@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/core/css/parser/css_tokenizer.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_idioms.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_token_range.h"
@@ -83,6 +88,10 @@ Vector<CSSParserToken, 32> CSSTokenizer::TokenizeToEOFWithUnicodeRanges() {
   Vector<CSSParserToken, 32> tokens = TokenizeToEOF();
   unicode_ranges_allowed_ = false;
   return tokens;
+}
+
+StringView CSSTokenizer::StringRangeFrom(wtf_size_t start) const {
+  return input_.RangeFrom(start);
 }
 
 StringView CSSTokenizer::StringRangeAt(wtf_size_t start,
@@ -460,13 +469,16 @@ CSSParserToken CSSTokenizer::ConsumeNumber() {
   NumericValueType type = kIntegerValueType;
   NumericSign sign = kNoSign;
   unsigned number_length = 0;
+  unsigned sign_length = 0;
 
   UChar next = input_.PeekWithoutReplacement(0);
   if (next == '+') {
     ++number_length;
+    ++sign_length;
     sign = kPlusSign;
   } else if (next == '-') {
     ++number_length;
+    ++sign_length;
     sign = kMinusSign;
   }
 
@@ -493,8 +505,19 @@ CSSParserToken CSSTokenizer::ConsumeNumber() {
     }
   }
 
-  double value = input_.GetDouble(0, number_length);
-  input_.Advance(number_length);
+  double value;
+  if (type == kIntegerValueType) {
+    // Fast path.
+    value = input_.GetNaturalNumberAsDouble(sign_length, number_length);
+    if (sign == kMinusSign) {
+      value = -value;
+    }
+    DCHECK_EQ(value, input_.GetDouble(0, number_length));
+    input_.Advance(number_length);
+  } else {
+    value = input_.GetDouble(0, number_length);
+    input_.Advance(number_length);
+  }
 
   return CSSParserToken(kNumberToken, value, type, sign);
 }
@@ -767,7 +790,8 @@ StringView CSSTokenizer::ConsumeName() {
       // or all-one for each byte, so we can use the code from
       // https://community.arm.com/arm-community-blogs/b/infrastructure-solutions-blog/posts/porting-x86-vector-bitmask-optimizations-to-arm-neon
       non_name_mask = non_name_mask && (b >= 0);
-      uint8x8_t narrowed_mask = vshrn_n_u16(non_name_mask, 4);
+      uint8x8_t narrowed_mask =
+          vshrn_n_u16(vreinterpretq_u16_s8(non_name_mask), 4);
       uint64_t bits = vget_lane_u64(vreinterpret_u64_u8(narrowed_mask), 0);
       if (bits == 0) {
         size += 16;

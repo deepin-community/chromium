@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {click, closeAllCloseableTabs, goToResource, reloadDevTools, timeout, waitFor} from '../../shared/helper.js';
+import {click, closeAllCloseableTabs, goToResource, timeout, waitFor} from '../../shared/helper.js';
 import {describe, it} from '../../shared/mocha-extensions.js';
 import {navigateToConsoleTab, waitForConsoleInfoMessageAndClickOnLink} from '../helpers/console-helpers.js';
 import {
   clickOnContextMenuItemFromTab,
   MOVE_TO_DRAWER_SELECTOR,
   MOVE_TO_MAIN_PANEL_SELECTOR,
+  reloadDevTools,
   tabExistsInDrawer,
   tabExistsInMainPanel,
 } from '../helpers/cross-tool-helper.js';
@@ -23,7 +24,7 @@ import {
 } from '../helpers/performance-helpers.js';
 import {openPanelViaMoreTools} from '../helpers/settings-helpers.js';
 
-describe('A user can navigate across', async function() {
+describe('A user can navigate across', function() {
   // These tests move between panels, which takes time.
   if (this.timeout() !== 0) {
     this.timeout(10000);
@@ -52,7 +53,8 @@ describe('A user can navigate across', async function() {
     await waitFor('.panel[aria-label="sources"]');
   });
 
-  it('Performance -> Sources', async () => {
+  // Flaky test.
+  it.skip('[crbug.com/327072692] Performance -> Sources', async () => {
     await navigateToPerformanceTab();
 
     await startRecording();
@@ -80,7 +82,7 @@ describe('A user can navigate across', async function() {
   });
 });
 
-describe('A user can move tabs', async function() {
+describe('A user can move tabs', function() {
   this.timeout(10000);
 
   it('Move Memory to drawer', async () => {
@@ -99,7 +101,7 @@ describe('A user can move tabs', async function() {
   });
 });
 
-describe('A user can open panels via the "panel" query param', async function() {
+describe('A user can open panels via the "panel" query param', function() {
   it('Layers is shown', async () => {
     await reloadDevTools({queryParams: {panel: 'layers'}});
     await tabExistsInMainPanel(LAYERS_TAB_SELECTOR);

@@ -49,7 +49,7 @@ std::ostream& operator<<(std::ostream& out, const ValidationError& value) {
       out << "kInfoFileInvalid";
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   return out;
@@ -66,7 +66,7 @@ base::File::Error ValidationErrorToFileError(ValidationError error) {
     case ValidationError::kInfoFileInvalid:
       return base::File::FILE_ERROR_INVALID_OPERATION;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return base::File::FILE_ERROR_FAILED;
   }
 }
@@ -167,9 +167,12 @@ void TrashInfoValidator::OnTrashInfoParsed(
     return;
   }
 
-  // The restore path that was parsed could be empty or not have a leading "/".
+  // The restore path that was parsed could be empty, not have a leading "/" or
+  // only consist of "/".
   if (restore_path.empty() ||
-      restore_path.value()[0] != base::FilePath::kSeparators[0]) {
+      restore_path.value()[0] != base::FilePath::kSeparators[0] ||
+      (restore_path.value().size() == 1 &&
+       restore_path.value()[0] == base::FilePath::kSeparators[0])) {
     RunCallbackWithError(ValidationError::kInfoFileInvalid,
                          std::move(callback));
     return;

@@ -19,6 +19,7 @@
 #include "base/observer_list_types.h"
 #include "base/timer/timer.h"
 #include "base/types/pass_key.h"
+#include "content/browser/preloading/preloading_confidence.h"
 #include "content/browser/preloading/prerender/prerender_final_status.h"
 #include "content/common/content_export.h"
 #include "content/common/frame.mojom-forward.h"
@@ -79,11 +80,12 @@ class CONTENT_EXPORT PrerenderHostRegistry : public WebContentsObserver {
   // value for an embedder was determined by
   // PageLoad.Clients.Prerender.NavigationToActivation.*.
   // The value for speculation rules was determined to align with the default
-  // value of BFCache's eviction timer.
+  // value of BFCache's eviction timer
+  // (kDefaultTimeToLiveInBackForwardCacheInSeconds).
   static constexpr base::TimeDelta kTimeToLiveInBackgroundForEmbedder =
       base::Seconds(19);
   static constexpr base::TimeDelta kTimeToLiveInBackgroundForSpeculationRules =
-      base::Seconds(180);
+      base::Seconds(600);
 
   using PassKey = base::PassKey<PrerenderHostRegistry>;
 
@@ -121,7 +123,7 @@ class CONTENT_EXPORT PrerenderHostRegistry : public WebContentsObserver {
   // `preloading_attempt` is the attempt corresponding to this prerender, the
   // default value is set to nullptr as every case of prerendering trigger is
   // not yet integrated with PreloadingAttempt.
-  // TODO(crbug.com/1350676): Remove the default value as nullptr for
+  // TODO(crbug.com/40234240): Remove the default value as nullptr for
   // preloading_attempt once new-tab-prerender is integrated with Preloading
   // APIs.
   int CreateAndStartHost(const PrerenderAttributes& attributes,
@@ -133,7 +135,9 @@ class CONTENT_EXPORT PrerenderHostRegistry : public WebContentsObserver {
   // PrerenderHostRegistry manages PrerenderNewTabHandle that owns the
   // WebContents (see `prerender_new_tab_handle_by_frame_tree_node_id_`).
   int CreateAndStartHostForNewTab(const PrerenderAttributes& attributes,
-                                  PreloadingPredictor preloading_predictor);
+                                  const PreloadingPredictor& creating_predictor,
+                                  const PreloadingPredictor& enacting_predictor,
+                                  PreloadingConfidence confidence);
 
   // Cancels the host registered for `frame_tree_node_id`. The host is
   // immediately removed from the map of non-reserved hosts but asynchronously
@@ -169,7 +173,7 @@ class CONTENT_EXPORT PrerenderHostRegistry : public WebContentsObserver {
   // OnActivationFinished() with the id to release the reserved host. This also
   // cancels all the prerender hosts except the one to be activated.
   //
-  // TODO(https://crbug.com/1198815): Consider returning the ownership of the
+  // TODO(crbug.com/40177514): Consider returning the ownership of the
   // reserved host and letting NavigationRequest own it instead of
   // PrerenderHostRegistry.
   int ReserveHostToActivate(NavigationRequest& navigation_request,
@@ -258,6 +262,7 @@ class CONTENT_EXPORT PrerenderHostRegistry : public WebContentsObserver {
  private:
   // WebContentsObserver implementation:
   void DidStartNavigation(NavigationHandle* navigation_handle) override;
+  void ReadyToCommitNavigation(NavigationHandle* navigation_handle) override;
   void DidFinishNavigation(NavigationHandle* navigation_handle) override;
   void OnVisibilityChanged(Visibility visibility) override;
   void PrimaryMainFrameRenderProcessGone(
@@ -350,7 +355,7 @@ class CONTENT_EXPORT PrerenderHostRegistry : public WebContentsObserver {
 
   // Hosts that are not reserved for activation yet. This map also includes the
   // hosts still waiting for their start.
-  // TODO(https://crbug.com/1132746): Expire prerendered contents if they are
+  // TODO(crbug.com/40150744): Expire prerendered contents if they are
   // not used for a while.
   base::flat_map<int, std::unique_ptr<PrerenderHost>>
       prerender_host_by_frame_tree_node_id_;

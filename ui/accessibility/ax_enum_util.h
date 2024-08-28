@@ -151,8 +151,13 @@ AX_BASE_EXPORT const char* ToString(ax::mojom::TreeOrder tree_order);
 // ax::mojom::ImageAnnotationStatus
 AX_BASE_EXPORT const char* ToString(ax::mojom::ImageAnnotationStatus status);
 
-// ax::mojom::Dropeffect
-AX_BASE_EXPORT const char* ToString(ax::mojom::Dropeffect dropeffect);
+// ax::mojom::AriaNotificationInterrupt
+AX_BASE_EXPORT const char* ToString(
+    ax::mojom::AriaNotificationInterrupt interrupt);
+
+// ax::mojom::AriaNotificationPriority
+AX_BASE_EXPORT const char* ToString(
+    ax::mojom::AriaNotificationPriority priority);
 
 template <typename T>
 std::optional<T> MaybeParseAXEnum(const char* attribute) {
@@ -191,7 +196,7 @@ T ParseAXEnum(const char* attribute) {
   }
 
   LOG(ERROR) << "Could not parse: " << attribute;
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return T::kNone;
 }
 

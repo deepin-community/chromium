@@ -77,8 +77,9 @@ void PaintRowIcon(gfx::Canvas* canvas,
 }
 
 bool EventIsDoubleTapOrClick(const ui::LocatedEvent& event) {
-  if (event.type() == ui::ET_GESTURE_TAP)
+  if (event.type() == ui::EventType::kGestureTap) {
     return event.AsGestureEvent()->details().tap_count() == 2;
+  }
   return !!(event.flags() & ui::EF_IS_DOUBLE_CLICK);
 }
 
@@ -95,24 +96,11 @@ TreeView::TreeView()
       drawing_provider_(std::make_unique<TreeViewDrawingProvider>()) {
   // Always focusable, even on Mac (consistent with NSOutlineView).
   SetFocusBehavior(FocusBehavior::ALWAYS);
-#if BUILDFLAG(IS_MAC)
-  constexpr bool kUseMdIcons = true;
-#else
-  constexpr bool kUseMdIcons = false;
-#endif
-  if (kUseMdIcons) {
-    closed_icon_ = open_icon_ = ui::ImageModel::FromVectorIcon(
-        vector_icons::kFolderIcon, ui::kColorIcon);
-  } else {
-    // TODO(ellyjones): if the pre-Harmony codepath goes away, merge
-    // closed_icon_ and open_icon_.
-    closed_icon_ = ui::ImageModel::FromImage(
-        ui::ResourceBundle::GetSharedInstance().GetImageNamed(
-            IDR_FOLDER_CLOSED));
-    open_icon_ = ui::ImageModel::FromImage(
-        ui::ResourceBundle::GetSharedInstance().GetImageNamed(IDR_FOLDER_OPEN));
-  }
-  text_offset_ = closed_icon_.Size().width() + kImagePadding + kImagePadding +
+
+  folder_icon_ = ui::ImageModel::FromVectorIcon(
+      vector_icons::kFolderChromeRefreshIcon, ui::kColorIcon);
+
+  text_offset_ = folder_icon_.Size().width() + kImagePadding + kImagePadding +
                  kArrowRegionSize;
 }
 
@@ -201,13 +189,13 @@ void TreeView::StartEditing(TreeModelNode* node) {
     // not parented.
     AddChildView(editor_.get());
     editor_->SetFontList(font_list_);
-    empty_editor_size_ = editor_->GetPreferredSize();
+    empty_editor_size_ = editor_->GetPreferredSize({});
     editor_->set_controller(this);
   }
   editor_->SetText(selected_node_->model_node()->GetTitle());
-  // TODO(crbug.com/1345828): Investigate whether accessible name should stay in
-  // sync during editing.
-  editor_->SetAccessibleName(
+  // TODO(crbug.com/40853810): Investigate whether accessible name should stay
+  // in sync during editing.
+  editor_->GetViewAccessibility().SetName(
       selected_node_->model_node()->GetAccessibleTitle());
   LayoutEditor();
   editor_->SetVisible(true);
@@ -250,7 +238,8 @@ void TreeView::CommitEdit() {
   DCHECK(selected_node_);
   const bool editor_has_focus = editor_->HasFocus();
   model_->SetTitle(GetSelectedNode(), editor_->GetText());
-  editor_->SetAccessibleName(GetSelectedNode()->GetAccessibleTitle());
+  editor_->GetViewAccessibility().SetName(
+      GetSelectedNode()->GetAccessibleTitle());
   CancelEdit();
   if (editor_has_focus)
     RequestFocus();
@@ -415,7 +404,8 @@ void TreeView::Layout(PassKey) {
   LayoutEditor();
 }
 
-gfx::Size TreeView::CalculatePreferredSize() const {
+gfx::Size TreeView::CalculatePreferredSize(
+    const SizeBounds& /*available_size*/) const {
   return preferred_size_;
 }
 
@@ -435,7 +425,7 @@ bool TreeView::OnMousePressed(const ui::MouseEvent& event) {
 }
 
 void TreeView::OnGestureEvent(ui::GestureEvent* event) {
-  if (event->type() == ui::ET_GESTURE_TAP) {
+  if (event->type() == ui::EventType::kGestureTap) {
     if (OnClickOrTap(*event))
       event->SetHandled();
   }
@@ -623,8 +613,9 @@ void TreeView::ContentsChanged(Textfield* sender,
 
 bool TreeView::HandleKeyEvent(Textfield* sender,
                               const ui::KeyEvent& key_event) {
-  if (key_event.type() != ui::ET_KEY_PRESSED)
+  if (key_event.type() != ui::EventType::kKeyPressed) {
     return false;
+  }
 
   switch (key_event.key_code()) {
     case ui::VKEY_RETURN:
@@ -668,7 +659,7 @@ std::optional<size_t> TreeView::GetSelectedRow() {
 void TreeView::SetSelectedRow(std::optional<size_t> row) {
   // Type-ahead manipulates selection because active node is synced to selected
   // node, so call SetSelectedNode() instead of SetActiveNode().
-  // TODO(crbug.com/1080944): Decouple active node from selected node by adding
+  // TODO(crbug.com/40691087): Decouple active node from selected node by adding
   // new keyboard affordances.
   SetSelectedNode(
       GetNodeForRow(row.has_value() ? static_cast<int>(row.value()) : -1));
@@ -822,7 +813,7 @@ void TreeView::UpdateSelection(TreeModelNode* model_node,
     // GetForegroundBoundsForNode() returns RTL-flipped coordinates for paint.
     // Un-flip before passing to ScrollRectToVisible(), which uses layout
     // coordinates.
-    // TODO(crbug.com/1267807): We should not be doing synchronous layout here
+    // TODO(crbug.com/40204541): We should not be doing synchronous layout here
     // but instead we should call into this asynchronously after the Views
     // tree has processed a layout pass which happens asynchronously.
     if (auto* widget = GetWidget())
@@ -1189,15 +1180,12 @@ void TreeView::PaintNodeIcon(gfx::Canvas* canvas,
     canvas->Translate(gfx::Vector2d(bounds.x(), 0));
     scoped_canvas.FlipIfRTL(bounds.width());
     // Now paint the icon local to that flipped region.
-    PaintRowIcon(canvas,
-                 (node->is_expanded() ? open_icon_ : closed_icon_)
-                     .Rasterize(GetColorProvider()),
-                 icon_x,
+    PaintRowIcon(canvas, folder_icon_.Rasterize(GetColorProvider()), icon_x,
                  gfx::Rect(0, bounds.y(), bounds.width(), bounds.height()));
   } else {
     const gfx::ImageSkia& icon =
         icons_[icon_index.value()].Rasterize(GetColorProvider());
-    icon_x += (open_icon_.Size().width() - icon.width()) / 2;
+    icon_x += (folder_icon_.Size().width() - icon.width()) / 2;
     if (base::i18n::IsRTL())
       icon_x = bounds.width() - icon_x - icon.width();
     PaintRowIcon(canvas, icon, icon_x, bounds);

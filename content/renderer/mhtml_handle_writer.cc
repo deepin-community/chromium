@@ -2,8 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/renderer/mhtml_handle_writer.h"
 
+#include "base/containers/span.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -44,7 +50,6 @@ void MHTMLHandleWriter::Finish(mojom::MhtmlSaveStatus save_status) {
 
   main_thread_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback_), save_status));
-  delete this;
 }
 
 MHTMLFileHandleWriter::MHTMLFileHandleWriter(
@@ -55,7 +60,7 @@ MHTMLFileHandleWriter::MHTMLFileHandleWriter(
                         std::move(callback)),
       file_(std::move(file)) {
 #if BUILDFLAG(IS_FUCHSIA)
-  // TODO(crbug.com/1288816): Remove the Seek call.
+  // TODO(crbug.com/42050414): Remove the Seek call.
   // On fuchsia, fds do not share state. As the fd has been duped and sent from
   // the browser process, it must be seeked to the end to ensure the data is
   // appended.
@@ -70,7 +75,7 @@ void MHTMLFileHandleWriter::WriteContentsImpl(
   mojom::MhtmlSaveStatus save_status = mojom::MhtmlSaveStatus::kSuccess;
   for (const blink::WebThreadSafeData& data : mhtml_contents) {
     if (!data.IsEmpty() &&
-        file_.WriteAtCurrentPos(data.Data(), data.size()) < 0) {
+        file_.WriteAtCurrentPos(data.data(), data.size()) < 0) {
       save_status = mojom::MhtmlSaveStatus::kFileWritingError;
       break;
     }
@@ -127,7 +132,7 @@ void MHTMLProducerHandleWriter::BeginWatchingHandle() {
                           base::Unretained(this)));
 }
 
-// TODO(https://crbug.com/915966): This can be simplified with usage
+// TODO(crbug.com/40606905): This can be simplified with usage
 // of BlockingCopyToString once error signalling is implemented and
 // updated with usage of base::span instead of std::string.
 void MHTMLProducerHandleWriter::TryWritingContents(
@@ -142,11 +147,12 @@ void MHTMLProducerHandleWriter::TryWritingContents(
 
   while (true) {
     const blink::WebThreadSafeData& data = mhtml_contents_.at(current_block_);
+    base::span<const uint8_t> bytes =
+        base::as_byte_span(data).subspan(write_position_);
 
     // If there is no more data in this block, continue to next block or
     // finish.
-    uint32_t num_bytes = data.size() - write_position_;
-    if (num_bytes == 0) {
+    if (bytes.empty()) {
       write_position_ = 0;
       if (++current_block_ >= mhtml_contents_.size()) {
         Finish(mojom::MhtmlSaveStatus::kSuccess);
@@ -155,8 +161,9 @@ void MHTMLProducerHandleWriter::TryWritingContents(
       continue;
     }
 
-    result = producer_->WriteData(data.Data() + write_position_, &num_bytes,
-                                  MOJO_WRITE_DATA_FLAG_NONE);
+    size_t bytes_written = 0;
+    result =
+        producer_->WriteData(bytes, MOJO_WRITE_DATA_FLAG_NONE, bytes_written);
 
     // Break out of loop early if write was not successful to avoid
     // incrementing the write position incorrectly.
@@ -164,7 +171,7 @@ void MHTMLProducerHandleWriter::TryWritingContents(
       break;
 
     // Reaching this indicates a successful write.
-    write_position_ += num_bytes;
+    write_position_ += bytes_written;
     DCHECK(write_position_ <= data.size());
   }
 

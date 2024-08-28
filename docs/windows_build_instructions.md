@@ -12,7 +12,7 @@ Are you a Google employee? See
 
 ## System requirements
 
-* A 64-bit Intel machine with at least 8GB of RAM. More than 16GB is highly
+* An x86-64 machine with at least 8GB of RAM. More than 16GB is highly
   recommended.
 * At least 100GB of free disk space on an NTFS-formatted hard drive. FAT32
   will not work, as some of the Git packfiles are larger than 4GB.
@@ -52,12 +52,13 @@ $ PATH_TO_INSTALLER.EXE ^
 Required
 
 * [Windows 11 SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/)
-version 10.0.22621.0. This can be installed separately or by checking the
+version 10.0.22621.2428. This can be installed separately or by checking the
 appropriate box in the Visual Studio Installer.
-* (Windows 11) SDK Debugging Tools 10.0.22621.755. This version of the Debugging
-tools is needed in order to support reading the large-page PDBs that Chrome uses
-to allow greater-than 4 GiB PDBs. This can be installed after the matching
-Windows SDK version is installed, from: Control Panel -> Programs and Features
+* (Windows 11) SDK Debugging Tools 10.0.22621.755 or higher. This version of the
+Debugging tools is needed in order to support reading the large-page PDBs that
+Chrome uses to allow greater-than 4 GiB PDBs. This can be installed after the
+matching Windows SDK version is installed, from: Control Panel -> Programs and
+Features
 -> Windows Software Development Kit [version] -> Change -> Debugging Tools for
 Windows. If building on ARM64 Windows then you will need to manually copy the
 Debuggers\x64 directory from another machine because it does not get installed
@@ -113,9 +114,9 @@ with the code, including msysgit and python.
 
 ## Check python install
 
-After running gclient open a command prompt and type `where python` and
-confirm that the depot_tools `python.bat` comes ahead of any copies of
-python.exe. Failing to ensure this can lead to overbuilding when
+After running gclient open a command prompt and type `where python3` and
+confirm that the depot_tools `python3.bat` comes ahead of any copies of
+python3.exe. Failing to ensure this can lead to overbuilding when
 using gn - see [crbug.com/611087](https://crbug.com/611087).
 
 [App Execution Aliases](https://docs.microsoft.com/en-us/windows/apps/desktop/modernize/desktop-to-uwp-extensions#alias)
@@ -256,25 +257,6 @@ Google employees can visit
 for more information. For external contributors, Reclient does not support
 Windows builds.
 
-#### Use Goma (deprecated)
-
-In addition, Google employees should use goma, a distributed compilation system.
-Detailed information is available internally but the relevant gn arg is:
-* `use_goma = true`
-
-To get any benefit from goma it is important to pass a large -j value to ninja.
-A good default is 10\*numCores to 20\*numCores. If you run autoninja then it
-will automatically pass an appropriate -j value to ninja for goma or not.
-
-```shell
-$ autoninja -C out\Default chrome
-```
-
-When invoking ninja, specify 'chrome' as the target to avoid building all test
-binaries as well.
-
-Still, builds will take many hours on many machines.
-
 #### Use SCCACHE
 
 You might be able to use [sccache](https://github.com/mozilla/sccache) for the
@@ -398,6 +380,23 @@ You can get a list of all of the other build targets from GN by running
 the GN label with no preceding "//" (so for `//chrome/test:unit_tests`
 use `autoninja -C out\Default chrome/test:unit_tests`).
 
+## Compile a single file
+
+Ninja supports a special [syntax `^`][ninja hat syntax] to compile a single object file specyfing
+the source file. For example, `ninja -C out/Default ../../base/logging.cc^`
+compiles `obj/base/base/logging.o`.
+
+[ninja hat syntax]: https://ninja-build.org/manual.html#:~:text=There%20is%20also%20a%20special%20syntax%20target%5E%20for%20specifying%20a%20target%20as%20the%20first%20output%20of%20some%20rule%20containing%20the%20source%20you%20put%20in%20the%20command%20line%2C%20if%20one%20exists.%20For%20example%2C%20if%20you%20specify%20target%20as%20foo.c%5E%20then%20foo.o%20will%20get%20built%20(assuming%20you%20have%20those%20targets%20in%20your%20build%20files)
+
+With autoninja, you need to add  `^^` to preserve the trailing `^`.
+
+```shell
+$ autoninja -C out\Default ..\..\base\logging.cc^^
+```
+
+In addition to `foo.cc^^`, Siso also supports `foo.h^^` syntax to compile
+the corresponding `foo.o` if it exists.
+
 ## Run Chromium
 
 Once it is built, you can simply run the browser:
@@ -435,6 +434,19 @@ $ out\Default\unit_tests.exe --gtest_filter="BrowserListUnitTest.*"
 
 You can find out more about GoogleTest at its
 [GitHub page](https://github.com/google/googletest).
+
+## Build an Installer
+
+Build the `mini_installer` target to create a self-contained installer. This
+has everything needed to install your browser on a machine.
+
+```shell
+$ autoninja -C out\Default mini_installer
+```
+
+See [//chrome/installer/setup/README.md](../chrome/installer/setup/README.md)
+and [//chrome/installer/mini_installer/README.md](../chrome/installer/mini_installer/README.md)
+for more information.
 
 ## Update your checkout
 

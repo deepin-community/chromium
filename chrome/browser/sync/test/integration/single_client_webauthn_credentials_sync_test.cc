@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/containers/span.h"
+#include "base/location.h"
 #include "base/rand_util.h"
 #include "base/ranges/algorithm.h"
 #include "base/test/scoped_feature_list.h"
@@ -15,6 +16,7 @@
 #include "chrome/browser/sync/test/integration/webauthn_credentials_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "components/password_manager/core/browser/features/password_manager_features_util.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/client_tag_hash.h"
 #include "components/sync/base/features.h"
 #include "components/sync/base/model_type.h"
@@ -23,6 +25,8 @@
 #include "components/sync/model/in_memory_metadata_change_list.h"
 #include "components/sync/protocol/entity_specifics.pb.h"
 #include "components/sync/protocol/webauthn_credential_specifics.pb.h"
+#include "components/sync/test/test_matchers.h"
+#include "components/version_info/version_info.h"
 #include "components/webauthn/core/browser/passkey_model.h"
 #include "components/webauthn/core/browser/passkey_model_change.h"
 #include "components/webauthn/core/browser/passkey_model_utils.h"
@@ -33,6 +37,7 @@
 
 namespace {
 
+using testing::ElementsAre;
 using testing::IsEmpty;
 using testing::Optional;
 using testing::UnorderedElementsAre;
@@ -98,8 +103,37 @@ CreateEntityWithCustomClientTagHash(
                                              client_tag_hash),
       syncer::WEBAUTHN_CREDENTIAL, /*version=*/0,
       /*non_unique_name=*/"", client_tag_hash, entity, /*creation_time=*/0,
-      /*last_modified_time=*/0);
+      /*last_modified_time=*/0, /*collaboration_id=*/"");
 }
+
+class PasskeyModelReadyChecker : public StatusChangeChecker,
+                                 public webauthn::PasskeyModel::Observer {
+ public:
+  explicit PasskeyModelReadyChecker(webauthn::PasskeyModel* model)
+      : model_(model) {
+    observation_.Observe(model);
+  }
+  ~PasskeyModelReadyChecker() override = default;
+
+  // SingleClientStatusChangeChecker:
+  bool IsExitConditionSatisfied(std::ostream* os) override {
+    return model_->IsReady();
+  }
+
+  // webauthn::PasskeyModel::Observer:
+  void OnPasskeysChanged(
+      const std::vector<webauthn::PasskeyModelChange>& changes) override {
+    CheckExitCondition();
+  }
+
+  void OnPasskeyModelShuttingDown() override {}
+
+ private:
+  const raw_ptr<webauthn::PasskeyModel> model_;
+  base::ScopedObservation<webauthn::PasskeyModel,
+                          webauthn::PasskeyModel::Observer>
+      observation_{this};
+};
 
 class SingleClientWebAuthnCredentialsSyncTest : public SyncTest {
  public:
@@ -141,6 +175,10 @@ class SingleClientWebAuthnCredentialsSyncTest : public SyncTest {
   webauthn::PasskeySyncBridge& GetModel() {
     return webauthn_credentials_helper::GetModel(kSingleProfile);
   }
+
+  void WaitTillModelReady() {
+    CHECK(PasskeyModelReadyChecker(&GetModel()).Wait());
+  }
 };
 
 // Adding a local passkey should sync to the server.
@@ -165,6 +203,20 @@ IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
                 syncer::WEBAUTHN_CREDENTIAL,
                 entities.front().specifics().webauthn_credential().sync_id())
                 .value());
+}
+
+IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
+                       StartWithLocalPasskey) {
+  // Exercise the case where PasskeySyncBridge::MergeFullSyncData has local
+  // credentials that the server doesn't know about.
+  ASSERT_TRUE(SetupClients());
+  WaitTillModelReady();
+  const std::string sync_id = GetModel().AddNewPasskeyForTesting(NewPasskey());
+  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+
+  EXPECT_TRUE(
+      ServerPasskeysMatchChecker(UnorderedElementsAre(EntityHasSyncId(sync_id)))
+          .Wait());
 }
 
 // CreatePasskey should create a new passkey entity and upload it to the server.
@@ -387,6 +439,8 @@ IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
 // Deleting a local passkey should remove from the server.
 IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
                        UploadLocalPasskeyDeletion) {
+  const base::Location kLocation = FROM_HERE;
+
   ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
 
   sync_pb::WebauthnCredentialSpecifics passkey = NewPasskey();
@@ -398,9 +452,14 @@ IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
   PasskeyChangeObservationChecker change_checker(
       kSingleProfile,
       {{webauthn::PasskeyModelChange::ChangeType::REMOVE, sync_id}});
-  GetModel().DeletePasskey(passkey.credential_id());
+  GetModel().DeletePasskey(passkey.credential_id(), kLocation);
   EXPECT_TRUE(ServerPasskeysMatchChecker(IsEmpty()).Wait());
   EXPECT_TRUE(change_checker.Wait());
+
+  EXPECT_THAT(GetFakeServer()->GetCommittedDeletionOrigins(
+                  syncer::ModelType::WEBAUTHN_CREDENTIAL),
+              ElementsAre(syncer::MatchesDeletionOrigin(
+                  version_info::GetVersionNumber(), kLocation)));
 }
 
 // Downloading a deletion for a passkey that does not exist locally should not
@@ -447,7 +506,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
 
   MockPasskeyModelObserver observer(&GetModel());
   EXPECT_CALL(observer, OnPasskeysChanged).Times(0);
-  EXPECT_FALSE(GetModel().DeletePasskey("non existing id"));
+  EXPECT_FALSE(GetModel().DeletePasskey("non existing id", FROM_HERE));
   EXPECT_TRUE(
       ServerPasskeysMatchChecker(UnorderedElementsAre(EntityHasSyncId(sync_id)))
           .Wait());
@@ -486,7 +545,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
       ServerPasskeysMatchChecker(testing::BeginEndDistanceIs(6)).Wait());
 
   // Delete passkey 4. This should result in only passkey 4 being deleted.
-  ASSERT_TRUE(GetModel().DeletePasskey(passkey4.credential_id()));
+  ASSERT_TRUE(GetModel().DeletePasskey(passkey4.credential_id(), FROM_HERE));
   EXPECT_TRUE(ServerPasskeysMatchChecker(
                   UnorderedElementsAre(EntityHasSyncId(passkey1.sync_id()),
                                        EntityHasSyncId(passkey2.sync_id()),
@@ -496,7 +555,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
                   .Wait());
 
   // Delete passkey 5. This should also result in only passkey 5 being deleted.
-  ASSERT_TRUE(GetModel().DeletePasskey(passkey5.credential_id()));
+  ASSERT_TRUE(GetModel().DeletePasskey(passkey5.credential_id(), FROM_HERE));
   EXPECT_TRUE(ServerPasskeysMatchChecker(
                   UnorderedElementsAre(EntityHasSyncId(passkey1.sync_id()),
                                        EntityHasSyncId(passkey2.sync_id()),
@@ -505,7 +564,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
                   .Wait());
 
   // Delete passkey 6. All credentials should be deleted.
-  ASSERT_TRUE(GetModel().DeletePasskey(passkey6.credential_id()));
+  ASSERT_TRUE(GetModel().DeletePasskey(passkey6.credential_id(), FROM_HERE));
   EXPECT_TRUE(ServerPasskeysMatchChecker(IsEmpty()).Wait());
 }
 
@@ -535,7 +594,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
                       EntityHasSyncId(different_user_id_passkey.sync_id())))
                   .Wait());
 
-  ASSERT_TRUE(GetModel().DeletePasskey(passkey.credential_id()));
+  ASSERT_TRUE(GetModel().DeletePasskey(passkey.credential_id(), FROM_HERE));
   EXPECT_TRUE(ServerPasskeysMatchChecker(
                   UnorderedElementsAre(
                       EntityHasSyncId(different_rp_id_passkey.sync_id()),
@@ -562,12 +621,44 @@ IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
                   .Wait());
 
   // Deleting should fail because neither passkey is head of a shadow chain.
-  ASSERT_FALSE(GetModel().DeletePasskey(passkey1.credential_id()));
-  ASSERT_FALSE(GetModel().DeletePasskey(passkey2.credential_id()));
+  ASSERT_FALSE(GetModel().DeletePasskey(passkey1.credential_id(), FROM_HERE));
+  ASSERT_FALSE(GetModel().DeletePasskey(passkey2.credential_id(), FROM_HERE));
   EXPECT_TRUE(ServerPasskeysMatchChecker(
                   UnorderedElementsAre(EntityHasSyncId(passkey1.sync_id()),
                                        EntityHasSyncId(passkey2.sync_id())))
                   .Wait());
+}
+
+IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
+                       DeleteAllPasskeys) {
+  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+
+  sync_pb::WebauthnCredentialSpecifics passkey1 = NewPasskey();
+  sync_pb::WebauthnCredentialSpecifics passkey2 = NewPasskey();
+
+  GetModel().AddNewPasskeyForTesting(passkey1);
+  GetModel().AddNewPasskeyForTesting(passkey2);
+  EXPECT_TRUE(ServerPasskeysMatchChecker(
+                  UnorderedElementsAre(EntityHasSyncId(passkey1.sync_id()),
+                                       EntityHasSyncId(passkey2.sync_id())))
+                  .Wait());
+
+  GetModel().DeleteAllPasskeys();
+  EXPECT_TRUE(GetModel().GetAllPasskeys().empty());
+  EXPECT_TRUE(ServerPasskeysMatchChecker(IsEmpty()).Wait());
+}
+
+IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
+                       DeleteAllPasskeysEmptyStore) {
+  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+
+  EXPECT_TRUE(GetModel().GetAllPasskeys().empty());
+  EXPECT_TRUE(ServerPasskeysMatchChecker(IsEmpty()).Wait());
+
+  GetModel().DeleteAllPasskeys();
+
+  EXPECT_TRUE(GetModel().GetAllPasskeys().empty());
+  EXPECT_TRUE(ServerPasskeysMatchChecker(IsEmpty()).Wait());
 }
 
 // Tests that deleting a passkey is persisted across browser restarts.
@@ -582,7 +673,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
                   .Wait());
   EXPECT_THAT(GetModel().GetAllPasskeys(),
               UnorderedElementsAre(PasskeyHasSyncId(passkey.sync_id())));
-  GetModel().DeletePasskey(passkey.credential_id());
+  GetModel().DeletePasskey(passkey.credential_id(), FROM_HERE);
   EXPECT_TRUE(GetModel().GetAllPasskeys().empty());
 }
 
@@ -856,26 +947,47 @@ IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
 
 // The unconsented primary account isn't supported on ChromeOS.
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
+
+class SingleClientWebAuthnCredentialsSyncTestExplicitParamTest
+    : public SingleClientWebAuthnCredentialsSyncTest,
+      public testing::WithParamInterface<bool /*explicit_signin*/> {
+ public:
+  SingleClientWebAuthnCredentialsSyncTestExplicitParamTest() = default;
+
+  bool is_explicit_signin() const { return GetParam(); }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_{
+      switches::kExplicitBrowserSigninUIOnDesktop};
+};
+
 // Tests that passkeys sync on transport mode only if the user has consented to
 // showing credentials from their Google account.
-IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
+IN_PROC_BROWSER_TEST_P(SingleClientWebAuthnCredentialsSyncTestExplicitParamTest,
                        TransportModeConsent) {
   const std::string sync_id = InjectPasskeyToFakeServer(NewPasskey());
   ASSERT_TRUE(SetupClients());
 
-  AccountInfo account_info = secondary_account_helper::SignInUnconsentedAccount(
-      GetProfile(0), &test_url_loader_factory_, "user@email.com");
+  const char kTestEmail[] = "user@email.com";
+  AccountInfo account_info =
+      is_explicit_signin()
+          ? secondary_account_helper::SignInUnconsentedAccount(
+                GetProfile(0), &test_url_loader_factory_, kTestEmail)
+          : secondary_account_helper::ImplicitSignInUnconsentedAccount(
+                GetProfile(0), &test_url_loader_factory_, kTestEmail);
   ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
   ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureEnabled());
 
-  // Passkeys should not be syncing.
-  EXPECT_FALSE(
-      GetSyncService(0)->GetActiveDataTypes().Has(syncer::WEBAUTHN_CREDENTIAL));
+  if (!is_explicit_signin()) {
+    // Passkeys should be syncing only if the signin is explicit.
+    EXPECT_FALSE(GetSyncService(0)->GetActiveDataTypes().Has(
+        syncer::WEBAUTHN_CREDENTIAL));
 
-  // Let the user opt in to transport mode and wait for passkeys to start
-  // syncing.
-  password_manager::features_util::OptInToAccountStorage(
-      GetProfile(0)->GetPrefs(), GetSyncService(0));
+    // Let the user opt in to transport mode and wait for passkeys to start
+    // syncing.
+    password_manager::features_util::OptInToAccountStorage(
+        GetProfile(0)->GetPrefs(), GetSyncService(0));
+  }
   PasskeySyncActiveChecker(GetSyncService(0)).Wait();
   EXPECT_TRUE(
       LocalPasskeysMatchChecker(kSingleProfile,
@@ -887,6 +999,14 @@ IN_PROC_BROWSER_TEST_F(SingleClientWebAuthnCredentialsSyncTest,
       GetProfile(0)->GetPrefs(), GetSyncService(0));
   EXPECT_TRUE(LocalPasskeysMatchChecker(kSingleProfile, IsEmpty()).Wait());
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    /* no prefix */,
+    SingleClientWebAuthnCredentialsSyncTestExplicitParamTest,
+    ::testing::Bool(),
+    [](const testing::TestParamInfo<bool>& info) {
+      return info.param ? "Explicit" : "Implicit";
+    });
 #endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
 
 }  // namespace

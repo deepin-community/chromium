@@ -123,6 +123,7 @@ class MockPrivacySandboxSettingsDelegate
   MOCK_METHOD(bool, IsIncognitoProfile, (), (const, override));
   MOCK_METHOD(bool, HasAppropriateTopicsConsent, (), (const, override));
   MOCK_METHOD(bool, IsSubjectToM1NoticeRestricted, (), (const, override));
+  MOCK_METHOD(bool, IsRestrictedNoticeEnabled, (), (const, override));
   MOCK_METHOD(bool,
               IsCookieDeprecationExperimentEligible,
               (),
@@ -169,6 +170,8 @@ enum class StateKey {
   kM1RestrictedNoticePreviouslyAcknowledged = 25,
   kAttestationsMap = 26,
   kBlockFledgeJoiningForEtldplus1 = 27,
+  kBlockAll3pcToggleEnabledUserPrefValue = 28,
+  kTrackingProtection3pcdEnabledUserPrefValue = 29,
 };
 
 // Defines the input to the functions under test.
@@ -186,6 +189,9 @@ enum class InputKey {
   kEventReportingDestinationOrigin = 11,
   kOutSharedStorageDebugMessage = 12,
   kOutSharedStorageSelectURLDebugMessage = 13,
+  kOutSharedStorageBlockIsSiteSettingSpecific = 14,
+  kOutSharedStorageSelectURLBlockIsSiteSettingSpecific = 15,
+  kOutPrivateAggregationBlockIsSiteSettingSpecific = 16,
 };
 
 // Defines the expected output of the functions under test, when the profile is
@@ -238,6 +244,9 @@ enum class OutputKey {
   kIsPrivateAggregationDebugModeAllowed = 47,
   kIsSharedStorageAllowedDebugMessage = 48,
   kIsSharedStorageSelectURLAllowedDebugMessage = 49,
+  kIsSharedStorageBlockSiteSettingSpecific = 50,
+  kIsSharedStorageSelectURLBlockSiteSettingSpecific = 51,
+  kIsPrivateAggregationBlockSiteSettingSpecific = 52,
 };
 
 // To allow multiple input keys to map to the same value, without having to
@@ -263,6 +272,7 @@ using SiteDataExceptions = std::vector<SiteDataException>;
 // a particular value type, and will error otherwise.
 using TestCaseItemValue = absl::variant<
     bool,
+    bool*,
     std::string,
     std::string*,
     url::Origin,

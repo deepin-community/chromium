@@ -19,11 +19,8 @@
 #include "extensions/browser/extension_registry_observer.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/widget/widget_observer.h"
 #include "url/gurl.h"
-
-#if defined(USE_AURA)
-#include "ui/wm/public/activation_change_observer.h"
-#endif
 
 class ExtensionViewViews;
 
@@ -40,9 +37,7 @@ enum class UnloadedExtensionReason;
 
 // The bubble used for hosting a browser-action popup provided by an extension.
 class ExtensionPopup : public views::BubbleDialogDelegateView,
-#if defined(USE_AURA)
-                       public wm::ActivationChangeObserver,
-#endif
+                       public views::WidgetObserver,
                        public ExtensionViewViews::Container,
                        public extensions::ExtensionRegistryObserver,
                        public content::WebContentsObserver,
@@ -68,6 +63,7 @@ class ExtensionPopup : public views::BubbleDialogDelegateView,
   static void ShowPopup(std::unique_ptr<extensions::ExtensionViewHost> host,
                         views::View* anchor_view,
                         views::BubbleBorder::Arrow arrow,
+                        bool by_user,
                         PopupShowAction show_action,
                         ShowPopupCallback callback);
 
@@ -78,20 +74,16 @@ class ExtensionPopup : public views::BubbleDialogDelegateView,
   extensions::ExtensionViewHost* host() const { return host_.get(); }
 
   // views::BubbleDialogDelegateView:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void AddedToWidget() override;
-  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
-#if defined(USE_AURA)
-  void OnWidgetDestroying(views::Widget* widget) override;
 
-  // wm::ActivationChangeObserver:
-  void OnWindowActivated(wm::ActivationChangeObserver::ActivationReason reason,
-                         aura::Window* gained_active,
-                         aura::Window* lost_active) override;
-#endif
+  // views::WidgetObserver:
+  void OnWidgetDestroying(views::Widget* widget) override;
+  void OnWidgetTreeActivated(views::Widget* root_widget,
+                             views::Widget* active_widget) override;
 
   // ExtensionViewViews::Container:
-  void OnExtensionSizeChanged(ExtensionViewViews* view) override;
   gfx::Size GetMinBounds() override;
   gfx::Size GetMaxBounds() override;
 
@@ -130,14 +122,17 @@ class ExtensionPopup : public views::BubbleDialogDelegateView,
   ExtensionPopup(std::unique_ptr<extensions::ExtensionViewHost> host,
                  views::View* anchor_view,
                  views::BubbleBorder::Arrow arrow,
+                 bool by_user,
                  PopupShowAction show_action,
                  ShowPopupCallback callback);
 
   // Shows the bubble, focuses its content, and registers listeners.
   void ShowBubble();
 
-  // Closes the bubble if the devtools window is not attached.
-  void CloseUnlessUnderInspection();
+  // Closes the bubble unless if there is
+  //   1. an attached DevTools inspection window, or
+  //   2. an open web dialog, e.g. JS alert.
+  void CloseUnlessBlockedByInspectionOrJSDialog();
 
   // Handles a signal from the extension host to close.
   void HandleCloseExtensionHost(extensions::ExtensionHost* host);
@@ -151,17 +146,15 @@ class ExtensionPopup : public views::BubbleDialogDelegateView,
                           extensions::ExtensionRegistryObserver>
       extension_registry_observation_{this};
 
+  // True if this popup is triggered by user.
+  const bool by_user_;
+
   PopupShowAction show_action_;
 
   ShowPopupCallback shown_callback_;
 
-#if BUILDFLAG(IS_MAC)
-  class ScopedBrowserActivationObservation;
-  // The observation on the browser window.
-  // Closes the extension popup when the browser window gets activation.
-  std::unique_ptr<ScopedBrowserActivationObservation>
-      scoped_browser_activation_obvervation_;
-#endif
+  base::ScopedObservation<views::Widget, views::WidgetObserver>
+      anchor_widget_observation_{this};
 
   // Note: This must be reset *before* `host_`. See note in
   // OnExtensionUnloaded().

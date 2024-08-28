@@ -28,6 +28,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/platform/graphics/gpu/drawing_buffer.h"
 
 #include <memory>
@@ -36,7 +41,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "components/viz/common/resources/release_callback.h"
 #include "components/viz/common/resources/transferable_resource.h"
-#include "components/viz/test/test_gpu_memory_buffer_manager.h"
 #include "gpu/command_buffer/client/gles2_interface_stub.h"
 #include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/common/sync_token.h"
@@ -149,7 +153,7 @@ TEST_F(DrawingBufferTestMultisample, verifyMultisampleResolve) {
 }
 
 TEST_F(DrawingBufferTest, VerifyResizingProperlyAffectsResources) {
-  viz::TestSharedImageInterface* sii =
+  gpu::TestSharedImageInterface* sii =
       drawing_buffer_->SharedImageInterfaceForTests();
 
   VerifyStateWasRestored();
@@ -278,8 +282,7 @@ TEST_F(DrawingBufferTest, VerifyCachedRecycledResourcesAreKept) {
 
     bool recycled = false;
     for (auto& resource : resources) {
-      if (recycled_resource.mailbox_holder.mailbox ==
-          resource.mailbox_holder.mailbox) {
+      if (recycled_resource.mailbox() == resource.mailbox()) {
         recycled = true;
         break;
       }
@@ -294,8 +297,7 @@ TEST_F(DrawingBufferTest, VerifyCachedRecycledResourcesAreKept) {
   EXPECT_TRUE(drawing_buffer_->PrepareTransferableResource(
       nullptr, &next_recycled_resource, &next_recycled_release_callback));
   for (auto& resource : resources) {
-    EXPECT_NE(resource.mailbox_holder.mailbox,
-              next_recycled_resource.mailbox_holder.mailbox);
+    EXPECT_NE(resource.mailbox(), next_recycled_resource.mailbox());
   }
   recycled_release_callbacks.push_back(
       std::move(next_recycled_release_callback));
@@ -358,11 +360,15 @@ class DrawingBufferImageChromiumTest : public DrawingBufferTest,
     auto provider =
         std::make_unique<WebGraphicsContext3DProviderForTests>(std::move(gl));
 
+    provider->GetMutableGpuFeatureInfo()
+        .status_values[gpu::GPU_FEATURE_TYPE_ANDROID_SURFACE_CONTROL] =
+        gpu::kGpuFeatureStatusEnabled;
+
     // DrawingBuffer requests MappableSharedImages with usage SCANOUT, whereas
     // TestSII by default creates backing SharedMemory GMBs that don't support
     // this usage. Configure the TestSII to instead use test GMBs that have
     // relaxed usage validation.
-    auto* sii = static_cast<viz::TestSharedImageInterface*>(
+    auto* sii = static_cast<gpu::TestSharedImageInterface*>(
         provider->SharedImageInterface());
     sii->UseTestGMBInSharedImageCreationWithBufferUsage();
     GLES2InterfaceForTests* gl_ =
@@ -383,7 +389,7 @@ class DrawingBufferImageChromiumTest : public DrawingBufferTest,
 
 TEST_F(DrawingBufferImageChromiumTest, VerifyResizingReallocatesImages) {
   GLES2InterfaceForTests* gl_ = drawing_buffer_->ContextGLForTests();
-  viz::TestSharedImageInterface* sii =
+  gpu::TestSharedImageInterface* sii =
       drawing_buffer_->SharedImageInterfaceForTests();
 
   viz::TransferableResource resource;
@@ -414,7 +420,7 @@ TEST_F(DrawingBufferImageChromiumTest, VerifyResizingReallocatesImages) {
   EXPECT_EQ(2u, sii->shared_image_count());
   EXPECT_TRUE(sii->CheckSharedImageExists(mailbox1));
   EXPECT_TRUE(sii->CheckSharedImageExists(mailbox2));
-  EXPECT_EQ(mailbox2, resource.mailbox_holder.mailbox);
+  EXPECT_EQ(mailbox2, resource.mailbox());
 
   // Resize to 100x50. The current backbuffer must be destroyed. The exported
   // resource should stay alive. A new backbuffer must be created.
@@ -450,7 +456,7 @@ TEST_F(DrawingBufferImageChromiumTest, VerifyResizingReallocatesImages) {
   EXPECT_EQ(2u, sii->shared_image_count());
   EXPECT_TRUE(sii->CheckSharedImageExists(mailbox3));
   EXPECT_TRUE(sii->CheckSharedImageExists(mailbox4));
-  EXPECT_EQ(mailbox4, resource.mailbox_holder.mailbox);
+  EXPECT_EQ(mailbox4, resource.mailbox());
   testing::Mock::VerifyAndClearExpectations(gl_);
 
   // Reset to initial size. The exported resource has to stay alive, but the
@@ -516,7 +522,7 @@ TEST_F(DrawingBufferImageChromiumTest, AllocationFailure) {
       features::kDrawingBufferWithoutGpuMemoryBuffer);
 
   GLES2InterfaceForTests* gl_ = drawing_buffer_->ContextGLForTests();
-  viz::TestSharedImageInterface* sii =
+  gpu::TestSharedImageInterface* sii =
       drawing_buffer_->SharedImageInterfaceForTests();
 
   viz::TransferableResource resource1;
@@ -594,7 +600,7 @@ class DepthStencilTrackingGLES2Interface
         depth_stencil_attachment_ = renderbuffer;
         break;
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
     }
   }

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/modules/mediarecorder/h264_encoder.h"
 
 #include <optional>
@@ -40,7 +45,7 @@ std::optional<EProfileIdc> ToOpenH264Profile(media::VideoCodecProfile profile) {
           {media::H264PROFILE_HIGH, PRO_HIGH},
       });
 
-  const auto* it = kProfileToEProfileIdc.find(profile);
+  const auto it = kProfileToEProfileIdc.find(profile);
   if (it != kProfileToEProfileIdc.end()) {
     return it->second;
   }
@@ -69,7 +74,7 @@ std::optional<ELevelIdc> ToOpenH264Level(uint8_t level) {
           {52, LEVEL_5_2},
       });
 
-  const auto* it = kLevelToELevelIdc.find(level);
+  const auto it = kLevelToELevelIdc.find(level);
   if (it != kLevelToELevelIdc.end())
     return it->second;
   return std::nullopt;
@@ -136,15 +141,15 @@ void H264Encoder::EncodeFrame(scoped_refptr<media::VideoFrame> frame,
   picture.iColorFormat = EVideoFormatType::videoFormatI420;
   picture.uiTimeStamp =
       (capture_timestamp - first_frame_timestamp_).InMilliseconds();
-  picture.iStride[0] = frame->stride(VideoFrame::kYPlane);
-  picture.iStride[1] = frame->stride(VideoFrame::kUPlane);
-  picture.iStride[2] = frame->stride(VideoFrame::kVPlane);
+  picture.iStride[0] = frame->stride(VideoFrame::Plane::kY);
+  picture.iStride[1] = frame->stride(VideoFrame::Plane::kU);
+  picture.iStride[2] = frame->stride(VideoFrame::Plane::kV);
   picture.pData[0] =
-      const_cast<uint8_t*>(frame->visible_data(VideoFrame::kYPlane));
+      const_cast<uint8_t*>(frame->visible_data(VideoFrame::Plane::kY));
   picture.pData[1] =
-      const_cast<uint8_t*>(frame->visible_data(VideoFrame::kUPlane));
+      const_cast<uint8_t*>(frame->visible_data(VideoFrame::Plane::kU));
   picture.pData[2] =
-      const_cast<uint8_t*>(frame->visible_data(VideoFrame::kVPlane));
+      const_cast<uint8_t*>(frame->visible_data(VideoFrame::Plane::kV));
 
   SFrameBSInfo info = {};
 
@@ -195,7 +200,7 @@ bool H264Encoder::ConfigureEncoder(const gfx::Size& size) {
   TRACE_EVENT0("media", "H264Encoder::ConfigureEncoder");
   ISVCEncoder* temp_encoder = nullptr;
   if (WelsCreateSVCEncoder(&temp_encoder) != 0) {
-    NOTREACHED() << "Failed to create OpenH264 encoder";
+    NOTREACHED_IN_MIGRATION() << "Failed to create OpenH264 encoder";
     return false;
   }
   openh264_encoder_.reset(temp_encoder);
@@ -289,7 +294,8 @@ SEncParamExt H264Encoder::GetEncoderOptionForTesting() {
   SEncParamExt params;
   if (openh264_encoder_->GetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
                                    &params) != 0) {
-    NOTREACHED() << "Failed to get ENCODER_OPTION_SVC_ENCODE_PARAM_EXT";
+    NOTREACHED_IN_MIGRATION()
+        << "Failed to get ENCODER_OPTION_SVC_ENCODE_PARAM_EXT";
   }
 
   return params;

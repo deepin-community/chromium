@@ -7,33 +7,42 @@
 #include <memory>
 
 #include "base/functional/callback.h"
+#include "components/facilitated_payments/content/browser/facilitated_payments_api_client_factory.h"
+#include "components/facilitated_payments/core/browser/facilitated_payments_api_client.h"
+#include "components/facilitated_payments/core/browser/facilitated_payments_manager.h"
 #include "content/public/browser/render_frame_host.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 
 namespace payments::facilitated {
 
-class FaciliatedPaymentsManager;
-
 ContentFacilitatedPaymentsDriver::ContentFacilitatedPaymentsDriver(
+    FacilitatedPaymentsClient* client,
     optimization_guide::OptimizationGuideDecider* optimization_guide_decider,
     content::RenderFrameHost* render_frame_host)
     : FacilitatedPaymentsDriver(std::make_unique<FacilitatedPaymentsManager>(
-          this,
-          optimization_guide_decider,
-          render_frame_host->GetPageUkmSourceId())),
-      render_frame_host_(*render_frame_host) {}
+          /*driver=*/this,
+          client,
+          GetFacilitatedPaymentsApiClientCreator(
+              render_frame_host->GetGlobalId()),
+          optimization_guide_decider)),
+      render_frame_host_id_(render_frame_host->GetGlobalId()) {}
 
 ContentFacilitatedPaymentsDriver::~ContentFacilitatedPaymentsDriver() = default;
 
 void ContentFacilitatedPaymentsDriver::TriggerPixCodeDetection(
-    base::OnceCallback<void(mojom::PixCodeDetectionResult)> callback) {
+    base::OnceCallback<void(mojom::PixCodeDetectionResult, const std::string&)>
+        callback) {
   GetAgent()->TriggerPixCodeDetection(std::move(callback));
 }
 
 const mojo::AssociatedRemote<mojom::FacilitatedPaymentsAgent>&
 ContentFacilitatedPaymentsDriver::GetAgent() {
-  if (!agent_) {
-    render_frame_host_->GetRemoteAssociatedInterfaces()->GetInterface(&agent_);
+  if (!agent_.is_bound()) {
+    content::RenderFrameHost* render_frame_host =
+        content::RenderFrameHost::FromID(render_frame_host_id_);
+    if (render_frame_host && render_frame_host->IsActive()) {
+      render_frame_host->GetRemoteAssociatedInterfaces()->GetInterface(&agent_);
+    }
   }
   return agent_;
 }

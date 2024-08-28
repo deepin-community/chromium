@@ -152,6 +152,7 @@ class WebSigninInterceptor {
     kEnterpriseAcceptManagement,
     kProfileSwitchForced,
     kChromeSignin,
+    kEnterpriseOIDC
   };
 
   // Delegate class responsible for showing the various interception UIs.
@@ -200,6 +201,13 @@ class WebSigninInterceptor {
         content::WebContents* web_contents,
         const BubbleParameters& bubble_parameters,
         base::OnceCallback<void(SigninInterceptionResult)> callback) = 0;
+
+    virtual std::unique_ptr<ScopedWebSigninInterceptionBubbleHandle>
+    ShowOidcInterceptionDialog(
+        content::WebContents* web_contents,
+        const BubbleParameters& bubble_parameters,
+        signin::SigninChoiceWithConfirmationCallback callback,
+        base::OnceClosure dialog_closed_closure) = 0;
 
     // Shows the first run experience for `account_id` in `browser` opened for
     // a newly created profile.

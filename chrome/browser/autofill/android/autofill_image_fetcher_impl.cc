@@ -5,8 +5,10 @@
 #include "chrome/browser/autofill/android/autofill_image_fetcher_impl.h"
 
 #include "base/android/jni_android.h"
-#include "chrome/browser/autofill/android/jni_headers/AutofillImageFetcher_jni.h"
 #include "url/android/gurl_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/autofill/android/jni_headers/AutofillImageFetcher_jni.h"
 
 namespace autofill {
 
@@ -25,14 +27,8 @@ void AutofillImageFetcherImpl::FetchImagesForURLs(
 
   JNIEnv* env = base::android::AttachCurrentThread();
 
-  std::vector<base::android::ScopedJavaLocalRef<jobject>> java_urls;
-  for (const auto& url : card_art_urls) {
-    java_urls.emplace_back(url::GURLAndroid::FromNativeGURL(env, url));
-  }
-
-  Java_AutofillImageFetcher_prefetchImages(
-      env, GetOrCreateJavaImageFetcher(),
-      url::GURLAndroid::ToJavaArrayOfGURLs(env, java_urls));
+  Java_AutofillImageFetcher_prefetchImages(env, GetOrCreateJavaImageFetcher(),
+                                           card_art_urls);
 }
 
 base::android::ScopedJavaLocalRef<jobject>

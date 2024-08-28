@@ -707,7 +707,7 @@ Type Typer::Visitor::ToNumeric(Type type, Typer* t) {
 Type Typer::Visitor::ToObject(Type type, Typer* t) {
   // ES6 section 7.1.13 ToObject ( argument )
   if (type.Is(Type::Receiver())) return type;
-  if (type.Is(Type::Primitive())) return Type::OtherObject();
+  if (type.Is(Type::Primitive())) return Type::StringWrapperOrOtherObject();
   if (!type.Maybe(Type::OtherUndetectable())) {
     return Type::DetectableReceiver();
   }
@@ -1192,6 +1192,16 @@ Type Typer::Visitor::TypeCall(Node* node) { return Type::Any(); }
 
 Type Typer::Visitor::TypeFastApiCall(Node* node) { return Type::Any(); }
 
+#ifdef V8_ENABLE_CONTINUATION_PRESERVED_EMBEDDER_DATA
+Type Typer::Visitor::TypeGetContinuationPreservedEmbedderData(Node* node) {
+  return Type::Any();
+}
+
+Type Typer::Visitor::TypeSetContinuationPreservedEmbedderData(Node* node) {
+  UNREACHABLE();
+}
+#endif  // V8_ENABLE_CONTINUATION_PRESERVED_EMBEDDER_DATA
+
 #if V8_ENABLE_WEBASSEMBLY
 Type Typer::Visitor::TypeJSWasmCall(Node* node) {
   const JSWasmCallParameters& op_params = JSWasmCallParametersOf(node->op());
@@ -1479,6 +1489,10 @@ Type Typer::Visitor::TypeJSCreateKeyValueArray(Node* node) {
 
 Type Typer::Visitor::TypeJSCreateObject(Node* node) {
   return Type::OtherObject();
+}
+
+Type Typer::Visitor::TypeJSCreateStringWrapper(Node* node) {
+  return Type::StringWrapper();
 }
 
 Type Typer::Visitor::TypeJSCreatePromise(Node* node) {
@@ -2363,6 +2377,11 @@ Type Typer::Visitor::TypeCheckSmi(Node* node) {
 Type Typer::Visitor::TypeCheckString(Node* node) {
   Type arg = Operand(node, 0);
   return Type::Intersect(arg, Type::String(), zone());
+}
+
+Type Typer::Visitor::TypeCheckStringOrStringWrapper(Node* node) {
+  Type arg = Operand(node, 0);
+  return Type::Intersect(arg, Type::StringOrStringWrapper(), zone());
 }
 
 Type Typer::Visitor::TypeCheckSymbol(Node* node) {

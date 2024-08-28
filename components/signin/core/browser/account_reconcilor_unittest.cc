@@ -20,6 +20,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/with_feature_override.h"
 #include "base/time/time.h"
 #include "base/timer/mock_timer.h"
 #include "build/build_config.h"
@@ -185,11 +186,11 @@ class DummyAccountReconcilorWithDelegate : public AccountReconcilor {
         return std::make_unique<signin::DiceAccountReconcilorDelegate>(
             identity_manager, client);
 #else
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         return nullptr;
 #endif
     }
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return nullptr;
   }
 };
@@ -254,9 +255,7 @@ struct Cookie {
   std::string gaia_id;
   bool is_valid;
 
-  bool operator==(const Cookie& other) const {
-    return gaia_id == other.gaia_id && is_valid == other.is_valid;
-  }
+  bool operator==(const Cookie& other) const = default;
 };
 
 // Converts CookieParams to ListedAccounts.
@@ -350,7 +349,7 @@ class AccountReconcilorTest : public ::testing::Test {
 
   signin::ConsentLevel consent_level_for_reconcile_ =
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-      // TODO(https://crbug.com/1463887): Migrate away from
+      // TODO(crbug.com/40067189): Migrate away from
       // `ConsentLevel::kSync` on Ash.
       signin::ConsentLevel::kSync;
 #else
@@ -410,6 +409,7 @@ AccountReconcilorTest::AccountReconcilorTest()
       identity_test_env_(/*test_url_loader_factory=*/nullptr,
                          &pref_service_,
                          &test_signin_client_) {
+  AccountReconcilor::RegisterProfilePrefs(pref_service_.registry());
   signin::SetListAccountsResponseHttpNotFound(&test_url_loader_factory_);
 
   // The reconcilor should not be built before the test can set the account
@@ -627,8 +627,16 @@ class BaseAccountReconcilorTestTable : public AccountReconcilorTest {
       EXPECT_EQ(CoreAccountId(), primary_account_id);
   }
 
+  virtual bool ShouldSkipTest(const std::vector<Token>& tokens) {
+    return false;
+  }
+
   void SetupTokens(const char* tokens_string) {
     std::vector<Token> tokens = ParseTokenString(tokens_string);
+    if (ShouldSkipTest(tokens)) {
+      GTEST_SKIP();
+    }
+
     Token primary_account;
     for (const Token& token : tokens) {
       CoreAccountId account_id;
@@ -679,7 +687,7 @@ class BaseAccountReconcilorTestTable : public AccountReconcilorTest {
       if (PickAccountIdForAccount(account.gaia_id, account.email) == account_id)
         return account;
     }
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return Account();
   }
 
@@ -727,7 +735,9 @@ class BaseAccountReconcilorTestTable : public AccountReconcilorTest {
     // Setup tokens. This triggers listing cookies so we need to setup cookies
     // before that.
     SetupTokens(param.tokens);
-
+    if (testing::Test::IsSkipped()) {
+      return;
+    }
     CreateReconclior();
 
     // Setup expectations.
@@ -1019,7 +1029,7 @@ const std::vector<AccountReconcilorTestTableParam> kDiceParams = {
     {  "AB",   "BC",   IsFirstReconcile::kBoth,     "UBA",  "AB",   "BA"      },
     // Check that Gaia cookie order is preserved for B.
     {  "*ABC", "CB",   IsFirstReconcile::kFirst,    "UABC", "*ABC", "ABC"     },
-    // TODO(https://crbug.com/1129931): Merge session should do XCB instead.
+    // TODO(crbug.com/40149592): Merge session should do XCB instead.
     {  "xABC", "ABC",  IsFirstReconcile::kFirst,    "UCB",  "BC",   "CB"      },
     // Check that order in the chrome_accounts is not important.
     {  "A*B",  "",     IsFirstReconcile::kBoth,     "PBA",  "A*B",  "BA"      },
@@ -1431,8 +1441,8 @@ class AccountReconcilorDiceTestForSupervisedUsers
     : public AccountReconcilorDiceTest {
  public:
   AccountReconcilorDiceTestForSupervisedUsers() {
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{}, /*disabled_features=*/{switches::kUnoDesktop});
+    feature_list_.InitAndDisableFeature(
+        switches::kExplicitBrowserSigninUIOnDesktop);
   }
 
   ~AccountReconcilorDiceTestForSupervisedUsers() override = default;
@@ -1501,27 +1511,22 @@ TEST_F(AccountReconcilorDiceTestForSupervisedUsers,
 
 class AccountReconcilorDiceTestWithUnoDesktop
     : public AccountReconcilorDiceTest,
-      public ::testing::WithParamInterface<bool> {
+      public base::test::WithFeatureOverride {
  public:
-  AccountReconcilorDiceTestWithUnoDesktop() {
-    if (is_uno_desktop_enabled()) {
-      feature_list_.InitAndEnableFeature(switches::kUnoDesktop);
-    } else {
-      feature_list_.InitAndDisableFeature(switches::kUnoDesktop);
-    }
-  }
+  AccountReconcilorDiceTestWithUnoDesktop()
+      : base::test::WithFeatureOverride(
+            switches::kExplicitBrowserSigninUIOnDesktop) {}
 
   ~AccountReconcilorDiceTestWithUnoDesktop() override = default;
 
-  bool is_uno_desktop_enabled() const { return GetParam(); }
+  bool is_uno_desktop_enabled() const { return IsParamFeatureEnabled(); }
 
  private:
   base::test::ScopedFeatureList feature_list_;
 };
 
-INSTANTIATE_TEST_SUITE_P(AccountReconcilorDiceTestWithUnoDesktop,
-                         AccountReconcilorDiceTestWithUnoDesktop,
-                         ::testing::Bool());
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
+    AccountReconcilorDiceTestWithUnoDesktop);
 
 TEST_P(AccountReconcilorDiceTestWithUnoDesktop, DeleteCookieForSignedInUser) {
   auto* identity_manager = identity_test_env()->identity_manager();
@@ -1573,39 +1578,218 @@ TEST_P(AccountReconcilorDiceTestWithUnoDesktop, DeleteCookieForSyncingUser) {
           account_info.account_id));
 }
 
+TEST_P(AccountReconcilorDiceTestWithUnoDesktop,
+       CookieSettingMigrationExplicitSignin) {
+  ASSERT_FALSE(pref_service()->GetBoolean(
+      prefs::kCookieClearOnExitMigrationNoticeComplete));
+  AccountInfo account_info = identity_test_env()->MakePrimaryAccountAvailable(
+      kFakeEmail, signin::ConsentLevel::kSignin);
+  ASSERT_EQ(is_uno_desktop_enabled(),
+            pref_service()->GetBoolean(prefs::kExplicitBrowserSignin));
+
+  // Explicit signin is auto-migrated.
+  GetMockReconcilor();
+  EXPECT_EQ(is_uno_desktop_enabled(),
+            pref_service()->GetBoolean(
+                prefs::kCookieClearOnExitMigrationNoticeComplete));
+}
+
+TEST_P(AccountReconcilorDiceTestWithUnoDesktop,
+       CookieSettingMigrationExplicitSigninWithClearOnExit) {
+  ASSERT_FALSE(pref_service()->GetBoolean(
+      prefs::kCookieClearOnExitMigrationNoticeComplete));
+  AccountInfo account_info = identity_test_env()->MakePrimaryAccountAvailable(
+      kFakeEmail, signin::ConsentLevel::kSignin);
+  ASSERT_EQ(is_uno_desktop_enabled(),
+            pref_service()->GetBoolean(prefs::kExplicitBrowserSignin));
+  test_signin_client()->set_are_signin_cookies_deleted_on_exit(true);
+
+  // Explicit signin is not auto-migrated when the setting exists.
+  content_settings::Observer* reconcilor = GetMockReconcilor();
+  EXPECT_FALSE(pref_service()->GetBoolean(
+      prefs::kCookieClearOnExitMigrationNoticeComplete));
+
+  // Changing cookie settings should trigger the migration.
+  test_signin_client()->set_are_signin_cookies_deleted_on_exit(false);
+  reconcilor->OnContentSettingChanged(
+      /*primary_pattern=*/ContentSettingsPattern(),
+      /*secondary_pattern=*/ContentSettingsPattern(),
+      ContentSettingsTypeSet(ContentSettingsType::COOKIES));
+  EXPECT_EQ(is_uno_desktop_enabled(),
+            pref_service()->GetBoolean(
+                prefs::kCookieClearOnExitMigrationNoticeComplete));
+}
+
+TEST_P(AccountReconcilorDiceTestWithUnoDesktop,
+       CookieSettingMigrationImplicitSignin) {
+  ASSERT_FALSE(pref_service()->GetBoolean(
+      prefs::kCookieClearOnExitMigrationNoticeComplete));
+  AccountInfo account_info = identity_test_env()->MakePrimaryAccountAvailable(
+      kFakeEmail, signin::ConsentLevel::kSignin);
+  pref_service()->ClearPref(prefs::kExplicitBrowserSignin);
+  ASSERT_FALSE(pref_service()->GetBoolean(prefs::kExplicitBrowserSignin));
+
+  // Implicit signin is not auto-migrated.
+  content_settings::Observer* reconcilor = GetMockReconcilor();
+  EXPECT_FALSE(pref_service()->GetBoolean(
+      prefs::kCookieClearOnExitMigrationNoticeComplete));
+
+  // Changing cookie settings should not trigger the migration.
+  reconcilor->OnContentSettingChanged(
+      /*primary_pattern=*/ContentSettingsPattern(),
+      /*secondary_pattern=*/ContentSettingsPattern(),
+      ContentSettingsTypeSet(ContentSettingsType::COOKIES));
+  EXPECT_FALSE(pref_service()->GetBoolean(
+      prefs::kCookieClearOnExitMigrationNoticeComplete));
+}
+
+TEST_P(AccountReconcilorDiceTestWithUnoDesktop,
+       CookieSettingMigrationSignedOut) {
+  ASSERT_FALSE(pref_service()->GetBoolean(
+      prefs::kCookieClearOnExitMigrationNoticeComplete));
+  ASSERT_FALSE(pref_service()->GetBoolean(prefs::kExplicitBrowserSignin));
+  ASSERT_FALSE(identity_test_env()->identity_manager()->HasPrimaryAccount(
+      signin::ConsentLevel::kSignin));
+
+  // Signed out state is auto-migrated.
+  GetMockReconcilor();
+  EXPECT_EQ(is_uno_desktop_enabled(),
+            pref_service()->GetBoolean(
+                prefs::kCookieClearOnExitMigrationNoticeComplete));
+}
+
+TEST_P(AccountReconcilorDiceTestWithUnoDesktop, CookieSettingMigrationSync) {
+  ASSERT_FALSE(pref_service()->GetBoolean(
+      prefs::kCookieClearOnExitMigrationNoticeComplete));
+  AccountInfo account_info = identity_test_env()->MakePrimaryAccountAvailable(
+      kFakeEmail, signin::ConsentLevel::kSync);
+  ASSERT_EQ(is_uno_desktop_enabled(),
+            pref_service()->GetBoolean(prefs::kExplicitBrowserSignin));
+
+  // Sync is not auto-migrated.
+  GetMockReconcilor();
+  EXPECT_FALSE(pref_service()->GetBoolean(
+      prefs::kCookieClearOnExitMigrationNoticeComplete));
+
+  // But is migrated on signout. Regression test for b/350888149.
+  identity_test_env()->ClearPrimaryAccount();
+  EXPECT_EQ(is_uno_desktop_enabled(),
+            pref_service()->GetBoolean(
+                prefs::kCookieClearOnExitMigrationNoticeComplete));
+}
+
+TEST_P(AccountReconcilorDiceTestWithUnoDesktop,
+       CookieSettingMigrationExplicitPref) {
+  ASSERT_FALSE(pref_service()->GetBoolean(
+      prefs::kCookieClearOnExitMigrationNoticeComplete));
+  AccountInfo account_info = identity_test_env()->MakePrimaryAccountAvailable(
+      kFakeEmail, signin::ConsentLevel::kSignin);
+  pref_service()->ClearPref(prefs::kExplicitBrowserSignin);
+  ASSERT_FALSE(pref_service()->GetBoolean(prefs::kExplicitBrowserSignin));
+
+  // Implicit signin is not auto-migrated.
+  GetMockReconcilor();
+  EXPECT_FALSE(pref_service()->GetBoolean(
+      prefs::kCookieClearOnExitMigrationNoticeComplete));
+
+  // Make the signin explicit, this triggers the migration.
+  pref_service()->SetBoolean(prefs::kExplicitBrowserSignin, true);
+  EXPECT_EQ(is_uno_desktop_enabled(),
+            pref_service()->GetBoolean(
+                prefs::kCookieClearOnExitMigrationNoticeComplete));
+}
+
 const std::vector<AccountReconcilorTestTableParam>
     kDiceParamsUnoPreChromeSignIn = {
         // clang-format off
         // See `kDiceParams` above for detailed params format.
-        {  "",     "A",    IsFirstReconcile::kBoth,  "",  "",   "A"    },
-        {  "AB",   "",     IsFirstReconcile::kBoth,  "",  "" ,  ""     },
-        {  "AB",   "A",    IsFirstReconcile::kBoth,  "",  "A",  "A"    },
-        {  "A",    "B",    IsFirstReconcile::kBoth,  "",  "" ,  "B"    },
-        {  "xA",   "A",    IsFirstReconcile::kBoth,  "",  "",   "A"    },
-        {  "xAB",  "A",    IsFirstReconcile::kBoth,  "",  "",   "A"    },
+        // First account in cookie doesn't have a token.
+        {  "",     "A",     IsFirstReconcile::kBoth,      "X",   "",   ""     },
+        {  "xA",   "A",     IsFirstReconcile::kBoth,      "X",   "",   ""     },
+        {  "B",    "AB",    IsFirstReconcile::kFirst,     "UB",  "B",  "B"    },
+        {  "B",    "AB",    IsFirstReconcile::kNotFirst,  "X",   "",   ""     },
+        {  "xAB",  "A",     IsFirstReconcile::kBoth,      "X",   "" ,  ""     },
 
-        // Account marked as invalid in cookies.
-        {  "A",    "xA",   IsFirstReconcile::kBoth,  "",  "",   "xA"   },
-        {  "AB",   "AxB",  IsFirstReconcile::kBoth,  "",  "A",  "AxB"  },
-        {  "xA",   "xA",   IsFirstReconcile::kBoth,  "",  "",   "xA"   },
+        // Invalid first account in cookie doesn't have a token.
+        {  "xA",   "xA",    IsFirstReconcile::kBoth,      "",    "",   "xA"   },
+        {  "",     "xAB",   IsFirstReconcile::kBoth,      "X",   "",   ""     },
+        {  "B",    "xAB",   IsFirstReconcile::kBoth,      "",    "B",  "xAB"  },
+        {  "B",    "xABC",  IsFirstReconcile::kBoth,      "UB",  "B",  "B"    },
+
+        // Invalid first account in cookie.
+        {  "A",    "xA",    IsFirstReconcile::kBoth,      "",    "",   "xA"   },
+        {  "A",    "xAB",   IsFirstReconcile::kBoth,      "X",   "",   ""     },
+        {  "AB",   "xABC",  IsFirstReconcile::kBoth,      "UB",  "B",  "B"    },
+
+        // Tokens not in the cookie.
+        {  "CB",   "B",     IsFirstReconcile::kBoth,      "",    "B",  "B"    },
+        {  "AB",   "",      IsFirstReconcile::kBoth,      "",    "" ,  ""     },
+        {  "AB",   "AxB",   IsFirstReconcile::kBoth,      "",    "A",  "AxB"  },
+
+        // Tokens and cookies need update.
+        {  "A",    "B",     IsFirstReconcile::kBoth,      "X",   "" ,  ""     },
+
+        // Secondary account without token.
+        {  "B",    "BC",    IsFirstReconcile::kBoth,      "UB",  "B",  "B"    },
+
+        // Consistent.
+        // Added to check Reconcile is Idempotent.
+        {  "B",    "B",    IsFirstReconcile::kBoth,       "",    "B",  "B"    },
+        {  "",     "",     IsFirstReconcile::kBoth,       "",    "",   ""     },
+        {  "",     "xA",   IsFirstReconcile::kBoth,       "",    "",   "xA"   },
+        {  "A",    "AxB",  IsFirstReconcile::kBoth,       "",    "A",  "AxB"  },
+
         // clang-format on
 };
-class AccountReconcilorTestDiceWithUnoPreChromeSignIn
+class AccountReconcilorTestDiceExplicitBrowserSignin
     : public AccountReconcilorTestTable {
+ public:
+  AccountReconcilorTestDiceExplicitBrowserSignin() {
+    consent_level_for_reconcile_ = signin::ConsentLevel::kSignin;
+  }
+
  private:
-  base::test::ScopedFeatureList scoped_feature_list_{switches::kUnoDesktop};
+  base::test::ScopedFeatureList scoped_feature_list_{
+      switches::kExplicitBrowserSigninUIOnDesktop};
 };
 
+using AccountReconcilorTestDicePreChromeSignIn =
+    AccountReconcilorTestDiceExplicitBrowserSignin;
+
 // Checks one row of the `kDiceParamsUnoPreChromeSignIn` table above.
-TEST_P(AccountReconcilorTestDiceWithUnoPreChromeSignIn, TableRowTest) {
+TEST_P(AccountReconcilorTestDicePreChromeSignIn, TableRowTest) {
   SetAccountConsistency(signin::AccountConsistencyMethod::kDice);
+  CheckReconcileIdempotent(kDiceParamsUnoPreChromeSignIn, GetParam());
   RunRowTest(GetParam());
 }
 
 INSTANTIATE_TEST_SUITE_P(,
-                         AccountReconcilorTestDiceWithUnoPreChromeSignIn,
+                         AccountReconcilorTestDicePreChromeSignIn,
                          ::testing::ValuesIn(GenerateTestCasesFromParams(
                              kDiceParamsUnoPreChromeSignIn)));
+
+class AccountReconcilorTestExplicitBrowserSigninDiceMultiLogin
+    : public AccountReconcilorTestDiceExplicitBrowserSignin {
+ public:
+  bool ShouldSkipTest(const std::vector<Token>& tokens) override {
+    // We use the same set of `kDiceParams`.
+    // In this test suite, the consent level is signin, skip the tests where
+    // there is no authenticated primary account.
+    return !base::ranges::any_of(
+        tokens, [](const Token& token) { return token.is_authenticated; });
+  }
+};
+
+TEST_P(AccountReconcilorTestExplicitBrowserSigninDiceMultiLogin, TableRowTest) {
+  SetAccountConsistency(signin::AccountConsistencyMethod::kDice);
+  CheckReconcileIdempotent(kDiceParams, GetParam());
+  RunRowTest(GetParam());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    AccountReconcilorTestExplicitBrowserSigninDiceMultiLogin,
+    ::testing::ValuesIn(GenerateTestCasesFromParams(kDiceParams)));
 
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
@@ -2541,7 +2725,7 @@ TEST_P(AccountReconcilorMethodParamTest,
       break;
     }
     case signin::AccountConsistencyMethod::kDisabled:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 
@@ -3008,6 +3192,48 @@ TEST_F(AccountReconcilorTest, UnlockAfterShutdown) {
   lock.reset();  // This should not crash.
   EXPECT_FALSE(reconcilor->is_reconcile_started_);
 }
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT) || BUILDFLAG(IS_CHROMEOS_LACROS)
+TEST_F(AccountReconcilorTest, OnAccountsInCookieUpdatedLogoutInProgress) {
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  signin::AccountConsistencyMethod account_consistency =
+      signin::AccountConsistencyMethod::kDice;
+  SetAccountConsistency(account_consistency);
+#else
+  signin::AccountConsistencyMethod account_consistency =
+      signin::AccountConsistencyMethod::kMirror;
+  SetAccountConsistency(account_consistency);
+#endif
+  signin::CookieParams cookie_params = {
+      kFakeEmail, signin::GetTestGaiaIdForEmail(kFakeEmail), true /* valid */,
+      false /* signed_out */, true /* verified */};
+
+  signin::SetListAccountsResponseOneAccountWithParams(
+      cookie_params, &test_url_loader_factory_);
+
+  EXPECT_CALL(*GetMockReconcilor(), PerformLogoutAllAccountsAction());
+
+  AccountReconcilor* reconcilor = GetMockReconcilor();
+  ASSERT_TRUE(reconcilor);
+
+  ASSERT_EQ(AccountReconcilorState::kScheduled, reconcilor->GetState());
+  reconcilor->StartReconcile(AccountReconcilor::Trigger::kCookieChange);
+  ASSERT_EQ(AccountReconcilorState::kRunning, reconcilor->GetState());
+
+  // Add extra cookie change notification. Reconcilor should ignore it.
+  reconcilor->OnAccountsInCookieUpdated(
+      identity_test_env()->identity_manager()->GetAccountsInCookieJar(),
+      GoogleServiceAuthError::AuthErrorNone());
+
+  base::RunLoop().RunUntilIdle();
+
+  SimulateLogOutFromCookieCompleted(reconcilor,
+                                    GoogleServiceAuthError::AuthErrorNone());
+
+  ASSERT_FALSE(reconcilor->is_reconcile_started_);
+  ASSERT_EQ(AccountReconcilorState::kOk, reconcilor->GetState());
+}
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT) || BUILDFLAG(IS_CHROMEOS_LACROS)
 
 class AccountReconcilorThrottlerTest : public AccountReconcilorTest {
  public:

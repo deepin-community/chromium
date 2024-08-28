@@ -171,7 +171,7 @@ TEST_F(LocationBarModelImplTest, FormatsReaderModeUrls) {
             model()->GetFormattedFullURL());
 }
 
-// TODO(https://crbug.com/1010418): Fix flakes on linux_chromium_asan_rel_ng and
+// TODO(crbug.com/40651107): Fix flakes on linux_chromium_asan_rel_ng and
 // re-enable this test.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_PreventElisionWorks DISABLED_PreventElisionWorks
@@ -196,11 +196,9 @@ TEST_F(LocationBarModelImplTest, MAYBE_PreventElisionWorks) {
 TEST_F(LocationBarModelImplTest, GetVectorIcon) {
   delegate()->SetSecurityLevel(security_state::SecurityLevel::WARNING);
 
-  gfx::ImageSkia expected_icon = gfx::CreateVectorIcon(
-      features::IsChromeRefresh2023()
-          ? vector_icons::kNotSecureWarningChromeRefreshIcon
-          : vector_icons::kNotSecureWarningIcon,
-      gfx::kFaviconSize, gfx::kPlaceholderColor);
+  gfx::ImageSkia expected_icon =
+      gfx::CreateVectorIcon(vector_icons::kNotSecureWarningChromeRefreshIcon,
+                            gfx::kFaviconSize, gfx::kPlaceholderColor);
 
   gfx::ImageSkia icon = gfx::CreateVectorIcon(
       model()->GetVectorIcon(), gfx::kFaviconSize, gfx::kPlaceholderColor);

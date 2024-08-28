@@ -134,23 +134,6 @@ class RemotingSender::SenderEncodedFrameFactory {
 
 RemotingSender::RemotingSender(
     scoped_refptr<media::cast::CastEnvironment> cast_environment,
-    media::cast::CastTransport* transport,
-    const media::cast::FrameSenderConfig& config,
-    mojo::ScopedDataPipeConsumerHandle pipe,
-    mojo::PendingReceiver<media::mojom::RemotingDataStreamSender> stream_sender,
-    base::OnceClosure error_callback)
-    : RemotingSender(cast_environment,
-                     media::cast::FrameSender::Create(cast_environment,
-                                                      config,
-                                                      transport,
-                                                      *this),
-                     config,
-                     std::move(pipe),
-                     std::move(stream_sender),
-                     std::move(error_callback)) {}
-
-RemotingSender::RemotingSender(
-    scoped_refptr<media::cast::CastEnvironment> cast_environment,
     std::unique_ptr<openscreen::cast::Sender> sender,
     const media::cast::FrameSenderConfig& config,
     mojo::ScopedDataPipeConsumerHandle pipe,
@@ -231,12 +214,12 @@ void RemotingSender::CancelInFlightData() {
 }
 
 int RemotingSender::GetNumberOfFramesInEncoder() const {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0;
 }
 
 base::TimeDelta RemotingSender::GetEncoderBacklogDuration() const {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return base::TimeDelta();
 }
 

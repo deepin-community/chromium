@@ -28,6 +28,7 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
@@ -37,11 +38,13 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.LifecycleObserver;
+import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler.AppMenuItemType;
 import org.chromium.chrome.browser.ui.appmenu.test.R;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.browser_ui.widget.chips.ChipView;
 import org.chromium.components.browser_ui.widget.highlight.ViewHighlighterTestUtils;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.ui.modelutil.MVCListAdapter;
+import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.test.util.BlankUiTestActivity;
 import org.chromium.ui.test.util.BlankUiTestActivityTestCase;
 import org.chromium.ui.test.util.UiDisableIf;
@@ -80,7 +83,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
     public void setUpTest() throws Exception {
         super.setUpTest();
         mCanvas = Mockito.mock(Canvas.class);
-        TestThreadUtils.runOnUiThreadBlocking(this::setUpTestOnUiThread);
+        ThreadUtils.runOnUiThreadBlocking(this::setUpTestOnUiThread);
         mLifecycleDispatcher.observerRegisteredCallbackHelper.waitForCallback(0);
     }
 
@@ -118,7 +121,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
     public void testShowHideAppMenu() throws TimeoutException {
         showMenuAndAssert();
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.hideAppMenu());
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.hideAppMenu());
         mMenuObserver.menuHiddenCallback.waitForCallback(0);
 
         Assert.assertEquals(
@@ -126,7 +129,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
                 1,
                 mPropertiesDelegate.menuDismissedCallback.getCallCount());
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mAppMenuCoordinator.destroy());
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuCoordinator.destroy());
         Assert.assertEquals(
                 "Incorrect number of calls to #onMenuDismissed after destroy",
                 1,
@@ -138,7 +141,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
     public void testHideAppMenuMultiple() throws TimeoutException {
         showMenuAndAssert();
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.getAppMenu().dismiss());
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.getAppMenu().dismiss());
         mMenuObserver.menuHiddenCallback.waitForCallback(0);
 
         Assert.assertEquals(
@@ -146,7 +149,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
                 1,
                 mPropertiesDelegate.menuDismissedCallback.getCallCount());
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.getAppMenu().dismiss());
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.getAppMenu().dismiss());
         Assert.assertEquals(
                 "Incorrect number of calls to #onMenuDismissed after second call",
                 1,
@@ -214,7 +217,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
     public void testShowDestroyAppMenu() throws TimeoutException {
         showMenuAndAssert();
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mAppMenuCoordinator.destroy());
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuCoordinator.destroy());
 
         Assert.assertEquals(
                 "Incorrect number of calls to #onMenuDismissed after destroy",
@@ -227,7 +230,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
     public void testClickMenuItem() throws TimeoutException {
         showMenuAndAssert();
 
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () ->
                         AppMenuTestSupport.callOnItemClick(
                                 mAppMenuCoordinator, R.id.menu_item_three));
@@ -244,7 +247,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
     public void testClickMenuItem_Disabled() throws TimeoutException {
         showMenuAndAssert();
 
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> AppMenuTestSupport.callOnItemClick(mAppMenuCoordinator, R.id.menu_item_two));
 
         Assert.assertEquals(
@@ -258,7 +261,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
     public void testClickMenuItem_UsingPosition() throws TimeoutException {
         showMenuAndAssert();
 
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> mAppMenuHandler.getAppMenu().onItemClick(null, null, 0, 0));
 
         mDelegate.itemSelectedCallbackHelper.waitForCallback(0);
@@ -276,7 +279,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
         AppMenu spiedMenu = Mockito.spy(mAppMenuHandler.getAppMenu());
 
         View dummyView = new View(getActivity());
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     spiedMenu.onItemLongClick(
                             mAppMenuHandler.getAppMenu().getMenuItemPropertyModel(R.id.icon_one),
@@ -294,7 +297,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
         AppMenu spiedMenu = Mockito.spy(mAppMenuHandler.getAppMenu());
 
         View dummyView = new View(getActivity());
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     spiedMenu.onItemLongClick(
                             mAppMenuHandler.getAppMenu().getMenuItemPropertyModel(R.id.icon_two),
@@ -312,7 +315,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
         AppMenu spiedMenu = Mockito.spy(mAppMenuHandler.getAppMenu());
 
         View dummyView = new View(getActivity());
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     spiedMenu.onItemLongClick(
                             mAppMenuHandler.getAppMenu().getMenuItemPropertyModel(R.id.icon_three),
@@ -338,8 +341,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
         Assert.assertFalse(
                 "App menu should not be allowed to show, both blockers registered",
                 AppMenuTestSupport.shouldShowAppMenu(mAppMenuCoordinator));
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> mAppMenuCoordinator.showAppMenuForKeyboardEvent());
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuCoordinator.showAppMenuForKeyboardEvent());
         Assert.assertFalse(
                 "App menu should not have been shown.", mAppMenuHandler.isAppMenuShowing());
 
@@ -355,7 +357,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
     public void testSetMenuHighlight_StandardItem() throws TimeoutException {
         Assert.assertFalse(mMenuObserver.menuHighlighting);
 
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> mAppMenuHandler.setMenuHighlight(R.id.menu_item_one));
         mMenuObserver.menuHighlightChangedCallback.waitForCallback(0);
         Assert.assertTrue(mMenuObserver.menuHighlighting);
@@ -365,7 +367,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
         View itemView = getViewAtPosition(0);
         checkHighlightOn(itemView);
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.clearMenuHighlight());
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.clearMenuHighlight());
         mMenuObserver.menuHighlightChangedCallback.waitForCallback(1);
         Assert.assertFalse(mMenuObserver.menuHighlighting);
     }
@@ -376,7 +378,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
         mPropertiesDelegate.footerResourceId = R.layout.test_menu_footer;
         Assert.assertFalse(mMenuObserver.menuHighlighting);
 
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> mAppMenuHandler.setMenuHighlight(R.id.menu_footer_chip_view));
         mMenuObserver.menuHighlightChangedCallback.waitForCallback(0);
         Assert.assertTrue(mMenuObserver.menuHighlighting);
@@ -401,7 +403,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
                         eq((float) chipView.getCornerRadius()),
                         Mockito.any());
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.clearMenuHighlight());
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.clearMenuHighlight());
         mMenuObserver.menuHighlightChangedCallback.waitForCallback(1);
         Assert.assertFalse(mMenuObserver.menuHighlighting);
     }
@@ -413,8 +415,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
 
         Assert.assertFalse(mMenuObserver.menuHighlighting);
 
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> mAppMenuHandler.setMenuHighlight(R.id.icon_one));
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.setMenuHighlight(R.id.icon_one));
         mMenuObserver.menuHighlightChangedCallback.waitForCallback(0);
         Assert.assertTrue(mMenuObserver.menuHighlighting);
 
@@ -423,7 +424,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
         View itemView = ((LinearLayout) getViewAtPosition(3)).getChildAt(0);
         checkHighlightOn(itemView);
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.clearMenuHighlight());
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.clearMenuHighlight());
         mMenuObserver.menuHighlightChangedCallback.waitForCallback(1);
         Assert.assertFalse(mMenuObserver.menuHighlighting);
     }
@@ -439,7 +440,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
                 ((TextView) itemView.findViewById(R.id.menu_item_text)).getText());
 
         String newText = "Test!";
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mAppMenuHandler
                             .getAppMenu()
@@ -453,6 +454,126 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
                 "Menu item text incorrect",
                 newText,
                 ((TextView) itemView.findViewById(R.id.menu_item_text)).getText());
+    }
+
+    @Test
+    @MediumTest
+    public void testMenuItemRemoved() throws TimeoutException, ExecutionException {
+        showMenuAndAssert();
+        Assert.assertEquals(3, mAppMenuHandler.getModelListForTesting().size());
+        View itemView = getViewAtPosition(1);
+        Assert.assertEquals(
+                "Menu item text incorrect",
+                "Menu Item Two",
+                ((TextView) itemView.findViewById(R.id.menu_item_text)).getText());
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mAppMenuHandler.getModelListForTesting().removeAt(1));
+
+        itemView = getViewAtPosition(1);
+        Assert.assertEquals(
+                "Menu item text incorrect",
+                "Menu Item Three",
+                ((TextView) itemView.findViewById(R.id.menu_item_text)).getText());
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Assert.assertEquals(
+                            0,
+                            mAppMenuHandler
+                                    .getAppMenu()
+                                    .getMenuItemPropertyModel(R.id.menu_item_one)
+                                    .get(AppMenuItemProperties.POSITION));
+
+                    Assert.assertEquals(
+                            1,
+                            mAppMenuHandler
+                                    .getAppMenu()
+                                    .getMenuItemPropertyModel(R.id.menu_item_three)
+                                    .get(AppMenuItemProperties.POSITION));
+                });
+    }
+
+    @Test
+    @MediumTest
+    public void testMenuItemRangeRemoved() throws TimeoutException, ExecutionException {
+        showMenuAndAssert();
+        Assert.assertEquals(3, mAppMenuHandler.getModelListForTesting().size());
+        View itemView = getViewAtPosition(1);
+        Assert.assertEquals(
+                "Menu item text incorrect",
+                "Menu Item Two",
+                ((TextView) itemView.findViewById(R.id.menu_item_text)).getText());
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mAppMenuHandler.getModelListForTesting().removeRange(0, 2));
+
+        Assert.assertEquals(1, mAppMenuHandler.getModelListForTesting().size());
+        itemView = getViewAtPosition(0);
+        Assert.assertEquals(
+                "Menu item text incorrect",
+                "Menu Item Three",
+                ((TextView) itemView.findViewById(R.id.menu_item_text)).getText());
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Assert.assertEquals(
+                            0,
+                            mAppMenuHandler
+                                    .getAppMenu()
+                                    .getMenuItemPropertyModel(R.id.menu_item_three)
+                                    .get(AppMenuItemProperties.POSITION));
+                });
+    }
+
+    @Test
+    @MediumTest
+    public void testMenuItemAdded() throws TimeoutException {
+        showMenuAndAssert();
+        Assert.assertEquals(3, mAppMenuHandler.getModelListForTesting().size());
+        View itemView = getViewAtPosition(1);
+        Assert.assertEquals(
+                "Menu item text incorrect",
+                "Menu Item Two",
+                ((TextView) itemView.findViewById(R.id.menu_item_text)).getText());
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PropertyModel model =
+                            new PropertyModel.Builder(AppMenuItemProperties.ALL_KEYS)
+                                    .with(AppMenuItemProperties.MENU_ITEM_ID, 13)
+                                    .with(AppMenuItemProperties.TITLE, "new item title")
+                                    .build();
+                    mAppMenuHandler
+                            .getModelListForTesting()
+                            .add(0, new MVCListAdapter.ListItem(AppMenuItemType.STANDARD, model));
+                });
+        // ensure clicking on the newly added item doesn't break anything
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mAppMenuHandler.getAppMenu().onItemClick(null, null, 0, 0));
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PropertyModel m = mAppMenuHandler.getAppMenu().getMenuItemPropertyModel(13);
+                    Assert.assertNotNull(m.get(AppMenuItemProperties.CLICK_HANDLER));
+                    Assert.assertEquals(0, m.get(AppMenuItemProperties.POSITION));
+                    Assert.assertEquals(
+                            1,
+                            mAppMenuHandler
+                                    .getAppMenu()
+                                    .getMenuItemPropertyModel(R.id.menu_item_one)
+                                    .get(AppMenuItemProperties.POSITION));
+                    Assert.assertEquals(
+                            2,
+                            mAppMenuHandler
+                                    .getAppMenu()
+                                    .getMenuItemPropertyModel(R.id.menu_item_two)
+                                    .get(AppMenuItemProperties.POSITION));
+                    Assert.assertEquals(
+                            3,
+                            mAppMenuHandler
+                                    .getAppMenu()
+                                    .getMenuItemPropertyModel(R.id.menu_item_three)
+                                    .get(AppMenuItemProperties.POSITION));
+                });
     }
 
     @Test
@@ -482,7 +603,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
     @MediumTest
     public void testAppMenuHiddenOnStopWithNative() throws TimeoutException {
         showMenuAndAssert();
-        TestThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.onStopWithNative());
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.onStopWithNative());
         Assert.assertFalse(mAppMenuHandler.isAppMenuShowing());
     }
 
@@ -490,7 +611,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
     @MediumTest
     public void testAppMenuHiddenOnConfigurationChange() throws TimeoutException {
         showMenuAndAssert();
-        TestThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.onConfigurationChanged(null));
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.onConfigurationChanged(null));
         Assert.assertFalse(mAppMenuHandler.isAppMenuShowing());
     }
 
@@ -500,7 +621,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
         showMenuAndAssert();
 
         AppMenu appMenu = mAppMenuHandler.getAppMenu();
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     KeyEvent down = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MENU);
                     KeyEvent up = new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU);
@@ -539,7 +660,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
     public void testAppMenuKeyEvent_IgnoreEventsWhenHidden() throws Exception {
         // Show app menu to initialize, then hide.
         showMenuAndAssert();
-        TestThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.hideAppMenu());
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuHandler.hideAppMenu());
         mMenuObserver.menuHiddenCallback.waitForCallback(0);
 
         AppMenu appMenu = mAppMenuHandler.getAppMenu();
@@ -584,6 +705,9 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
 
     @Test
     @MediumTest
+    @DisableIf.Build(
+            sdk_is_greater_than = VERSION_CODES.Q,
+            message = "Flaky. See crbug.com/41496891")
     public void testAppMenuButtonHelper_DownCancel() throws Exception {
         AppMenuButtonHelperImpl buttonHelper =
                 (AppMenuButtonHelperImpl) mAppMenuHandler.createAppMenuButtonHelper();
@@ -686,7 +810,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
         AppMenuButtonHelperImpl buttonHelper =
                 (AppMenuButtonHelperImpl) mAppMenuHandler.createAppMenuButtonHelper();
 
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () ->
                         buttonHelper.performAccessibilityAction(
                                 mTestMenuButtonDelegate.getMenuButtonView(),
@@ -696,7 +820,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
         waitForMenuToShow(0);
         Assert.assertTrue("Menu should be showing", mAppMenuHandler.isAppMenuShowing());
 
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () ->
                         buttonHelper.performAccessibilityAction(
                                 mTestMenuButtonDelegate.getMenuButtonView(),
@@ -713,7 +837,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
         AppMenuButtonHelperImpl buttonHelper =
                 (AppMenuButtonHelperImpl) mAppMenuHandler.createAppMenuButtonHelper();
 
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> buttonHelper.onEnterKeyPress(mTestMenuButtonDelegate.getMenuButtonView()));
 
         waitForMenuToShow(0);
@@ -1015,8 +1139,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
 
     private void showMenuAndAssert() throws TimeoutException {
         int currentCallCount = mMenuObserver.menuShownCallback.getCallCount();
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> mAppMenuCoordinator.showAppMenuForKeyboardEvent());
+        ThreadUtils.runOnUiThreadBlocking(() -> mAppMenuCoordinator.showAppMenuForKeyboardEvent());
         waitForMenuToShow(currentCallCount);
     }
 
@@ -1024,7 +1147,7 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
         mMenuObserver.menuShownCallback.waitForCallback(currentCallCount);
         Assert.assertTrue("Menu should be showing", mAppMenuHandler.isAppMenuShowing());
 
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> mAppMenuHandler.getAppMenu().finishAnimationsForTests());
     }
 
@@ -1098,14 +1221,14 @@ public class AppMenuTest extends BlankUiTestActivityTestCase {
 
     private Rect getVisibleScreenRectAtPosition(int position) throws ExecutionException {
         View view = getViewAtPosition(position);
-        return TestThreadUtils.runOnUiThreadBlocking(
+        return ThreadUtils.runOnUiThreadBlocking(
                 () -> mAppMenuHandler.getAppMenuDragHelper().getScreenVisibleRect(view));
     }
 
     private void sendMotionEventToButtonHelper(
             AppMenuButtonHelperImpl helper, View view, MotionEvent event)
             throws ExecutionException {
-        TestThreadUtils.runOnUiThreadBlocking(() -> helper.onTouch(view, event));
+        ThreadUtils.runOnUiThreadBlocking(() -> helper.onTouch(view, event));
     }
 
     private void checkHighlightOn(View view) {

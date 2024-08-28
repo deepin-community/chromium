@@ -27,7 +27,7 @@
 #include "base/values.h"
 #include "chrome/browser/apps/app_service/app_service_test.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_test.h"
-#include "chrome/browser/ash/child_accounts/time_limits/app_time_test_utils.h"
+#include "chrome/browser/ash/child_accounts/apps/app_test_utils.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_types.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/test_extension_system.h"
@@ -186,7 +186,7 @@ class AppServiceWrapperTest : public ::testing::Test {
               webapps::WebappUninstallSource::kExternalPreinstalled,
               base::BindLambdaForTesting(
                   [&](webapps::UninstallResultCode code) {
-                    EXPECT_EQ(code, webapps::UninstallResultCode::kSuccess);
+                    EXPECT_EQ(code, webapps::UninstallResultCode::kAppRemoved);
                     run_loop.Quit();
                   }));
       run_loop.Run();

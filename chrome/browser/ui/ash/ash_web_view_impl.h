@@ -52,6 +52,7 @@ class AshWebViewImpl : public ash::AshWebView,
   void AddedToWidget() override;
   views::View* GetInitiallyFocusedView() override;
   void SetCornerRadii(const gfx::RoundedCornersF& corner_radii) override;
+  const base::UnguessableToken& GetMediaSessionRequestId() override;
 
   // content::WebContentsDelegate:
   bool IsWebContentsCreationOverridden(
@@ -62,7 +63,9 @@ class AshWebViewImpl : public ash::AshWebView,
       const GURL& target_url) override;
   content::WebContents* OpenURLFromTab(
       content::WebContents* source,
-      const content::OpenURLParams& params) override;
+      const content::OpenURLParams& params,
+      base::OnceCallback<void(content::NavigationHandle&)>
+          navigation_handle_callback) override;
   void ResizeDueToAutoResize(content::WebContents* web_contents,
                              const gfx::Size& new_size) override;
   bool TakeFocus(content::WebContents* web_contents, bool reverse) override;
@@ -75,6 +78,8 @@ class AshWebViewImpl : public ash::AshWebView,
   bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
                                   const url::Origin& security_origin,
                                   blink::mojom::MediaStreamType type) override;
+  std::string GetTitleForMediaControls(
+      content::WebContents* web_contents) override;
 
   // content::WebContentsObserver:
   void DidStopLoading() override;

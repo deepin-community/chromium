@@ -4,6 +4,7 @@
 
 #include "base/task/common/checked_lock_impl.h"
 
+#include <optional>
 #include <ostream>
 #include <unordered_map>
 #include <vector>
@@ -141,8 +142,7 @@ LazyInstance<SafeAcquisitionTracker>::Leaky g_safe_acquisition_tracker =
 
 CheckedLockImpl::CheckedLockImpl() : CheckedLockImpl(nullptr) {}
 
-CheckedLockImpl::CheckedLockImpl(const CheckedLockImpl* predecessor)
-    : is_universal_predecessor_(false) {
+CheckedLockImpl::CheckedLockImpl(const CheckedLockImpl* predecessor) {
   DCHECK(predecessor == nullptr || !predecessor->is_universal_successor_);
   g_safe_acquisition_tracker.Get().RegisterLock(this, predecessor);
 }
@@ -163,8 +163,8 @@ void CheckedLockImpl::AssertNoLockHeldOnCurrentThread() {
   g_safe_acquisition_tracker.Get().AssertNoLockHeldOnCurrentThread();
 }
 
-void CheckedLockImpl::Acquire() {
-  lock_.Acquire();
+void CheckedLockImpl::Acquire(subtle::LockTracking tracking) {
+  lock_.Acquire(tracking);
   g_safe_acquisition_tracker.Get().RecordAcquisition(this);
 }
 
@@ -181,8 +181,13 @@ void CheckedLockImpl::AssertNotHeld() const {
   lock_.AssertNotHeld();
 }
 
-std::unique_ptr<ConditionVariable> CheckedLockImpl::CreateConditionVariable() {
-  return std::make_unique<ConditionVariable>(&lock_);
+ConditionVariable CheckedLockImpl::CreateConditionVariable() {
+  return ConditionVariable(&lock_);
+}
+
+void CheckedLockImpl::CreateConditionVariableAndEmplace(
+    std::optional<ConditionVariable>& opt) {
+  opt.emplace(&lock_);
 }
 
 }  // namespace internal

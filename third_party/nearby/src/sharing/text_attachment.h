@@ -15,8 +15,7 @@
 #ifndef THIRD_PARTY_NEARBY_SHARING_TEXT_ATTACHMENT_H_
 #define THIRD_PARTY_NEARBY_SHARING_TEXT_ATTACHMENT_H_
 
-#include <stdint.h>
-
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -29,8 +28,6 @@ namespace nearby {
 namespace sharing {
 
 // Represents a text attachment.
-struct ShareTarget;
-
 class TextAttachment : public Attachment {
  public:
   using Type = nearby::sharing::service::proto::TextMetadata::Type;
@@ -42,6 +39,9 @@ class TextAttachment : public Attachment {
   TextAttachment(int64_t id, Type type, std::string text_title, int64_t size,
                  int32_t batch_id = 0,
                  SourceType source_type = SourceType::kUnknown);
+  TextAttachment(int64_t id, Type type, std::string text_body,
+                 std::string text_title, int64_t size, std::string mime_type,
+                 int32_t batch_id, SourceType source_type);
   TextAttachment(const TextAttachment&) = default;
   TextAttachment(TextAttachment&&) = default;
   TextAttachment& operator=(const TextAttachment&) = default;
@@ -53,21 +53,18 @@ class TextAttachment : public Attachment {
   Type type() const { return type_; }
 
   // Attachment:
-  void MoveToShareTarget(ShareTarget& share_target) override;
   absl::string_view GetDescription() const override;
   ShareType GetShareType() const override;
 
   void set_text_body(std::string text_body);
 
   std::string mime_type() const { return mime_type_; }
-  SourceType source_type() const { return source_type_; }
 
  private:
   Type type_ = service::proto::TextMetadata::UNKNOWN;
   std::string text_title_;
   std::string text_body_;
   std::string mime_type_;
-  SourceType source_type_ = SourceType::kUnknown;
 };
 
 }  // namespace sharing

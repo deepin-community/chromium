@@ -166,7 +166,7 @@ OnceCallback<void(Preargs..., Args...)> IgnoreArgs(
 class BASE_EXPORT ScopedClosureRunner {
  public:
   ScopedClosureRunner();
-  explicit ScopedClosureRunner(OnceClosure closure);
+  [[nodiscard]] explicit ScopedClosureRunner(OnceClosure closure);
   ScopedClosureRunner(ScopedClosureRunner&& other);
   // Runs the current closure if it's set, then replaces it with the closure
   // from |other|. This is akin to how unique_ptr frees the contained pointer in
@@ -191,15 +191,15 @@ class BASE_EXPORT ScopedClosureRunner {
 };
 
 // Returns a placeholder type that will implicitly convert into a null callback,
-// similar to how absl::nullopt / std::nullptr work in conjunction with
-// absl::optional and various smart pointer types.
+// similar to how std::nullopt / std::nullptr work in conjunction with
+// std::optional and various smart pointer types.
 constexpr auto NullCallback() {
   return internal::NullCallbackTag();
 }
 
 // Returns a placeholder type that will implicitly convert into a callback that
-// does nothing, similar to how absl::nullopt / std::nullptr work in conjunction
-// with absl::optional and various smart pointer types.
+// does nothing, similar to how std::nullopt / std::nullptr work in conjunction
+// with std::optional and various smart pointer types.
 constexpr auto DoNothing() {
   return internal::DoNothingCallbackTag();
 }

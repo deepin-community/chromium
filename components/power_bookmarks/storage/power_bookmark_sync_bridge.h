@@ -19,7 +19,7 @@ class PowerBookmarkSyncMetadataDatabase;
 
 // Transaction wraps a database transaction. When it's out of scope the
 // underlying transaction will be cancelled if not committed.
-// TODO(crbug.com/1392502): Find a better layout for this class.
+// TODO(crbug.com/40247772): Find a better layout for this class.
 class Transaction {
  public:
   virtual bool Commit() = 0;
@@ -84,8 +84,9 @@ class PowerBookmarkSyncBridge : public syncer::ModelTypeSyncBridge {
       syncer::EntityChangeList entity_changes) override;
   std::string GetStorageKey(const syncer::EntityData& entity_data) override;
   std::string GetClientTag(const syncer::EntityData& entity_data) override;
-  void GetData(StorageKeyList storage_keys, DataCallback callback) override;
-  void GetAllDataForDebugging(DataCallback callback) override;
+  std::unique_ptr<syncer::DataBatch> GetDataForCommit(
+      StorageKeyList storage_keys) override;
+  std::unique_ptr<syncer::DataBatch> GetAllDataForDebugging() override;
 
   void SendPowerToSync(const Power& power);
   void NotifySyncForDeletion(const std::string& guid);

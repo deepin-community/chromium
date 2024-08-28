@@ -201,6 +201,17 @@ BuildAttributionReportingIssueViolationType(
         kNavigationRegistrationWithoutTransientUserActivation:
       // This issue is not reported from the browser.
       NOTREACHED_NORETURN();
+    case blink::mojom::AttributionReportingIssueType::kInvalidInfoHeader:
+      return AttributionReportingIssueTypeEnum::InvalidInfoHeader;
+    case blink::mojom::AttributionReportingIssueType::kNoRegisterSourceHeader:
+      return AttributionReportingIssueTypeEnum::NoRegisterSourceHeader;
+    case blink::mojom::AttributionReportingIssueType::kNoRegisterTriggerHeader:
+      return AttributionReportingIssueTypeEnum::NoRegisterTriggerHeader;
+    case blink::mojom::AttributionReportingIssueType::kNoRegisterOsSourceHeader:
+      return AttributionReportingIssueTypeEnum::NoRegisterOsSourceHeader;
+    case blink::mojom::AttributionReportingIssueType::
+        kNoRegisterOsTriggerHeader:
+      return AttributionReportingIssueTypeEnum::NoRegisterOsTriggerHeader;
   }
 }
 
@@ -249,112 +260,130 @@ FederatedAuthRequestResultToProtocol(
     case FederatedAuthRequestResult::kShouldEmbargo: {
       return FederatedAuthRequestIssueReasonEnum::ShouldEmbargo;
     }
-    case FederatedAuthRequestResult::kErrorDisabledInSettings: {
+    case FederatedAuthRequestResult::kDisabledInSettings: {
       return FederatedAuthRequestIssueReasonEnum::DisabledInSettings;
     }
-    case FederatedAuthRequestResult::kErrorTooManyRequests: {
+    case FederatedAuthRequestResult::kDisabledInFlags: {
+      return FederatedAuthRequestIssueReasonEnum::DisabledInFlags;
+    }
+    case FederatedAuthRequestResult::kIdpNotPotentiallyTrustworthy: {
+      return FederatedAuthRequestIssueReasonEnum::IdpNotPotentiallyTrustworthy;
+    }
+    case FederatedAuthRequestResult::kTooManyRequests: {
       return FederatedAuthRequestIssueReasonEnum::TooManyRequests;
     }
-    case FederatedAuthRequestResult::kErrorFetchingWellKnownHttpNotFound: {
+    case FederatedAuthRequestResult::kWellKnownHttpNotFound: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownHttpNotFound;
     }
-    case FederatedAuthRequestResult::kErrorFetchingWellKnownNoResponse: {
+    case FederatedAuthRequestResult::kWellKnownNoResponse: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownNoResponse;
     }
-    case FederatedAuthRequestResult::kErrorFetchingWellKnownInvalidResponse: {
+    case FederatedAuthRequestResult::kWellKnownInvalidResponse: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownInvalidResponse;
     }
-    case FederatedAuthRequestResult::kErrorFetchingWellKnownListEmpty: {
+    case FederatedAuthRequestResult::kWellKnownListEmpty: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownListEmpty;
     }
-    case FederatedAuthRequestResult::
-        kErrorFetchingWellKnownInvalidContentType: {
+    case FederatedAuthRequestResult::kWellKnownInvalidContentType: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownInvalidContentType;
     }
-    case FederatedAuthRequestResult::kErrorConfigNotInWellKnown: {
+    case FederatedAuthRequestResult::kConfigNotInWellKnown: {
       return FederatedAuthRequestIssueReasonEnum::ConfigNotInWellKnown;
     }
-    case FederatedAuthRequestResult::kErrorWellKnownTooBig: {
+    case FederatedAuthRequestResult::kWellKnownTooBig: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownTooBig;
     }
-    case FederatedAuthRequestResult::kErrorFetchingConfigHttpNotFound: {
+    case FederatedAuthRequestResult::kConfigHttpNotFound: {
       return FederatedAuthRequestIssueReasonEnum::ConfigHttpNotFound;
     }
-    case FederatedAuthRequestResult::kErrorFetchingConfigNoResponse: {
+    case FederatedAuthRequestResult::kConfigNoResponse: {
       return FederatedAuthRequestIssueReasonEnum::ConfigNoResponse;
     }
-    case FederatedAuthRequestResult::kErrorFetchingConfigInvalidResponse: {
+    case FederatedAuthRequestResult::kConfigInvalidResponse: {
       return FederatedAuthRequestIssueReasonEnum::ConfigInvalidResponse;
     }
-    case FederatedAuthRequestResult::kErrorFetchingConfigInvalidContentType: {
+    case FederatedAuthRequestResult::kConfigInvalidContentType: {
       return FederatedAuthRequestIssueReasonEnum::ConfigInvalidContentType;
     }
-    case FederatedAuthRequestResult::kErrorFetchingClientMetadataHttpNotFound: {
+    case FederatedAuthRequestResult::kClientMetadataHttpNotFound: {
       return FederatedAuthRequestIssueReasonEnum::ClientMetadataHttpNotFound;
     }
-    case FederatedAuthRequestResult::kErrorFetchingClientMetadataNoResponse: {
+    case FederatedAuthRequestResult::kClientMetadataNoResponse: {
       return FederatedAuthRequestIssueReasonEnum::ClientMetadataNoResponse;
     }
-    case FederatedAuthRequestResult::
-        kErrorFetchingClientMetadataInvalidResponse: {
+    case FederatedAuthRequestResult::kClientMetadataInvalidResponse: {
       return FederatedAuthRequestIssueReasonEnum::ClientMetadataInvalidResponse;
     }
-    case FederatedAuthRequestResult::
-        kErrorFetchingClientMetadataInvalidContentType: {
+    case FederatedAuthRequestResult::kClientMetadataInvalidContentType: {
       return FederatedAuthRequestIssueReasonEnum::
           ClientMetadataInvalidContentType;
     }
-    case FederatedAuthRequestResult::kErrorFetchingAccountsHttpNotFound: {
+    case FederatedAuthRequestResult::kAccountsHttpNotFound: {
       return FederatedAuthRequestIssueReasonEnum::AccountsHttpNotFound;
     }
-    case FederatedAuthRequestResult::kErrorFetchingAccountsNoResponse: {
+    case FederatedAuthRequestResult::kAccountsNoResponse: {
       return FederatedAuthRequestIssueReasonEnum::AccountsNoResponse;
     }
-    case FederatedAuthRequestResult::kErrorFetchingAccountsInvalidResponse: {
+    case FederatedAuthRequestResult::kAccountsInvalidResponse: {
       return FederatedAuthRequestIssueReasonEnum::AccountsInvalidResponse;
     }
-    case FederatedAuthRequestResult::kErrorFetchingAccountsListEmpty: {
+    case FederatedAuthRequestResult::kAccountsListEmpty: {
       return FederatedAuthRequestIssueReasonEnum::AccountsListEmpty;
     }
-    case FederatedAuthRequestResult::kErrorFetchingAccountsInvalidContentType: {
+    case FederatedAuthRequestResult::kAccountsInvalidContentType: {
       return FederatedAuthRequestIssueReasonEnum::AccountsInvalidContentType;
     }
-    case FederatedAuthRequestResult::kErrorFetchingIdTokenHttpNotFound: {
+    case FederatedAuthRequestResult::kIdTokenHttpNotFound: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenHttpNotFound;
     }
-    case FederatedAuthRequestResult::kErrorFetchingIdTokenNoResponse: {
+    case FederatedAuthRequestResult::kIdTokenNoResponse: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenNoResponse;
     }
-    case FederatedAuthRequestResult::kErrorFetchingIdTokenInvalidResponse: {
+    case FederatedAuthRequestResult::kIdTokenInvalidResponse: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenInvalidResponse;
     }
-    case FederatedAuthRequestResult::kErrorFetchingIdTokenIdpErrorResponse: {
+    case FederatedAuthRequestResult::kIdTokenIdpErrorResponse: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenIdpErrorResponse;
     }
-    case FederatedAuthRequestResult::
-        kErrorFetchingIdTokenCrossSiteIdpErrorResponse: {
+    case FederatedAuthRequestResult::kIdTokenCrossSiteIdpErrorResponse: {
       return FederatedAuthRequestIssueReasonEnum::
           IdTokenCrossSiteIdpErrorResponse;
     }
-    case FederatedAuthRequestResult::kErrorFetchingIdTokenInvalidContentType: {
+    case FederatedAuthRequestResult::kIdTokenInvalidContentType: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenInvalidContentType;
     }
-    case FederatedAuthRequestResult::kErrorCanceled: {
+    case FederatedAuthRequestResult::kCanceled: {
       return FederatedAuthRequestIssueReasonEnum::Canceled;
     }
-    case FederatedAuthRequestResult::kErrorRpPageNotVisible:
+    case FederatedAuthRequestResult::kRpPageNotVisible:
       return FederatedAuthRequestIssueReasonEnum::RpPageNotVisible;
     case FederatedAuthRequestResult::kError: {
       return FederatedAuthRequestIssueReasonEnum::ErrorIdToken;
     }
-    case FederatedAuthRequestResult::kErrorSilentMediationFailure: {
+    case FederatedAuthRequestResult::kSilentMediationFailure: {
       return FederatedAuthRequestIssueReasonEnum::SilentMediationFailure;
     }
-    case FederatedAuthRequestResult::kErrorThirdPartyCookiesBlocked: {
+    case FederatedAuthRequestResult::kThirdPartyCookiesBlocked: {
       return FederatedAuthRequestIssueReasonEnum::ThirdPartyCookiesBlocked;
     }
-    case FederatedAuthRequestResult::kErrorNotSignedInWithIdp: {
+    case FederatedAuthRequestResult::kNotSignedInWithIdp: {
       return FederatedAuthRequestIssueReasonEnum::NotSignedInWithIdp;
+    }
+    case FederatedAuthRequestResult::kMissingTransientUserActivation: {
+      return FederatedAuthRequestIssueReasonEnum::
+          MissingTransientUserActivation;
+    }
+    case FederatedAuthRequestResult::kReplacedByButtonMode: {
+      return FederatedAuthRequestIssueReasonEnum::ReplacedByButtonMode;
+    }
+    case FederatedAuthRequestResult::kInvalidFieldsSpecified: {
+      return FederatedAuthRequestIssueReasonEnum::InvalidFieldsSpecified;
+    }
+    case FederatedAuthRequestResult::kRelyingPartyOriginIsOpaque: {
+      return FederatedAuthRequestIssueReasonEnum::RelyingPartyOriginIsOpaque;
+    }
+    case FederatedAuthRequestResult::kTypeNotMatching: {
+      return FederatedAuthRequestIssueReasonEnum::TypeNotMatching;
     }
     case FederatedAuthRequestResult::kSuccess: {
       NOTREACHED_NORETURN();
@@ -523,31 +552,6 @@ std::unique_ptr<protocol::Audits::InspectorIssue> BuildBounceTrackingIssue(
   return issue;
 }
 
-std::unique_ptr<protocol::Audits::InspectorIssue>
-BuildCookieDeprecationMetadataIssue(
-    const blink::mojom::CookieDeprecationMetadataIssueDetailsPtr&
-        issue_details) {
-  auto metadata_issue_details =
-      protocol::Audits::CookieDeprecationMetadataIssueDetails::Create()
-          .SetAllowedSites(std::make_unique<protocol::Array<protocol::String>>(
-              issue_details->allowed_sites))
-          .Build();
-
-  auto protocol_issue_details =
-      protocol::Audits::InspectorIssueDetails::Create()
-          .SetCookieDeprecationMetadataIssueDetails(
-              std::move(metadata_issue_details))
-          .Build();
-
-  auto issue = protocol::Audits::InspectorIssue::Create()
-                   .SetCode(protocol::Audits::InspectorIssueCodeEnum::
-                                CookieDeprecationMetadataIssue)
-                   .SetDetails(std::move(protocol_issue_details))
-                   .Build();
-
-  return issue;
-}
-
 void UpdateChildFrameTrees(FrameTreeNode* ftn, bool update_target_info) {
   if (auto* agent_host = WebContentsDevToolsAgentHost::GetFor(
           WebContentsImpl::FromFrameTreeNode(ftn))) {
@@ -711,6 +715,15 @@ void DidActivatePrerender(const NavigationRequest& nav_request,
   UpdateChildFrameTrees(ftn, /* update_target_info= */ true);
 }
 
+void DidUpdatePolicyContainerHost(FrameTreeNode* ftn) {
+  if (!ftn) {
+    return;
+  }
+
+  DispatchToAgents(ftn,
+                   &protocol::NetworkHandler::OnPolicyContainerHostUpdated);
+}
+
 void DidUpdatePrefetchStatus(
     FrameTreeNode* ftn,
     const base::UnguessableToken& initiator_devtools_navigation_token,
@@ -754,6 +767,9 @@ namespace {
 
 protocol::String BuildBlockedByResponseReason(
     network::mojom::BlockedByResponseReason reason) {
+  // TODO(crbug.com/336752983):
+  // Add specific error messages when a subresource load was blocked due to
+  // Document-Isolation-Policy (Dip).
   switch (reason) {
     case network::mojom::BlockedByResponseReason::
         kCoepFrameResourceNeedsCoepHeader:
@@ -767,6 +783,10 @@ protocol::String BuildBlockedByResponseReason(
       return protocol::Audits::BlockedByResponseReasonEnum::CorpNotSameOrigin;
     case network::mojom::BlockedByResponseReason::
         kCorpNotSameOriginAfterDefaultedToSameOriginByCoep:
+    case network::mojom::BlockedByResponseReason::
+        kCorpNotSameOriginAfterDefaultedToSameOriginByDip:
+    case network::mojom::BlockedByResponseReason::
+        kCorpNotSameOriginAfterDefaultedToSameOriginByCoepAndDip:
       return protocol::Audits::BlockedByResponseReasonEnum::
           CorpNotSameOriginAfterDefaultedToSameOriginByCoep;
     case network::mojom::BlockedByResponseReason::kCorpNotSameSite:
@@ -858,6 +878,31 @@ bool ShouldBypassCSP(const NavigationRequest& nav_request) {
 
   for (auto* page : protocol::PageHandler::ForAgentHost(agent_host)) {
     if (page->ShouldBypassCSP()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ShouldBypassCertificateErrors(DevToolsAgentHost* agent_host) {
+  if (!agent_host) {
+    return false;
+  }
+
+  DevToolsAgentHostImpl* host_impl =
+      static_cast<DevToolsAgentHostImpl*>(agent_host);
+  for (auto* security_handler :
+       protocol::SecurityHandler::ForAgentHost(host_impl)) {
+    if (security_handler->IsIgnoreCertificateErrorsSet()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ShouldBypassCertificateErrors() {
+  for (auto* browser_agent_host : BrowserDevToolsAgentHost::Instances()) {
+    if (ShouldBypassCertificateErrors(browser_agent_host)) {
       return true;
     }
   }
@@ -1035,7 +1080,7 @@ void ThrottleServiceWorkerMainScriptFetch(
           ->GetDevToolsAgentHostForNewInstallingWorker(wrapper, version_id);
   DCHECK(agent_host);
 
-  // TODO(https://crbug.com/1467851): We should probably also add the
+  // TODO(crbug.com/40276949): We should probably also add the
   // possibility for Browser wide agents to throttle the request.
 
   // If we have a requesting_frame_id, we should have a frame and a frame tree
@@ -1770,6 +1815,34 @@ protocol::String BuildCookieOperation(blink::mojom::CookieOperation operation) {
   }
 }
 
+std::unique_ptr<protocol::Audits::InspectorIssue>
+BuildCookieDeprecationMetadataIssue(
+    const blink::mojom::CookieDeprecationMetadataIssueDetailsPtr&
+        issue_details) {
+  auto metadata_issue_details =
+      protocol::Audits::CookieDeprecationMetadataIssueDetails::Create()
+          .SetAllowedSites(std::make_unique<protocol::Array<protocol::String>>(
+              issue_details->allowed_sites))
+          .SetOptOutPercentage(issue_details->opt_out_percentage)
+          .SetIsOptOutTopLevel(issue_details->is_opt_out_top_level)
+          .SetOperation(BuildCookieOperation(issue_details->operation))
+          .Build();
+
+  auto protocol_issue_details =
+      protocol::Audits::InspectorIssueDetails::Create()
+          .SetCookieDeprecationMetadataIssueDetails(
+              std::move(metadata_issue_details))
+          .Build();
+
+  auto issue = protocol::Audits::InspectorIssue::Create()
+                   .SetCode(protocol::Audits::InspectorIssueCodeEnum::
+                                CookieDeprecationMetadataIssue)
+                   .SetDetails(std::move(protocol_issue_details))
+                   .Build();
+
+  return issue;
+}
+
 }  // namespace
 
 void ReportCookieIssue(
@@ -1778,7 +1851,8 @@ void ReportCookieIssue(
     const GURL& url,
     const net::SiteForCookies& site_for_cookies,
     blink::mojom::CookieOperation operation,
-    const std::optional<std::string>& devtools_request_id) {
+    const std::optional<std::string>& devtools_request_id,
+    const std::optional<std::string>& devtools_issue_id) {
   auto exclusion_reasons =
       BuildExclusionReasons(excluded_cookie->access_result.status);
   auto warning_reasons =
@@ -1835,6 +1909,9 @@ void ReportCookieIssue(
           .SetCode(protocol::Audits::InspectorIssueCodeEnum::CookieIssue)
           .SetDetails(std::move(details))
           .Build();
+  if (devtools_issue_id.has_value()) {
+    issue->SetIssueId(devtools_issue_id.value());
+  }
 
   ReportBrowserInitiatedIssue(render_frame_host_impl, issue.get());
 }
@@ -1896,7 +1973,7 @@ void BuildAndReportBrowserInitiatedIssue(
     issue = BuildAttributionReportingIssue(
         info->details->attribution_reporting_issue_details);
   } else {
-    NOTREACHED() << "Unsupported type of browser-initiated issue";
+    NOTREACHED_IN_MIGRATION() << "Unsupported type of browser-initiated issue";
   }
   ReportBrowserInitiatedIssue(frame, issue.get());
 }
@@ -2169,10 +2246,6 @@ void ApplyNetworkContextParamsOverrides(
 protocol::Audits::GenericIssueErrorType GenericIssueErrorTypeToProtocol(
     blink::mojom::GenericIssueErrorType error_type) {
   switch (error_type) {
-    case blink::mojom::GenericIssueErrorType::
-        kCrossOriginPortalPostMessageError:
-      return protocol::Audits::GenericIssueErrorTypeEnum::
-          CrossOriginPortalPostMessageError;
     case blink::mojom::GenericIssueErrorType::kFormLabelForNameError:
       return protocol::Audits::GenericIssueErrorTypeEnum::FormLabelForNameError;
     case blink::mojom::GenericIssueErrorType::kFormDuplicateIdForInputError:
@@ -2274,18 +2347,11 @@ void DidCloseFedCmDialog(RenderFrameHost& render_frame_host) {
 
 void OnFencedFrameReportRequestSent(int initiator_frame_tree_node_id,
                                     const std::string& devtools_request_id,
-                                    network::ResourceRequest& request) {
-  const net::HttpRequestHeaders& headers = request.headers;
-  network::mojom::URLRequestDevToolsInfoPtr request_info =
-      network::ExtractDevToolsInfo(request);
-
+                                    network::ResourceRequest& request,
+                                    const std::string& event_data) {
   DispatchToAgents(initiator_frame_tree_node_id,
-                   &protocol::NetworkHandler::RequestSent,
-                   /*request_id=*/devtools_request_id,
-                   /*loader_id=*/devtools_request_id, headers, *request_info,
-                   protocol::Network::Initiator::TypeEnum::Other,
-                   /*initiator_url=*/std::nullopt,
-                   /*initiator_devtools_request_id=*/devtools_request_id,
+                   &protocol::NetworkHandler::FencedFrameReportRequestSent,
+                   /*request_id=*/devtools_request_id, request, event_data,
                    base::TimeTicks::Now());
 }
 

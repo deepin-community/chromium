@@ -11,6 +11,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/profiles/profile_attributes_init_params.h"
@@ -24,6 +25,7 @@
 #include "components/policy/core/common/mock_policy_service.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
+#include "components/sync/base/features.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -110,7 +112,7 @@ class ProfileReportGeneratorTest : public ::testing::Test {
   void InitPolicyMap() {
     policy_map_.Set("kPolicyName1", policy::POLICY_LEVEL_MANDATORY,
                     policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
-                    base::Value(base::Value::List()), nullptr);
+                    base::Value(true), nullptr);
     policy_map_.Set("kPolicyName2", policy::POLICY_LEVEL_RECOMMENDED,
                     policy::POLICY_SCOPE_MACHINE, policy::POLICY_SOURCE_MERGED,
                     base::Value(true), nullptr);
@@ -196,10 +198,30 @@ TEST_F(ProfileReportGeneratorTest, UnsignedInProfile) {
 }
 
 TEST_F(ProfileReportGeneratorTest, SignedInProfile) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      syncer::kReplaceSyncPromosWithSignInPromos);
+
   IdentityTestEnvironmentProfileAdaptor identity_test_env_adaptor(profile());
   auto expected_info =
       identity_test_env_adaptor.identity_test_env()->SetPrimaryAccount(
           "test@mail.com", signin::ConsentLevel::kSync);
+  auto report = GenerateReport();
+  EXPECT_TRUE(report->has_chrome_signed_in_user());
+  EXPECT_EQ(expected_info.email, report->chrome_signed_in_user().email());
+  EXPECT_EQ(expected_info.gaia,
+            report->chrome_signed_in_user().obfuscated_gaia_id());
+}
+
+TEST_F(ProfileReportGeneratorTest,
+       SignedInProfileReplaceSyncPromosWithSigninPromos) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(syncer::kReplaceSyncPromosWithSignInPromos);
+
+  IdentityTestEnvironmentProfileAdaptor identity_test_env_adaptor(profile());
+  auto expected_info =
+      identity_test_env_adaptor.identity_test_env()->SetPrimaryAccount(
+          "test@mail.com", signin::ConsentLevel::kSignin);
   auto report = GenerateReport();
   EXPECT_TRUE(report->has_chrome_signed_in_user());
   EXPECT_EQ(expected_info.email, report->chrome_signed_in_user().email());
@@ -232,7 +254,6 @@ TEST_F(ProfileReportGeneratorTest, ProfileIdObfuscate) {
   EXPECT_NE(report->id(), report3->id());
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 TEST_F(ProfileReportGeneratorTest, PoliciesDisabled) {
   // Users' profile info is collected by default.
   std::unique_ptr<em::ChromeUserProfileInfo> report = GenerateReport();
@@ -250,6 +271,26 @@ TEST_F(ProfileReportGeneratorTest, PoliciesDisabled) {
   EXPECT_EQ(2, report->chrome_policies_size());
 }
 
+TEST_F(ProfileReportGeneratorTest, PoliciesHidden) {
+  std::unique_ptr<em::ChromeUserProfileInfo> report = GenerateReport();
+
+  for (const auto& policy : report->chrome_policies()) {
+    EXPECT_EQ("true", policy.value());
+  }
+
+  generator_.set_is_machine_scope(false);
+  report = GenerateReport();
+
+  for (const auto& policy : report->chrome_policies()) {
+    if (policy.scope() == em::Policy_PolicyScope_SCOPE_MACHINE) {
+      EXPECT_EQ("\"********\"", policy.value());
+    } else {
+      EXPECT_EQ("true", policy.value());
+    }
+  }
+}
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 TEST_F(ProfileReportGeneratorTest, PendingRequest) {
   profile()->GetTestingPrefService()->SetManagedPref(
       prefs::kCloudExtensionRequestEnabled,
@@ -262,6 +303,18 @@ TEST_F(ProfileReportGeneratorTest, PendingRequest) {
   EXPECT_EQ(kExtensionId, report->extension_requests(0).id());
   EXPECT_EQ(kFakeTime, report->extension_requests(0).request_timestamp());
   EXPECT_EQ(kJustification, report->extension_requests(0).justification());
+}
+
+TEST_F(ProfileReportGeneratorTest, PendingRequestNotSupportProfileReporting) {
+  profile()->GetTestingPrefService()->SetManagedPref(
+      prefs::kCloudExtensionRequestEnabled,
+      std::make_unique<base::Value>(true));
+  std::vector<std::string> ids = {kExtensionId};
+  SetExtensionToPendingList(ids);
+
+  generator_.set_is_machine_scope(false);
+  auto report = GenerateReport();
+  ASSERT_EQ(0, report->extension_requests_size());
 }
 
 TEST_F(ProfileReportGeneratorTest, NoPendingRequestWhenItsDisabled) {

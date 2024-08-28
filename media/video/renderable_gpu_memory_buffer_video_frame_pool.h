@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/memory/scoped_refptr.h"
+#include "gpu/command_buffer/common/shared_image_usage.h"
 #include "media/base/media_export.h"
 #include "media/base/video_types.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
@@ -50,18 +51,6 @@ class MEDIA_EXPORT RenderableGpuMemoryBufferVideoFramePool {
         gfx::BufferFormat format,
         gfx::BufferUsage usage) = 0;
 
-    // Create a SharedImage representation of a plane of a GpuMemoryBuffer
-    // allocated by this interface.
-    // Return a ClientSharedImage pointer. Populate `sync_token`.
-    virtual scoped_refptr<gpu::ClientSharedImage> CreateSharedImage(
-        gfx::GpuMemoryBuffer* gpu_memory_buffer,
-        gfx::BufferPlane plane,
-        const gfx::ColorSpace& color_space,
-        GrSurfaceOrigin surface_origin,
-        SkAlphaType alpha_type,
-        uint32_t usage,
-        gpu::SyncToken& sync_token) = 0;
-
     // Create a SharedImage representation with format `si_format` of a
     // GpuMemoryBuffer allocated by this interface.
     // Return a ClientSharedImage pointer. Populate `sync_token`.
@@ -71,7 +60,18 @@ class MEDIA_EXPORT RenderableGpuMemoryBufferVideoFramePool {
         const gfx::ColorSpace& color_space,
         GrSurfaceOrigin surface_origin,
         SkAlphaType alpha_type,
-        uint32_t usage,
+        gpu::SharedImageUsageSet usage,
+        gpu::SyncToken& sync_token) = 0;
+
+    // Used to create a Mappable shared image.
+    virtual scoped_refptr<gpu::ClientSharedImage> CreateSharedImage(
+        const gfx::Size& size,
+        gfx::BufferUsage buffer_usage,
+        const viz::SharedImageFormat& si_format,
+        const gfx::ColorSpace& color_space,
+        GrSurfaceOrigin surface_origin,
+        SkAlphaType alpha_type,
+        gpu::SharedImageUsageSet usage,
         gpu::SyncToken& sync_token) = 0;
 
     // Destroy a SharedImage created by this interface.
@@ -84,9 +84,10 @@ class MEDIA_EXPORT RenderableGpuMemoryBufferVideoFramePool {
 
   // Create a frame pool. The supplied `context` will live until all frames
   // created by the pool have been destroyed (so it may outlive the returned
-  // pool).
+  // pool). Only NV12 and ARGB formats are supported.
   static std::unique_ptr<RenderableGpuMemoryBufferVideoFramePool> Create(
-      std::unique_ptr<Context> context);
+      std::unique_ptr<Context> context,
+      VideoPixelFormat format = PIXEL_FORMAT_NV12);
 
   // Returns a GpuMemoryBuffer-backed VideoFrame that can be rendered to. This
   // may return nullptr on an unsupported parameter, or may return nullptr

@@ -26,6 +26,7 @@
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_install_finalizer.h"
+#include "chrome/browser/web_applications/web_app_install_params.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_tab_helper.h"
@@ -62,7 +63,7 @@ using blink::mojom::SubAppsServiceResultCode;
 
 namespace web_app {
 
-// TODO(crbug.com/1467861): Replace registrar_unsafe with Locks
+// TODO(crbug.com/40924576): Replace registrar_unsafe with Locks
 // TODO (crbug.com/1467862): Move from //c/b/ui/web_applications to
 // //c/b/web_applications
 
@@ -418,7 +419,7 @@ void SubAppsServiceImpl::ProcessDialogResponse(int add_call_id,
   for (const std::unique_ptr<web_app::WebAppInstallInfo>& install_info :
        add_call_info.install_infos) {
     add_call_info.results.emplace_back(SubAppsServiceAddResult::New(
-        ConvertUrlToPath(install_info->manifest_id),
+        ConvertUrlToPath(install_info->manifest_id()),
         blink::mojom::SubAppsServiceResultCode::kFailure));
   }
 
@@ -432,8 +433,8 @@ void SubAppsServiceImpl::ScheduleSubAppInstalls(int add_call_id) {
   WebAppProvider* provider = GetWebAppProvider(render_frame_host());
   base::ConcurrentCallbacks<SubAppInstallResult> concurrent;
   for (auto& install_info : add_call_info.install_infos) {
-    webapps::ManifestId manifest_id = install_info->manifest_id;
-    provider->scheduler().InstallFromInfo(
+    webapps::ManifestId manifest_id = install_info->manifest_id();
+    provider->scheduler().InstallFromInfoWithParams(
         std::move(install_info), /*overwrite_existing_manifest_fields=*/false,
         webapps::WebappInstallSource::SUB_APP,
         base::BindOnce(
@@ -442,7 +443,8 @@ void SubAppsServiceImpl::ScheduleSubAppInstalls(int add_call_id) {
               return SubAppInstallResult(manifest_id, app_id, result_code);
             },
             manifest_id)
-            .Then(concurrent.CreateCallback()));
+            .Then(concurrent.CreateCallback()),
+        WebAppInstallParams());
   }
   std::move(concurrent)
       .Done(base::BindOnce(&SubAppsServiceImpl::FinishAddCall,
@@ -576,7 +578,7 @@ void SubAppsServiceImpl::RemoveSubApp(
           [](std::string manifest_id_path,
              webapps::UninstallResultCode result_code) {
             SubAppsServiceResultCode result =
-                result_code == webapps::UninstallResultCode::kSuccess
+                webapps::UninstallSucceeded(result_code)
                     ? SubAppsServiceResultCode::kSuccess
                     : SubAppsServiceResultCode::kFailure;
             return SubAppsServiceRemoveResult::New(manifest_id_path, result);

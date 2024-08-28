@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/check_op.h"
@@ -18,9 +19,7 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
@@ -81,6 +80,7 @@
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
 #include "services/network/public/cpp/cors/cors.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
@@ -100,7 +100,7 @@ class ProfileNetworkContextServiceBrowsertest : public InProcessBrowserTest {
 
   ~ProfileNetworkContextServiceBrowsertest() override = default;
 
-  // TODO(crbug.com/1491942): This fails with the field trial testing config.
+  // TODO(crbug.com/40285326): This fails with the field trial testing config.
   void SetUpCommandLine(base::CommandLine* command_line) override {
     InProcessBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch("disable-field-trial-config");
@@ -249,8 +249,8 @@ IN_PROC_BROWSER_TEST_F(ProfileNetworkContextServiceBrowsertest, BrotliEnabled) {
 }
 
 void CheckCacheResetStatus(base::HistogramTester* histograms, bool reset) {
-  // TODO(crbug/1041810): The failure case, here, is to time out.  Since Chrome
-  // doesn't synchronize cache loading, there's no guarantee that this is
+  // TODO(crbug.com/40114587): The failure case, here, is to time out.  Since
+  // Chrome doesn't synchronize cache loading, there's no guarantee that this is
   // complete and it's merely available at earliest convenience.  If shutdown
   // occurs prior to the cache being loaded, then nothing is reported.  This
   // should probably be fixed to avoid the use of the sleep function, but that
@@ -276,9 +276,8 @@ class ProfileNetworkContextServiceCacheSameBrowsertest
  public:
   ProfileNetworkContextServiceCacheSameBrowsertest() {
     // Override features that are enabled via the fieldtrial testing config.
-    scoped_feature_list_.InitWithFeatures(
-        {}, {net::features::kSplitCacheByNetworkIsolationKey,
-             net::features::kEnableCrossSiteFlagNetworkIsolationKey});
+    scoped_feature_list_.InitAndDisableFeature(
+        net::features::kSplitCacheByNetworkIsolationKey);
   }
   ~ProfileNetworkContextServiceCacheSameBrowsertest() override = default;
 
@@ -415,125 +414,6 @@ IN_PROC_BROWSER_TEST_F(ProfileNetworkContextServiceCacheCredentialsBrowserTest,
       local_state->GetString(
           "profile_network_context_service.http_cache_finch_experiment_groups"),
       "None None None scoped_feature_list_trial_group");
-}
-
-// This subclass adds tests for the 2023 HTTP Cache keying experiment flags.
-enum class HttpCache2023ExperimentTestCase {
-  kDoublePlusBitExperimentGroup,
-  kTripleKeyedSharedOpaqueExperimentGroup,
-  kControlGroup,
-};
-
-class ProfileNetworkContextServiceCacheKeySchemeExperimentBrowserTest
-    : public ProfileNetworkContextServiceBrowsertest,
-      public testing::WithParamInterface<HttpCache2023ExperimentTestCase> {
- public:
-  ProfileNetworkContextServiceCacheKeySchemeExperimentBrowserTest() {
-    // Override any configured experiments for the
-    // SplitCacheByNetworkIsolationKey feature.
-    always_enabled_feature_list_.InitAndEnableFeatureWithParameters(
-        net::features::kSplitCacheByNetworkIsolationKey, {});
-
-    switch (GetParam()) {
-      case HttpCache2023ExperimentTestCase::kDoublePlusBitExperimentGroup:
-        test_feature_list_.InitWithFeatures(
-            {net::features::kEnableCrossSiteFlagNetworkIsolationKey},
-            {net::features::kEnableFrameSiteSharedOpaqueNetworkIsolationKey,
-             net::features::kHttpCacheKeyingExperimentControlGroup});
-        break;
-      case HttpCache2023ExperimentTestCase::
-          kTripleKeyedSharedOpaqueExperimentGroup:
-        test_feature_list_.InitWithFeatures(
-            {net::features::kEnableFrameSiteSharedOpaqueNetworkIsolationKey},
-            {net::features::kEnableCrossSiteFlagNetworkIsolationKey,
-             net::features::kHttpCacheKeyingExperimentControlGroup});
-        break;
-      case HttpCache2023ExperimentTestCase::kControlGroup:
-        test_feature_list_.InitWithFeatures(
-            {net::features::kHttpCacheKeyingExperimentControlGroup},
-            {net::features::kEnableCrossSiteFlagNetworkIsolationKey,
-             net::features::kEnableFrameSiteSharedOpaqueNetworkIsolationKey});
-        break;
-    }
-  }
-
-  const char* GetExperimentString() {
-    switch (GetParam()) {
-      case HttpCache2023ExperimentTestCase::kDoublePlusBitExperimentGroup:
-        return "CrossSiteFlagNIK";
-      case HttpCache2023ExperimentTestCase::
-          kTripleKeyedSharedOpaqueExperimentGroup:
-        return "FrameSiteSharedOpaqueNIK";
-      case HttpCache2023ExperimentTestCase::kControlGroup:
-        return "2023ExperimentControlGroup";
-    }
-  }
-  ~ProfileNetworkContextServiceCacheKeySchemeExperimentBrowserTest() override =
-      default;
-
-  base::HistogramTester histograms_;
-
- private:
-  base::test::ScopedFeatureList always_enabled_feature_list_;
-  base::test::ScopedFeatureList test_feature_list_;
-};
-
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    ProfileNetworkContextServiceCacheKeySchemeExperimentBrowserTest,
-    testing::ValuesIn(
-        {HttpCache2023ExperimentTestCase::kDoublePlusBitExperimentGroup,
-         HttpCache2023ExperimentTestCase::
-             kTripleKeyedSharedOpaqueExperimentGroup,
-         HttpCache2023ExperimentTestCase::kControlGroup}),
-    [](const testing::TestParamInfo<HttpCache2023ExperimentTestCase>& info) {
-      switch (info.param) {
-        case (HttpCache2023ExperimentTestCase::kDoublePlusBitExperimentGroup):
-          return "DoublePlusBitExperimentGroup";
-        case (HttpCache2023ExperimentTestCase::
-                  kTripleKeyedSharedOpaqueExperimentGroup):
-          return "TripleKeyedSharedOpaqueExperimentGroup";
-        case (HttpCache2023ExperimentTestCase::kControlGroup):
-          return "ControlGroup";
-      }
-    });
-
-IN_PROC_BROWSER_TEST_P(
-    ProfileNetworkContextServiceCacheKeySchemeExperimentBrowserTest,
-    PRE_TestCacheResetParameter) {
-  NavigateToCreateHttpCache();
-  CheckCacheResetStatus(&histograms_, false);
-
-  // At this point, we have already called the initialization.
-  // Verify that we have the correct values in the local_state.
-  PrefService* local_state = g_browser_process->local_state();
-  DCHECK_EQ(
-      local_state->GetString(
-          "profile_network_context_service.http_cache_finch_experiment_groups"),
-      base::StrCat({"scoped_feature_list_trial_group None None None ",
-                    GetExperimentString()}));
-  // Set the local state for the next test.
-  local_state->SetString(
-      "profile_network_context_service.http_cache_finch_experiment_groups",
-      "None None None None");
-}
-
-// The second time we load we know the state, which was "None None None None"
-// for the previous test, so we should see a reset being in an experiment.
-IN_PROC_BROWSER_TEST_P(
-    ProfileNetworkContextServiceCacheKeySchemeExperimentBrowserTest,
-    TestCacheResetParameter) {
-  NavigateToCreateHttpCache();
-  CheckCacheResetStatus(&histograms_, true);
-
-  // At this point, we have already called the initialization once.
-  // Verify that we have the correct values in the local_state.
-  PrefService* local_state = g_browser_process->local_state();
-  DCHECK_EQ(
-      local_state->GetString(
-          "profile_network_context_service.http_cache_finch_experiment_groups"),
-      base::StrCat({"scoped_feature_list_trial_group None None None ",
-                    GetExperimentString()}));
 }
 
 class AmbientAuthenticationTestWithPolicy : public policy::PolicyTest {
@@ -771,8 +651,8 @@ class ProfileNetworkContextTrustTokensBrowsertest
   }
 
   void ProvideRequestHandlerKeyCommitmentsToNetworkService(
-      base::StringPiece host) {
-    base::flat_map<url::Origin, base::StringPiece> origins_and_commitments;
+      std::string_view host) {
+    base::flat_map<url::Origin, std::string_view> origins_and_commitments;
     std::string key_commitments = request_handler_.GetKeyCommitmentRecord();
 
     GURL::Replacements replacements;
@@ -876,68 +756,4 @@ IN_PROC_BROWSER_TEST_F(ProfileNetworkContextTrustTokensBrowsertest,
   chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
   EXPECT_TRUE(content::WaitForLoadStop(GetActiveWebContents()));
   EXPECT_EQ(false, EvalJs(GetActiveWebContents(), command));
-}
-
-class ProfileNetworkContextServiceResourceBlocklistBrowsertest
-    : public ProfileNetworkContextServiceBrowsertest {
- public:
-  void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        features::
-            kEnableNetworkServiceResourceBlockListIfThirdPartyCookiesBlocked);
-    ProfileNetworkContextServiceBrowsertest::SetUp();
-  }
-
-  content::WebContents* GetActiveWebContents() {
-    return chrome_test_utils::GetActiveWebContents(this);
-  }
-
-  PrefService* GetPrefs() {
-    return user_prefs::UserPrefs::Get(
-        GetActiveWebContents()->GetBrowserContext());
-  }
-
- protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-// Test that with
-// kEnableNetworkServiceResourceBlockListIfThirdPartyCookiesBlocked enabled, the
-// anti-fingerprinting blocklist is not enabled if third party cookies are
-// allowed.
-IN_PROC_BROWSER_TEST_F(ProfileNetworkContextServiceResourceBlocklistBrowsertest,
-                       ThirdPartyCookiesAllowed) {
-  ProfileNetworkContextService* profile_network_context_service =
-      ProfileNetworkContextServiceFactory::GetForContext(browser()->profile());
-  base::FilePath empty_relative_partition_path;
-  network::mojom::NetworkContextParams network_context_params;
-  cert_verifier::mojom::CertVerifierCreationParams
-      cert_verifier_creation_params;
-  profile_network_context_service->ConfigureNetworkContextParams(
-      /*in_memory=*/false, empty_relative_partition_path,
-      &network_context_params, &cert_verifier_creation_params);
-
-  EXPECT_FALSE(network_context_params.afp_block_list_experiment_enabled);
-}
-
-// Test that with
-// kEnableNetworkServiceResourceBlockListIfThirdPartyCookiesBlocked enabled, the
-// anti-fingerprinting blocklist is enabled if third party cookies are blocked.
-IN_PROC_BROWSER_TEST_F(ProfileNetworkContextServiceResourceBlocklistBrowsertest,
-                       ThirdPartyCookiesBlocked) {
-  GetPrefs()->SetInteger(
-      prefs::kCookieControlsMode,
-      static_cast<int>(content_settings::CookieControlsMode::kBlockThirdParty));
-
-  ProfileNetworkContextService* profile_network_context_service =
-      ProfileNetworkContextServiceFactory::GetForContext(browser()->profile());
-  base::FilePath empty_relative_partition_path;
-  network::mojom::NetworkContextParams network_context_params;
-  cert_verifier::mojom::CertVerifierCreationParams
-      cert_verifier_creation_params;
-  profile_network_context_service->ConfigureNetworkContextParams(
-      /*in_memory=*/false, empty_relative_partition_path,
-      &network_context_params, &cert_verifier_creation_params);
-
-  EXPECT_TRUE(network_context_params.afp_block_list_experiment_enabled);
 }

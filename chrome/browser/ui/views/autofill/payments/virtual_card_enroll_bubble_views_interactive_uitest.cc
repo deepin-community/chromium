@@ -29,6 +29,7 @@
 #include "content/public/test/browser_test.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image_unittest_util.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/throbber.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/view_observer.h"
@@ -96,7 +97,7 @@ class VirtualCardEnrollBubbleViewsInteractiveUiTest
     base::RunLoop run_loop;
     base::RepeatingClosure bubble_shown_closure_for_testing_ =
         run_loop.QuitClosure();
-    test_api(GetController())
+    test_api(*GetController())
         .SetBubbleShownClosure(bubble_shown_closure_for_testing_);
 
     GetController()->ShowBubble(
@@ -132,7 +133,7 @@ class VirtualCardEnrollBubbleViewsInteractiveUiTest
     }
 
     return static_cast<VirtualCardEnrollBubbleViews*>(
-        controller->GetVirtualCardEnrollBubbleView());
+        controller->GetVirtualCardBubbleView());
   }
 
   void ClickLearnMoreLink() { GetBubbleViews()->LearnMoreLinkClicked(); }
@@ -585,7 +586,7 @@ IN_PROC_BROWSER_TEST_P(
 IN_PROC_BROWSER_TEST_P(
     VirtualCardEnrollBubbleViewsInteractiveUiTestParameterized,
     IconViewAccessibleName) {
-  EXPECT_EQ(GetIconView()->GetAccessibleName(),
+  EXPECT_EQ(GetIconView()->GetViewAccessibility().GetCachedName(),
             l10n_util::GetStringUTF16(
                 IDS_AUTOFILL_VIRTUAL_CARD_ENROLLMENT_FALLBACK_ICON_TOOLTIP));
   EXPECT_EQ(GetIconView()->GetTextForTooltipAndAccessibleName(),
@@ -603,7 +604,7 @@ IN_PROC_BROWSER_TEST_P(
       base::DoNothing());
   ASSERT_TRUE(GetBubbleViews());
   EXPECT_FALSE(IsLoadingProgressRowVisible());
-  EXPECT_EQ(GetBubbleViews()->GetDialogButtons(),
+  EXPECT_EQ(GetBubbleViews()->buttons(),
             (ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL));
 
   GetBubbleViews()->AcceptDialog();
@@ -613,7 +614,7 @@ IN_PROC_BROWSER_TEST_P(
   views::View* loading_throbber =
       GetBubbleViews()->GetViewByID(DialogViewId::LOADING_THROBBER);
   EXPECT_TRUE(loading_throbber->IsDrawn());
-  EXPECT_EQ(GetBubbleViews()->GetDialogButtons(), ui::DIALOG_BUTTON_NONE);
+  EXPECT_EQ(GetBubbleViews()->buttons(), ui::DIALOG_BUTTON_NONE);
 
   CloseBubbleForReasonAndWaitTillDestroyed(
       views::Widget::ClosedReason::kAcceptButtonClicked);
@@ -661,7 +662,7 @@ IN_PROC_BROWSER_TEST_P(
       base::DoNothing());
   ASSERT_TRUE(GetBubbleViews());
   EXPECT_FALSE(IsLoadingProgressRowVisible());
-  EXPECT_EQ(GetBubbleViews()->GetDialogButtons(),
+  EXPECT_EQ(GetBubbleViews()->buttons(),
             (ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL));
 
   views::test::WidgetDestroyedWaiter destroyed_waiter(

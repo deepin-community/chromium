@@ -29,7 +29,6 @@ using MessageDecodingFunction = ssize_t (*)(const uint8_t*, size_t, T&);
 // function, request serializable data member.
 template <typename T>
 struct DefaultRequestCoderTraits {
- public:
   using RequestMsgType = typename T::RequestMsgType;
   static constexpr MessageEncodingFunction<RequestMsgType> kEncoder =
       T::kEncoder;
@@ -58,27 +57,26 @@ class RequestResponseHandler : public MessageDemuxer::MessageCallback {
  public:
   class Delegate {
    public:
-
     virtual void OnMatchedResponse(RequestT* request,
                                    typename RequestT::ResponseMsgType* response,
-                                   uint64_t endpoint_id) = 0;
-    virtual void OnError(RequestT* request, Error error) = 0;
+                                   uint64_t instance_id) = 0;
+    virtual void OnError(RequestT* request, const Error& error) = 0;
 
    protected:
     virtual ~Delegate() = default;
   };
 
-  explicit RequestResponseHandler(Delegate* delegate) : delegate_(delegate) {}
+  explicit RequestResponseHandler(Delegate& delegate) : delegate_(delegate) {}
   ~RequestResponseHandler() { Reset(); }
 
   void Reset() {
     connection_ = nullptr;
     for (auto& message : to_send_) {
-      delegate_->OnError(&message.request, Error::Code::kRequestCancelled);
+      delegate_.OnError(&message.request, Error::Code::kRequestCancelled);
     }
     to_send_.clear();
     for (auto& message : sent_) {
-      delegate_->OnError(&message.request, Error::Code::kRequestCancelled);
+      delegate_.OnError(&message.request, Error::Code::kRequestCancelled);
     }
     sent_.clear();
     response_watch_ = MessageDemuxer::MessageWatch();
@@ -96,7 +94,7 @@ class RequestResponseHandler : public MessageDemuxer::MessageCallback {
   WriteMessage(std::optional<uint64_t> id, RequestTRval&& message) {
     auto* request_msg = RequestCoderTraits::serial_request(message);
     if (connection_) {
-      request_msg->request_id = GetNextRequestId(connection_->endpoint_id());
+      request_msg->request_id = GetNextRequestId(connection_->instance_id());
       Error result =
           connection_->WriteMessage(*request_msg, RequestCoderTraits::kEncoder);
       if (!result.ok()) {
@@ -142,13 +140,13 @@ class RequestResponseHandler : public MessageDemuxer::MessageCallback {
     connection_ = connection;
     for (auto& message : to_send_) {
       auto* request_msg = RequestCoderTraits::serial_request(message.request);
-      request_msg->request_id = GetNextRequestId(connection_->endpoint_id());
+      request_msg->request_id = GetNextRequestId(connection_->instance_id());
       Error result =
           connection_->WriteMessage(*request_msg, RequestCoderTraits::kEncoder);
       if (result.ok()) {
         sent_.emplace_back(std::move(message));
       } else {
-        delegate_->OnError(&message.request, result);
+        delegate_.OnError(&message.request, result);
       }
     }
     if (!to_send_.empty()) {
@@ -158,7 +156,7 @@ class RequestResponseHandler : public MessageDemuxer::MessageCallback {
   }
 
   // MessageDemuxer::MessageCallback overrides.
-  ErrorOr<size_t> OnStreamMessage(uint64_t endpoint_id,
+  ErrorOr<size_t> OnStreamMessage(uint64_t instance_id,
                                   uint64_t connection_id,
                                   msgs::Type message_type,
                                   const uint8_t* buffer,
@@ -179,8 +177,8 @@ class RequestResponseHandler : public MessageDemuxer::MessageCallback {
                  response.request_id;
         });
     if (it != sent_.end()) {
-      delegate_->OnMatchedResponse(&it->request, &response,
-                                   connection_->endpoint_id());
+      delegate_.OnMatchedResponse(&it->request, &response,
+                                  connection_->instance_id());
       sent_.erase(it);
       if (sent_.empty()) {
         response_watch_ = MessageDemuxer::MessageWatch();
@@ -202,21 +200,21 @@ class RequestResponseHandler : public MessageDemuxer::MessageCallback {
     if (!response_watch_) {
       response_watch_ = NetworkServiceManager::Get()
                             ->GetProtocolConnectionClient()
-                            ->message_demuxer()
-                            ->WatchMessageType(connection_->endpoint_id(),
-                                               RequestT::kResponseType, this);
+                            ->GetMessageDemuxer()
+                            .WatchMessageType(connection_->instance_id(),
+                                              RequestT::kResponseType, this);
     }
   }
 
-  uint64_t GetNextRequestId(uint64_t endpoint_id) {
+  uint64_t GetNextRequestId(uint64_t instance_id) {
     return NetworkServiceManager::Get()
         ->GetProtocolConnectionClient()
-        ->endpoint_request_ids()
-        ->GetNextRequestId(endpoint_id);
+        ->GetInstanceRequestIds()
+        .GetNextRequestId(instance_id);
   }
 
   ProtocolConnection* connection_ = nullptr;
-  Delegate* const delegate_;
+  Delegate& delegate_;
   std::vector<RequestWithId> to_send_;
   std::vector<RequestWithId> sent_;
   MessageDemuxer::MessageWatch response_watch_;

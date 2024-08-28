@@ -14,6 +14,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/separator.h"
@@ -54,7 +55,7 @@ VirtualCardManualFallbackBubbleViews::VirtualCardManualFallbackBubbleViews(
     views::View* anchor_view,
     content::WebContents* web_contents,
     VirtualCardManualFallbackBubbleController* controller)
-    : LocationBarBubbleDelegateView(anchor_view, web_contents),
+    : AutofillLocationBarBubble(anchor_view, web_contents),
       controller_(controller) {
   DCHECK(controller_);
   SetShowIcon(true);
@@ -258,8 +259,8 @@ void VirtualCardManualFallbackBubbleViews::AddCardDetailButtons(
   expiry_row->AddChildView(CreateRowItemButtonForField(
       VirtualCardManualFallbackBubbleField::kExpirationMonth));
   expiry_row->AddChildView(std::make_unique<views::Label>(u"/"));
-  // TODO(crbug.com/1196021): Validate this works when the expiration year field
-  // is for two-digit numbers
+  // TODO(crbug.com/40176273): Validate this works when the expiration year
+  // field is for two-digit numbers
   expiry_row->AddChildView(CreateRowItemButtonForField(
       VirtualCardManualFallbackBubbleField::kExpirationYear));
 
@@ -292,7 +293,7 @@ void VirtualCardManualFallbackBubbleViews::
   for (auto& pair : fields_to_buttons_map_) {
     std::u16string tooltip = controller_->GetFieldButtonTooltip(pair.first);
     pair.second->SetTooltipText(tooltip);
-    pair.second->SetAccessibleName(
+    pair.second->GetViewAccessibility().SetName(
         base::StrCat({pair.second->GetText(), u" ", tooltip}));
   }
 }

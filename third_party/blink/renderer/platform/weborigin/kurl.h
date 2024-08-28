@@ -29,6 +29,8 @@
 
 #include <iosfwd>
 #include <memory>
+
+#include "base/feature_list.h"
 #include "third_party/abseil-cpp/absl/base/attributes.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
@@ -121,15 +123,45 @@ class PLATFORM_EXPORT KURL {
   bool HasPath() const;
 
   // Returns true if you can set the host and port for the URL.
-  // Non-hierarchical URLs don't have a host and port. This is equivalent to
-  // GURL::IsStandard().
   //
   // Note: this returns true for "filesystem" and false for "blob" currently,
   // due to peculiarities of how schemes are registered in url/ -- neither
   // of these schemes can have hostnames on the outer URL.
-  bool CanSetHostOrPort() const { return IsHierarchical(); }
-  bool CanSetPathname() const { return IsHierarchical(); }
+  bool CanSetHostOrPort() const;
+  bool CanSetPathname() const;
+
+  // Return true if a host can be removed from the URL.
+  //
+  // URL Standard: https://url.spec.whatwg.org/#host-state
+  //
+  // > 3.2: Otherwise, if state override is given, buffer is the empty string,
+  // > and either url includes credentials or url’s port is non-null, return.
+  //
+  // Examples:
+  //
+  // Setting an empty host is allowed:
+  //
+  // > const url = new URL("git://h/")
+  // > url.host = "";
+  // > assertEquals(url.href, "git:///");
+  //
+  // Setting an empty host is disallowed:
+  //
+  // > const url = new URL("git://u@h/")
+  // > url.host = "";
+  // > assertEquals(url.href, "git://u@h/");
+  bool CanRemoveHost() const;
+
+  // Return true if this URL is hierarchical, which is equivalent to standard
+  // URLs.
+  //
+  // Important note: If kStandardCompliantNonSpecialSchemeURLParsing flag is
+  // enabled, returns true also for non-special URLs which don't have an opaque
+  // path.
   bool IsHierarchical() const;
+
+  // Return true if this URL is a standard URL.
+  bool IsStandard() const;
 
   // The returned `AtomicString` is guaranteed to consist of only ASCII
   // characters, but may be 8-bit or 16-bit.
@@ -208,7 +240,6 @@ class PLATFORM_EXPORT KURL {
   unsigned PathAfterLastSlash() const;
 
   operator const String&() const { return GetString(); }
-  operator StringView() const { return StringView(GetString()); }
 
   const url::Parsed& GetParsed() const { return parsed_; }
 
@@ -251,6 +282,14 @@ class PLATFORM_EXPORT KURL {
 
   // Asserts that `string_` is an ASCII string in DCHECK builds.
   void AssertStringSpecIsASCII();
+
+  // URL Standard: https://url.spec.whatwg.org/#include-credentials
+  bool IncludesCredentials() const {
+    return !User().empty() || !Pass().empty();
+  }
+
+  // URL Standard: https://url.spec.whatwg.org/#url-opaque-path
+  bool HasOpaquePath() const { return parsed_.has_opaque_path; }
 
   bool is_valid_;
   bool protocol_is_in_http_family_;
@@ -319,6 +358,15 @@ PLATFORM_EXPORT String EncodeWithURLEscapeSequences(const String&);
 // function returns true if an occurrence of '%' is found and followed by
 // anything other than two hex-digits.
 PLATFORM_EXPORT bool HasInvalidURLEscapeSequences(const String&);
+
+// Some call sites of `KURL::Host` can be made more efficient by not making a
+// string copy and just using a StringView instead. This feature flag is used to
+// investigate how costly the copying is.
+//
+// The disabled cases at the call sites are intentionally inefficient.
+//
+// TODO(crbug.com/339026510): Remove after this investigation.
+PLATFORM_EXPORT BASE_DECLARE_FEATURE(kAvoidWastefulHostCopies);
 
 }  // namespace blink
 

@@ -35,8 +35,8 @@ limitations under the License.
 #include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/common/tfl_pass_config.h"
 #include "tensorflow/compiler/mlir/lite/python/tf_tfl_flatbuffer_helpers.h"
-#include "tensorflow/compiler/mlir/lite/quantization/quantization_config.h"
 #include "tensorflow/compiler/mlir/lite/transforms/passes.h"
+#include "tensorflow/compiler/mlir/quantization/common/quantization_lib/quantization_config.h"
 #include "xla/service/hlo.pb.h"
 #include "xla/service/hlo_parser.h"
 #include "xla/translate/hlo_to_mhlo/hlo_to_mlir_hlo.h"
@@ -121,9 +121,9 @@ mlir::OwningOpRef<mlir::ModuleOp> HloTextToMlirHloTranslateFunction(
 }  // namespace
 absl::Status ConvertJaxToTFLiteFlatBuffer(const std::string& input,
                                           const toco::ModelFlags& model_flags,
-                                          const toco::TocoFlags& toco_flags,
+                                          toco::TocoFlags& toco_flags,
                                           std::string* result) {
-  mlir::MLIRContext context;
+  auto context = std::make_unique<mlir::MLIRContext>();
   mlir::quant::QuantizationSpecs quant_specs;
 
   // Parse input arrays.
@@ -162,9 +162,9 @@ absl::Status ConvertJaxToTFLiteFlatBuffer(const std::string& input,
 
   mlir::OwningOpRef<mlir::ModuleOp> module;
   if (model_flags.hlo_file_type() == toco::ModelFlags::HLO_TEXT) {
-    module = HloTextToMlirHloTranslateFunction(input, &context, false);
+    module = HloTextToMlirHloTranslateFunction(input, context.get(), false);
   } else if (model_flags.hlo_file_type() == toco::ModelFlags::HLO_PROTO) {
-    module = HloToMlirHloTranslateFunction(input, &context, false);
+    module = HloToMlirHloTranslateFunction(input, context.get(), false);
   } else {
     return errors::InvalidArgument("unknown hlo format type.");
   }
@@ -191,7 +191,8 @@ absl::Status ConvertJaxToTFLiteFlatBuffer(const std::string& input,
   // StableHLO Quantizer is not supported for JAX input models, so
   // quantization_py_function_lib is set to nullptr.
   auto status = internal::ConvertMLIRToTFLiteFlatBuffer(
-      model_flags, toco_flags, std::move(module), pass_config,
+      model_flags, toco_flags, std::move(context), std::move(module),
+      pass_config,
       /*saved_model_tags=*/{}, result, /*saved_model_bundle=*/nullptr,
       /*quantization_py_function_lib=*/nullptr);
   return status;

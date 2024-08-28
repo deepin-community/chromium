@@ -21,7 +21,7 @@
 #include "components/invalidation/impl/fcm_invalidation_service.h"
 #include "components/invalidation/impl/fcm_network_handler.h"
 #include "components/invalidation/impl/per_user_topic_subscription_manager.h"
-#include "components/invalidation/impl/profile_invalidation_provider.h"
+#include "components/invalidation/profile_invalidation_provider.h"
 #include "components/invalidation/public/identity_provider.h"
 #include "components/invalidation/public/invalidation_handler.h"
 #include "components/invalidation/public/invalidation_service.h"
@@ -86,7 +86,7 @@ AffiliatedInvalidationServiceProviderImpl::InvalidationServiceObserver::
   DCHECK(invalidation_service_);
   invalidation_service_observation_.Observe(invalidation_service_);
   is_service_connected_ = invalidation_service->GetInvalidatorState() ==
-                          invalidation::INVALIDATIONS_ENABLED;
+                          invalidation::InvalidatorState::kEnabled;
   is_observer_ready_ = true;
 }
 
@@ -111,7 +111,7 @@ void AffiliatedInvalidationServiceProviderImpl::InvalidationServiceObserver::
     return;
 
   const bool new_is_service_connected =
-      (state == invalidation::INVALIDATIONS_ENABLED);
+      (state == invalidation::InvalidatorState::kEnabled);
 
   if (is_service_connected_ == new_is_service_connected)
     return;
@@ -368,7 +368,6 @@ AffiliatedInvalidationServiceProviderImpl::
           base::BindRepeating(&invalidation::FCMInvalidationListener::Create),
           base::BindRepeating(
               &invalidation::PerUserTopicSubscriptionManager::Create,
-              device_identity_provider_.get(), g_browser_process->local_state(),
               base::RetainedRef(url_loader_factory)),
           device_instance_id_driver_.get(), g_browser_process->local_state(),
           kPolicyFCMInvalidationSenderID);

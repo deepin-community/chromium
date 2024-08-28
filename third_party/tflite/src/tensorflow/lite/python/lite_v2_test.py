@@ -391,9 +391,19 @@ class FromConcreteFunctionTest(lite_v2_test_util.ModelTest):
     """Create a simple QAT SavedModel that includes float ops at the end."""
     saved_model_dir = os.path.join(self.get_temp_dir(), 'qat_float_ops_at_end')
     input_tensor = tf.keras.layers.Input((32, 32, 128))
-    x = tf.quantization.fake_quant_with_min_max_args(input_tensor, -3.0, 3.0)
+
+    class _FakeQuantArgsLayer(tf.keras.layers.Layer):
+      """A fake quantization layer with fake_quant_with_min_max_args.
+
+      Keras 3 requires wrapping the tf function inside Keras layer.
+      """
+
+      def call(self, x):
+        return tf.quantization.fake_quant_with_min_max_args(x, -3.0, 3.0)
+
+    x = _FakeQuantArgsLayer()(input_tensor)
     x = tf.keras.layers.Conv2D(1, (3, 3))(x)
-    x = tf.quantization.fake_quant_with_min_max_args(x, -3.0, 3.0)
+    x = _FakeQuantArgsLayer()(x)
     # Exclude the quantization of the following Dense layer by not putting
     # fake quant layer after the dense layer.
     output_tensor = tf.keras.layers.Dense(1, activation='sigmoid')(x)
@@ -794,10 +804,10 @@ class FromConcreteFunctionTest(lite_v2_test_util.ModelTest):
     """Test gather_nd with quantized i8 parameters."""
 
     class GatherNDQI8QDQ(tf.keras.Model):
+
       @tf.function(
           input_signature=[tf.TensorSpec(shape=(2, 2), dtype=tf.float32)]
       )
-
       def func(self, input_tensor):
         x = tf.quantization.fake_quant_with_min_max_args(
             input_tensor, -3.0, 3.0
@@ -1376,6 +1386,79 @@ class FromConcreteFunctionTest(lite_v2_test_util.ModelTest):
     self.assertLen(quant_params['scales'], expected_num_params)
     self.assertLen(quant_params['zero_points'], expected_num_params)
 
+  def _getIntegerQuantizeDenseModel(self, num_filters=32):
+    np.random.seed(0)
+
+    root = autotrackable.AutoTrackable()
+
+    @tf.function(
+        input_signature=[tf.TensorSpec(shape=[1, 16], dtype=tf.float32)]
+    )
+    def func(inp):
+      dense = tf.matmul(a=inp, b=tf.ones([16, num_filters]))
+      output = tf.nn.relu(dense, name='output')
+      return output
+
+    def calibration_gen():
+      for _ in range(5):
+        yield [np.random.uniform(-1, 1, size=(1, 16)).astype(np.float32)]
+
+    root.f = func
+    to_save = root.f.get_concrete_function()
+    return (root, to_save, calibration_gen)
+
+  @parameterized.named_parameters(
+      ('_PerChannelQuant', False, False),
+      ('_PerChannelMlirQuant', False, True),
+      ('_PerTensorQuant', True, False),
+      ('_PerTensorMlirQuant', True, True),
+      ('_PerChannelDynamicRange', False, True, True),
+      ('_PerTensorDynamicRange', True, True, True),
+  )
+  @test_util.run_v2_only
+  def testDisablePerChannelQuantizationForDenseLayers(
+      self,
+      disable_per_channel_for_dense=False,
+      enable_mlir_quantizer=False,
+      representative_dataset=False,
+  ):
+    k_dense_name = 'tfl.pseudo_qconst' if representative_dataset else 'MatMul'
+    # Dynamic range quant requires total num elements of filters > 1024.
+    k_num_filters = 64
+    root, func, calib_gen = self._getIntegerQuantizeDenseModel(k_num_filters)
+    quantized_converter = tf.lite.TFLiteConverter.from_concrete_functions(
+        [func], root
+    )
+    quantized_converter.optimizations = [lite.Optimize.DEFAULT]
+    if representative_dataset:
+      quantized_converter.representative_dataset = calib_gen
+    quantized_converter.target_spec.supported_ops = [
+        lite.OpsSet.TFLITE_BUILTINS
+    ]
+    quantized_converter.experimental_new_quantizer = enable_mlir_quantizer
+    if disable_per_channel_for_dense:
+      quantized_converter._experimental_disable_per_channel_quantization_for_dense_layers = (
+          disable_per_channel_for_dense
+      )
+    quantized_tflite_model = quantized_converter.convert()
+    self.assertIsNotNone(quantized_tflite_model)
+
+    # Do not apply delegates as XNNPack converts per tensor to per channel.
+    interp = interpreter.Interpreter(
+        model_content=quantized_tflite_model,
+        experimental_op_resolver_type=interpreter.OpResolverType.BUILTIN_WITHOUT_DEFAULT_DELEGATES,
+    )
+    interp.allocate_tensors()
+    detail = next((
+        d
+        for d in interp.get_tensor_details()
+        if d['name'].startswith(k_dense_name)
+    ))
+    quant_params = detail['quantization_parameters']
+    expected_num_params = 1 if disable_per_channel_for_dense else k_num_filters
+    self.assertLen(quant_params['scales'], expected_num_params)
+    self.assertLen(quant_params['zero_points'], expected_num_params)
+
   @parameterized.named_parameters(
       ('MlirQuantize', True), ('TocoQuantize', False)
   )
@@ -1534,10 +1617,19 @@ class FromSavedModelTest(lite_v2_test_util.ModelTest):
     input_name = 'input'
     output_name = 'scores'
 
+    class _FakeQuantArgsLayer(tf.keras.layers.Layer):
+      """A fake quantization layer with fake_quant_with_min_max_args.
+
+      Keras 3 requires wrapping the tf function inside Keras layer.
+      """
+
+      def call(self, x):
+        return tf.quantization.fake_quant_with_min_max_args(x, -3.0, 3.0)
+
     input_tensor = tf.keras.layers.Input((32, 32, 128), name=input_name)
-    x = tf.quantization.fake_quant_with_min_max_args(input_tensor, -3.0, 3.0)
+    x = _FakeQuantArgsLayer()(input_tensor)
     x = tf.keras.layers.Conv2D(1, (3, 3))(x)
-    x = tf.quantization.fake_quant_with_min_max_args(x, -3.0, 3.0)
+    x = _FakeQuantArgsLayer()(x)
     scores = tf.keras.layers.Reshape((-1,), name=output_name)(x)
     model = tf.keras.Model(input_tensor, scores)
     model.save(saved_model_dir)
@@ -1556,7 +1648,9 @@ class FromSavedModelTest(lite_v2_test_util.ModelTest):
 
     converter = lite.TFLiteConverterV2.from_saved_model(save_dir)
     converter.experimental_use_stablehlo_quantizer = True
-    with self.assertRaisesRegex(ValueError, 'only supports static-range PTQ'):
+    with self.assertRaisesRegex(
+        ValueError, 'only supports static-range and weight-only PTQ'
+    ):
       converter.convert()
 
   @test_util.run_v2_only
@@ -1813,7 +1907,7 @@ class FromSavedModelTest(lite_v2_test_util.ModelTest):
     input_details = interp.get_input_details()
     output_details = interp.get_output_details()
 
-    input_data = np.array(['a', 'b', 'c', 'z'], dtype=np.string_)
+    input_data = np.array(['a', 'b', 'c', 'z'], dtype=np.bytes_)
     interp.resize_tensor_input(input_details[0]['index'], [4], strict=False)
     interp.allocate_tensors()
 
@@ -1907,7 +2001,7 @@ class FromSavedModelTest(lite_v2_test_util.ModelTest):
     input_details = interp.get_input_details()
     output_details = interp.get_output_details()
 
-    input_data = np.array(['a', 'b', 'c'], dtype=np.string_)
+    input_data = np.array(['a', 'b', 'c'], dtype=np.bytes_)
     interp.resize_tensor_input(input_details[0]['index'], [3], strict=False)
     interp.allocate_tensors()
 
@@ -2604,9 +2698,18 @@ class FromSavedModelTest(lite_v2_test_util.ModelTest):
         batch_size=1, shape=[3, 3], name='input_tensor', dtype=tf.float32
     )
 
-    x = tf.quantization.fake_quant_with_min_max_args(input_tensor, -3.0, 3.0)
+    class _FakeQuantArgsLayer(tf.keras.layers.Layer):
+      """A fake quantization layer with fake_quant_with_min_max_args.
+
+      Keras 3 requires wrapping the tf function inside Keras layer.
+      """
+
+      def call(self, x):
+        return tf.quantization.fake_quant_with_min_max_args(x, -3.0, 3.0)
+
+    x = _FakeQuantArgsLayer()(input_tensor)
     x = tf.keras.layers.Dense(3)(x)
-    x = tf.quantization.fake_quant_with_min_max_args(x, -3.0, 3.0)
+    x = _FakeQuantArgsLayer()(x)
     model = tf.keras.Model(input_tensor, x)
 
     model.compile(
@@ -2661,14 +2764,20 @@ class FromSavedModelTest(lite_v2_test_util.ModelTest):
             inputs, filters, [*inputs.shape[:-1], 24], 1
         )
 
+    class _FakeQuantVarsLayer(tf.keras.layers.Layer):
+      """A fake quantization layer with fake_quant_with_min_max_vars.
+
+      Keras 3 requires wrapping the tf function inside Keras layer.
+      """
+
+      def call(self, x):
+        return tf.quantization.fake_quant_with_min_max_vars(
+            x, -3.0, 3.0, narrow_range=True)
+
     inp = tf.keras.Input(shape=(6, 8, 48), batch_size=1)
-    x = tf.quantization.fake_quant_with_min_max_vars(
-        inp, -3.0, 3.0, narrow_range=True
-    )
+    x = _FakeQuantVarsLayer()(inp)
     x = QuantConv2DTransposed()(x)
-    x = tf.quantization.fake_quant_with_min_max_vars(
-        x, -3.0, 3.0, narrow_range=True
-    )
+    x = _FakeQuantVarsLayer()(x)
 
     model = tf.keras.Model(inp, x)
 
@@ -2936,7 +3045,11 @@ class FromSavedModelTest(lite_v2_test_util.ModelTest):
     quantized_tflite_model = converter.convert()
     self.assertIsNotNone(quantized_tflite_model)
 
-    interp = interpreter.Interpreter(model_content=quantized_tflite_model)
+    # Do not apply delegates as XNNPack converts per tensor to per channel.
+    interp = interpreter.Interpreter(
+        model_content=quantized_tflite_model,
+        experimental_op_resolver_type=interpreter.OpResolverType.BUILTIN_WITHOUT_DEFAULT_DELEGATES,
+    )
     interp.allocate_tensors()
     quantized_weight = None
     quantized_weight_with_one_postfix = None
@@ -3278,7 +3391,11 @@ class FromKerasModelTest(lite_v2_test_util.ModelTest):
     quantized_tflite_model = converter.convert()
     self.assertIsNotNone(quantized_tflite_model)
 
-    interp = interpreter.Interpreter(model_content=quantized_tflite_model)
+    # Do not apply delegates as XNNPack converts per tensor to per channel.
+    interp = interpreter.Interpreter(
+        model_content=quantized_tflite_model,
+        experimental_op_resolver_type=interpreter.OpResolverType.BUILTIN_WITHOUT_DEFAULT_DELEGATES,
+    )
     interp.allocate_tensors()
     quantized_weight = None
     quantized_weight_with_one_postfix = None
@@ -3429,10 +3546,18 @@ class FromKerasModelTest(lite_v2_test_util.ModelTest):
             result, -3.0, 3.0, narrow_range=True
         )
 
+    class _FakeQuantVarsLayer(tf.keras.layers.Layer):
+      """A fake quantization layer with fake_quant_with_min_max_vars.
+
+      Keras 3 requires wrapping the tf function inside Keras layer.
+      """
+
+      def call(self, x):
+        return tf.quantization.fake_quant_with_min_max_vars(
+            x, -3.0, 3.0, narrow_range=True)
+
     inp = tf.keras.Input(shape=(6, 8, 6), batch_size=1)
-    x = tf.quantization.fake_quant_with_min_max_vars(
-        inp, -3.0, 3.0, narrow_range=True
-    )
+    x = _FakeQuantVarsLayer()(inp)
     x = QuantConv2DTransposedWithBiasAndActivation()(x)
 
     model = tf.keras.Model(inp, x)
@@ -3471,6 +3596,64 @@ class FromKerasModelTest(lite_v2_test_util.ModelTest):
 
     # There should be only 2 float tensors, input and output.
     self.assertEqual(num_float32_tensor, 2)
+
+  @parameterized.named_parameters(
+      ('_PerChannelQuant', False, False),
+      ('_PerChannelMlirQuant', False, True),
+      ('_PerTensorQuant', True, False),
+      ('_PerTensorMlirQuant', True, True),
+      ('_PerChannelDynamicRange', False, True, True),
+      ('_PerTensorDynamicRange', True, True, True),
+  )
+  @test_util.run_v2_only
+  def testDisablePerChannelQuantizationForDenseLayers(
+      self,
+      disable_per_channel_for_dense=False,
+      enable_mlir_quantizer=False,
+      representative_dataset=False,
+  ):
+    k_dense_name = 'tfl.pseudo_qconst' if representative_dataset else 'MatMul'
+    # Dynamic range quant requires total num elements of filters > 1024.
+    k_num_filters = 64
+    model = tf.keras.models.Sequential([
+        tf.keras.Input(shape=(16,)),
+        tf.keras.layers.Dense(k_num_filters, activation='relu'),
+    ])
+    model.build()
+
+    quantized_converter = lite.TFLiteConverterV2.from_keras_model(model)
+    quantized_converter.optimizations = [lite.Optimize.DEFAULT]
+    if representative_dataset:
+
+      def calibration_gen():
+        for _ in range(5):
+          yield [np.random.uniform(-1, 1, size=(1, 16)).astype(np.float32)]
+
+      quantized_converter.representative_dataset = calibration_gen
+    quantized_converter.target_spec.supported_ops = [
+        lite.OpsSet.TFLITE_BUILTINS
+    ]
+    quantized_converter.experimental_new_quantizer = enable_mlir_quantizer
+    if disable_per_channel_for_dense:
+      quantized_converter._experimental_disable_per_channel_quantization_for_dense_layers = (
+          disable_per_channel_for_dense
+      )
+    quantized_tflite_model = quantized_converter.convert()
+    self.assertIsNotNone(quantized_tflite_model)
+
+    # Do not apply delegates as XNNPack converts per tensor to per channel.
+    interp = interpreter.Interpreter(
+        model_content=quantized_tflite_model,
+        experimental_op_resolver_type=interpreter.OpResolverType.BUILTIN_WITHOUT_DEFAULT_DELEGATES,
+    )
+    interp.allocate_tensors()
+    detail = next(
+        (d for d in interp.get_tensor_details() if k_dense_name in d['name'])
+    )
+    quant_params = detail['quantization_parameters']
+    expected_num_params = 1 if disable_per_channel_for_dense else k_num_filters
+    self.assertLen(quant_params['scales'], expected_num_params)
+    self.assertLen(quant_params['zero_points'], expected_num_params)
 
 
 class FromJaxModelTest(lite_v2_test_util.ModelTest):
@@ -3941,6 +4124,27 @@ class ControlFlowTest(lite_v2_test_util.ModelTest):
     # Check values from converted model.
     expected_value = model.predict(input_data)
     self.assertAllClose(expected_value, actual_value, atol=1e-05)
+
+  @test_util.run_v2_only
+  def testKerasRNNLSTMFloat16Quant(self):
+    input_data = tf.constant(
+        np.array(np.random.random_sample((4, 10, 10)), dtype=np.float32)
+    )
+    # Specify a fixed batch size(4) for the test model.
+    x = tf.keras.layers.Input(batch_shape=(4, 10, 10))
+    y = tf.keras.layers.LSTM(units=10, input_shape=(10, 10))(x)
+    model = tf.keras.Model(inputs=[x], outputs=[y])
+
+    # Convert model.
+    converter = lite.TFLiteConverterV2.from_keras_model(model)
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.target_spec.supported_types = [tf.float16]
+    tflite_model = converter.convert()
+    actual_value = self._evaluateTFLiteModel(tflite_model, [input_data])[0]
+
+    # Check values from converted model.
+    expected_value = model.predict(input_data)
+    self.assertAllClose(expected_value, actual_value, atol=1e-03)
 
   @parameterized.named_parameters(
       ('ForceToUseBatchSizeOne', True), ('DontForceToUseBatchSizeOne', False)
@@ -5076,7 +5280,13 @@ class SparsityTest(lite_v2_test_util.ModelTest):
         metadata.options.modelOptimizationModes,
     )
 
-  def testQuantizedBlockSparsity(self):
+  @parameterized.named_parameters(
+      ('_PerChannelQuantForDense', False),
+      ('_PerTensorQuantForDense', True),
+  )
+  def testQuantizedBlockSparsity(
+      self, disable_per_channel_quantization_for_dense_layers
+  ):
     weight_values = np.array([
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         [0, 2, 0, 0, 0, 0, 5, 0, 0, 0, 3, 0, 0, 0, 1, 0],
@@ -5105,6 +5315,9 @@ class SparsityTest(lite_v2_test_util.ModelTest):
         lite.Optimize.DEFAULT,
     ]
     quantized_converter.representative_dataset = calibration_gen
+    quantized_converter._experimental_disable_per_channel_quantization_for_dense_layers = (
+        disable_per_channel_quantization_for_dense_layers
+    )
     quantized_tflite_model = quantized_converter.convert()
     self.assertIsNotNone(quantized_tflite_model)
 

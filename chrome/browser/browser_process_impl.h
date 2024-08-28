@@ -13,8 +13,11 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 
+#include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/sequence_checker.h"
@@ -28,13 +31,13 @@
 #include "components/nacl/common/buildflags.h"
 #include "components/prefs/persistent_pref_store.h"
 #include "components/prefs/pref_change_registrar.h"
-#include "components/services/screen_ai/buildflags/buildflags.h"
 #include "extensions/buildflags/buildflags.h"
 #include "media/media_buildflags.h"
 #include "ppapi/buildflags/buildflags.h"
 #include "printing/buildflags/buildflags.h"
 #include "services/network/public/cpp/network_quality_tracker.h"
 #include "services/network/public/mojom/network_service.mojom-forward.h"
+#include "services/screen_ai/buildflags/buildflags.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/upgrade_detector/build_state.h"
@@ -48,9 +51,9 @@
 class BatteryMetrics;
 class ChromeMetricsServicesManagerClient;
 class DevToolsAutoOpener;
+class GlobalDesktopFeatures;
 class RemoteDebuggingServer;
 class PrefRegistrySimple;
-class SearchEngineChoiceProfileTagger;
 class SecureOriginPrefsObserver;
 class SiteIsolationPrefsObserver;
 class SystemNotificationHelper;
@@ -73,6 +76,7 @@ class GCMDriver;
 }
 
 namespace os_crypt_async {
+class KeyProvider;
 class OSCryptAsync;
 }
 
@@ -86,8 +90,7 @@ class WebRtcEventLogManager;
 }  // namespace webrtc_event_logging
 
 namespace speech {
-class SodaInstallerImpl;
-class SodaInstallerImplChromeOS;
+class SodaInstaller;
 }  // namespace speech
 
 namespace screen_ai {
@@ -114,7 +117,7 @@ class BrowserProcessImpl : public BrowserProcess,
 #if !BUILDFLAG(IS_ANDROID)
   // Sets a closure to be run to break out of a run loop on browser shutdown
   // (when the KeepAlive count reaches zero).
-  // TODO(https://crbug.com/845966): This is also used on macOS for the Cocoa
+  // TODO(crbug.com/41390731): This is also used on macOS for the Cocoa
   // first run dialog so that shutdown can be initiated via a signal while the
   // first run dialog is showing.
   void SetQuitClosure(base::OnceClosure quit_closure);
@@ -123,7 +126,7 @@ class BrowserProcessImpl : public BrowserProcess,
 #if BUILDFLAG(IS_MAC)
   // Clears the quit closure. Shutdown will not be initiated should the
   // KeepAlive count reach zero. This function may be called more than once.
-  // TODO(https://crbug.com/845966): Remove this once the Cocoa first run
+  // TODO(crbug.com/41390731): Remove this once the Cocoa first run
   // dialog no longer needs it.
   void ClearQuitClosure();
 #endif
@@ -199,10 +202,12 @@ class BrowserProcessImpl : public BrowserProcess,
   safe_browsing::SafeBrowsingService* safe_browsing_service() override;
   subresource_filter::RulesetService* subresource_filter_ruleset_service()
       override;
+  subresource_filter::RulesetService*
+  fingerprinting_protection_ruleset_service() override;
 
   StartupData* startup_data() override;
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
+// TODO(crbug.com/40118868): Revisit the macro expression once build flag switch
 // of lacros-chrome is complete.
 #if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
   void StartAutoupdateTimer() override;
@@ -223,9 +228,14 @@ class BrowserProcessImpl : public BrowserProcess,
   SerialPolicyAllowedPorts* serial_policy_allowed_ports() override;
   HidSystemTrayIcon* hid_system_tray_icon() override;
   UsbSystemTrayIcon* usb_system_tray_icon() override;
+  GlobalDesktopFeatures* GetDesktopFeatures() override;
 #endif
 
   os_crypt_async::OSCryptAsync* os_crypt_async() override;
+
+  void set_additional_os_crypt_async_provider_for_test(
+      size_t precedence,
+      std::unique_ptr<os_crypt_async::KeyProvider> provider) override;
 
   BuildState* GetBuildState() override;
 
@@ -250,6 +260,7 @@ class BrowserProcessImpl : public BrowserProcess,
   void CreateBackgroundPrintingManager();
   void CreateSafeBrowsingService();
   void CreateSubresourceFilterRulesetService();
+  void CreateFingerprintingProtectionRulesetService();
   void CreateOptimizationGuideService();
   void CreateStatusTray();
   void CreateBackgroundModeManager();
@@ -363,6 +374,10 @@ class BrowserProcessImpl : public BrowserProcess,
   std::unique_ptr<subresource_filter::RulesetService>
       subresource_filter_ruleset_service_;
 
+  bool created_fingerprinting_protection_ruleset_service_ = false;
+  std::unique_ptr<subresource_filter::RulesetService>
+      fingerprinting_protection_ruleset_service_;
+
   bool shutting_down_ = false;
 
   bool tearing_down_ = false;
@@ -387,7 +402,7 @@ class BrowserProcessImpl : public BrowserProcess,
 
   std::unique_ptr<BatteryMetrics> battery_metrics_;
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
+// TODO(crbug.com/40118868): Revisit the macro expression once build flag switch
 // of lacros-chrome is complete.
 #if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
   base::RepeatingTimer autoupdate_timer_;
@@ -406,17 +421,12 @@ class BrowserProcessImpl : public BrowserProcess,
   // but some users of component updater only install per-user.
   std::unique_ptr<component_updater::ComponentUpdateService> component_updater_;
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+#if !BUILDFLAG(IS_ANDROID)
   // Used to create a singleton instance of SodaInstallerImpl, which can be
   // retrieved using speech::SodaInstaller::GetInstance().
   // SodaInstallerImpl depends on ComponentUpdateService, so define it here
   // to ensure that SodaInstallerImpl gets destructed first.
-  std::unique_ptr<speech::SodaInstallerImpl> soda_installer_impl_;
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Chrome OS has a different implementation of SodaInstaller.
-  std::unique_ptr<speech::SodaInstallerImplChromeOS> soda_installer_impl_;
+  std::unique_ptr<speech::SodaInstaller> soda_installer_impl_;
 #endif
 
 #if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
@@ -456,8 +466,7 @@ class BrowserProcessImpl : public BrowserProcess,
 
   BuildState build_state_;
 
-  std::unique_ptr<SearchEngineChoiceProfileTagger>
-      search_engine_choice_profile_tagger_;
+  std::unique_ptr<GlobalDesktopFeatures> desktop_features_;
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
@@ -470,6 +479,11 @@ class BrowserProcessImpl : public BrowserProcess,
       application_breadcrumbs_logger_;
 
   std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
+  std::optional<base::CallbackListSubscription>
+      os_crypt_async_init_subscription_;
+
+  std::optional<std::pair<size_t, std::unique_ptr<os_crypt_async::KeyProvider>>>
+      additional_provider_for_test_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

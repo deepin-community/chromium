@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "extensions/common/command.h"
 
 #include <stddef.h>
@@ -238,7 +243,7 @@ TEST(CommandTest, ExtensionCommandParsingFallback) {
   ui::Accelerator accelerator(ui::VKEY_L,
                               ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN);
 #elif BUILDFLAG(IS_FUCHSIA)
-  // TODO(crbug.com/1312215): Change this once we decide on a unique platform
+  // TODO(crbug.com/40220501): Change this once we decide on a unique platform
   // key for Fuchsia.
   ui::Accelerator accelerator(ui::VKEY_L,
                               ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN);

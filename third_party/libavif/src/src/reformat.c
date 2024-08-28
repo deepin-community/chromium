@@ -99,8 +99,6 @@ avifBool avifGetYUVColorSpaceInfo(const avifImage * image, avifYUVColorSpaceInfo
 #if defined(AVIF_ENABLE_EXPERIMENTAL_YCGCO_R)
     const avifBool useYCgCo = (image->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_YCGCO_RE) ||
                               (image->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_YCGCO_RO);
-#else
-    const avifBool useYCgCo = AVIF_FALSE;
 #endif
 
     AVIF_CHECK(image->depth == 8 || image->depth == 10 || image->depth == 12 || image->depth == 16);
@@ -112,7 +110,12 @@ avifBool avifGetYUVColorSpaceInfo(const avifImage * image, avifYUVColorSpaceInfo
     // YCgCo performs limited-full range adjustment on R,G,B but the current implementation performs range adjustment
     // on Y,U,V. So YCgCo with limited range is unsupported.
     if ((image->matrixCoefficients == 3 /* CICP reserved */) ||
-        ((image->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_YCGCO || useYCgCo) && (image->yuvRange == AVIF_RANGE_LIMITED)) ||
+        ((image->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_YCGCO
+#if defined(AVIF_ENABLE_EXPERIMENTAL_YCGCO_R)
+          || useYCgCo
+#endif
+          ) &&
+         (image->yuvRange == AVIF_RANGE_LIMITED)) ||
         (image->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_BT2020_CL) ||
         (image->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_SMPTE2085) ||
         (image->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_CHROMA_DERIVED_CL) ||
@@ -146,16 +149,13 @@ static avifBool avifPrepareReformatState(const avifImage * image, const avifRGBI
 #if defined(AVIF_ENABLE_EXPERIMENTAL_YCGCO_R)
     const avifBool useYCgCoRe = (image->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_YCGCO_RE);
     const avifBool useYCgCoRo = (image->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_YCGCO_RO);
-#else
-    const avifBool useYCgCoRe = AVIF_FALSE;
-    const avifBool useYCgCoRo = AVIF_FALSE;
-#endif
     if (useYCgCoRe || useYCgCoRo) {
         const int bitOffset = (useYCgCoRe) ? 2 : 1;
         if (image->depth - bitOffset != rgb->depth) {
             return AVIF_FALSE;
         }
     }
+#endif
 
     AVIF_CHECK(avifGetRGBColorSpaceInfo(rgb, &state->rgb));
     AVIF_CHECK(avifGetYUVColorSpaceInfo(image, &state->yuv));
@@ -502,7 +502,7 @@ static avifBool avifCreateYUVToRGBLookUpTables(float ** unormFloatTableY, float 
     const size_t cpCount = (size_t)1 << depth;
 
     assert(unormFloatTableY);
-    *unormFloatTableY = avifAlloc(cpCount * sizeof(**unormFloatTableY));
+    *unormFloatTableY = (float *)avifAlloc(cpCount * sizeof(float));
     AVIF_CHECK(*unormFloatTableY);
     for (uint32_t cp = 0; cp < cpCount; ++cp) {
         (*unormFloatTableY)[cp] = ((float)cp - state->yuv.biasY) / state->yuv.rangeY;
@@ -513,7 +513,7 @@ static avifBool avifCreateYUVToRGBLookUpTables(float ** unormFloatTableY, float 
             // Just reuse the luma table since the chroma values are the same.
             *unormFloatTableUV = *unormFloatTableY;
         } else {
-            *unormFloatTableUV = avifAlloc(cpCount * sizeof(**unormFloatTableUV));
+            *unormFloatTableUV = (float *)avifAlloc(cpCount * sizeof(float));
             if (!*unormFloatTableUV) {
                 avifFree(*unormFloatTableY);
                 *unormFloatTableY = NULL;
@@ -1579,18 +1579,18 @@ avifResult avifImageYUVToRGB(const avifImage * image, avifRGBImage * rgb)
     }
 
     const size_t byteCount = sizeof(YUVToRGBThreadData) * jobs;
-    YUVToRGBThreadData * threadData = avifAlloc(byteCount);
+    YUVToRGBThreadData * threadData = (YUVToRGBThreadData *)avifAlloc(byteCount);
     if (!threadData) {
         return AVIF_RESULT_OUT_OF_MEMORY;
     }
     memset(threadData, 0, byteCount);
-    int rowsPerJob = image->height / jobs;
+    uint32_t rowsPerJob = image->height / jobs;
     if (rowsPerJob % 2) {
         ++rowsPerJob;
         jobs = (image->height + rowsPerJob - 1) / rowsPerJob; // ceil
     }
-    const int rowsForLastJob = image->height - rowsPerJob * (jobs - 1);
-    int startRow = 0;
+    const uint32_t rowsForLastJob = image->height - rowsPerJob * (jobs - 1);
+    uint32_t startRow = 0;
     uint32_t i;
     for (i = 0; i < jobs; ++i, startRow += rowsPerJob) {
         YUVToRGBThreadData * tdata = &threadData[i];
@@ -1747,10 +1747,10 @@ void avifGetRGBAPixel(const avifRGBImage * src, uint32_t x, uint32_t y, const av
 
     const uint8_t * const srcPixel = &src->pixels[y * src->rowBytes + x * info->pixelBytes];
     if (info->channelBytes > 1) {
-        uint16_t r = *((uint16_t *)(&srcPixel[info->offsetBytesR]));
-        uint16_t g = *((uint16_t *)(&srcPixel[info->offsetBytesG]));
-        uint16_t b = *((uint16_t *)(&srcPixel[info->offsetBytesB]));
-        uint16_t a = avifRGBFormatHasAlpha(src->format) ? *((uint16_t *)(&srcPixel[info->offsetBytesA])) : (uint16_t)info->maxChannel;
+        uint16_t r = *((const uint16_t *)(&srcPixel[info->offsetBytesR]));
+        uint16_t g = *((const uint16_t *)(&srcPixel[info->offsetBytesG]));
+        uint16_t b = *((const uint16_t *)(&srcPixel[info->offsetBytesB]));
+        uint16_t a = avifRGBFormatHasAlpha(src->format) ? *((const uint16_t *)(&srcPixel[info->offsetBytesA])) : (uint16_t)info->maxChannel;
         if (src->isFloat) {
             rgbaPixel[0] = avifF16ToFloat(r);
             rgbaPixel[1] = avifF16ToFloat(g);

@@ -8,12 +8,12 @@
 #include <numeric>
 #include <tuple>
 
+#include "base/numerics/angle_conversions.h"
 #include "skia/ext/skcolorspace_primaries.h"
 #include "skia/ext/skcolorspace_trfn.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/modules/skcms/skcms.h"
 #include "ui/gfx/color_space.h"
-#include "ui/gfx/geometry/angle_conversions.h"
 
 namespace gfx {
 
@@ -24,19 +24,20 @@ constexpr float kD50_x = 0.9642f;
 constexpr float kD50_y = 1.0f;
 constexpr float kD50_z = 0.8251f;
 
-// Evaluate the specified transfer function using point symmetry around the
-// origin. This means that if the transfer function f is valid only for positive
-// numbers, let g be the extended transfer function for all reals, defined as
-// g(x) = sign(x) * f(abs(x)).
+// Evaluate the specified transfer function. This can be replaced by
+// skcms_TransferFunction_eval when b/331320414 is fixed.
 float skcmsTrFnEvalExt(const skcms_TransferFunction* fn, float x) {
-  if (x < 0) {
-    return -skcms_TransferFunction_eval(fn, -x);
-  } else {
-    return skcms_TransferFunction_eval(fn, x);
+  float sign = x < 0 ? -1 : 1;
+  x *= sign;
+  // TODO(b/331320414): Make skcms_TransferFunction_eval not assert on when
+  // this is the case.
+  if (x >= fn->d && fn->a * x + fn->b < 0) {
+    return sign * fn->e;
   }
+  return sign * skcms_TransferFunction_eval(fn, x);
 }
 
-// Same as the above but for the pow function.
+// Power function extended to all real numbers by point symmetry.
 float powExt(float x, float p) {
   if (x < 0) {
     return -powf(-x, p);
@@ -436,12 +437,12 @@ std::tuple<float, float, float> XYZD65ToOklab(float x, float y, float z) {
 }
 
 std::tuple<float, float, float> LchToLab(float l, float c, float h) {
-  return std::make_tuple(l, c * std::cos(gfx::DegToRad(h)),
-                         c * std::sin(gfx::DegToRad(h)));
+  return std::make_tuple(l, c * std::cos(base::DegToRad(h)),
+                         c * std::sin(base::DegToRad(h)));
 }
 std::tuple<float, float, float> LabToLch(float l, float a, float b) {
   return std::make_tuple(l, std::sqrt(a * a + b * b),
-                         gfx::RadToDeg(atan2f(b, a)));
+                         base::RadToDeg(atan2f(b, a)));
 }
 
 std::tuple<float, float, float> DisplayP3ToXYZD50(float r, float g, float b) {

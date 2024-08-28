@@ -47,9 +47,9 @@
 #include "components/component_updater/url_param_filter_remover.h"
 #include "components/nacl/common/buildflags.h"
 #include "components/safe_browsing/core/common/features.h"
-#include "components/services/screen_ai/buildflags/buildflags.h"
 #include "device/vr/buildflags/buildflags.h"
 #include "ppapi/buildflags/buildflags.h"
+#include "services/screen_ai/buildflags/buildflags.h"
 #include "third_party/widevine/cdm/buildflags.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -71,6 +71,7 @@
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/component_updater/iwa_key_distribution_component_installer.h"
 #include "chrome/browser/component_updater/zxcvbn_data_component_installer.h"
 #include "chrome/browser/resource_coordinator/tab_manager.h"
 #include "media/base/media_switches.h"
@@ -139,10 +140,7 @@ void RegisterComponentsForUpdate() {
   RegisterFirstPartySetsComponent(cus);
   RegisterMaskedDomainListComponent(cus);
   RegisterPrivacySandboxAttestationsComponent(cus);
-  if (base::FeatureList::IsEnabled(
-          features::kEnableNetworkServiceResourceBlockList)) {
-    RegisterAntiFingerprintingBlockedDomainListComponent(cus);
-  }
+  RegisterAntiFingerprintingBlockedDomainListComponent(cus);
 
   base::FilePath path;
   if (base::PathService::Get(chrome::DIR_USER_DATA, &path)) {
@@ -150,13 +148,6 @@ void RegisterComponentsForUpdate() {
 
     // Clean up any remaining desktop sharing hub state.
     component_updater::DeleteDesktopSharingHub(path);
-
-    // Clean up any existing versions of the blocklist if the feature is
-    // disabled.
-    if (!base::FeatureList::IsEnabled(
-            features::kEnableNetworkServiceResourceBlockList)) {
-      DeleteAntiFingerprintingBlockedDomainListComponent(path);
-    }
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
     if (base::SysInfo::IsRunningOnChromeOS()) {
@@ -177,9 +168,7 @@ void RegisterComponentsForUpdate() {
   // Since file type policies are per-platform, and we don't support
   // Fuchsia-specific component versions, we don't dynamically update file type
   // policies on Fuchsia.
-#if !BUILDFLAG(IS_FUCHSIA)
   RegisterFileTypePoliciesComponent(cus);
-#endif
 
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
   // CRLSetFetcher attempts to load a CRL set from either the local disk or
@@ -210,6 +199,7 @@ void RegisterComponentsForUpdate() {
 #endif
 
 #if !BUILDFLAG(IS_ANDROID)
+  RegisterIwaKeyDistributionComponent(cus);
   RegisterZxcvbnDataComponent(cus);
 #endif  // !BUILDFLAG(IS_ANDROID)
 

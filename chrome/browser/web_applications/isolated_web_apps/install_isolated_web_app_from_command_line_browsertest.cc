@@ -15,7 +15,9 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_installation_manager.h"
+#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_storage_location.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
+#include "chrome/browser/web_applications/isolated_web_apps/test/integrity_block_data_matcher.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/test_signed_web_bundle_builder.h"
 #include "chrome/browser/web_applications/test/web_app_test_observers.h"
 #include "chrome/browser/web_applications/web_app.h"
@@ -44,12 +46,12 @@ using ::testing::Property;
 using ::testing::VariantWith;
 
 class InstallIsolatedWebAppFromCommandLineBrowserTest
-    : public WebAppControllerBrowserTest {
+    : public WebAppBrowserTestBase {
  protected:
   void SetUp() override {
     scoped_feature_list_.InitWithFeatures(
         {features::kIsolatedWebApps, features::kIsolatedWebAppDevMode}, {});
-    WebAppControllerBrowserTest::SetUp();
+    WebAppBrowserTestBase::SetUp();
   }
 
   WebAppRegistrar& GetWebAppRegistrar() {
@@ -91,15 +93,19 @@ IN_PROC_BROWSER_TEST_F(InstallIsolatedWebAppFromCommandLineFromUrlBrowserTest,
   webapps::AppId id = observer.BeginListeningAndWait();
 
   EXPECT_THAT(GetWebAppRegistrar().IsInstalled(id), IsTrue());
-  EXPECT_THAT(GetWebAppRegistrar().GetAppById(id),
-              test::IwaIs(Eq("Simple Isolated App"),
-                          test::IsolationDataIs(
-                              VariantWith<DevModeProxy>(
-                                  Field(&DevModeProxy::proxy_url,
-                                        Eq(url::Origin::Create(GetAppUrl())))),
-                              Eq(base::Version("1.0.0")),
-                              /*controlled_frame_partitions=*/_,
-                              /*pending_update_info=*/Eq(std::nullopt))));
+  EXPECT_THAT(
+      GetWebAppRegistrar().GetAppById(id),
+      test::IwaIs(
+          Eq("Simple Isolated App"),
+          test::IsolationDataIs(
+              Property("variant", &IsolatedWebAppStorageLocation::variant,
+                       VariantWith<IwaStorageProxy>(
+                           Property(&IwaStorageProxy::proxy_url,
+                                    Eq(url::Origin::Create(GetAppUrl()))))),
+              Eq(base::Version("1.0.0")),
+              /*controlled_frame_partitions=*/_,
+              /*pending_update_info=*/Eq(std::nullopt),
+              /*integrity_block_data=*/_)));
 }
 
 class InstallIsolatedWebAppFromCommandLineFromFileBrowserTest
@@ -160,14 +166,19 @@ IN_PROC_BROWSER_TEST_F(InstallIsolatedWebAppFromCommandLineFromFileBrowserTest,
     absolute_path = base::MakeAbsoluteFilePath(signed_web_bundle_path_);
   }
 
-  EXPECT_THAT(GetWebAppRegistrar().GetAppById(id),
-              test::IwaIs(Eq("Simple Isolated App"),
-                          test::IsolationDataIs(
-                              VariantWith<DevModeBundle>(Field(
-                                  &DevModeBundle::path, Eq(absolute_path))),
-                              Eq(base::Version("1.0.0")),
-                              /*controlled_frame_partitions=*/_,
-                              /*pending_update_info=*/Eq(std::nullopt))));
+  EXPECT_THAT(
+      GetWebAppRegistrar().GetAppById(id),
+      test::IwaIs(
+          Eq("Simple Isolated App"),
+          test::IsolationDataIs(
+              Property("variant", &IsolatedWebAppStorageLocation::variant,
+                       VariantWith<IwaStorageUnownedBundle>(Property(
+                           &IwaStorageUnownedBundle::path, Eq(absolute_path)))),
+              Eq(base::Version("1.0.0")),
+              /*controlled_frame_partitions=*/_,
+              /*pending_update_info=*/Eq(std::nullopt),
+              test::IntegrityBlockDataPublicKeysAre(
+                  test::GetDefaultEd25519KeyPair().public_key))));
 }
 
 }  // namespace

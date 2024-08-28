@@ -25,7 +25,7 @@
 #include "ash/wm/desks/templates/saved_desk_presenter.h"
 #include "ash/wm/desks/templates/saved_desk_util.h"
 #include "ash/wm/overview/overview_controller.h"
-#include "ash/wm/overview/overview_focus_cycler.h"
+#include "ash/wm/overview/overview_focus_cycler_old.h"
 #include "ash/wm/overview/overview_grid.h"
 #include "ash/wm/overview/overview_session.h"
 #include "ash/wm/overview/overview_utils.h"
@@ -41,6 +41,7 @@
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/animation_builder.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/focus_ring.h"
@@ -121,7 +122,7 @@ SavedDeskItemView::SavedDeskItemView(std::unique_ptr<DeskTemplate> saved_desk)
   views::Builder<SavedDeskItemView>(this)
       .SetPreferredSize(kPreferredSize)
       .SetUseDefaultFillLayout(true)
-      .SetAccessibleName(saved_desk_name)
+      .SetAccessibleName(ComputeAccessibleName())
       .SetCallback(std::move(launch_template_callback))
       .AddChildren(
           views::Builder<View>()
@@ -249,6 +250,7 @@ SavedDeskItemView::SavedDeskItemView(std::unique_ptr<DeskTemplate> saved_desk)
       l10n_util::GetStringUTF16(button_text_id),
       PillButton::Type::kDefaultWithoutIcon,
       /*icon=*/nullptr));
+  launch_button_->SetFocusBehavior(views::View::FocusBehavior::ACCESSIBLE_ONLY);
 
   // Users cannot delete admin templates.
   if (!is_admin_managed) {
@@ -261,6 +263,8 @@ SavedDeskItemView::SavedDeskItemView(std::unique_ptr<DeskTemplate> saved_desk)
             /*has_border=*/false));
     delete_button_->SetTooltipText(l10n_util::GetStringUTF16(
         IDS_ASH_DESKS_TEMPLATES_DELETE_DIALOG_CONFIRM_BUTTON));
+    delete_button_->SetFocusBehavior(
+        views::View::FocusBehavior::ACCESSIBLE_ONLY);
   }
 
   // Use a border to create spacing between `name_view_`s background (set in
@@ -280,12 +284,14 @@ SavedDeskItemView::SavedDeskItemView(std::unique_ptr<DeskTemplate> saved_desk)
 
   views::FocusRing* focus_ring =
       StyleUtil::SetUpFocusRingForView(this, kWindowMiniViewFocusRingHaloInset);
-  focus_ring->SetHasFocusPredicate(
-      base::BindRepeating([](const views::View* view) {
-        const auto* v = views::AsViewClass<SavedDeskItemView>(view);
-        CHECK(v);
-        return v->is_focused();
-      }));
+  if (!features::IsOverviewNewFocusEnabled()) {
+    focus_ring->SetHasFocusPredicate(
+        base::BindRepeating([](const views::View* view) {
+          const auto* v = views::AsViewClass<SavedDeskItemView>(view);
+          CHECK(v);
+          return v->is_focused();
+        }));
+  }
   focus_ring->SetColorId(cros_tokens::kCrosSysFocusRing);
 
   SetEventTargeter(std::make_unique<views::ViewTargeter>(this));
@@ -298,6 +304,10 @@ SavedDeskItemView::SavedDeskItemView(std::unique_ptr<DeskTemplate> saved_desk)
 
   hover_container_->layer()->SetOpacity(0.0f);
   icon_container_view_->layer()->SetOpacity(1.0f);
+
+  AddAccelerator(ui::Accelerator(ui::VKEY_W, ui::EF_CONTROL_DOWN));
+
+  GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
 }
 
 SavedDeskItemView::~SavedDeskItemView() {
@@ -387,7 +397,7 @@ void SavedDeskItemView::UpdateSavedDesk(
   auto new_name = saved_desk_->template_name();
   DCHECK(!new_name.empty());
   name_view_->SetText(new_name);
-  SetAccessibleName(new_name);
+  GetViewAccessibility().SetName(ComputeAccessibleName());
 
   // This will trigger `name_view_` to compute its new preferred bounds and
   // invalidate the layout for `this`
@@ -395,17 +405,12 @@ void SavedDeskItemView::UpdateSavedDesk(
 }
 
 void SavedDeskItemView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
-  int accessible_text_id =
-      saved_desk_->type() == DeskTemplateType::kTemplate
-          ? IDS_ASH_DESKS_TEMPLATES_LIBRARY_TEMPLATES_GRID_ITEM_ACCESSIBLE_NAME
-          : IDS_ASH_DESKS_TEMPLATES_LIBRARY_SAVE_AND_RECALL_GRID_ITEM_ACCESSIBLE_NAME;
-
-  node_data->role = ax::mojom::Role::kButton;
-
-  node_data->AddStringAttribute(
-      ax::mojom::StringAttribute::kName,
-      l10n_util::GetStringFUTF8(accessible_text_id,
-                                saved_desk_->template_name()));
+  // We must set the updated accessible name directly in the cache to override
+  // the one set in `LabelButton::SetText`. This is temporary.
+  //
+  // TODO(crbug.com/325137417): Remove this once the accessible name is set in
+  // the cache as soon as the name is updated.
+  GetViewAccessibility().SetName(ComputeAccessibleName());
 
   node_data->AddStringAttribute(
       ax::mojom::StringAttribute::kDescription,
@@ -426,7 +431,7 @@ void SavedDeskItemView::Layout(PassKey) {
   }
 
   const gfx::Size launch_button_preferred_size =
-      launch_button_->CalculatePreferredSize();
+      launch_button_->CalculatePreferredSize({});
   launch_button_->SetBoundsRect(
       gfx::Rect({(width() - launch_button_preferred_size.width()) / 2,
                  height() - launch_button_preferred_size.height() -
@@ -456,9 +461,11 @@ void SavedDeskItemView::OnViewFocused(views::View* observed_view) {
   icon_container_view_->layer()->SetOpacity(1.0f);
 
   // Move the overview focus ring to `name_view_`.
-  auto* focus_cycler =
-      Shell::Get()->overview_controller()->overview_session()->focus_cycler();
-  if (focus_cycler->IsFocusVisible()) {
+  auto* focus_cycler = Shell::Get()
+                           ->overview_controller()
+                           ->overview_session()
+                           ->focus_cycler_old();
+  if (focus_cycler && focus_cycler->IsFocusVisible()) {
     focus_cycler->MoveFocusToView(name_view_);
 
     // Update a11y focus window.
@@ -566,6 +573,18 @@ views::Button::KeyClickAction SavedDeskItemView::GetKeyClickActionForEvent(
   return Button::GetKeyClickActionForEvent(event);
 }
 
+bool SavedDeskItemView::AcceleratorPressed(const ui::Accelerator& accelerator) {
+  if (accelerator.IsCtrlDown() && accelerator.key_code() == ui::VKEY_W) {
+    OnDeleteButtonPressed();
+    return true;
+  }
+  return views::Button::AcceleratorPressed(accelerator);
+}
+
+bool SavedDeskItemView::CanHandleAccelerators() const {
+  return HasFocus() && views::Button::CanHandleAccelerators();
+}
+
 void SavedDeskItemView::UpdateSavedDeskName() {
   saved_desk_->set_template_name(name_view_->GetText());
   OnSavedDeskNameChanged(saved_desk_->template_name());
@@ -575,6 +594,16 @@ void SavedDeskItemView::UpdateSavedDeskName() {
         /*is_update=*/true, GetWidget()->GetNativeWindow()->GetRootWindow(),
         saved_desk_->Clone());
   }
+}
+
+std::u16string SavedDeskItemView::ComputeAccessibleName() const {
+  int accessible_text_id =
+      saved_desk_->type() == DeskTemplateType::kTemplate
+          ? IDS_ASH_DESKS_TEMPLATES_LIBRARY_TEMPLATES_GRID_ITEM_ACCESSIBLE_NAME
+          : IDS_ASH_DESKS_TEMPLATES_LIBRARY_SAVE_AND_RECALL_GRID_ITEM_ACCESSIBLE_NAME;
+
+  return l10n_util::GetStringFUTF16(accessible_text_id,
+                                    saved_desk_->template_name());
 }
 
 void SavedDeskItemView::AnimateHover(ui::Layer* layer_to_show,
@@ -619,8 +648,9 @@ bool SavedDeskItemView::HandleKeyEvent(views::Textfield* sender,
   // Pressing enter or escape should blur the focus away from `name_view_` so
   // that editing the saved desk item's name ends. Pressing tab should do the
   // same, but is handled in `OverviewSession`.
-  if (key_event.type() != ui::ET_KEY_PRESSED)
+  if (key_event.type() != ui::EventType::kKeyPressed) {
     return false;
+  }
 
   if (key_event.key_code() != ui::VKEY_RETURN &&
       key_event.key_code() != ui::VKEY_ESCAPE) {
@@ -643,7 +673,7 @@ bool SavedDeskItemView::HandleMouseEvent(views::Textfield* sender,
   DCHECK_EQ(sender, name_view_);
 
   switch (mouse_event.type()) {
-    case ui::ET_MOUSE_PRESSED:
+    case ui::EventType::kMousePressed:
       // If this is the first mouse press on the `name_view_`, then it's not
       // focused yet. `OnViewFocused()` should not select all text, since it
       // will be undone by the mouse release event. Instead we defer it until we
@@ -653,7 +683,7 @@ bool SavedDeskItemView::HandleMouseEvent(views::Textfield* sender,
       }
       break;
 
-    case ui::ET_MOUSE_RELEASED:
+    case ui::EventType::kMouseReleased:
       if (defer_select_all_) {
         defer_select_all_ = false;
         // The user may have already clicked and dragged to select some range
@@ -734,7 +764,7 @@ void SavedDeskItemView::OnSavedDeskNameChanged(const std::u16string& new_name) {
   DCHECK(!new_name.empty());
   name_view_->SetText(new_name);
   name_view_->ResetTemporaryName();
-  SetAccessibleName(new_name);
+  GetViewAccessibility().SetName(ComputeAccessibleName());
 
   // This will trigger `name_view_` to compute its new preferred bounds and
   // invalidate the layout for `this`.

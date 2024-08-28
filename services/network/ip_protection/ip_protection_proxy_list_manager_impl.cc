@@ -4,13 +4,30 @@
 
 #include "services/network/ip_protection/ip_protection_proxy_list_manager_impl.h"
 
+#include "base/metrics/histogram_functions.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/proxy_chain.h"
+#include "services/network/ip_protection/ip_protection_geo_utils.h"
 
 namespace network {
+
+namespace {
+
+IpProtectionProxyListManagerImpl::ProxyListResult GetProxyListResult(
+    const std::optional<std::vector<net::ProxyChain>>& proxy_list) {
+  if (!proxy_list.has_value()) {
+    return IpProtectionProxyListManagerImpl::ProxyListResult::kFailed;
+  }
+  if (proxy_list->empty()) {
+    return IpProtectionProxyListManagerImpl::ProxyListResult::kEmptyList;
+  }
+  return IpProtectionProxyListManagerImpl::ProxyListResult::kPopulatedList;
+}
+
+}  // namespace
 
 IpProtectionProxyListManagerImpl::IpProtectionProxyListManagerImpl(
     mojo::Remote<network::mojom::IpProtectionConfigGetter>* config_getter,
@@ -35,6 +52,10 @@ IpProtectionProxyListManagerImpl::ProxyList() {
   return proxy_list_;
 }
 
+const std::string& IpProtectionProxyListManagerImpl::GeoId() {
+  return geo_id_;
+}
+
 void IpProtectionProxyListManagerImpl::RefreshProxyList() {
   if (fetching_proxy_list_ || !config_getter_) {
     return;
@@ -42,22 +63,35 @@ void IpProtectionProxyListManagerImpl::RefreshProxyList() {
 
   fetching_proxy_list_ = true;
   last_proxy_list_refresh_ = base::Time::Now();
+  const base::TimeTicks refresh_start_time_for_metrics = base::TimeTicks::Now();
 
-  config_getter_->get()->GetProxyList(
-      base::BindOnce(&IpProtectionProxyListManagerImpl::OnGotProxyList,
-                     weak_ptr_factory_.GetWeakPtr()));
+  config_getter_->get()->GetProxyList(base::BindOnce(
+      &IpProtectionProxyListManagerImpl::OnGotProxyList,
+      weak_ptr_factory_.GetWeakPtr(), refresh_start_time_for_metrics));
 }
 
 void IpProtectionProxyListManagerImpl::OnGotProxyList(
-    const std::optional<std::vector<net::ProxyChain>>& proxy_list) {
+    const base::TimeTicks refresh_start_time_for_metrics,
+    const std::optional<std::vector<net::ProxyChain>>& proxy_list,
+    const network::mojom::GeoHintPtr geo_hint) {
   fetching_proxy_list_ = false;
 
-  // If an error occurred fetching the proxy list, continue using the existing
-  // proxy list, if any.
+  // If the request for fetching the proxy list is successful, utilize the new
+  // proxy list, otherwise, continue using the existing list, if any. Geo hint
+  // is only updated if a proxy list is returned.
   if (proxy_list.has_value()) {
     proxy_list_ = *proxy_list;
     have_fetched_proxy_list_ = true;
+    base::UmaHistogramMediumTimes(
+        "NetworkService.IpProtection.ProxyListRefreshTime",
+        base::TimeTicks::Now() - refresh_start_time_for_metrics);
+
+    geo_id_ = network::GetGeoIdFromGeoHint(geo_hint.Clone());
   }
+
+  base::UmaHistogramEnumeration(
+      "NetworkService.IpProtection.GetProxyListResult",
+      GetProxyListResult(proxy_list));
 
   // Schedule the next refresh. If this timer was already running, this will
   // reschedule it for the given time.

@@ -28,8 +28,8 @@ class MockAutofillCrowdsourcingManager : public AutofillCrowdsourcingManager {
 
   MOCK_METHOD(bool,
               StartQueryRequest,
-              (const std::vector<vector_experimental_raw_ptr<FormStructure>>&,
-               net::IsolationInfo,
+              ((const std::vector<raw_ptr<FormStructure, VectorExperimental>>&),
+               std::optional<net::IsolationInfo>,
                QueryRequestCompleteCallback),
               (override));
 
@@ -37,8 +37,7 @@ class MockAutofillCrowdsourcingManager : public AutofillCrowdsourcingManager {
               StartUploadRequest,
               (std::vector<AutofillUploadContents>,
                mojom::SubmissionSource,
-               int,
-               PrefService*),
+               bool),
               (override));
 };
 

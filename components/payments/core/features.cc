@@ -48,6 +48,10 @@ BASE_FEATURE(kGPayAppDynamicUpdate,
              "GPayAppDynamicUpdate",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kSecurePaymentConfirmationInlineNetworkAndIssuerIcons,
+             "SecurePaymentConfirmationInlineNetworkAndIssuerIcons",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kSecurePaymentConfirmationUseCredentialStoreAPIs,
              "SecurePaymentConfirmationUseCredentialStoreAPIs",
 #if BUILDFLAG(IS_ANDROID)
@@ -58,12 +62,6 @@ BASE_FEATURE(kSecurePaymentConfirmationUseCredentialStoreAPIs,
 );
 
 #if !BUILDFLAG(IS_ANDROID)
-// The blink-side feature of the same name is disabled by default, and can be
-// enabled directly or via origin trial.
-BASE_FEATURE(kPaymentHandlerMinimalHeaderUX,
-             "PaymentHandlerMinimalHeaderUX",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kPaymentHandlerWindowInTaskManager,
              "PaymentHandlerWindowInTaskManager",
              base::FEATURE_ENABLED_BY_DEFAULT);

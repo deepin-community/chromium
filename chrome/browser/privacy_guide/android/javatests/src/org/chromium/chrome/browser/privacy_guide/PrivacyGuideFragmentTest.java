@@ -28,7 +28,7 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
-import static org.chromium.content_public.browser.test.util.TestThreadUtils.runOnUiThreadBlocking;
+import static org.chromium.base.ThreadUtils.runOnUiThreadBlocking;
 import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
 
 import android.app.Activity;
@@ -58,6 +58,7 @@ import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.base.test.util.RequiresRestart;
 import org.chromium.base.test.util.UserActionTester;
 import org.chromium.build.BuildConfig;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -92,6 +93,7 @@ import java.util.Set;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@EnableFeatures({ChromeFeatureList.REPLACE_SYNC_PROMOS_WITH_SIGN_IN_PROMOS})
 public class PrivacyGuideFragmentTest {
     private static final String SETTINGS_STATES_HISTOGRAM = "Settings.PrivacyGuide.SettingsStates";
     private static final String NEXT_NAVIGATION_HISTOGRAM = "Settings.PrivacyGuide.NextNavigation";
@@ -155,7 +157,7 @@ public class PrivacyGuideFragmentTest {
                     FragmentType.MSBB,
                     R.string.url_keyed_anonymized_data_title,
                     FragmentType.HISTORY_SYNC,
-                    R.string.privacy_guide_history_sync_toggle,
+                    R.string.privacy_guide_history_and_tabs_sync_toggle,
                     FragmentType.COOKIES,
                     R.string.privacy_guide_cookies_intro,
                     FragmentType.SAFE_BROWSING,
@@ -164,6 +166,8 @@ public class PrivacyGuideFragmentTest {
                     R.string.improve_search_suggestions_title,
                     FragmentType.PRELOAD,
                     R.string.preload_pages_privacy_guide_summary,
+                    FragmentType.AD_TOPICS,
+                    R.string.settings_privacy_guide_ad_topics_toggle_label,
                     FragmentType.DONE,
                     R.string.privacy_guide_done_title);
 
@@ -235,7 +239,10 @@ public class PrivacyGuideFragmentTest {
     }
 
     private void setSafeBrowsingState(@SafeBrowsingState int safeBrowsingState) {
-        runOnUiThreadBlocking(() -> SafeBrowsingBridge.setSafeBrowsingState(safeBrowsingState));
+        runOnUiThreadBlocking(
+                () ->
+                        new SafeBrowsingBridge(ProfileManager.getLastUsedRegularProfile())
+                                .setSafeBrowsingState(safeBrowsingState));
     }
 
     private void setCookieControlsMode(@CookieControlsMode int cookieControlsMode) {
@@ -253,7 +260,10 @@ public class PrivacyGuideFragmentTest {
     }
 
     private void setPreloadStatePG3(@PreloadPagesState int preloadPagesState) {
-        runOnUiThreadBlocking(() -> PreloadPagesSettingsBridge.setState(preloadPagesState));
+        runOnUiThreadBlocking(
+                () ->
+                        PreloadPagesSettingsBridge.setState(
+                                ProfileManager.getLastUsedRegularProfile(), preloadPagesState));
     }
 
     private void executeWhileCapturingIntents(Runnable func) {
@@ -334,10 +344,11 @@ public class PrivacyGuideFragmentTest {
     @Test
     @LargeTest
     @Feature({"RenderTest"})
+    @RequiresRestart("crbug.com/344675713")
     public void testRenderHistorySyncCard() throws IOException {
         launchPrivacyGuide();
         goToCard(FragmentType.HISTORY_SYNC);
-        mRenderTestRule.render(getRootView(), "privacy_guide_history_sync");
+        mRenderTestRule.render(getRootView(), "privacy_guide_history_and_tabs_sync");
     }
 
     @Test
@@ -356,7 +367,7 @@ public class PrivacyGuideFragmentTest {
         launchPrivacyGuide();
         goToCard(FragmentType.SAFE_BROWSING);
         clickOnArrowNextToRadioButtonWithText(R.string.privacy_guide_safe_browsing_enhanced_title);
-        mRenderTestRule.render(getRootView(), "privacy_guide_sb_enhanced_sheet");
+        mRenderTestRule.render(getRootView(), "privacy_guide_sb_enhanced_sheet_friendlier");
     }
 
     @Test
@@ -380,7 +391,8 @@ public class PrivacyGuideFragmentTest {
         mRenderTestRule.render(getRootView(), "privacy_guide_sb_standard_sheet");
     }
 
-    // TODO(crbug.com/1466292): Remove once friendlier safe browsing settings standard protection is
+    // TODO(crbug.com/40923883): Remove once friendlier safe browsing settings standard protection
+    // is
     // launched.
     @Test
     @LargeTest
@@ -399,7 +411,8 @@ public class PrivacyGuideFragmentTest {
                 .check(matches(isDisplayed()));
     }
 
-    // TODO(crbug.com/1466292): Remove once friendlier safe browsing settings standard protection is
+    // TODO(crbug.com/40923883): Remove once friendlier safe browsing settings standard protection
+    // is
     // launched.
     @Test
     @LargeTest
@@ -427,6 +440,7 @@ public class PrivacyGuideFragmentTest {
     @Test
     @LargeTest
     @Feature({"RenderTest"})
+    @RequiresRestart("crbug.com/344675713")
     public void testRenderCookiesCard() throws IOException {
         launchPrivacyGuide();
         goToCard(FragmentType.COOKIES);
@@ -523,7 +537,8 @@ public class PrivacyGuideFragmentTest {
     @Feature({"PrivacyGuide"})
     @EnableFeatures({
         ChromeFeatureList.PRIVACY_GUIDE_ANDROID_3,
-        ChromeFeatureList.PRIVACY_GUIDE_PRELOAD_ANDROID
+        ChromeFeatureList.PRIVACY_GUIDE_PRELOAD_ANDROID,
+        ChromeFeatureList.PRIVACY_SANDBOX_PRIVACY_GUIDE_AD_TOPICS
     })
     public void testForwardNavAllActionsPreloadPG3() {
         setMSBBState(false);
@@ -562,11 +577,16 @@ public class PrivacyGuideFragmentTest {
         onView(withId(R.id.search_suggestions_switch)).check(matches(isChecked()));
 
         navigateFromCardToNext(FragmentType.SEARCH_SUGGESTIONS);
-        testButtonVisibility(false, true, true);
+        testButtonVisibility(true, true, false);
         onView(withId(R.id.standard_option)).perform(click());
         onInternalRadioButtonOfViewWithId(R.id.standard_option).check(matches(isChecked()));
 
         navigateFromCardToNext(FragmentType.PRELOAD);
+        testButtonVisibility(false, true, true);
+        onView(withId(R.id.ad_topics_switch)).perform(click());
+        onView(withId(R.id.ad_topics_switch)).check(matches(isChecked()));
+
+        navigateFromCardToNext(FragmentType.AD_TOPICS);
         testButtonVisibility(false, false, false);
     }
 
@@ -613,7 +633,8 @@ public class PrivacyGuideFragmentTest {
     @Feature({"PrivacyGuide"})
     @EnableFeatures({
         ChromeFeatureList.PRIVACY_GUIDE_ANDROID_3,
-        ChromeFeatureList.PRIVACY_GUIDE_PRELOAD_ANDROID
+        ChromeFeatureList.PRIVACY_GUIDE_PRELOAD_ANDROID,
+        ChromeFeatureList.PRIVACY_SANDBOX_PRIVACY_GUIDE_AD_TOPICS
     })
     @DisableIf.Build(
             message = "Flaky on P. See http://crbug.com/1487153",
@@ -629,6 +650,11 @@ public class PrivacyGuideFragmentTest {
 
         launchPrivacyGuide();
         goToCard(FragmentType.DONE);
+
+        pressBack();
+        onViewWaiting(allOf(withId(R.id.ad_topics_switch), isCompletelyDisplayed()));
+        onView(withId(R.id.ad_topics_switch)).perform(click());
+        onView(withId(R.id.ad_topics_switch)).check(matches(isChecked()));
 
         pressBack();
         onViewWaiting(withText(R.string.preload_pages_privacy_guide_summary));

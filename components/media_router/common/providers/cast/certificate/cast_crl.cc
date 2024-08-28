@@ -34,9 +34,9 @@
 
 namespace cast_certificate {
 
-using cast::certificate::Crl;
-using cast::certificate::CrlBundle;
-using cast::certificate::TbsCrl;
+using openscreen::cast::proto::Crl;
+using openscreen::cast::proto::CrlBundle;
+using openscreen::cast::proto::TbsCrl;
 
 namespace {
 
@@ -202,7 +202,7 @@ bool VerifyCRL(const Crl& crl,
   if (!result.HasValidPath()) {
     VLOG(2) << "CRL - Issuer certificate verification failed.";
 #ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-    // TODO(crbug.com/634443): Log the error information.
+    // TODO(crbug.com/41267838): Log the error information.
     return false;
 #endif
   }

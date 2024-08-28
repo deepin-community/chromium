@@ -389,8 +389,7 @@ class PLATFORM_EXPORT DrawingBuffer : public cc::TextureLayerClient,
    private:
     scoped_refptr<DrawingBuffer> drawing_buffer_;
     // The previous state restorer, in case restorers are nested.
-    raw_ptr<ScopedStateRestorer, ExperimentalRenderer>
-        previous_state_restorer_ = nullptr;
+    raw_ptr<ScopedStateRestorer> previous_state_restorer_ = nullptr;
     bool clear_state_dirty_ = false;
     bool pixel_pack_parameters_dirty_ = false;
     bool texture_binding_dirty_ = false;
@@ -426,7 +425,7 @@ class PLATFORM_EXPORT DrawingBuffer : public cc::TextureLayerClient,
     const gfx::ColorSpace color_space;
     const viz::SharedImageFormat format;
     const SkAlphaType alpha_type;
-    const GLenum texture_target;
+    GLenum texture_target;
     const GLuint texture_id;
     const bool is_overlay_candidate;
 
@@ -499,6 +498,7 @@ class PLATFORM_EXPORT DrawingBuffer : public cc::TextureLayerClient,
 
   bool PrepareTransferableResourceInternal(
       cc::SharedBitmapIdRegistrar* bitmap_registrar,
+      scoped_refptr<gpu::ClientSharedImage>* client_si,
       viz::TransferableResource* out_resource,
       viz::ReleaseCallback* out_release_callback,
       bool force_gpu_result);
@@ -506,6 +506,7 @@ class PLATFORM_EXPORT DrawingBuffer : public cc::TextureLayerClient,
   // Helper functions to be called only by PrepareTransferableResourceInternal.
   bool FinishPrepareTransferableResourceGpu(
       viz::TransferableResource* out_resource,
+      scoped_refptr<gpu::ClientSharedImage>* client_si,
       viz::ReleaseCallback* out_release_callback);
   bool FinishPrepareTransferableResourceSoftware(
       cc::SharedBitmapIdRegistrar* bitmap_registrar,
@@ -586,7 +587,7 @@ class PLATFORM_EXPORT DrawingBuffer : public cc::TextureLayerClient,
   void ResolveAndPresentSwapChainIfNeeded();
 
   // Weak, reset by beginDestruction.
-  raw_ptr<Client, ExperimentalRenderer> client_ = nullptr;
+  raw_ptr<Client> client_ = nullptr;
 
   const PreserveDrawingBuffer preserve_drawing_buffer_;
   const WebGLVersion webgl_version_;
@@ -617,7 +618,7 @@ class PLATFORM_EXPORT DrawingBuffer : public cc::TextureLayerClient,
   // The current state restorer, which is used to track state dirtying. It is an
   // error to dirty state shared with WebGL while there is no existing state
   // restorer.
-  raw_ptr<ScopedStateRestorer, ExperimentalRenderer> state_restorer_ = nullptr;
+  raw_ptr<ScopedStateRestorer> state_restorer_ = nullptr;
 
   // This is used when the user requests either a depth or stencil buffer.
   GLuint depth_stencil_buffer_ = 0;

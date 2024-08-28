@@ -90,11 +90,15 @@ viz_component("service") {
     "display/frame_rate_decider.h",
     "display/null_renderer.cc",
     "display/null_renderer.h",
+    "display/occlusion_culler.cc",
+    "display/occlusion_culler.h",
     "display/output_surface.cc",
     "display/output_surface.h",
     "display/output_surface_client.h",
     "display/output_surface_frame.cc",
     "display/output_surface_frame.h",
+    "display/overdraw_tracker.cc",
+    "display/overdraw_tracker.h",
     "display/overlay_candidate.cc",
     "display/overlay_candidate.h",
     "display/overlay_candidate_factory.cc",
@@ -175,6 +179,8 @@ viz_component("service") {
     "frame_sinks/compositor_frame_sink_impl.h",
     "frame_sinks/compositor_frame_sink_support.cc",
     "frame_sinks/compositor_frame_sink_support.h",
+    "frame_sinks/eviction_handler.cc",
+    "frame_sinks/eviction_handler.h",
     "frame_sinks/external_begin_frame_source_mojo.cc",
     "frame_sinks/external_begin_frame_source_mojo.h",
     "frame_sinks/frame_counter.cc",
@@ -189,6 +195,8 @@ viz_component("service") {
     "frame_sinks/gmb_video_frame_pool_context_provider_impl.h",
     "frame_sinks/root_compositor_frame_sink_impl.cc",
     "frame_sinks/root_compositor_frame_sink_impl.h",
+    "frame_sinks/shared_image_interface_provider.cc",
+    "frame_sinks/shared_image_interface_provider.h",
     "frame_sinks/surface_resource_holder.cc",
     "frame_sinks/surface_resource_holder.h",
     "frame_sinks/surface_resource_holder_client.h",
@@ -261,7 +269,6 @@ viz_component("service") {
 
     # Note that dependency on //gpu/ipc/client is for GpuMemoryBufferImpl. This
     # dependency should not be in public_deps.
-    "//components/ml/webnn:features",
     "//components/version_info:version_info",
     "//components/viz/common",
     "//gpu/command_buffer/client",
@@ -279,6 +286,7 @@ viz_component("service") {
     "//services/tracing/public/cpp:cpp",
     "//services/viz/privileged/mojom",
     "//services/webnn:webnn_service",
+    "//services/webnn/public/mojom",
     "//skia",
     "//skia:skcms",
     "//third_party/libyuv",
@@ -405,6 +413,8 @@ viz_component("service") {
     sources += [
       "display/overlay_processor_delegated.cc",
       "display/overlay_processor_delegated.h",
+      "display/overlay_processor_delegated_support.cc",
+      "display/overlay_processor_delegated_support.h",
       "display/overlay_processor_ozone.cc",
       "display/overlay_processor_ozone.h",
       "display_embedder/software_output_device_ozone.cc",
@@ -418,6 +428,8 @@ viz_component("service") {
     sources += [
       "display/dc_layer_overlay.cc",
       "display/dc_layer_overlay.h",
+      "display/overlay_processor_delegated_support.cc",
+      "display/overlay_processor_delegated_support.h",
       "display/overlay_processor_win.cc",
       "display/overlay_processor_win.h",
       "display_embedder/output_device_backing.cc",
@@ -469,7 +481,7 @@ viz_component("service") {
       ]
     }
 
-    # TODO(1239521): ideally, ozone_platform_x11 should not be used outside
+    # TODO(crbug.com/40193891): ideally, ozone_platform_x11 should not be used outside
     # ui/ozone.
     if (ozone_platform_x11) {
       sources += [
@@ -501,7 +513,7 @@ viz_component("service") {
     public_deps += [ "//third_party/dawn/include/dawn:headers" ]
 
     deps += [
-      "//third_party/dawn/src/dawn:cpp",
+      "//third_party/dawn/include/dawn:cpp_headers",
       "//third_party/dawn/src/dawn:proc",
       "//third_party/dawn/src/dawn/native",
     ]
@@ -530,10 +542,12 @@ viz_source_set("unit_tests") {
     "display/display_utils_unittest.cc",
     "display/draw_polygon_unittest.cc",
     "display/frame_rate_decider_unittest.cc",
+    "display/occlusion_culler_unittest.cc",
+    "display/overdraw_tracker_unittest.cc",
     "display/overlay_candidate_factory_unittest.cc",
+    "display/readback_pixeltest.cc",
     "display/renderer_pixeltest.cc",
     "display/resolved_frame_data_unittest.cc",
-    "display/skia_readback_pixeltest.cc",
     "display/software_renderer_unittest.cc",
     "display/surface_aggregator_pixeltest.cc",
     "display/surface_aggregator_unittest.cc",
@@ -578,7 +592,6 @@ viz_source_set("unit_tests") {
     "//build:chromeos_buildflags",
     "//cc:test_support",
     "//cc/paint",
-    "//components/ml/webnn:features",
     "//components/viz/client",
     "//components/viz/common",
     "//components/viz/host",
@@ -590,6 +603,7 @@ viz_source_set("unit_tests") {
     "//gpu/ipc:gl_in_process_context",
     "//gpu/ipc/service",
     "//media",
+    "//media:test_support",
     "//media/capture:capture_lib",
     "//services/viz/public/mojom",
     "//skia",
@@ -605,7 +619,6 @@ viz_source_set("unit_tests") {
     sources += [
       "display/overlay_combination_cache_unittest.cc",
       "display/overlay_processor_ozone_unittest.cc",
-      "display/overlay_proposed_candidate_unittest.cc",
       "display/overlay_unittest.cc",
       "display_embedder/software_output_device_ozone_unittest.cc",
     ]
@@ -646,7 +659,6 @@ viz_source_set("unit_tests") {
     sources += [
       "display/overlay_combination_cache_unittest.cc",
       "display/overlay_processor_surface_control_unittest.cc",
-      "display/overlay_proposed_candidate_unittest.cc",
       "display/overlay_unittest.cc",
       "frame_sinks/external_begin_frame_source_android_unittest.cc",
     ]

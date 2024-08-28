@@ -5,6 +5,7 @@
 #include "components/domain_reliability/monitor.h"
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/check.h"
@@ -96,7 +97,7 @@ void DomainReliabilityMonitor::Shutdown() {
 
 void DomainReliabilityMonitor::AddBakedInConfigs() {
   for (size_t i = 0; kBakedInJsonConfigs[i]; ++i) {
-    base::StringPiece json(kBakedInJsonConfigs[i]);
+    std::string_view json(kBakedInJsonConfigs[i]);
     std::unique_ptr<const DomainReliabilityConfig> config =
         DomainReliabilityConfig::FromJSON(json);
     // Guard against accidentally checking in malformed JSON configs.
@@ -153,7 +154,7 @@ void DomainReliabilityMonitor::ClearBrowsingData(
       context_manager_.RemoveContexts(origin_filter);
       break;
     case MAX_CLEAR_MODE:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 }
 
@@ -265,7 +266,7 @@ void DomainReliabilityMonitor::OnRequestLegComplete(
   beacon_template.http_response_code = response_code;
   beacon_template.start_time = request.load_timing_info.request_start;
   beacon_template.elapsed = time_->NowTicks() - beacon_template.start_time;
-  beacon_template.was_proxied = request.response_info.was_fetched_via_proxy;
+  beacon_template.was_proxied = request.response_info.WasFetchedViaProxy();
   beacon_template.url = request.url;
   if (base::FeatureList::IsEnabled(
           features::kPartitionDomainReliabilityByNetworkIsolationKey)) {

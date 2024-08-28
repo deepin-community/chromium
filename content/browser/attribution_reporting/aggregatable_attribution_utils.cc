@@ -4,15 +4,22 @@
 
 #include "content/browser/attribution_reporting/aggregatable_attribution_utils.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <iterator>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/functional/overloaded.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
+#include "base/numerics/checked_math.h"
+#include "base/numerics/clamped_math.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
@@ -20,20 +27,22 @@
 #include "base/values.h"
 #include "components/attribution_reporting/aggregatable_trigger_config.h"
 #include "components/attribution_reporting/aggregatable_trigger_data.h"
+#include "components/attribution_reporting/aggregatable_utils.h"
 #include "components/attribution_reporting/aggregatable_values.h"
 #include "components/attribution_reporting/aggregation_keys.h"
 #include "components/attribution_reporting/constants.h"
+#include "components/attribution_reporting/features.h"
 #include "components/attribution_reporting/filters.h"
 #include "components/attribution_reporting/source_registration_time_config.mojom.h"
 #include "components/attribution_reporting/source_type.mojom-forward.h"
 #include "components/attribution_reporting/suitable_origin.h"
 #include "content/browser/aggregation_service/aggregatable_report.h"
-#include "content/browser/attribution_reporting/aggregatable_histogram_contribution.h"
+#include "content/browser/aggregation_service/aggregation_service_features.h"
 #include "content/browser/attribution_reporting/attribution_info.h"
 #include "content/browser/attribution_reporting/attribution_report.h"
 #include "net/base/schemeful_site.h"
 #include "third_party/abseil-cpp/absl/types/variant.h"
-#include "third_party/blink/public/mojom/private_aggregation/aggregatable_report.mojom.h"
+#include "third_party/blink/public/mojom/aggregation_service/aggregatable_report.mojom.h"
 
 namespace content {
 
@@ -44,14 +53,24 @@ namespace {
 std::string SerializeTimeRoundedDownToWholeDayInSeconds(base::Time time) {
   // TODO(csharrison, linnan): Validate that `time` is valid (e.g. not null /
   // inf).
-  base::Time rounded = RoundDownToWholeDaySinceUnixEpoch(time);
+  base::Time rounded =
+      attribution_reporting::RoundDownToWholeDaySinceUnixEpoch(time);
   return base::NumberToString(rounded.InMillisecondsSinceUnixEpoch() /
                               base::Time::kMillisecondsPerSecond);
 }
 
+bool IsAggregatableFilteringIdsEnabled() {
+  return base::FeatureList::IsEnabled(
+             attribution_reporting::features::
+                 kAttributionReportingAggregatableFilteringIds) &&
+         base::FeatureList::IsEnabled(
+             kPrivacySandboxAggregationServiceFilteringIds);
+}
+
 }  // namespace
 
-std::vector<AggregatableHistogramContribution> CreateAggregatableHistogram(
+std::vector<blink::mojom::AggregatableReportHistogramContribution>
+CreateAggregatableHistogram(
     const attribution_reporting::FilterData& source_filter_data,
     attribution_reporting::mojom::SourceType source_type,
     const base::Time& source_time,
@@ -61,7 +80,7 @@ std::vector<AggregatableHistogramContribution> CreateAggregatableHistogram(
         aggregatable_trigger_data,
     const std::vector<attribution_reporting::AggregatableValues>&
         aggregatable_values) {
-  int num_trigger_data_filtered = 0;
+  size_t num_trigger_data_filtered = 0;
 
   attribution_reporting::AggregationKeys::Keys buckets = keys.keys();
 
@@ -85,7 +104,9 @@ std::vector<AggregatableHistogramContribution> CreateAggregatableHistogram(
     }
   }
 
-  std::vector<AggregatableHistogramContribution> contributions;
+  std::vector<blink::mojom::AggregatableReportHistogramContribution>
+      contributions;
+  const bool filtering_id_enabled = IsAggregatableFilteringIdsEnabled();
   for (const auto& aggregatable_value : aggregatable_values) {
     if (source_filter_data.Matches(source_type, source_time, trigger_time,
                                    aggregatable_value.filters())) {
@@ -97,22 +118,37 @@ std::vector<AggregatableHistogramContribution> CreateAggregatableHistogram(
           continue;
         }
 
-        contributions.emplace_back(key, value->second);
+        std::optional<uint64_t> filtering_id;
+        if (filtering_id_enabled) {
+          filtering_id = value->second.filtering_id();
+        }
+
+        contributions.emplace_back(
+            key, base::checked_cast<int32_t>(value->second.value()),
+            filtering_id);
       }
       break;
     }
   }
 
   if (!aggregatable_trigger_data.empty()) {
+    base::ClampedNumeric<size_t> percentage = num_trigger_data_filtered;
+    percentage *= 100;
+    percentage /= aggregatable_trigger_data.size();
+
     base::UmaHistogramPercentage(
         "Conversions.AggregatableReport.FilteredTriggerDataPercentage",
-        100 * num_trigger_data_filtered / aggregatable_trigger_data.size());
+        percentage);
   }
 
   if (!buckets.empty()) {
+    base::ClampedNumeric<size_t> percentage = buckets.size();
+    percentage -= contributions.size();
+    percentage *= 100;
+    percentage /= buckets.size();
+
     base::UmaHistogramPercentage(
-        "Conversions.AggregatableReport.DroppedKeysPercentage",
-        100 * (buckets.size() - contributions.size()) / buckets.size());
+        "Conversions.AggregatableReport.DroppedKeysPercentage", percentage);
   }
 
   static_assert(attribution_reporting::kMaxAggregationKeysPerSource == 20,
@@ -121,8 +157,20 @@ std::vector<AggregatableHistogramContribution> CreateAggregatableHistogram(
 
   base::UmaHistogramExactLinear(
       "Conversions.AggregatableReport.NumContributionsPerReport2",
-      contributions.size(),
+      base::saturated_cast<int>(contributions.size()),
       attribution_reporting::kMaxAggregationKeysPerSource + 1);
+
+  // If total values exceeds the max, log the metrics as 100,000 to measure
+  // how often the max is exceeded.
+  static_assert(attribution_reporting::kMaxAggregatableValue == 65536);
+  const int64_t max_value = attribution_reporting::kMaxAggregatableValue + 1;
+  int64_t adjusted_value = std::min(
+      base::MakeStrictNum(max_value),
+      GetTotalAggregatableValues(contributions).ValueOrDefault(max_value));
+  base::UmaHistogramCounts100000(
+      "Conversions.AggregatableReport.TotalBudgetPerReport",
+      adjusted_value == max_value ? 100000
+                                  : base::saturated_cast<int>(adjusted_value));
 
   return contributions;
 }
@@ -131,26 +179,21 @@ std::optional<AggregatableReportRequest> CreateAggregatableReportRequest(
     const AttributionReport& report) {
   base::Time source_time;
   std::optional<uint64_t> source_debug_key;
-  std::vector<blink::mojom::AggregatableReportHistogramContribution>
-      contributions;
   const AttributionReport::CommonAggregatableData* common_aggregatable_data =
       nullptr;
+  std::vector<blink::mojom::AggregatableReportHistogramContribution>
+      contributions;
 
   absl::visit(
       base::Overloaded{
-          [](const AttributionReport::EventLevelData&) { NOTREACHED(); },
+          [](const AttributionReport::EventLevelData&) {
+            NOTREACHED_IN_MIGRATION();
+          },
           [&](const AttributionReport::AggregatableAttributionData& data) {
-            source_time = data.source.source_time();
-            source_debug_key = data.source.debug_key();
+            source_time = data.source_time;
+            source_debug_key = data.source_debug_key;
             common_aggregatable_data = &data.common_data;
-            base::ranges::transform(
-                data.contributions, std::back_inserter(contributions),
-                [](const auto& contribution) {
-                  return blink::mojom::AggregatableReportHistogramContribution(
-                      /*bucket=*/contribution.key(),
-                      /*value=*/base::checked_cast<int32_t>(
-                          contribution.value()));
-                });
+            contributions = data.contributions;
           },
           [&](const AttributionReport::NullAggregatableData& data) {
             source_time = data.fake_source_time;
@@ -183,9 +226,23 @@ std::optional<AggregatableReportRequest> CreateAggregatableReportRequest(
   }
   additional_fields.Set("source_registration_time",
                         std::move(serialized_source_time));
-  additional_fields.Set(
-      "attribution_destination",
-      net::SchemefulSite(attribution_info.context_origin).Serialize());
+  SetAttributionDestination(
+      additional_fields, net::SchemefulSite(attribution_info.context_origin));
+
+  std::optional<size_t> filtering_id_max_bytes;
+  if (IsAggregatableFilteringIdsEnabled()) {
+    filtering_id_max_bytes =
+        common_aggregatable_data->aggregatable_trigger_config
+            .aggregatable_filtering_id_max_bytes()
+            .value();
+  } else {
+    // We clear the filtering ids to avoid hitting `FilteringIdsFitInMaxBytes()`
+    // invalidly in case that filtering ids were unexpectedly set in the db for
+    // some reason like db corruption.
+    for (auto& contribution : contributions) {
+      contribution.filtering_id.reset();
+    }
+  }
   return AggregatableReportRequest::Create(
       AggregationServicePayloadContents(
           AggregationServicePayloadContents::Operation::kHistogram,
@@ -196,17 +253,34 @@ std::optional<AggregatableReportRequest> CreateAggregatableReportRequest(
                     **common_aggregatable_data->aggregation_coordinator_origin)
               : std::nullopt,
           /*max_contributions_allowed=*/
-          attribution_reporting::kMaxAggregationKeysPerSource),
+          attribution_reporting::kMaxAggregationKeysPerSource,
+          filtering_id_max_bytes),
       AggregatableReportSharedInfo(
           report.initial_report_time(), report.external_report_id(),
-          report.GetReportingOrigin(), debug_mode, std::move(additional_fields),
-          AttributionReport::CommonAggregatableData::kVersion,
-          AttributionReport::CommonAggregatableData::kApiIdentifier));
+          report.reporting_origin(), debug_mode, std::move(additional_fields),
+          filtering_id_max_bytes.has_value()
+              ? AttributionReport::CommonAggregatableData::
+                    kVersionWithFlexibleContributionFiltering
+              : AttributionReport::CommonAggregatableData::kVersion,
+          AttributionReport::CommonAggregatableData::kApiIdentifier),
+      // The returned request cannot be serialized due to the null `delay_type`.
+      /*delay_type=*/std::nullopt);
 }
 
-base::Time RoundDownToWholeDaySinceUnixEpoch(base::Time time) {
-  return base::Time::UnixEpoch() +
-         (time - base::Time::UnixEpoch()).FloorToMultiple(base::Days(1));
+base::CheckedNumeric<int64_t> GetTotalAggregatableValues(
+    const std::vector<blink::mojom::AggregatableReportHistogramContribution>&
+        contributions) {
+  base::CheckedNumeric<int64_t> total_value = 0;
+  for (const blink::mojom::AggregatableReportHistogramContribution&
+           contribution : contributions) {
+    total_value += contribution.value;
+  }
+  return total_value;
+}
+
+void SetAttributionDestination(base::Value::Dict& dict,
+                               const net::SchemefulSite& destination) {
+  dict.Set("attribution_destination", destination.Serialize());
 }
 
 }  // namespace content

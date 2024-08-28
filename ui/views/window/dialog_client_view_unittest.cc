@@ -17,7 +17,12 @@
 #include "ui/base/ui_base_types.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
+#include "ui/events/event_constants.h"
+#include "ui/events/gesture_event_details.h"
+#include "ui/events/pointer_details.h"
+#include "ui/events/types/event_type.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/label_button.h"
@@ -77,7 +82,7 @@ class DialogClientViewTest : public test::WidgetTest {
 
   void SizeAndLayoutWidget() {
     Widget* dialog = widget();
-    dialog->SetSize(dialog->GetContentsView()->GetPreferredSize());
+    dialog->SetSize(dialog->GetContentsView()->GetPreferredSize({}));
     views::test::RunScheduledLayout(dialog);
   }
 
@@ -85,7 +90,7 @@ class DialogClientViewTest : public test::WidgetTest {
   // the requested amount, but height should always match exactly.
   void CheckContentsIsSetToPreferredSize() {
     const gfx::Rect client_bounds = GetUpdatedClientBounds();
-    const gfx::Size preferred_size = delegate_->GetPreferredSize();
+    const gfx::Size preferred_size = delegate_->GetPreferredSize({});
     EXPECT_EQ(preferred_size.height(), delegate_->bounds().height());
     EXPECT_LE(preferred_size.width(), delegate_->bounds().width());
     EXPECT_EQ(gfx::Point(), delegate_->origin());
@@ -140,8 +145,9 @@ class DialogClientViewTest : public test::WidgetTest {
 
   Button* GetButtonByAccessibleName(View* root, const std::u16string& name) {
     Button* button = Button::AsButton(root);
-    if (button && button->GetAccessibleName() == name)
+    if (button && button->GetViewAccessibility().GetCachedName() == name) {
       return button;
+    }
     for (views::View* child : root->children()) {
       button = GetButtonByAccessibleName(child, name);
       if (button)
@@ -170,7 +176,8 @@ class DialogClientViewTest : public test::WidgetTest {
         : parent_(parent) {}
 
     // DialogDelegateView:
-    gfx::Size CalculatePreferredSize() const override {
+    gfx::Size CalculatePreferredSize(
+        const SizeBounds& /*available_size*/) const override {
       return parent_->preferred_size_;
     }
     gfx::Size GetMinimumSize() const override { return parent_->min_size_; }
@@ -197,7 +204,7 @@ TEST_F(DialogClientViewTest, UpdateButtons) {
   SetSizeConstraints(gfx::Size(200, 100), gfx::Size(300, 200),
                      gfx::Size(400, 300));
   // This dialog should start with no buttons.
-  EXPECT_EQ(delegate()->GetDialogButtons(), ui::DIALOG_BUTTON_NONE);
+  EXPECT_EQ(delegate()->buttons(), ui::DIALOG_BUTTON_NONE);
   EXPECT_EQ(nullptr, client_view()->ok_button());
   EXPECT_EQ(nullptr, client_view()->cancel_button());
   const int height_without_buttons = GetUpdatedClientBounds().height();
@@ -352,7 +359,7 @@ TEST_F(DialogClientViewTest, LayoutWithButtons) {
 // row in its minimum and preferred size calculations.
 TEST_F(DialogClientViewTest, MinMaxPreferredSize) {
   SetDialogButtons(ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL);
-  const gfx::Size buttons_size = client_view()->GetPreferredSize();
+  const gfx::Size buttons_size = client_view()->GetPreferredSize({});
   EXPECT_FALSE(buttons_size.IsEmpty());
 
   // When the contents view has no preference, just fit the buttons. The
@@ -368,7 +375,7 @@ TEST_F(DialogClientViewTest, MinMaxPreferredSize) {
   SetDialogButtons(ui::DIALOG_BUTTON_NONE);
   SetSizeConstraints(gfx::Size(10, 15), gfx::Size(20, 25), gfx::Size(300, 350));
   EXPECT_EQ(gfx::Size(10, 15), client_view()->GetMinimumSize());
-  EXPECT_EQ(gfx::Size(20, 25), client_view()->GetPreferredSize());
+  EXPECT_EQ(gfx::Size(20, 25), client_view()->GetPreferredSize({}));
   EXPECT_EQ(gfx::Size(300, 350), client_view()->GetMaximumSize());
 
   // With buttons, size should increase vertically only.
@@ -376,7 +383,7 @@ TEST_F(DialogClientViewTest, MinMaxPreferredSize) {
   EXPECT_EQ(gfx::Size(buttons_size.width(), 15 + buttons_size.height()),
             client_view()->GetMinimumSize());
   EXPECT_EQ(gfx::Size(buttons_size.width(), 25 + buttons_size.height()),
-            client_view()->GetPreferredSize());
+            client_view()->GetPreferredSize({}));
   EXPECT_EQ(gfx::Size(300, 350 + buttons_size.height()),
             client_view()->GetMaximumSize());
 
@@ -386,7 +393,7 @@ TEST_F(DialogClientViewTest, MinMaxPreferredSize) {
   EXPECT_EQ(gfx::Size(400, 450 + buttons_size.height()),
             client_view()->GetMinimumSize());
   EXPECT_EQ(gfx::Size(500, 550 + buttons_size.height()),
-            client_view()->GetPreferredSize());
+            client_view()->GetPreferredSize({}));
   EXPECT_EQ(gfx::Size(600, 650 + buttons_size.height()),
             client_view()->GetMaximumSize());
 }
@@ -544,21 +551,67 @@ TEST_F(DialogClientViewTest, IgnorePossiblyUnintendedClicks_ClickAfterShown) {
   SetDialogButtons(ui::DIALOG_BUTTON_CANCEL | ui::DIALOG_BUTTON_OK);
 
   // Should ignore clicks right after the dialog is shown.
-  ui::MouseEvent mouse_event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
+  ui::MouseEvent mouse_event(ui::EventType::kMousePressed, gfx::PointF(),
+                             gfx::PointF(), ui::EventTimeForNow(), ui::EF_NONE,
+                             ui::EF_NONE);
   test::ButtonTestApi(client_view()->ok_button()).NotifyClick(mouse_event);
   test::ButtonTestApi cancel_button(client_view()->cancel_button());
   cancel_button.NotifyClick(mouse_event);
   EXPECT_FALSE(widget()->IsClosed());
 
   cancel_button.NotifyClick(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
+      ui::EventType::kMousePressed, gfx::PointF(), gfx::PointF(),
       ui::EventTimeForNow() + base::Milliseconds(GetDoubleClickInterval()),
       ui::EF_NONE, ui::EF_NONE));
   EXPECT_TRUE(widget()->IsClosed());
 }
 
-// TODO(https://crbug.com/1449221): investigate the tests on ChromeOS and
+// Ensures that taps are ignored for a short time after the view has been shown.
+TEST_F(DialogClientViewTest, IgnorePossiblyUnintendedClicks_TapAfterShown) {
+  widget()->Show();
+  SetDialogButtons(ui::DIALOG_BUTTON_CANCEL | ui::DIALOG_BUTTON_OK);
+
+  // Should ignore taps right after the dialog is shown.
+  ui::GestureEvent tap_event(
+      0, 0, 0, ui::EventTimeForNow(),
+      ui::GestureEventDetails(ui::EventType::kGestureTap));
+  test::ButtonTestApi(client_view()->ok_button()).NotifyClick(tap_event);
+  test::ButtonTestApi cancel_button(client_view()->cancel_button());
+  cancel_button.NotifyClick(tap_event);
+  EXPECT_FALSE(widget()->IsClosed());
+
+  ui::GestureEvent tap_event2(
+      0, 0, 0,
+      ui::EventTimeForNow() + base::Milliseconds(GetDoubleClickInterval()),
+      ui::GestureEventDetails(ui::EventType::kGestureTap));
+  cancel_button.NotifyClick(tap_event2);
+  EXPECT_TRUE(widget()->IsClosed());
+}
+
+// Ensures that touch events are ignored for a short time after the view has
+// been shown.
+TEST_F(DialogClientViewTest, IgnorePossiblyUnintendedClicks_TouchAfterShown) {
+  widget()->Show();
+  SetDialogButtons(ui::DIALOG_BUTTON_CANCEL | ui::DIALOG_BUTTON_OK);
+
+  // Should ignore touches right after the dialog is shown.
+  ui::TouchEvent touch_event(ui::EventType::kTouchPressed, gfx::PointF(),
+                             gfx::PointF(), ui::EventTimeForNow(),
+                             ui::PointerDetails(ui::EventPointerType::kTouch));
+  test::ButtonTestApi(client_view()->ok_button()).NotifyClick(touch_event);
+  test::ButtonTestApi cancel_button(client_view()->cancel_button());
+  cancel_button.NotifyClick(touch_event);
+  EXPECT_FALSE(widget()->IsClosed());
+
+  ui::TouchEvent touch_event2(
+      ui::EventType::kTouchPressed, gfx::PointF(), gfx::PointF(),
+      ui::EventTimeForNow() + base::Milliseconds(GetDoubleClickInterval()),
+      ui::PointerDetails(ui::EventPointerType::kTouch));
+  cancel_button.NotifyClick(touch_event2);
+  EXPECT_TRUE(widget()->IsClosed());
+}
+
+// TODO(crbug.com/40269697): investigate the tests on ChromeOS and
 // fuchsia
 #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_FUCHSIA)
 class DesktopDialogClientViewTest : public DialogClientViewTest {
@@ -583,15 +636,16 @@ TEST_F(DesktopDialogClientViewTest,
   // old widget should be ignored.
   auto* widget1 = CreateTopLevelNativeWidget();
   widget1->SetBounds(gfx::Rect(50, 50, 100, 100));
-  ui::MouseEvent mouse_event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
+  ui::MouseEvent mouse_event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), ui::EF_NONE,
+                             ui::EF_NONE);
   test::ButtonTestApi(client_view()->ok_button()).NotifyClick(mouse_event);
   test::ButtonTestApi cancel_button(client_view()->cancel_button());
   cancel_button.NotifyClick(mouse_event);
   EXPECT_FALSE(widget()->IsClosed());
 
   cancel_button.NotifyClick(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
+      ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
       ui::EventTimeForNow() + base::Milliseconds(GetDoubleClickInterval()),
       ui::EF_NONE, ui::EF_NONE));
   EXPECT_TRUE(widget()->IsClosed());
@@ -612,15 +666,16 @@ TEST_F(DesktopDialogClientViewTest,
   // widget should be ignored.
   auto* widget1 = CreateTopLevelNativeWidget();
   widget1->CloseNow();
-  ui::MouseEvent mouse_event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
+  ui::MouseEvent mouse_event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), ui::EF_NONE,
+                             ui::EF_NONE);
   test::ButtonTestApi(client_view()->ok_button()).NotifyClick(mouse_event);
   test::ButtonTestApi cancel_button(client_view()->cancel_button());
   cancel_button.NotifyClick(mouse_event);
   EXPECT_FALSE(widget()->IsClosed());
 
   cancel_button.NotifyClick(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
+      ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
       ui::EventTimeForNow() + base::Milliseconds(GetDoubleClickInterval()),
       ui::EF_NONE, ui::EF_NONE));
   EXPECT_TRUE(widget()->IsClosed());
@@ -640,8 +695,9 @@ TEST_F(DialogClientViewTest,
   Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_TOOLTIP);
   widget1->Init(std::move(params));
   widget1->CloseNow();
-  ui::MouseEvent mouse_event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
+  ui::MouseEvent mouse_event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), ui::EF_NONE,
+                             ui::EF_NONE);
   test::ButtonTestApi(client_view()->ok_button()).NotifyClick(mouse_event);
   test::ButtonTestApi cancel_button(client_view()->cancel_button());
   cancel_button.NotifyClick(mouse_event);
@@ -660,8 +716,8 @@ TEST_F(DialogClientViewTest, IgnorePossiblyUnintendedClicks_RepeatedClicks) {
       base::Milliseconds(GetDoubleClickInterval());
 
   // Should ignore clicks right after the dialog is shown.
-  ui::MouseEvent mouse_event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             kNow, ui::EF_NONE, ui::EF_NONE);
+  ui::MouseEvent mouse_event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), kNow, ui::EF_NONE, ui::EF_NONE);
   test::ButtonTestApi(client_view()->ok_button()).NotifyClick(mouse_event);
   test::ButtonTestApi cancel_button(client_view()->cancel_button());
   cancel_button.NotifyClick(mouse_event);
@@ -674,18 +730,18 @@ TEST_F(DialogClientViewTest, IgnorePossiblyUnintendedClicks_RepeatedClicks) {
   ASSERT_TRUE(kNumClicks * kRepeatedClickInterval > kShortClickInterval);
   base::TimeTicks event_time = kNow;
   for (size_t i = 0; i < kNumClicks; i++) {
-    cancel_button.NotifyClick(ui::MouseEvent(ui::ET_MOUSE_PRESSED, gfx::Point(),
-                                             gfx::Point(), event_time,
-                                             ui::EF_NONE, ui::EF_NONE));
+    cancel_button.NotifyClick(
+        ui::MouseEvent(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+                       event_time, ui::EF_NONE, ui::EF_NONE));
     EXPECT_FALSE(widget()->IsClosed());
     event_time += kRepeatedClickInterval;
   }
 
   // Sufficient time passed, events are now allowed.
   event_time += kShortClickInterval;
-  cancel_button.NotifyClick(ui::MouseEvent(ui::ET_MOUSE_PRESSED, gfx::Point(),
-                                           gfx::Point(), event_time,
-                                           ui::EF_NONE, ui::EF_NONE));
+  cancel_button.NotifyClick(
+      ui::MouseEvent(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+                     event_time, ui::EF_NONE, ui::EF_NONE));
   EXPECT_TRUE(widget()->IsClosed());
 }
 

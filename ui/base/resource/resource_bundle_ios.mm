@@ -116,7 +116,7 @@ gfx::Image& ResourceBundle::GetNativeImageNamed(int resource_id) {
     NSData* ns_data = [[NSData alloc] initWithBytes:data->front()
                                              length:data->size()];
 
-    bool is_fallback = PNGContainsFallbackMarker(data->front(), data->size());
+    bool is_fallback = PNGContainsFallbackMarker(*data);
     // Create the image from the data.
     CGFloat target_scale = ui::GetScaleForResourceScaleFactor(scale_factor);
     CGFloat source_scale = is_fallback ? 1.0 : target_scale;
@@ -150,7 +150,7 @@ gfx::Image& ResourceBundle::GetNativeImageNamed(int resource_id) {
 
     if (!ui_image) {
       LOG(WARNING) << "Unable to load image with id " << resource_id;
-      NOTREACHED();  // Want to assert in debug mode.
+      NOTREACHED_IN_MIGRATION();  // Want to assert in debug mode.
       return GetEmptyImage();
     }
 

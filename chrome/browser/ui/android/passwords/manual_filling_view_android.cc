@@ -18,8 +18,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/android/features/keyboard_accessory/internal/jni/ManualFillingComponentBridge_jni.h"
-#include "chrome/android/features/keyboard_accessory/public/jni/UserInfoField_jni.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_data.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_enums.h"
 #include "chrome/browser/keyboard_accessory/android/manual_filling_controller.h"
@@ -32,6 +30,10 @@
 #include "ui/android/view_android.h"
 #include "ui/android/window_android.h"
 #include "url/android/gurl_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/features/keyboard_accessory/internal/jni/ManualFillingComponentBridge_jni.h"
+#include "chrome/android/features/keyboard_accessory/public/jni/UserInfoField_jni.h"
 
 using autofill::AccessorySheetData;
 using autofill::AccessorySheetField;
@@ -70,7 +72,7 @@ AccessorySheetField ConvertJavaUserInfoField(
 // bridge — it's only required because it is referenced in callbacks. Therefore,
 // the java_object can always be used, even if the controller has been
 // dismissed.
-// TODO(crbug.com/1354183): Pass a delegate/callback and not the bridge object.
+// TODO(crbug.com/40858913): Pass a delegate/callback and not the bridge object.
 ScopedJavaGlobalRef<jobject> ConvertAccessorySheetDataToJavaObject(
     ScopedJavaGlobalRef<jobject> java_object,
     AccessorySheetData tab_data) {
@@ -82,16 +84,23 @@ ScopedJavaGlobalRef<jobject> ConvertAccessorySheetDataToJavaObject(
   JNIEnv* env = base::android::AttachCurrentThread();
   ScopedJavaGlobalRef<jobject> j_tab_data;
   j_tab_data.Reset(Java_ManualFillingComponentBridge_createAccessorySheetData(
-      env, static_cast<int>(tab_data.get_sheet_type()),
-      ConvertUTF16ToJavaString(env, tab_data.title()),
-      ConvertUTF16ToJavaString(env, tab_data.warning())));
+      env, static_cast<int>(tab_data.get_sheet_type()), tab_data.title(),
+      tab_data.warning()));
 
   if (tab_data.option_toggle().has_value()) {
     const autofill::OptionToggle& toggle = tab_data.option_toggle().value();
     Java_ManualFillingComponentBridge_addOptionToggleToAccessorySheetData(
-        env, java_object, j_tab_data,
-        ConvertUTF16ToJavaString(env, toggle.display_text()),
+        env, java_object, j_tab_data, toggle.display_text(),
         toggle.is_enabled(), static_cast<int>(toggle.accessory_action()));
+  }
+
+  for (const autofill::PlusAddressSection& plus_address_section :
+       tab_data.plus_address_section_list()) {
+    Java_ManualFillingComponentBridge_addPlusAddressSectionToAccessorySheetData(
+        env, java_object, j_tab_data,
+        static_cast<int>(tab_data.get_sheet_type()),
+        plus_address_section.origin(),
+        plus_address_section.plus_address().display_text());
   }
 
   for (const autofill::PasskeySection& passkey_section :
@@ -99,26 +108,21 @@ ScopedJavaGlobalRef<jobject> ConvertAccessorySheetDataToJavaObject(
     Java_ManualFillingComponentBridge_addPasskeySectionToAccessorySheetData(
         env, java_object, j_tab_data,
         static_cast<int>(tab_data.get_sheet_type()),
-        ConvertUTF8ToJavaString(env, passkey_section.display_name()),
-        base::android::ToJavaByteArray(env, passkey_section.passkey_id()));
+        passkey_section.display_name(), passkey_section.passkey_id());
   }
 
   for (const UserInfo& user_info : tab_data.user_info_list()) {
     ScopedJavaLocalRef<jobject> j_user_info =
         Java_ManualFillingComponentBridge_addUserInfoToAccessorySheetData(
-            env, java_object, j_tab_data,
-            ConvertUTF8ToJavaString(env, user_info.origin()),
+            env, java_object, j_tab_data, user_info.origin(),
             user_info.is_exact_match().value(),
             url::GURLAndroid::FromNativeGURL(env, user_info.icon_url()));
     for (const AccessorySheetField& field : user_info.fields()) {
       Java_ManualFillingComponentBridge_addFieldToUserInfo(
           env, java_object, j_user_info,
-          static_cast<int>(tab_data.get_sheet_type()),
-          ConvertUTF16ToJavaString(env, field.display_text()),
-          ConvertUTF16ToJavaString(env, field.text_to_fill()),
-          ConvertUTF16ToJavaString(env, field.a11y_description()),
-          ConvertUTF8ToJavaString(env, field.id()), field.is_obfuscated(),
-          field.selectable());
+          static_cast<int>(tab_data.get_sheet_type()), field.display_text(),
+          field.text_to_fill(), field.a11y_description(), field.id(),
+          field.is_obfuscated(), field.selectable());
     }
   }
 
@@ -128,18 +132,22 @@ ScopedJavaGlobalRef<jobject> ConvertAccessorySheetDataToJavaObject(
     const std::u16string& detailsText = promo_code_info.details_text();
     Java_ManualFillingComponentBridge_addPromoCodeInfoToAccessorySheetData(
         env, java_object, j_tab_data,
-        static_cast<int>(tab_data.get_sheet_type()),
-        ConvertUTF16ToJavaString(env, promo_code.display_text()),
-        ConvertUTF16ToJavaString(env, promo_code.text_to_fill()),
-        ConvertUTF16ToJavaString(env, promo_code.a11y_description()),
-        ConvertUTF8ToJavaString(env, promo_code.id()),
-        promo_code.is_obfuscated(), ConvertUTF16ToJavaString(env, detailsText));
+        static_cast<int>(tab_data.get_sheet_type()), promo_code.display_text(),
+        promo_code.text_to_fill(), promo_code.a11y_description(),
+        promo_code.id(), promo_code.is_obfuscated(), detailsText);
+  }
+
+  for (const autofill::IbanInfo& iban_info : tab_data.iban_info_list()) {
+    const AccessorySheetField& value = iban_info.value();
+    Java_ManualFillingComponentBridge_addIbanInfoToAccessorySheetData(
+        env, java_object, j_tab_data,
+        static_cast<int>(tab_data.get_sheet_type()), value.id(),
+        value.display_text(), value.text_to_fill());
   }
 
   for (const FooterCommand& footer_command : tab_data.footer_commands()) {
     Java_ManualFillingComponentBridge_addFooterCommandToAccessorySheetData(
-        env, java_object, j_tab_data,
-        ConvertUTF16ToJavaString(env, footer_command.display_text()),
+        env, java_object, j_tab_data, footer_command.display_text(),
         static_cast<int>(footer_command.accessory_action()));
   }
   return j_tab_data;
@@ -236,9 +244,7 @@ void ManualFillingViewAndroid::OnPasskeySelected(
     JNIEnv* env,
     const base::android::JavaParamRef<jobject>& obj,
     jint tab_type,
-    const base::android::JavaParamRef<jbyteArray>& j_passkey_id) {
-  std::vector<uint8_t> passkey;
-  base::android::AppendJavaByteArrayToByteVector(env, j_passkey_id, &passkey);
+    std::vector<uint8_t>& passkey) {
   controller_->OnPasskeySelected(
       static_cast<autofill::AccessoryTabType>(tab_type), passkey);
 }
@@ -298,30 +304,21 @@ ManualFillingViewAndroid::GetOrCreateJavaObject() {
 void JNI_ManualFillingComponentBridge_CachePasswordSheetDataForTesting(
     JNIEnv* env,
     const base::android::JavaParamRef<jobject>& j_web_contents,
-    const base::android::JavaParamRef<jobjectArray>& j_usernames,
-    const base::android::JavaParamRef<jobjectArray>& j_passwords,
+    std::vector<std::string>& usernames,
+    std::vector<std::string>& passwords,
     jboolean j_blocklisted) {
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(j_web_contents);
 
   url::Origin origin =
       web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin();
-  std::vector<std::string> usernames;
-  std::vector<std::string> passwords;
-  base::android::AppendJavaStringArrayToStringVector(env, j_usernames,
-                                                     &usernames);
-  base::android::AppendJavaStringArrayToStringVector(env, j_passwords,
-                                                     &passwords);
-  std::vector<password_manager::PasswordForm> password_forms(usernames.size());
-  std::vector<raw_ptr<const password_manager::PasswordForm, VectorExperimental>>
-      credentials;
+  std::vector<password_manager::PasswordForm> credentials(usernames.size());
   for (unsigned int i = 0; i < usernames.size(); ++i) {
-    password_forms[i].url = origin.GetURL();
-    password_forms[i].username_value = base::ASCIIToUTF16(usernames[i]);
-    password_forms[i].password_value = base::ASCIIToUTF16(passwords[i]);
-    password_forms[i].match_type =
+    credentials[i].url = origin.GetURL();
+    credentials[i].username_value = base::ASCIIToUTF16(usernames[i]);
+    credentials[i].password_value = base::ASCIIToUTF16(passwords[i]);
+    credentials[i].match_type =
         password_manager::PasswordForm::MatchType::kExact;
-    credentials.push_back(&password_forms[i]);
   }
   return ChromePasswordManagerClient::FromWebContents(web_contents)
       ->GetCredentialCacheForTesting()

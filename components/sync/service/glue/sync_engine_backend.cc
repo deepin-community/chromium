@@ -176,13 +176,11 @@ void SyncEngineBackend::DoInitialize(
   args.cache_guid = restored_local_transport_data.cache_guid;
   args.birthday = restored_local_transport_data.birthday;
   args.bag_of_chips = restored_local_transport_data.bag_of_chips;
-  args.sync_poll_immediately_on_every_startup =
-      params.sync_poll_immediately_on_every_startup;
   sync_manager_->Init(&args);
 
   LoadAndConnectNigoriController();
 
-  ConfigureReason reason = sync_manager_->InitialSyncEndedTypes().Empty()
+  ConfigureReason reason = sync_manager_->InitialSyncEndedTypes().empty()
                                ? CONFIGURE_REASON_NEW_CLIENT
                                : CONFIGURE_REASON_NEWLY_ENABLED_DATA_TYPE;
 
@@ -319,11 +317,11 @@ void SyncEngineBackend::DoPurgeDisabledTypes(const ModelTypeSet& to_purge) {
     // We are using USS implementation of Nigori and someone asked us to purge
     // it's data. For regular datatypes it's controlled DataTypeManager, but
     // for Nigori we need to do it here.
-    // TODO(crbug.com/1142771): try to find better way to implement this logic,
+    // TODO(crbug.com/40154783): try to find better way to implement this logic,
     // it's likely happen only due to BackendMigrator.
-    // TODO(crbug.com/1142771): Evaluate whether this logic is necessary at all.
-    // There's no "purging" logic for any other data type, so likely it's not
-    // necessary for NIGORI either.
+    // TODO(crbug.com/40154783): Evaluate whether this logic is necessary at
+    // all. There's no "purging" logic for any other data type, so likely it's
+    // not necessary for NIGORI either.
     sync_manager_->GetModelTypeConnector()->DisconnectDataType(NIGORI);
     nigori_controller_->Stop(SyncStopMetadataFate::CLEAR_METADATA,
                              base::DoNothing());
@@ -355,7 +353,7 @@ void SyncEngineBackend::DoFinishConfigureDataTypes(
 
   // Update the enabled types for the bridge and sync manager.
   const ModelTypeSet enabled_types = sync_manager_->GetConnectedTypes();
-  DCHECK(Difference(enabled_types, ProtocolTypes()).Empty());
+  DCHECK(Difference(enabled_types, ProtocolTypes()).empty());
 
   const ModelTypeSet failed_types =
       Difference(types_to_download, sync_manager_->InitialSyncEndedTypes());
@@ -494,7 +492,7 @@ void SyncEngineBackend::LoadAndConnectNigoriController() {
       .sync_mode = SyncMode::kFull,
       .configuration_start_time = base::Time::Now()};
   nigori_controller_->LoadModels(configure_context, base::DoNothing());
-  DCHECK_EQ(nigori_controller_->state(), DataTypeController::MODEL_LOADED);
+  DCHECK_EQ(nigori_controller_->state(), ModelTypeController::MODEL_LOADED);
   sync_manager_->GetModelTypeConnector()->ConnectDataType(
       NIGORI, nigori_controller_->Connect());
 }

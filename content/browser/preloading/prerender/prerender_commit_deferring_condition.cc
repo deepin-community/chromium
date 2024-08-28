@@ -20,11 +20,12 @@ namespace {
 // Returns the root prerender frame tree node associated with navigation_request
 // of ongoing prerender activation.
 FrameTreeNode* GetRootPrerenderFrameTreeNode(int prerender_frame_tree_node_id) {
-  FrameTreeNode* prerender_frame_tree_node =
+  FrameTreeNode* root =
       FrameTreeNode::GloballyFindByID(prerender_frame_tree_node_id);
-  return prerender_frame_tree_node
-             ? prerender_frame_tree_node->frame_tree().root()
-             : nullptr;
+  if (root) {
+    CHECK(root->IsOutermostMainFrame());
+  }
+  return root;
 }
 
 }  // namespace
@@ -65,19 +66,27 @@ PrerenderCommitDeferringCondition::WillCommitNavigation(
 
   // If the prerender FrameTreeNode is gone, the prerender activation is allowed
   // to continue here but will fail soon.
-  if (!prerender_frame_tree_node)
+  if (!prerender_frame_tree_node) {
     return Result::kProceed;
+  }
 
+  PrerenderHost& prerender_host =
+      PrerenderHost::GetFromFrameTreeNode(*prerender_frame_tree_node);
   // If there is no ongoing main frame navigation in prerender frame tree, the
   // prerender activation is allowed to continue.
   if (!prerender_frame_tree_node->HasNavigation()) {
     // Record the defer waiting time for PrerenderCommitDeferringCondition as no
     // delay.
-    PrerenderHost& prerender_host =
-        PrerenderHost::GetFromFrameTreeNode(*prerender_frame_tree_node);
     RecordPrerenderActivationCommitDeferTime(
         base::TimeDelta(), prerender_host.trigger_type(),
         prerender_host.embedder_histogram_suffix());
+    return Result::kProceed;
+  }
+
+  // If we cannot match the navigation URL the prerender activation is allowed
+  // to continue here but will fail soon. This can happen when matching
+  // by No-Vary-Search hint and the No-Vary-Search header doesn't agree.
+  if (!prerender_host.IsUrlMatch(GetNavigationHandle().GetURL())) {
     return Result::kProceed;
   }
 

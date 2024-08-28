@@ -54,6 +54,7 @@
 #include "ash/tray_action/tray_action.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/memory/raw_ptr.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
@@ -343,7 +344,7 @@ TEST_F(LockContentsViewUnitTest, LayoutInSmallScreenSize) {
 
     // Resize to the minimum width that will fit both the left and right views
     int display_width = left_width + right_width;
-    display_manager_test_api.UpdateDisplay(std::to_string(display_width) +
+    display_manager_test_api.UpdateDisplay(base::NumberToString(display_width) +
                                            "x400");
 
     // Verify the views moved, ie, a layout was performed
@@ -924,9 +925,7 @@ TEST_F(LockContentsViewUnitTest, ShowStatusIndicatorIfAdbSideloadingEnabled) {
 TEST_F(LockContentsViewUnitTest, ShowStatusIndicatorIfEnrolledDevice) {
   // If the device is enrolled, bottom_status_indicator should be visible.
   Shell::Get()->system_tray_model()->SetDeviceEnterpriseInfo(
-      DeviceEnterpriseInfo{"BestCompanyEver",
-                           /*active_directory_managed=*/false,
-                           ManagementDeviceMode::kNone});
+      DeviceEnterpriseInfo{"BestCompanyEver", ManagementDeviceMode::kNone});
 
   auto* contents = new LockContentsView(
       mojom::TrayActionState::kAvailable, LockScreen::ScreenType::kLock,
@@ -951,9 +950,7 @@ TEST_F(LockContentsViewUnitTest, ShowStatusIndicatorIfEnrolledDevice) {
 TEST_F(LockContentsViewUnitTest, ShowManagementBubbleOnClickIfEnrolledDevice) {
   // If the device is enrolled, bottom_status_indicator should be visible.
   Shell::Get()->system_tray_model()->SetDeviceEnterpriseInfo(
-      DeviceEnterpriseInfo{"BestCompanyEver",
-                           /*active_directory_managed=*/false,
-                           ManagementDeviceMode::kNone});
+      DeviceEnterpriseInfo{"BestCompanyEver", ManagementDeviceMode::kNone});
 
   auto* contents = new LockContentsView(
       mojom::TrayActionState::kAvailable, LockScreen::ScreenType::kLock,
@@ -988,9 +985,7 @@ TEST_F(LockContentsViewUnitTest, ShowManagementBubbleOnClickIfEnrolledDevice) {
 TEST_F(LockContentsViewUnitTest, DoNotShowManagementBubbleOnClickIfAdb) {
   // If the device is enrolled, bottom_status_indicator should be visible.
   Shell::Get()->system_tray_model()->SetDeviceEnterpriseInfo(
-      DeviceEnterpriseInfo{"BestCompanyEver",
-                           /*active_directory_managed=*/false,
-                           ManagementDeviceMode::kNone});
+      DeviceEnterpriseInfo{"BestCompanyEver", ManagementDeviceMode::kNone});
 
   auto* contents = new LockContentsView(
       mojom::TrayActionState::kAvailable, LockScreen::ScreenType::kLock,
@@ -3238,9 +3233,7 @@ TEST_F(LockContentsViewUnitTest,
 TEST_F(LockContentsViewUnitTest, LoginExtensionUiWithUsers) {
   // If the device is enrolled, bottom_status_indicator should be visible.
   Shell::Get()->system_tray_model()->SetDeviceEnterpriseInfo(
-      DeviceEnterpriseInfo{"BestCompanyEver",
-                           /*active_directory_managed=*/false,
-                           ManagementDeviceMode::kNone});
+      DeviceEnterpriseInfo{"BestCompanyEver", ManagementDeviceMode::kNone});
 
   auto* contents = new LockContentsView(
       mojom::TrayActionState::kNotAvailable, LockScreen::ScreenType::kLogin,
@@ -3276,9 +3269,7 @@ TEST_F(LockContentsViewUnitTest, LoginExtensionUiWithUsers) {
 TEST_F(LockContentsViewUnitTest, LoginExtensionUiWithNoUsers) {
   // If the device is enrolled, bottom_status_indicator should be visible.
   Shell::Get()->system_tray_model()->SetDeviceEnterpriseInfo(
-      DeviceEnterpriseInfo{"BestCompanyEver",
-                           /*active_directory_managed=*/false,
-                           ManagementDeviceMode::kNone});
+      DeviceEnterpriseInfo{"BestCompanyEver", ManagementDeviceMode::kNone});
 
   auto* contents = new LockContentsView(
       mojom::TrayActionState::kNotAvailable, LockScreen::ScreenType::kLogin,

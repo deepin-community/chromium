@@ -36,8 +36,10 @@
 #include "src/tint/lang/core/type/f16.h"
 #include "src/tint/lang/core/type/f32.h"
 #include "src/tint/lang/core/type/i32.h"
+#include "src/tint/lang/core/type/invalid.h"
 #include "src/tint/lang/core/type/matrix.h"
 #include "src/tint/lang/core/type/pointer.h"
+#include "src/tint/lang/core/type/reference.h"
 #include "src/tint/lang/core/type/type.h"
 #include "src/tint/lang/core/type/u32.h"
 #include "src/tint/lang/core/type/vector.h"
@@ -53,6 +55,10 @@ Manager::Manager(Manager&&) = default;
 Manager& Manager::operator=(Manager&& rhs) = default;
 
 Manager::~Manager() = default;
+
+const core::type::Invalid* Manager::invalid() {
+    return Get<core::type::Invalid>();
+}
 
 const core::type::Void* Manager::void_() {
     return Get<core::type::Void>();
@@ -92,6 +98,14 @@ const core::type::Atomic* Manager::atomic(const core::type::Type* inner) {
 
 const core::type::Vector* Manager::packed_vec(const core::type::Type* inner, uint32_t size) {
     return Get<core::type::Vector>(inner, size, true);
+}
+
+const core::type::Type* Manager::match_width(const core::type::Type* el_ty,
+                                             const core::type::Type* match) {
+    if (auto* m = match->As<core::type::Vector>()) {
+        return vec(el_ty, m->Width());
+    }
+    return el_ty;
 }
 
 const core::type::Vector* Manager::vec(const core::type::Type* inner, uint32_t size) {
@@ -198,10 +212,15 @@ const core::type::Pointer* Manager::ptr(core::AddressSpace address_space,
         access == core::Access::kUndefined ? DefaultAccessFor(address_space) : access);
 }
 
+const core::type::Reference* Manager::ref(core::AddressSpace address_space,
+                                          const core::type::Type* subtype,
+                                          core::Access access /* = core::Access::kReadWrite */) {
+    return Get<core::type::Reference>(address_space, subtype, access);
+}
+
 core::type::Struct* Manager::Struct(Symbol name, VectorRef<const StructMember*> members) {
     if (auto* existing = Find<type::Struct>(name); TINT_UNLIKELY(existing)) {
         TINT_ICE() << "attempting to construct two structs named " << name.NameView();
-        return existing;
     }
 
     uint32_t max_align = 0u;
@@ -216,7 +235,6 @@ core::type::Struct* Manager::Struct(Symbol name, VectorRef<const StructMember*> 
 core::type::Struct* Manager::Struct(Symbol name, VectorRef<StructMemberDesc> md) {
     if (auto* existing = Find<type::Struct>(name); TINT_UNLIKELY(existing)) {
         TINT_ICE() << "attempting to construct two structs named " << name.NameView();
-        return existing;
     }
 
     tint::Vector<const StructMember*, 4> members;

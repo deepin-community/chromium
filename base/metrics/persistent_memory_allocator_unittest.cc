@@ -2,15 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "base/metrics/persistent_memory_allocator.h"
 
 #include <memory>
 
+#include "base/containers/heap_array.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_span.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "base/memory/writable_shared_memory_region.h"
@@ -393,7 +400,7 @@ class MakeIterableThread : public SimpleThread {
 
  private:
   raw_ptr<PersistentMemoryAllocator> allocator_;
-  span<Reference> refs_;
+  raw_span<Reference> refs_;
 };
 
 // Verifies that multiple threads making the same objects iterable doesn't cause
@@ -918,8 +925,8 @@ TEST(FilePersistentMemoryAllocatorTest, AcceptableTest) {
   local.MakeIterable(local.Allocate(1, 1));
   local.MakeIterable(local.Allocate(11, 11));
   const size_t minsize = local.used();
-  std::unique_ptr<char[]> garbage(new char[minsize]);
-  RandBytes(garbage.get(), minsize);
+  auto garbage = HeapArray<uint8_t>::Uninit(minsize);
+  RandBytes(garbage);
 
   std::unique_ptr<MemoryMappedFile> mmfile;
   char filename[100];
@@ -983,7 +990,7 @@ TEST(FilePersistentMemoryAllocatorTest, AcceptableTest) {
     {
       File writer(file_path, File::FLAG_CREATE | File::FLAG_WRITE);
       ASSERT_TRUE(writer.IsValid());
-      writer.Write(0, (const char*)garbage.get(), filesize);
+      writer.Write(0, garbage.first(filesize));
     }
     ASSERT_TRUE(PathExists(file_path));
 

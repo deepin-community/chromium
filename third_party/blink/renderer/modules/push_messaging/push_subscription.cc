@@ -113,10 +113,10 @@ DOMArrayBuffer* PushSubscription::getKey(const AtomicString& name) const {
   return nullptr;
 }
 
-ScriptPromiseTyped<IDLBoolean> PushSubscription::unsubscribe(
+ScriptPromise<IDLBoolean> PushSubscription::unsubscribe(
     ScriptState* script_state) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolverTyped<IDLBoolean>>(
-      script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(script_state);
   auto promise = resolver->Promise();
 
   PushProvider* push_provider =
@@ -132,7 +132,7 @@ ScriptValue PushSubscription::toJSONForBinding(ScriptState* script_state) {
   DCHECK(p256dh_);
 
   V8ObjectBuilder result(script_state);
-  result.AddString("endpoint", endpoint());
+  result.AddString("endpoint", endpoint().GetString());
 
   if (expiration_time_) {
     result.AddNumber("expirationTime", *expiration_time_);

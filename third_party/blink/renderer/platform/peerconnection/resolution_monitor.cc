@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/platform/peerconnection/resolution_monitor.h"
 
 #include <bitset>
@@ -12,8 +17,8 @@
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "media/base/decoder_buffer.h"
-#include "media/filters/vp9_parser.h"
 #include "media/parsers/vp8_parser.h"
+#include "media/parsers/vp9_parser.h"
 #include "third_party/abseil-cpp/absl/types/variant.h"
 #include "third_party/libgav1/src/src/buffer_pool.h"
 #include "third_party/libgav1/src/src/decoder_state.h"
@@ -36,7 +41,7 @@ class Vp8ResolutionMonitor : public ResolutionMonitor {
 
     media::Vp8Parser parser;
     media::Vp8FrameHeader frame_header;
-    if (!parser.ParseFrame(buffer.data(), buffer.data_size(), &frame_header)) {
+    if (!parser.ParseFrame(buffer.data(), buffer.size(), &frame_header)) {
       DLOG(ERROR) << "Failed to parse vp8 stream";
       current_resolution_ = std::nullopt;
     } else {
@@ -65,8 +70,7 @@ class Vp9ResolutionMonitor : public ResolutionMonitor {
     if (buffer.has_side_data()) {
       frame_sizes = buffer.side_data()->spatial_layers;
     }
-    parser_.SetStream(buffer.data(),
-                      base::checked_cast<off_t>(buffer.data_size()),
+    parser_.SetStream(buffer.data(), base::checked_cast<off_t>(buffer.size()),
                       frame_sizes, /*stream_config=*/nullptr);
 
     gfx::Size frame_size;
@@ -123,8 +127,8 @@ class Av1ResolutionMonitor : public ResolutionMonitor {
   std::optional<gfx::Size> GetResolution(
       const media::DecoderBuffer& buffer) override {
     auto parser = base::WrapUnique(new (std::nothrow) libgav1::ObuParser(
-        buffer.data(), buffer.data_size(), kDefaultOperatingPoint,
-        &buffer_pool_, &decoder_state_));
+        buffer.data(), buffer.size(), kDefaultOperatingPoint, &buffer_pool_,
+        &decoder_state_));
     if (current_sequence_header_) {
       parser->set_sequence_header(*current_sequence_header_);
     }
@@ -236,7 +240,7 @@ class H264ResolutionMonitor : public ResolutionMonitor {
 
     std::optional<gfx::Size> resolution;
     std::vector<webrtc::H264::NaluIndex> nalu_indices =
-        webrtc::H264::FindNaluIndices(buffer.data(), buffer.data_size());
+        webrtc::H264::FindNaluIndices(buffer.data(), buffer.size());
     for (const auto& nalu_index : nalu_indices) {
       base::span<const uint8_t> nalu_payload(
           buffer.data() + nalu_index.payload_start_offset,

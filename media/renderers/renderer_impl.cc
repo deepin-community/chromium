@@ -351,7 +351,7 @@ bool RendererImpl::GetWallClockTimes(
 }
 
 bool RendererImpl::HasEncryptedStream() {
-  std::vector<raw_ptr<DemuxerStream, VectorExperimental>> demuxer_streams =
+  std::vector<DemuxerStream*> demuxer_streams =
       media_resource_->GetAllStreams();
 
   for (media::DemuxerStream* stream : demuxer_streams) {
@@ -833,7 +833,7 @@ void RendererImpl::PausePlayback() {
     case STATE_UNINITIALIZED:
     case STATE_INIT_PENDING_CDM:
     case STATE_INITIALIZING:
-      NOTREACHED() << "Invalid state: " << state_;
+      NOTREACHED_IN_MIGRATION() << "Invalid state: " << state_;
       break;
 
     case STATE_ERROR:

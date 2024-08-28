@@ -5,14 +5,14 @@
 #ifndef V8_WASM_BASELINE_IA32_LIFTOFF_ASSEMBLER_IA32_INL_H_
 #define V8_WASM_BASELINE_IA32_LIFTOFF_ASSEMBLER_IA32_INL_H_
 
-#include "src/base/v8-fallthrough.h"
 #include "src/codegen/assembler.h"
-#include "src/heap/memory-chunk.h"
+#include "src/heap/mutable-page-metadata.h"
 #include "src/wasm/baseline/liftoff-assembler.h"
 #include "src/wasm/baseline/liftoff-register.h"
 #include "src/wasm/object-access.h"
 #include "src/wasm/simd-shuffle.h"
 #include "src/wasm/value-type.h"
+#include "src/wasm/wasm-linkage.h"
 #include "src/wasm/wasm-objects.h"
 
 namespace v8::internal::wasm {
@@ -22,10 +22,6 @@ namespace v8::internal::wasm {
   CpuFeatureScope feature(this, name);
 
 namespace liftoff {
-
-// ebp-4 holds the stack marker, ebp-8 is the instance data parameter.
-constexpr int kInstanceDataOffset = 8;
-constexpr int kFeedbackVectorOffset = 12;  // ebp-12 is the feedback vector.
 
 inline Operand GetStackSlot(int offset) { return Operand(ebp, -offset); }
 
@@ -37,7 +33,7 @@ inline MemOperand GetHalfStackSlot(int offset, RegPairHalf half) {
 
 // TODO(clemensb): Make this a constexpr variable once Operand is constexpr.
 inline Operand GetInstanceDataOperand() {
-  return GetStackSlot(kInstanceDataOffset);
+  return GetStackSlot(WasmLiftoffFrameConstants::kInstanceDataOffset);
 }
 
 inline Operand MemOperand(Register base, Register offset_reg, int offset_imm) {
@@ -52,6 +48,9 @@ inline void Load(LiftoffAssembler* assm, LiftoffRegister dst, Register base,
                  int32_t offset, ValueKind kind) {
   Operand src(base, offset);
   switch (kind) {
+    case kI16:
+      assm->mov_w(dst.gp(), src);
+      break;
     case kI32:
     case kRefNull:
     case kRef:
@@ -80,6 +79,9 @@ inline void Store(LiftoffAssembler* assm, Register base, int32_t offset,
                   LiftoffRegister src, ValueKind kind) {
   Operand dst(base, offset);
   switch (kind) {
+    case kI16:
+      assm->mov_w(dst, src.gp());
+      break;
     case kI32:
     case kRefNull:
     case kRef:
@@ -102,7 +104,7 @@ inline void Store(LiftoffAssembler* assm, Register base, int32_t offset,
     case kVoid:
     case kBottom:
     case kI8:
-    case kI16:
+    case kF16:
       UNREACHABLE();
   }
 }
@@ -138,6 +140,7 @@ inline void push(LiftoffAssembler* assm, LiftoffRegister reg, ValueKind kind,
     case kBottom:
     case kI8:
     case kI16:
+    case kF16:
       UNREACHABLE();
   }
 }
@@ -221,11 +224,14 @@ int LiftoffAssembler::PrepareStackFrame() {
 }
 
 void LiftoffAssembler::CallFrameSetupStub(int declared_function_index) {
-  // TODO(jkummerow): Enable this check when we have C++20.
-  // static_assert(std::find(std::begin(wasm::kGpParamRegisters),
-  //                         std::end(wasm::kGpParamRegisters),
-  //                         kLiftoffFrameSetupFunctionReg) ==
-  //                         std::end(wasm::kGpParamRegisters));
+// The standard library used by gcc tryjobs does not consider `std::find` to be
+// `constexpr`, so wrap it in a `#ifdef __clang__` block.
+#ifdef __clang__
+  static_assert(std::find(std::begin(wasm::kGpParamRegisters),
+                          std::end(wasm::kGpParamRegisters),
+                          kLiftoffFrameSetupFunctionReg) ==
+                std::end(wasm::kGpParamRegisters));
+#endif
 
   LoadConstant(LiftoffRegister(kLiftoffFrameSetupFunctionReg),
                WasmValue(declared_function_index));
@@ -343,7 +349,7 @@ void LiftoffAssembler::AbortCompilation() {}
 
 // static
 constexpr int LiftoffAssembler::StaticStackFrameSize() {
-  return liftoff::kFeedbackVectorOffset;
+  return WasmLiftoffFrameConstants::kFeedbackVectorOffset;
 }
 
 int LiftoffAssembler::SlotSizeForType(ValueKind kind) {
@@ -404,11 +410,11 @@ void LiftoffAssembler::LoadInstanceDataFromFrame(Register dst) {
   mov(dst, liftoff::GetInstanceDataOperand());
 }
 
-void LiftoffAssembler::LoadTrustedDataFromInstanceObject(
-    Register dst, Register instance_object) {
-  LoadTaggedPointerFromInstance(
-      dst, instance_object,
-      wasm::ObjectAccess::ToTagged(WasmInstanceObject::kTrustedDataOffset));
+void LiftoffAssembler::LoadTrustedPointer(Register dst, Register src_addr,
+                                          int offset, IndirectPointerTag tag) {
+  static_assert(!V8_ENABLE_SANDBOX_BOOL);
+  static_assert(!COMPRESS_POINTERS_BOOL);
+  mov(dst, Operand{src_addr, offset});
 }
 
 void LiftoffAssembler::LoadFromInstance(Register dst, Register instance,
@@ -432,20 +438,6 @@ void LiftoffAssembler::LoadTaggedPointerFromInstance(Register dst,
                                                      int offset) {
   static_assert(kTaggedSize == kSystemPointerSize);
   mov(dst, Operand{instance, offset});
-}
-
-void LiftoffAssembler::LoadExternalPointer(Register dst, Register src_addr,
-                                           int offset, ExternalPointerTag tag,
-                                           Register scratch) {
-  LoadFullPointer(dst, src_addr, offset);
-}
-
-void LiftoffAssembler::LoadExternalPointer(Register dst, Register src_addr,
-                                           int offset, Register index,
-                                           ExternalPointerTag tag,
-                                           Register scratch) {
-  Operand src_op = Operand(src_addr, index, times_4, offset);
-  mov(dst, src_op);
 }
 
 void LiftoffAssembler::SpillInstanceData(Register instance) {
@@ -584,6 +576,9 @@ void LiftoffAssembler::Load(LiftoffRegister dst, Register src_addr,
     case LoadType::kS128Load:
       movdqu(dst.fp(), src_op);
       break;
+    case LoadType::kF32LoadF16:
+      UNIMPLEMENTED();
+      break;
   }
 }
 
@@ -601,7 +596,7 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
   switch (type.value()) {
     case StoreType::kI64Store8:
       src = src.low();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case StoreType::kI32Store8:
       // Only the lower 4 registers can be addressed as 8-bit registers.
       if (src.gp().is_byte_register()) {
@@ -631,13 +626,13 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
       break;
     case StoreType::kI64Store16:
       src = src.low();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case StoreType::kI32Store16:
       mov_w(dst_op, src.gp());
       break;
     case StoreType::kI64Store32:
       src = src.low();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case StoreType::kI32Store:
       mov(dst_op, src.gp());
       break;
@@ -659,6 +654,9 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
       break;
     case StoreType::kS128Store:
       Movdqu(dst_op, src.fp());
+      break;
+    case StoreType::kF32StoreF16:
+      UNIMPLEMENTED();
       break;
   }
 }
@@ -2581,7 +2579,7 @@ void LiftoffAssembler::emit_cond_jump(Condition cond, Label* label,
       case kRefNull:
       case kRtt:
         DCHECK(cond == kEqual || cond == kNotEqual);
-        V8_FALLTHROUGH;
+        [[fallthrough]];
       case kI32:
         cmp(lhs, rhs);
         break;
@@ -4659,8 +4657,26 @@ void LiftoffAssembler::emit_f64x2_qfms(LiftoffRegister dst,
             liftoff::kScratchDoubleReg);
 }
 
-void LiftoffAssembler::set_trap_on_oob_mem64(Register index, int oob_shift,
-                                             MemOperand oob_offset) {
+bool LiftoffAssembler::emit_f16x8_splat(LiftoffRegister dst,
+                                        LiftoffRegister src) {
+  return false;
+}
+
+bool LiftoffAssembler::emit_f16x8_extract_lane(LiftoffRegister dst,
+                                               LiftoffRegister lhs,
+                                               uint8_t imm_lane_idx) {
+  return false;
+}
+
+bool LiftoffAssembler::emit_f16x8_replace_lane(LiftoffRegister dst,
+                                               LiftoffRegister src1,
+                                               LiftoffRegister src2,
+                                               uint8_t imm_lane_idx) {
+  return false;
+}
+
+void LiftoffAssembler::set_trap_on_oob_mem64(Register index, uint64_t oob_size,
+                                             uint64_t oob_index) {
   UNREACHABLE();
 }
 

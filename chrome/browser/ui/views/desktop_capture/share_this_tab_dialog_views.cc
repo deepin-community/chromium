@@ -35,6 +35,7 @@
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/color_palette.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/layout/box_layout.h"
@@ -124,7 +125,7 @@ ShareThisTabDialogView::ShareThisTabDialogView(
   title_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   title_label->SetText(
       l10n_util::GetStringFUTF16(IDS_SHARE_THIS_TAB_DIALOG_TITLE, app_name_));
-  // TODO(crbug.com/1448008): Prevent non-initial focus of the title label.
+  // TODO(crbug.com/40269137): Prevent non-initial focus of the title label.
   title_label->SetFocusBehavior(View::FocusBehavior::ALWAYS);
   SetInitiallyFocusedView(title_label);
 
@@ -172,19 +173,14 @@ ShareThisTabDialogView::ShareThisTabDialogView(
     CreateDialogWidget(this, params.context, nullptr)->Show();
   }
 
-  source_view_->SetBorder(features::IsChromeRefresh2023()
-                              ? views::CreateThemedRoundedRectBorder(
-                                    1, 4, ui::kColorSysPrimaryContainer)
-                              : views::CreateThemedRoundedRectBorder(
-                                    1, 2, kColorShareThisTabSourceViewBorder));
+  source_view_->SetBorder(views::CreateThemedRoundedRectBorder(
+      1, 4, ui::kColorSysPrimaryContainer));
 
   SetButtonLabel(ui::DIALOG_BUTTON_OK,
                  l10n_util::GetStringUTF16(IDS_SHARE_THIS_TAB_DIALOG_ALLOW));
   SetButtonEnabled(ui::DIALOG_BUTTON_OK, false);
-  if (features::IsChromeRefresh2023()) {
-    SetButtonStyle(ui::DIALOG_BUTTON_OK, ui::ButtonStyle::kTonal);
-    SetButtonStyle(ui::DIALOG_BUTTON_CANCEL, ui::ButtonStyle::kTonal);
-  }
+  SetButtonStyle(ui::DIALOG_BUTTON_OK, ui::ButtonStyle::kTonal);
+  SetButtonStyle(ui::DIALOG_BUTTON_CANCEL, ui::ButtonStyle::kTonal);
 
   // Simply pressing ENTER without tab-key navigating to the button
   // must not accept the dialog, or else that'd be a security issue.
@@ -202,10 +198,13 @@ void ShareThisTabDialogView::DetachParent() {
   parent_ = nullptr;
 }
 
-gfx::Size ShareThisTabDialogView::CalculatePreferredSize() const {
+gfx::Size ShareThisTabDialogView::CalculatePreferredSize(
+    const views::SizeBounds& /*available_size*/) const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   static constexpr size_t kDialogViewWidth = 600;
-  return gfx::Size(kDialogViewWidth, GetHeightForWidth(kDialogViewWidth));
+  return gfx::Size(
+      kDialogViewWidth,
+      GetLayoutManager()->GetPreferredHeightForWidth(this, kDialogViewWidth));
 }
 
 bool ShareThisTabDialogView::ShouldShowWindowTitle() const {
@@ -269,10 +268,7 @@ void ShareThisTabDialogView::SetupAudioToggle() {
   audio_toggle_container->SetProperty(views::kMarginsKey,
                                       gfx::Insets::TLBR(8, 0, 0, 0));
   audio_toggle_container->SetBackground(
-      features::IsChromeRefresh2023()
-          ? views::CreateThemedRoundedRectBackground(ui::kColorSysSurface4, 8)
-          : views::CreateThemedRoundedRectBackground(
-                kColorShareThisTabAudioToggleBackground, 4));
+      views::CreateThemedRoundedRectBackground(ui::kColorSysSurface4, 8));
 
   views::ImageView* audio_icon_view = audio_toggle_container->AddChildView(
       std::make_unique<views::ImageView>());
@@ -289,7 +285,7 @@ void ShareThisTabDialogView::SetupAudioToggle() {
 
   audio_toggle_button_ = audio_toggle_container->AddChildView(
       std::make_unique<views::ToggleButton>());
-  audio_toggle_button_->SetAccessibleName(
+  audio_toggle_button_->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_SHARE_THIS_TAB_AUDIO_SHARE));
   audio_toggle_button_->SetIsOn(
       !base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -371,7 +367,7 @@ void ShareThisTabDialogViews::Show(
   CHECK(!callback_);
   CHECK(!dialog_);
 
-  DesktopMediaPickerManager::Get()->OnShowDialog();
+  DesktopMediaPickerManager::Get()->OnShowDialog(params);
   callback_ = std::move(done_callback);
   dialog_ = new ShareThisTabDialogView(params, this);
 }

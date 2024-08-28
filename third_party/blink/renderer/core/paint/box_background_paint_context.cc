@@ -5,10 +5,12 @@
 #include "third_party/blink/renderer/core/paint/box_background_paint_context.h"
 
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/frame/pagination_state.h"
 #include "third_party/blink/renderer/core/layout/fragmentation_utils.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/layout/layout_box_model_object.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
+#include "third_party/blink/renderer/core/layout/pagination_utils.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/layout/table/layout_table_cell.h"
 #include "third_party/blink/renderer/core/paint/paint_info.h"
@@ -97,8 +99,22 @@ BoxBackgroundPaintContext::BoxBackgroundPaintContext(
           To<LayoutBoxModelObject>(fragment.GetLayoutObject()),
           To<LayoutBoxModelObject>(fragment.GetLayoutObject())) {
   DCHECK(box_->IsBox());
+  box_fragment_ = &fragment;
 
-  if (fragment.IsTable()) {
+  if (fragment.GetBoxType() == PhysicalFragment::kPageBorderBox) {
+    // The page border box paints the document canvas, in which case it's the
+    // LayoutView that has been used as image client.
+    painting_view_ = true;
+    const LayoutView* view = fragment.GetDocument().GetLayoutView();
+    box_ = view;
+    positioning_size_override_ = view->RootBox().Size();
+
+    // Calculate the offset into the background image for the current page.
+    wtf_size_t page_number =
+        view->GetFrameView()->GetPaginationState()->CurrentPageNumber();
+    element_positioning_area_offset_ =
+        StitchedPageContentRect(*view, page_number).offset;
+  } else if (fragment.IsTable()) {
     auto stitched_background_rect = ComputeStitchedTableGridRect(fragment);
     positioning_size_override_ = stitched_background_rect.size;
     element_positioning_area_offset_ = -stitched_background_rect.offset;
@@ -127,10 +143,16 @@ BoxBackgroundPaintContext::BoxBackgroundPaintContext(
 }
 
 PhysicalBoxStrut BoxBackgroundPaintContext::BorderOutsets() const {
+  if (box_fragment_) {
+    return box_fragment_->Borders();
+  }
   return positioning_box_->BorderOutsets();
 }
 
 PhysicalBoxStrut BoxBackgroundPaintContext::PaddingOutsets() const {
+  if (box_fragment_) {
+    return box_fragment_->Padding();
+  }
   return positioning_box_->PaddingOutsets();
 }
 
@@ -176,7 +198,7 @@ SnappedAndUnsnappedOutsets BoxBackgroundPaintContext::ObscuredBorderOutsets(
                                                             positioning_area)
           .Rect();
 
-  BorderEdge edges[4];
+  BorderEdgeArray edges;
   style.GetBorderEdgeInfo(edges);
   const PhysicalBoxStrut box_outsets = BorderOutsets();
   SnappedAndUnsnappedOutsets adjust;
@@ -304,6 +326,14 @@ const ComputedStyle& BoxBackgroundPaintContext::ImageStyle(
     return positioning_box_->StyleRef();
   }
   return fragment_style;
+}
+
+bool BoxBackgroundPaintContext::ShouldSkipBackgroundIfWhite() const {
+  // Leave a transparent background if white, assuming the paper or the PDF
+  // viewer background is white by default. This allows further customization of
+  // the background, e.g. in the case of https://crbug.com/498892.
+  return box_fragment_ &&
+         box_fragment_->GetBoxType() == PhysicalFragment::kPageBorderBox;
 }
 
 PhysicalOffset BoxBackgroundPaintContext::OffsetInBackground(

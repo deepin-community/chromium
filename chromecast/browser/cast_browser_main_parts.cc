@@ -90,6 +90,10 @@
 #include "ui/base/ui_base_switches.h"
 #include "ui/gl/gl_switches.h"
 
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif  // BUILDFLAG(IS_OZONE)
+
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include <fontconfig/fontconfig.h>
 #include <signal.h>
@@ -184,7 +188,7 @@ void RegisterClosureOnSignal(base::OnceClosure closure) {
   for (int sig : kSignalsToRunClosure) {
     struct sigaction sa_old;
     if (sigaction(sig, &sa_new, &sa_old) == -1) {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
     } else {
       DCHECK_EQ(sa_old.sa_handler, SIG_DFL);
     }
@@ -210,13 +214,13 @@ void RegisterKillOnAlarm(int timeout_seconds) {
 
   struct sigaction sa_old;
   if (sigaction(SIGALRM, &sa_new, &sa_old) == -1) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   } else {
     DCHECK_EQ(sa_old.sa_handler, SIG_DFL);
   }
 
   if (alarm(timeout_seconds) > 0)
-    NOTREACHED() << "Previous alarm() was cancelled";
+    NOTREACHED_IN_MIGRATION() << "Previous alarm() was cancelled";
 }
 
 void DeregisterKillOnAlarm() {
@@ -231,7 +235,7 @@ void DeregisterKillOnAlarm() {
 
   struct sigaction sa_old;
   if (sigaction(SIGALRM, &sa_new, &sa_old) == -1) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   } else {
     DCHECK_EQ(sa_old.sa_handler, KillOnAlarm);
   }
@@ -470,6 +474,13 @@ void CastBrowserMainParts::PreCreateMainMessageLoop() {
 void CastBrowserMainParts::PostCreateMainMessageLoop() {
   // Ensure CastMetricsHelper initialized on UI thread.
   metrics::CastMetricsHelper::GetInstance();
+
+#if BUILDFLAG(IS_OZONE)
+  // Pass the UI task runner to the ozone platform.
+  CHECK(base::SingleThreadTaskRunner::HasCurrentDefault());
+  ui::OzonePlatform::GetInstance()->PostCreateMainMessageLoop(
+      base::DoNothing(), base::SingleThreadTaskRunner::GetCurrentDefault());
+#endif  // BUILDFLAG(IS_OZONE)
 }
 
 void CastBrowserMainParts::ToolkitInitialized() {
@@ -693,7 +704,7 @@ void CastBrowserMainParts::WillRunMainMessageLoop(
     std::unique_ptr<base::RunLoop>& run_loop) {
 #if BUILDFLAG(IS_ANDROID)
   // Android does not use native main MessageLoop.
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 #elif !BUILDFLAG(IS_FUCHSIA)
   // Fuchsia doesn't have signals.
   RegisterClosureOnSignal(run_loop->QuitClosure());
@@ -716,7 +727,7 @@ void CastBrowserMainParts::PostMainMessageLoopRun() {
 
 #if BUILDFLAG(IS_ANDROID)
   // Android does not use native main MessageLoop.
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 #else
 
 #if defined(USE_AURA)

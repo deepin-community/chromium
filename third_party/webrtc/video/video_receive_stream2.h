@@ -61,7 +61,7 @@ class CallStats;
 // multiple calls to clock->Now().
 struct VideoFrameMetaData {
   VideoFrameMetaData(const webrtc::VideoFrame& frame, Timestamp now)
-      : rtp_timestamp(frame.timestamp()),
+      : rtp_timestamp(frame.rtp_timestamp()),
         timestamp_us(frame.timestamp_us()),
         ntp_time_ms(frame.ntp_time_ms()),
         width(frame.width()),
@@ -350,6 +350,8 @@ class VideoReceiveStream2
   // destructed to avoid races when running tasks on the `decode_queue_` during
   // VideoReceiveStream2 destruction.
   std::unique_ptr<TaskQueueBase, TaskQueueDeleter> decode_queue_;
+
+  absl::optional<uint32_t> last_decoded_rtp_timestamp_;
 };
 
 }  // namespace internal

@@ -20,7 +20,11 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
+#include "build/chromeos_buildflags.h"
 #include "components/back_forward_cache/back_forward_cache_disable.h"
+#include "components/content_settings/core/browser/content_settings_registry.h"
+#include "components/content_settings/core/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/constants.h"
 #include "components/permissions/features.h"
 #include "components/permissions/origin_keyed_permission_action_service.h"
@@ -92,8 +96,8 @@ namespace {
 // permission prompt was displayed longer than `kQuietChipIgnoreTimeout`, we
 // consider it as shown long enough and it will not be shown again after it is
 // preempted.
-// TODO(crbug.com/1221083): If a user switched tabs, do not include that time as
-// "shown".
+// TODO(crbug.com/40186690): If a user switched tabs, do not include that time
+// as "shown".
 bool ShouldShowQuietRequestAgainIfPreempted(
     std::optional<base::Time> request_display_start_time) {
   if (request_display_start_time->is_null()) {
@@ -113,15 +117,27 @@ bool IsMediaRequest(RequestType type) {
   return type == RequestType::kMicStream || type == RequestType::kCameraStream;
 }
 
-bool ShouldGroupRequests(PermissionRequest* a, PermissionRequest* b) {
-  if (a->requesting_origin() != b->requesting_origin())
-    return false;
+#if !BUILDFLAG(IS_ANDROID)
+bool IsExclusiveAccessRequest(RequestType type) {
+  return type == RequestType::kPointerLock ||
+         type == RequestType::kKeyboardLock;
+}
+#endif
 
-  // Group if both requests are media requests.
+bool ShouldGroupRequests(PermissionRequest* a, PermissionRequest* b) {
+  if (a->requesting_origin() != b->requesting_origin()) {
+    return false;
+  }
+  // Group if both requests are of the same category.
   if (IsMediaRequest(a->request_type()) && IsMediaRequest(b->request_type())) {
     return true;
   }
-
+#if !BUILDFLAG(IS_ANDROID)
+  if (IsExclusiveAccessRequest(a->request_type()) &&
+      IsExclusiveAccessRequest(b->request_type())) {
+    return true;
+  }
+#endif
   return false;
 }
 
@@ -227,11 +243,12 @@ void PermissionRequestManager::AddRequest(
   bool is_main_frame =
       url::IsSameOriginWith(main_frame_origin, request->requesting_origin());
 
-  std::optional<url::Origin> auto_approval_origin =
-      PermissionsClient::Get()->GetAutoApprovalOrigin();
-  if (auto_approval_origin) {
-    if (url::Origin::Create(request->requesting_origin()) ==
-        auto_approval_origin.value()) {
+  std::optional<PermissionAction> should_auto_approve_request =
+      PermissionsClient::Get()->GetAutoApprovalStatus(
+          web_contents()->GetBrowserContext(), request->requesting_origin());
+
+  if (should_auto_approve_request) {
+    if (should_auto_approve_request == PermissionAction::GRANTED) {
       request->PermissionGranted(/*is_one_time=*/false);
     }
     request->RequestFinished();
@@ -435,7 +452,7 @@ void PermissionRequestManager::DidStartNavigation(
   // as either a renderer-initiated navigation with a user gesture, or a
   // browser-initiated navigation.
   //
-  // TODO(crbug.com/952347): This check has to be done at DidStartNavigation
+  // TODO(crbug.com/40622940): This check has to be done at DidStartNavigation
   // time, the HasUserGesture state is lost by the time the navigation
   // commits.
   if (!navigation_handle->IsRendererInitiated() ||
@@ -529,7 +546,15 @@ void PermissionRequestManager::OnVisibilityChanged(
           break;
         case PermissionPrompt::TabSwitchingBehavior::
             kDestroyPromptAndIgnoreRequest:
-          CurrentRequestsDecided(PermissionAction::IGNORED);
+// Lacros has an issue with focus switching if a view is destroyed while the
+// webcontents is losing visibility, therefore the Ignore() call gets delayed.
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+          base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+              FROM_HERE, base::BindOnce(&PermissionRequestManager::Ignore,
+                                        weak_factory_.GetWeakPtr()));
+#else   // BUILDFLAG(IS_CHROMEOS_LACROS)
+          Ignore();
+#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
           break;
         case PermissionPrompt::TabSwitchingBehavior::kKeepPromptAlive:
           break;
@@ -728,11 +753,14 @@ void PermissionRequestManager::OpenHelpCenterLink(const ui::Event& event) {
   CHECK_GT(requests_.size(), 0u);
   switch (requests_[0]->request_type()) {
     case permissions::RequestType::kStorageAccess:
-      GetAssociatedWebContents()->OpenURL(content::OpenURLParams(
-          GURL(permissions::kEmbeddedContentHelpCenterURL), content::Referrer(),
-          ui::DispositionFromEventFlags(
-              event.flags(), WindowOpenDisposition::NEW_FOREGROUND_TAB),
-          ui::PAGE_TRANSITION_LINK, /*is_renderer_initiated=*/false));
+      GetAssociatedWebContents()->OpenURL(
+          content::OpenURLParams(
+              GURL(permissions::kEmbeddedContentHelpCenterURL),
+              content::Referrer(),
+              ui::DispositionFromEventFlags(
+                  event.flags(), WindowOpenDisposition::NEW_FOREGROUND_TAB),
+              ui::PAGE_TRANSITION_LINK, /*is_renderer_initiated=*/false),
+          /*navigation_handle_callback=*/{});
       break;
     default:
       NOTREACHED_NORETURN();
@@ -820,7 +848,10 @@ bool PermissionRequestManager::RecreateView() {
   }
 
   current_request_prompt_disposition_ = view_->GetPromptDisposition();
-  if (should_do_auto_response_for_testing) {
+  current_request_pepc_prompt_position_ = view_->GetPromptPosition();
+  SetCurrentRequestsInitialStatuses();
+
+  if (auto_response_for_test_ != NONE && should_do_auto_response_for_testing) {
     // MAC_OS_PROMPT disposition has it's own auto-response logic for testing,
     // so if that was the original disposition we would have skipped our own
     // auto-response logic. Since the disposition can have changed, trigger
@@ -994,8 +1025,11 @@ void PermissionRequestManager::ShowPrompt() {
         web_contents(), requests_[0]->request_type(), std::nullopt,
         DetermineCurrentRequestUIDisposition(),
         DetermineCurrentRequestUIDispositionReasonForUMA(),
-        requests_[0]->GetGestureType(), std::nullopt, false,
+        requests_[0]->GetGestureType(),
+        /*prompt_display_duration=*/std::nullopt, /*is_post_prompt=*/false,
         web_contents()->GetLastCommittedURL(),
+        current_request_pepc_prompt_position_,
+        GetRequestInitialStatus(requests_[0]),
         hats_shown_callback_.has_value()
             ? std::move(hats_shown_callback_.value())
             : base::DoNothing());
@@ -1044,8 +1078,14 @@ void PermissionRequestManager::ResetViewStateForCurrentRequest() {
   did_click_manage_ = false;
   did_click_learn_more_ = false;
   hats_shown_callback_.reset();
+  current_request_pepc_prompt_position_.reset();
+  current_requests_initial_statuses_.clear();
   if (view_)
     DeletePrompt();
+}
+
+bool PermissionRequestManager::ShouldRecordUmaForCurrentPrompt() const {
+  return (!view_ || view_->IsAskPrompt());
 }
 
 void PermissionRequestManager::CurrentRequestsDecided(
@@ -1078,12 +1118,16 @@ void PermissionRequestManager::CurrentRequestsDecided(
 
   content::BrowserContext* browser_context =
       web_contents()->GetBrowserContext();
-  PermissionUmaUtil::PermissionPromptResolved(
-      requests_, web_contents(), permission_action, time_to_decision,
-      DetermineCurrentRequestUIDisposition(),
-      DetermineCurrentRequestUIDispositionReasonForUMA(),
-      prediction_grant_likelihood_, was_decision_held_back_, ignore_reason,
-      did_show_prompt_, did_click_manage_, did_click_learn_more_);
+
+  if (ShouldRecordUmaForCurrentPrompt()) {
+    PermissionUmaUtil::PermissionPromptResolved(
+        requests_, web_contents(), permission_action, time_to_decision,
+        DetermineCurrentRequestUIDisposition(),
+        DetermineCurrentRequestUIDispositionReasonForUMA(),
+        view_ ? std::optional(view_->GetPromptVariants()) : std::nullopt,
+        prediction_grant_likelihood_, was_decision_held_back_, ignore_reason,
+        did_show_prompt_, did_click_manage_, did_click_learn_more_);
+  }
 
   std::optional<QuietUiReason> quiet_ui_reason;
   if (ShouldCurrentRequestUseQuietUI())
@@ -1105,15 +1149,13 @@ void PermissionRequestManager::CurrentRequestsDecided(
         request->requesting_origin(), DetermineCurrentRequestUIDisposition(),
         DetermineCurrentRequestUIDispositionReasonForUMA(),
         request->GetGestureType(), quiet_ui_reason, time_since_shown,
+        current_request_pepc_prompt_position_, GetRequestInitialStatus(request),
         web_contents());
 
     PermissionUmaUtil::RecordEmbargoStatus(RecordActionAndGetEmbargoStatus(
         browser_context, request, permission_action));
   }
 
-  // IGNORED is not a decision on the prompt and it occurs because of external
-  // factors (e.g. tab switching). Therefore |ShouldFinalizeRequestAfterDecided|
-  // does not take effect when the action is IGNORED.
   if (ShouldFinalizeRequestAfterDecided(permission_action)) {
     FinalizeCurrentRequests();
   }
@@ -1384,6 +1426,10 @@ void PermissionRequestManager::StorePermissionActionForUMA(
     const GURL& origin,
     RequestType request_type,
     PermissionAction permission_action) {
+  if (!ShouldRecordUmaForCurrentPrompt()) {
+    return;
+  }
+
   std::optional<ContentSettingsType> content_settings_type =
       RequestTypeToContentSettingsType(request_type);
   if (content_settings_type.has_value()) {
@@ -1507,7 +1553,7 @@ void PermissionRequestManager::DoAutoResponseForTesting() {
       Dismiss();
       break;
     case NONE:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 }
 
@@ -1566,6 +1612,43 @@ PermissionRequestManager::RecordActionAndGetEmbargoStatus(
   }
 
   return PermissionEmbargoStatus::NOT_EMBARGOED;
+}
+
+void PermissionRequestManager::SetCurrentRequestsInitialStatuses() {
+  // This function is called whenever the view is created which can happen
+  // multiple times for the same request (e.g. by tab switching). Only actually
+  // compute this if |current_requests_initial_statuses_| has been cleared
+  // before to mark a view being closed.
+  if (!current_requests_initial_statuses_.empty()) {
+    return;
+  }
+
+  auto* map = PermissionsClient::Get()->GetSettingsMap(
+      web_contents()->GetBrowserContext());
+  for (const auto& request : requests_) {
+    // It's possible in tests for |map| to not be initialized yet. Also there
+    // are some permission requests (like SMART_CARD_DATA) which are not for
+    // content settings.
+    if (!map || !content_settings::ContentSettingsRegistry::GetInstance()->Get(
+                    request->GetContentSettingsType())) {
+      current_requests_initial_statuses_.emplace(request,
+                                                 CONTENT_SETTING_DEFAULT);
+    } else {
+      current_requests_initial_statuses_.emplace(
+          request,
+          map->GetContentSetting(GetRequestingOrigin(), GetEmbeddingOrigin(),
+                                 request->GetContentSettingsType()));
+    }
+  }
+}
+
+ContentSetting PermissionRequestManager::GetRequestInitialStatus(
+    PermissionRequest* request) {
+  if (current_requests_initial_statuses_.contains(request)) {
+    return current_requests_initial_statuses_.at(request);
+  }
+
+  return CONTENT_SETTING_DEFAULT;
 }
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(PermissionRequestManager);

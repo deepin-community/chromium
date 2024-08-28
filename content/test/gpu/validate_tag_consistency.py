@@ -27,15 +27,12 @@ BREAK_INDENTATION = ' ' * 4
 TAG_SPECIALIZATIONS = {
     'OS_TAGS': {
         'android': [
-            'android-lollipop',
-            'android-marshmallow',
-            'android-nougat',
             'android-oreo',
             'android-pie',
             'android-r',
             'android-s',
             'android-t',
-            'android-u',
+            'android-14',
         ],
         'chromeos': [],
         'fuchsia': [],
@@ -49,6 +46,7 @@ TAG_SPECIALIZATIONS = {
             'bigsur',
             'monterey',
             'ventura',
+            'sonoma',
         ],
         'win': [
             'win8',
@@ -102,6 +100,7 @@ TAG_SPECIALIZATIONS = {
             'intel-0xa011',
             'intel-0x3e92',
             'intel-0x3e9b',
+            'intel-0x4680',
             'intel-0x5912',
             'intel-0x9bc5',
         ],
@@ -111,7 +110,12 @@ TAG_SPECIALIZATIONS = {
             'nvidia-0x2184',
         ],
         'qualcomm': [
+            # 043a = 0x41333430 = older Adreno GPU
+            # 0636 = 0x36333630 = Adreno 690 GPU (such as Surface Pro 9 5G)
+            # 0c36 = 0x36334330 = Adreno 741 GPU
             'qualcomm-0x41333430',
+            'qualcomm-0x36333630',
+            'qualcomm-0x36334330',
         ],
     },
 }
@@ -174,7 +178,7 @@ TAG_HEADER = """\
 # Devices
 # tags: [ android-nexus-5x android-pixel-2 android-pixel-4
 #             android-pixel-6 android-shield-android-tv android-sm-a135m
-#             android-sm-a235m
+#             android-sm-a235m android-sm-s911u1
 #         chromeos-board-amd64-generic chromeos-board-eve chromeos-board-jacuzzi
 #             chromeos-board-octopus chromeos-board-volteer
 #         fuchsia-board-astro fuchsia-board-nelson fuchsia-board-sherlock
@@ -200,13 +204,13 @@ TAG_HEADER = """\
 #         angle-swiftshader
 #         angle-vulkan ]
 # Skia Renderer
-# tags: [ renderer-skia-dawn
-#         renderer-skia-gl
+# tags: [ renderer-skia-gl
 #         renderer-skia-vulkan
 #         renderer-software ]
 # Driver
 # tags: [ mesa_lt_19.1
 #         mesa_ge_21.0
+#         mesa_ge_23.2
 #         nvidia_ge_31.0.15.4601 nvidia_lt_31.0.15.4601 ]
 # ASan
 # tags: [ asan no-asan ]
@@ -218,10 +222,13 @@ TAG_HEADER = """\
 # tags: [ dawn-backend-validation dawn-no-backend-validation ]
 # WebGPU Adapter
 # tags: [ webgpu-adapter-default webgpu-adapter-swiftshader ]
-# WebGPU Compat Mode
-# tags: [ webgpu-compat webgpu-not-compat ]
 # WebGPU DXC
 # tags: [ webgpu-dxc-enabled webgpu-dxc-disabled ]
+# WebGPU worker usage
+# tags: [ webgpu-no-worker
+#         webgpu-service-worker
+#         webgpu-dedicated-worker
+#         webgpu-shared-worker ]
 # Clang coverage
 # tags: [ clang-coverage no-clang-coverage ]
 # Skia Graphite

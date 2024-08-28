@@ -2,9 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <stdint.h>
 
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -64,6 +70,7 @@
 #include "net/test/test_with_task_environment.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "net/url_request/static_http_user_agent_settings.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/scheme_host_port.h"
@@ -84,9 +91,9 @@ const int kDefaultMaxSocketsPerGroup = 2;
 constexpr base::TimeDelta kUnusedIdleSocketTimeout = base::Seconds(10);
 
 ClientSocketPool::GroupId TestGroupId(
-    base::StringPiece host,
+    std::string_view host,
     int port = 80,
-    base::StringPiece scheme = url::kHttpScheme,
+    std::string_view scheme = url::kHttpScheme,
     PrivacyMode privacy_mode = PrivacyMode::PRIVACY_MODE_DISABLED,
     NetworkAnonymizationKey network_anonymization_key =
         NetworkAnonymizationKey()) {
@@ -232,7 +239,7 @@ class MockClientSocketFactory : public ClientSocketFactory {
       DatagramSocket::BindType bind_type,
       NetLog* net_log,
       const NetLogSource& source) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return nullptr;
   }
 
@@ -453,7 +460,7 @@ class TestConnectJob : public ConnectJob {
         DoAdvanceAuthChallenge(2, false /* succeed_after_last_challenge */);
         return ERR_IO_PENDING;
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         SetSocket(std::unique_ptr<StreamSocket>(), std::nullopt);
         return ERR_FAILED;
     }
@@ -698,6 +705,8 @@ class ClientSocketPoolBaseTest : public TestWithTaskEnvironment {
   // synchronous completions are not registered by this count.
   size_t completion_count() const { return test_base_.completion_count(); }
 
+  const StaticHttpUserAgentSettings http_user_agent_settings_ = {"*",
+                                                                 "test-ua"};
   const CommonConnectJobParams common_connect_job_params_{
       /*client_socket_factory=*/nullptr,
       /*host_resolver=*/nullptr,
@@ -707,7 +716,7 @@ class ClientSocketPoolBaseTest : public TestWithTaskEnvironment {
       /*quic_supported_versions=*/nullptr,
       /*quic_session_pool=*/nullptr,
       /*proxy_delegate=*/nullptr,
-      /*http_user_agent_settings=*/nullptr,
+      &http_user_agent_settings_,
       /*ssl_client_context=*/nullptr,
       /*socket_performance_watcher_factory=*/nullptr,
       /*network_quality_estimator=*/nullptr,
@@ -3002,7 +3011,7 @@ TEST_F(ClientSocketPoolBaseTest, DoNotReuseSocketAfterFlush) {
                   callback.callback(), ClientSocketPool::ProxyAuthCallback(),
                   pool_.get(), NetLogWithSource()));
   EXPECT_THAT(callback.WaitForResult(), IsOk());
-  EXPECT_EQ(ClientSocketHandle::UNUSED, handle.reuse_type());
+  EXPECT_EQ(StreamSocketHandle::SocketReuseType::kUnused, handle.reuse_type());
   NetLogSource source = handle.socket()->NetLog().source();
 
   pool_->FlushWithError(ERR_NETWORK_CHANGED, "Network changed");
@@ -3017,7 +3026,7 @@ TEST_F(ClientSocketPoolBaseTest, DoNotReuseSocketAfterFlush) {
                   callback.callback(), ClientSocketPool::ProxyAuthCallback(),
                   pool_.get(), NetLogWithSource()));
   EXPECT_THAT(callback.WaitForResult(), IsOk());
-  EXPECT_EQ(ClientSocketHandle::UNUSED, handle.reuse_type());
+  EXPECT_EQ(StreamSocketHandle::SocketReuseType::kUnused, handle.reuse_type());
 
   ExpectSocketClosedWithReason(
       source, TransportClientSocketPool::kSocketGenerationOutOfDate);

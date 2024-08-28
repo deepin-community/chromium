@@ -176,7 +176,7 @@ void TestGLES2Interface::GetShaderPrecisionFormat(GLenum shadertype,
       *precision = 16;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 }
@@ -375,19 +375,6 @@ void TestGLES2Interface::GetQueryObjectuivEXT(GLuint id,
   }
 }
 
-void TestGLES2Interface::ProduceTextureDirectCHROMIUM(GLuint texture,
-                                                      GLbyte* mailbox) {
-  gpu::Mailbox gpu_mailbox = gpu::Mailbox::GenerateLegacyMailboxForTesting();
-  memcpy(mailbox, gpu_mailbox.name, sizeof(gpu_mailbox.name));
-}
-
-GLuint TestGLES2Interface::CreateAndConsumeTextureCHROMIUM(
-    const GLbyte* mailbox) {
-  GLuint texture_id;
-  GenTextures(1, &texture_id);
-  return texture_id;
-}
-
 GLuint TestGLES2Interface::CreateAndTexStorage2DSharedImageCHROMIUM(
     const GLbyte* mailbox) {
   GLuint texture_id;
@@ -441,14 +428,6 @@ void TestGLES2Interface::ReadPixels(GLint x,
   memset(pixels, 0, pixels_size);
 }
 
-void TestGLES2Interface::set_support_texture_format_bgra8888(bool support) {
-  test_capabilities_.texture_format_bgra8888 = support;
-}
-
-void TestGLES2Interface::set_support_sync_query(bool support) {
-  test_capabilities_.sync_query = support;
-}
-
 void TestGLES2Interface::set_support_texture_half_float_linear(bool support) {
   test_capabilities_.texture_half_float_linear = support;
 }
@@ -457,16 +436,8 @@ void TestGLES2Interface::set_support_texture_norm16(bool support) {
   test_capabilities_.texture_norm16 = support;
 }
 
-void TestGLES2Interface::set_msaa_is_slow(bool msaa_is_slow) {
-  test_capabilities_.msaa_is_slow = msaa_is_slow;
-}
-
 void TestGLES2Interface::set_gpu_rasterization(bool gpu_rasterization) {
   test_capabilities_.gpu_rasterization = gpu_rasterization;
-}
-
-void TestGLES2Interface::set_avoid_stencil_buffers(bool avoid_stencil_buffers) {
-  test_capabilities_.avoid_stencil_buffers = avoid_stencil_buffers;
 }
 
 void TestGLES2Interface::set_max_texture_size(int size) {

@@ -10,9 +10,12 @@
 #include "ash/test/ash_test_base.h"
 #include "ash/test/pixel/ash_pixel_differ.h"
 #include "ash/test/pixel/ash_pixel_test_init_params.h"
+#include "base/test/scoped_feature_list.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
 #include "chromeos/ash/components/dbus/audio/audio_node.h"
 #include "chromeos/ash/components/dbus/audio/fake_cras_audio_client.h"
+#include "media/base/media_switches.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/view.h"
 
 namespace ash {
@@ -22,13 +25,19 @@ constexpr uint64_t kInternalMicId = 10003;
 // Pixel tests for the quick settings audio detailed view.
 class AudioDetailedViewPixelTest : public AshTestBase {
  public:
-  AudioDetailedViewPixelTest() = default;
+  AudioDetailedViewPixelTest() {
+    scoped_features_.InitWithFeatures(
+        {media::kLiveCaption, features::kOnDeviceSpeechRecognition}, {});
+  }
 
   // AshTestBase:
   std::optional<pixel_test::InitParams> CreatePixelTestInitParams()
       const override {
     return pixel_test::InitParams();
   }
+
+ private:
+  base::test::ScopedFeatureList scoped_features_;
 };
 
 TEST_F(AudioDetailedViewPixelTest, Basics) {
@@ -37,9 +46,9 @@ TEST_F(AudioDetailedViewPixelTest, Basics) {
   AudioDevice output_device(FakeCrasAudioClient::Get()->node_list()[1]);
   AudioDevice input_device(FakeCrasAudioClient::Get()->node_list()[5]);
   audio_handler->SwitchToDevice(output_device, true,
-                                CrasAudioHandler::ACTIVATE_BY_USER);
+                                DeviceActivateType::kActivateByUser);
   audio_handler->SwitchToDevice(input_device, true,
-                                CrasAudioHandler::ACTIVATE_BY_USER);
+                                DeviceActivateType::kActivateByUser);
 
   UnifiedSystemTray* system_tray = GetPrimaryUnifiedSystemTray();
   system_tray->ShowBubble();
@@ -74,7 +83,7 @@ TEST_F(AudioDetailedViewPixelTest, ShowNoiseCancellationButton) {
   client->SetNoiseCancellationSupported(true);
   audio_handler->RequestNoiseCancellationSupported(base::DoNothing());
   audio_handler->SwitchToDevice(AudioDevice(internal_mic_node), true,
-                                CrasAudioHandler::ACTIVATE_BY_USER);
+                                DeviceActivateType::kActivateByUser);
 
   UnifiedSystemTray* system_tray = GetPrimaryUnifiedSystemTray();
   system_tray->ShowBubble();

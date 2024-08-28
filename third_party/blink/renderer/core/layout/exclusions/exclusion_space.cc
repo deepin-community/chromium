@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/core/layout/exclusions/exclusion_space.h"
 
 #include <algorithm>
@@ -176,6 +181,7 @@ ExclusionSpaceInternal::ExclusionSpaceInternal(
           other.initial_letter_left_clear_offset_),
       initial_letter_right_clear_offset_(
           other.initial_letter_right_clear_offset_),
+      non_hidden_clear_offset_(other.non_hidden_clear_offset_),
       track_shape_exclusions_(other.track_shape_exclusions_),
       has_break_before_left_float_(other.has_break_before_left_float_),
       has_break_before_right_float_(other.has_break_before_right_float_),
@@ -203,6 +209,7 @@ void ExclusionSpaceInternal::CopyFrom(const ExclusionSpaceInternal& other) {
   last_float_block_start_ = other.last_float_block_start_;
   initial_letter_left_clear_offset_ = other.initial_letter_left_clear_offset_;
   initial_letter_right_clear_offset_ = other.initial_letter_right_clear_offset_;
+  non_hidden_clear_offset_ = other.non_hidden_clear_offset_;
   track_shape_exclusions_ = other.track_shape_exclusions_;
   has_break_before_left_float_ = other.has_break_before_left_float_;
   has_break_before_right_float_ = other.has_break_before_right_float_;
@@ -278,6 +285,11 @@ void ExclusionSpaceInternal::Add(const ExclusionArea* exclusion) {
           std::max(initial_letter_right_clear_offset_, clear_offset);
     }
 
+    if (!exclusion->is_hidden_for_paint) {
+      non_hidden_clear_offset_ =
+          std::max(non_hidden_clear_offset_, clear_offset);
+    }
+
     if (!already_exists) {
       // Perform a copy-on-write if the number of exclusions has gone out of
       // sync.
@@ -319,6 +331,10 @@ void ExclusionSpaceInternal::Add(const ExclusionArea* exclusion) {
     left_clear_offset_ = std::max(left_clear_offset_, clear_offset);
   else if (exclusion->type == EFloat::kRight)
     right_clear_offset_ = std::max(right_clear_offset_, clear_offset);
+
+  if (!exclusion->is_hidden_for_paint) {
+    non_hidden_clear_offset_ = std::max(non_hidden_clear_offset_, clear_offset);
+  }
 
   if (derived_geometry_)
     derived_geometry_->Add(*exclusion);

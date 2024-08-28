@@ -52,15 +52,6 @@ const DEVICE_VISIBILITY_LIGHT_ICON =
 const DEVICE_VISIBILITY_DARK_ICON =
     'nearby-images:nearby-device-visibility-dark';
 
-const CONTACTS_EMPTY_ICON = 'nearby-images:contacts-empty';
-
-const CONTACTS_EMPTY_JELLY_ICON = 'nearby-images:contacts-empty-jelly';
-
-const CONTACTS_FAILED_ICON = 'nearby-images:contacts-download-failed';
-
-const CONTACTS_FAILED_JELLY_ICON =
-    'nearby-images:contacts-download-failed-jelly';
-
 export interface NearbyVisibilityContact {
   id: string;
   name: string;
@@ -99,9 +90,7 @@ export class NearbyContactVisibilityElement extends
 
       /**
        * Which visibility setting is selected as a string or
-       * null for no selection.
-       * If self share is enabled: ('contacts', 'yourDevices', 'none', null).
-       * If self share is disabled: ('all', 'some', 'none', null).
+       * null for no selection: 'contacts', 'yourDevices', 'none'.
        */
       selectedVisibility: {
         type: String,
@@ -144,30 +133,6 @@ export class NearbyContactVisibilityElement extends
       },
 
       /**
-       * Return true if the Jelly feature flag is enabled.
-       */
-      isJellyEnabled_: {
-        type: Boolean,
-        readOnly: true,
-        value() {
-          return loadTimeData.valueExists('isJellyEnabled') &&
-              loadTimeData.getBoolean('isJellyEnabled');
-        },
-      },
-
-      /**
-       * Return true if the Self Share feature flag is enabled.
-       */
-      isSelfShareEnabled_: {
-        type: Boolean,
-        readOnly: true,
-        value() {
-          return loadTimeData.valueExists('isSelfShareEnabled') &&
-              loadTimeData.getBoolean('isSelfShareEnabled');
-        },
-      },
-
-      /**
        * True if the user toggles All Contacts visibility.
        */
       isAllContactsToggledOn_: {
@@ -206,9 +171,7 @@ export class NearbyContactVisibilityElement extends
       null;
   private downloadTimeoutId_: number|null;
   private isDarkModeActive_: boolean;
-  private isJellyEnabled_: boolean;
   private isAllContactsToggledOn_: boolean;
-  private isSelfShareEnabled_: boolean;
   private numUnreachable_: number;
   private numUnreachableMessage_: string;
 
@@ -261,31 +224,18 @@ export class NearbyContactVisibilityElement extends
    */
   private visibilityStringToValue(visibilityString: string|null): Visibility
       |null {
-    if (this.isSelfShareEnabled_) {
-      switch (visibilityString) {
-        case 'contacts':
-          if (this.isAllContactsToggledOn_) {
-            return Visibility.kAllContacts;
-          }
-          return Visibility.kSelectedContacts;
-        case 'yourDevices':
-          return Visibility.kYourDevices;
-        case 'none':
-          return Visibility.kNoOne;
-        default:
-          return null;
-      }
-    } else {
-      switch (visibilityString) {
-        case 'all':
+    switch (visibilityString) {
+      case 'contacts':
+        if (this.isAllContactsToggledOn_) {
           return Visibility.kAllContacts;
-        case 'some':
-          return Visibility.kSelectedContacts;
-        case 'none':
-          return Visibility.kNoOne;
-        default:
-          return null;
-      }
+        }
+        return Visibility.kSelectedContacts;
+      case 'yourDevices':
+        return Visibility.kYourDevices;
+      case 'none':
+        return Visibility.kNoOne;
+      default:
+        return null;
     }
   }
 
@@ -293,30 +243,17 @@ export class NearbyContactVisibilityElement extends
    * Maps visibility mojo enum to a string for the radio button selection
    */
   private visibilityValueToString(visibility: Visibility|null): string|null {
-    if (this.isSelfShareEnabled_) {
-      switch (visibility) {
-        case Visibility.kAllContacts:
-          return 'contacts';
-        case Visibility.kSelectedContacts:
-          return 'contacts';
-        case Visibility.kYourDevices:
-          return 'yourDevices';
-        case Visibility.kNoOne:
-          return 'none';
-        default:
-          return null;
-      }
-    } else {
-      switch (visibility) {
-        case Visibility.kAllContacts:
-          return 'all';
-        case Visibility.kSelectedContacts:
-          return 'some';
-        case Visibility.kNoOne:
-          return 'none';
-        default:
-          return null;
-      }
+    switch (visibility) {
+      case Visibility.kAllContacts:
+        return 'contacts';
+      case Visibility.kSelectedContacts:
+        return 'contacts';
+      case Visibility.kYourDevices:
+        return 'yourDevices';
+      case Visibility.kNoOne:
+        return 'none';
+      default:
+        return null;
     }
   }
 
@@ -467,24 +404,14 @@ export class NearbyContactVisibilityElement extends
 
   private showEmptyState_(selectedVisibility: string, contactsState: string):
       boolean {
-    if (this.isSelfShareEnabled_) {
-      return selectedVisibility === 'contacts' &&
-          contactsState === ContactsState.ZERO_CONTACTS;
-    } else {
-      return (selectedVisibility === 'all' || selectedVisibility === 'some') &&
-          contactsState === ContactsState.ZERO_CONTACTS;
-    }
+    return selectedVisibility === 'contacts' &&
+        contactsState === ContactsState.ZERO_CONTACTS;
   }
 
   private showContactList_(selectedVisibility: string, contactsState: string):
       boolean {
-    if (this.isSelfShareEnabled_) {
-      return selectedVisibility === 'contacts' &&
-          contactsState === ContactsState.HAS_CONTACTS;
-    } else {
-      return (selectedVisibility === 'all' || selectedVisibility === 'some') &&
-          contactsState === ContactsState.HAS_CONTACTS;
-    }
+    return selectedVisibility === 'contacts' &&
+        contactsState === ContactsState.HAS_CONTACTS;
   }
 
   private showAllContactsToggle_(
@@ -646,38 +573,24 @@ export class NearbyContactVisibilityElement extends
   }
 
   private getVisibilityDescription_(): TrustedHTML {
-    if (this.isSelfShareEnabled_) {
-      switch (this.getSelectedVisibility()) {
-        case Visibility.kAllContacts:
-          return this.i18nAdvanced(
-              'nearbyShareContactVisibilityOwnAllSelfShare',
-              {substitutions: [this.profileEmail]});
-        case Visibility.kSelectedContacts:
-          return this.i18nAdvanced(
-              'nearbyShareContactVisibilityOwnSomeSelfShare',
-              {substitutions: [this.profileEmail]});
-        case Visibility.kYourDevices:
-          return this.i18nAdvanced(
-              'nearbyShareContactVisibilityOwnYourDevices',
-              {substitutions: [this.profileEmail]});
-        case Visibility.kNoOne:
-          return this.i18nAdvanced('nearbyShareContactVisibilityOwnNone');
-        default:
-          assert(window.trustedTypes);
-          return window.trustedTypes.emptyHTML;
-      }
-    } else {
-      switch (this.getSelectedVisibility()) {
-        case Visibility.kAllContacts:
-          return this.i18nAdvanced('nearbyShareContactVisibilityOwnAll');
-        case Visibility.kSelectedContacts:
-          return this.i18nAdvanced('nearbyShareContactVisibilityOwnSome');
-        case Visibility.kNoOne:
-          return this.i18nAdvanced('nearbyShareContactVisibilityOwnNone');
-        default:
-          assert(window.trustedTypes);
-          return window.trustedTypes.emptyHTML;
-      }
+    switch (this.getSelectedVisibility()) {
+      case Visibility.kAllContacts:
+        return this.i18nAdvanced(
+            'nearbyShareContactVisibilityOwnAllSelfShare',
+            {substitutions: [this.profileEmail]});
+      case Visibility.kSelectedContacts:
+        return this.i18nAdvanced(
+            'nearbyShareContactVisibilityOwnSomeSelfShare',
+            {substitutions: [this.profileEmail]});
+      case Visibility.kYourDevices:
+        return this.i18nAdvanced(
+            'nearbyShareContactVisibilityOwnYourDevices',
+            {substitutions: [this.profileEmail]});
+      case Visibility.kNoOne:
+        return this.i18nAdvanced('nearbyShareContactVisibilityOwnNone');
+      default:
+        assert(window.trustedTypes);
+        return window.trustedTypes.emptyHTML;
     }
   }
 
@@ -730,29 +643,6 @@ export class NearbyContactVisibilityElement extends
   private getDeviceVisibilityIcon_(): string {
     return this.isDarkModeActive_ ? DEVICE_VISIBILITY_DARK_ICON :
                                     DEVICE_VISIBILITY_LIGHT_ICON;
-  }
-
-  /**
-   * Returns the contacts empty icon based on Jelly enablement.
-   */
-  private getContactsEmptyIcon_(): string {
-    return this.isJellyEnabled_ ? CONTACTS_EMPTY_JELLY_ICON :
-                                  CONTACTS_EMPTY_ICON;
-  }
-
-  /**
-   * Returns the contacts failed icon based on Jelly enablement.
-   */
-  private getContactsFailedIcon_(): string {
-    return this.isJellyEnabled_ ? CONTACTS_FAILED_JELLY_ICON :
-                                  CONTACTS_FAILED_ICON;
-  }
-
-  /**
-   * Returns a boolean indicating whether to show Self Share UI.
-   */
-  private showSelfShareUi_(): boolean {
-    return this.isSelfShareEnabled_;
   }
 }
 

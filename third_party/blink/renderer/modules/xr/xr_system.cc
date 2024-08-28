@@ -14,8 +14,8 @@
 #include "build/build_config.h"
 #include "device/vr/public/mojom/vr_service.mojom-blink.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_xr_depth_state_init.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_xr_tracked_image_init.h"
@@ -82,10 +82,6 @@ const char kImmersiveArModeNotValid[] =
 const char kTrackedImageWidthInvalid[] =
     "trackedImages[%d].widthInMeters invalid, must be a positive number.";
 
-const char kDepthSensingConfigurationNotSupported[] =
-    "The provided preferences depth sensing usage and format are not "
-    "supported, unable to create the session.";
-
 constexpr device::mojom::XRSessionFeature kDefaultImmersiveVrFeatures[] = {
     device::mojom::XRSessionFeature::REF_SPACE_VIEWER,
     device::mojom::XRSessionFeature::REF_SPACE_LOCAL,
@@ -112,7 +108,7 @@ device::mojom::blink::XRSessionMode stringToSessionMode(
     return device::mojom::blink::XRSessionMode::kImmersiveAr;
   }
 
-  NOTREACHED();  // Only strings in the enum are allowed by IDL.
+  NOTREACHED_IN_MIGRATION();  // Only strings in the enum are allowed by IDL.
   return device::mojom::blink::XRSessionMode::kInline;
 }
 
@@ -126,7 +122,7 @@ const char* SessionModeToString(device::mojom::blink::XRSessionMode mode) {
       return "immersive-ar";
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return "";
 }
 
@@ -155,6 +151,8 @@ device::mojom::XRDepthDataFormat ParseDepthFormat(
       return device::mojom::XRDepthDataFormat::kLuminanceAlpha;
     case V8XRDepthDataFormat::Enum::kFloat32:
       return device::mojom::XRDepthDataFormat::kFloat32;
+    case V8XRDepthDataFormat::Enum::kUnsignedShort:
+      return device::mojom::XRDepthDataFormat::kUnsignedShort;
   }
 }
 
@@ -365,7 +363,7 @@ const char* XRSystem::CheckInlineSessionRequestAllowed(
 }
 
 XRSystem::PendingSupportsSessionQuery::PendingSupportsSessionQuery(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolverBase* resolver,
     device::mojom::blink::XRSessionMode session_mode,
     bool throw_on_unsupported)
     : resolver_(resolver),
@@ -388,14 +386,15 @@ void XRSystem::PendingSupportsSessionQuery::Resolve(
 
   if (throw_on_unsupported_) {
     if (supported) {
-      resolver_->Resolve();
+      resolver_->DowncastTo<IDLUndefined>()->Resolve();
     } else {
       DVLOG(2) << __func__ << ": session is unsupported - throwing exception";
       RejectWithDOMException(DOMExceptionCode::kNotSupportedError,
                              kSessionNotSupported, exception_state);
     }
   } else {
-    resolver_->Resolve(supported);
+    static_cast<ScriptPromiseResolver<IDLBoolean>*>(resolver_.Get())
+        ->Resolve(supported);
   }
 }
 
@@ -464,7 +463,7 @@ XRSystem::PendingSupportsSessionQuery::mode() const {
 
 XRSystem::PendingRequestSessionQuery::PendingRequestSessionQuery(
     int64_t ukm_source_id,
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<XRSession>* resolver,
     device::mojom::blink::XRSessionMode session_mode,
     RequestedXRSessionFeatureSet required_features,
     RequestedXRSessionFeatureSet optional_features)
@@ -576,9 +575,10 @@ void XRSystem::PendingRequestSessionQuery::ReportRequestSessionResult(
     mojo::PendingRemote<device::mojom::blink::XRSessionMetricsRecorder>
         metrics_recorder) {
   using device::mojom::XRSessionFeature;
-
-  if (!resolver_->DomWindow())
+  auto* execution_context = resolver_->GetExecutionContext();
+  if (!execution_context) {
     return;
+  }
 
   auto feature_request_viewer =
       GetFeatureRequestStatus(XRSessionFeature::REF_SPACE_VIEWER, session);
@@ -608,7 +608,7 @@ void XRSystem::PendingRequestSessionQuery::ReportRequestSessionResult(
       .SetFeature_BoundedFloor(
           static_cast<int64_t>(feature_request_bounded_floor))
       .SetFeature_Unbounded(static_cast<int64_t>(feature_request_unbounded))
-      .Record(resolver_->DomWindow()->UkmRecorder());
+      .Record(execution_context->UkmRecorder());
 
   // If the session was successfully created and DOM overlay was requested,
   // count this as a use of the DOM overlay feature.
@@ -899,16 +899,26 @@ void XRSystem::SetFramesThrottled(const XRSession* session, bool throttled) {
   }
 }
 
-ScriptPromise XRSystem::supportsSession(ScriptState* script_state,
-                                        const String& mode,
-                                        ExceptionState& exception_state) {
-  return InternalIsSessionSupported(script_state, mode, exception_state, true);
+ScriptPromise<IDLUndefined> XRSystem::supportsSession(
+    ScriptState* script_state,
+    const String& mode,
+    ExceptionState& exception_state) {
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  InternalIsSessionSupported(resolver, mode, exception_state, true);
+  return promise;
 }
 
-ScriptPromise XRSystem::isSessionSupported(ScriptState* script_state,
-                                           const String& mode,
-                                           ExceptionState& exception_state) {
-  return InternalIsSessionSupported(script_state, mode, exception_state, false);
+ScriptPromise<IDLBoolean> XRSystem::isSessionSupported(
+    ScriptState* script_state,
+    const String& mode,
+    ExceptionState& exception_state) {
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  InternalIsSessionSupported(resolver, mode, exception_state, false);
+  return promise;
 }
 
 void XRSystem::AddConsoleMessage(mojom::blink::ConsoleMessageLevel error_level,
@@ -920,21 +930,16 @@ void XRSystem::AddConsoleMessage(mojom::blink::ConsoleMessageLevel error_level,
       mojom::blink::ConsoleMessageSource::kJavaScript, error_level, message));
 }
 
-ScriptPromise XRSystem::InternalIsSessionSupported(
-    ScriptState* script_state,
-    const String& mode,
-    ExceptionState& exception_state,
-    bool throw_on_unsupported) {
+void XRSystem::InternalIsSessionSupported(ScriptPromiseResolverBase* resolver,
+                                          const String& mode,
+                                          ExceptionState& exception_state,
+                                          bool throw_on_unsupported) {
   if (!GetExecutionContext()) {
     // Reject if the context is inaccessible.
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kNavigatorDetachedError);
-    return ScriptPromise();  // Will be rejected by generated bindings
+    return;  // Promise will be rejected by generated bindings
   }
-
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
-      script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
 
   device::mojom::blink::XRSessionMode session_mode = stringToSessionMode(mode);
   PendingSupportsSessionQuery* query =
@@ -947,13 +952,13 @@ ScriptPromise XRSystem::InternalIsSessionSupported(
              << ": Immersive AR session is only supported if WebXRARModule "
                 "feature is enabled by a runtime feature and web settings";
     query->Resolve(false);
-    return promise;
+    return;
   }
 
   if (session_mode == device::mojom::blink::XRSessionMode::kInline) {
     // inline sessions are always supported.
     query->Resolve(true);
-    return promise;
+    return;
   }
 
   if (!GetExecutionContext()->IsFeatureEnabled(
@@ -962,7 +967,7 @@ ScriptPromise XRSystem::InternalIsSessionSupported(
     // Only allow the call to be made if the appropriate permissions policy is
     // in place.
     query->RejectWithSecurityError(kFeaturePolicyBlocked, &exception_state);
-    return promise;
+    return;
   }
 
   // If TryEnsureService() doesn't set |service_|, then we don't have any WebXR
@@ -970,7 +975,7 @@ ScriptPromise XRSystem::InternalIsSessionSupported(
   TryEnsureService();
   if (!service_.is_bound()) {
     query->Resolve(false, &exception_state);
-    return promise;
+    return;
   }
 
   device::mojom::blink::XRSessionOptionsPtr session_options =
@@ -983,8 +988,6 @@ ScriptPromise XRSystem::InternalIsSessionSupported(
       std::move(session_options),
       WTF::BindOnce(&XRSystem::OnSupportsSessionReturned, WrapPersistent(this),
                     WrapPersistent(query)));
-
-  return promise;
 }
 
 void XRSystem::RequestSessionInternal(
@@ -1202,10 +1205,11 @@ XRSystem::RequestedXRSessionFeatureSet XRSystem::ParseRequestedFeatures(
   return result;
 }
 
-ScriptPromise XRSystem::requestSession(ScriptState* script_state,
-                                       const String& mode,
-                                       XRSessionInit* session_init,
-                                       ExceptionState& exception_state) {
+ScriptPromise<XRSession> XRSystem::requestSession(
+    ScriptState* script_state,
+    const String& mode,
+    XRSessionInit* session_init,
+    ExceptionState& exception_state) {
   DVLOG(2) << __func__;
   // TODO(https://crbug.com/968622): Make sure we don't forget to call
   // metrics-related methods when the promise gets resolved/rejected.
@@ -1217,7 +1221,8 @@ ScriptPromise XRSystem::requestSession(ScriptState* script_state,
     // Document to get UkmRecorder anyway).
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kNavigatorDetachedError);
-    return ScriptPromise();  // Will be rejected by generated bindings
+    return EmptyPromise();  // Will be rejected by generated
+                            // bindings
   }
 
   device::mojom::blink::XRSessionMode session_mode = stringToSessionMode(mode);
@@ -1236,7 +1241,7 @@ ScriptPromise XRSystem::requestSession(ScriptState* script_state,
         .SetMode(static_cast<int64_t>(session_mode))
         .SetStatus(static_cast<int64_t>(SessionRequestStatus::kOtherError))
         .Record(DomWindow()->UkmRecorder());
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   // Parse required feature strings
@@ -1286,9 +1291,9 @@ ScriptPromise XRSystem::requestSession(ScriptState* script_state,
     }
   }
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<XRSession>>(
       script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
+  auto promise = resolver->Promise();
 
   PendingRequestSessionQuery* query =
       MakeGarbageCollected<PendingRequestSessionQuery>(
@@ -1344,19 +1349,6 @@ ScriptPromise XRSystem::requestSession(ScriptState* script_state,
         ParseDepthUsages(session_init->depthSensing()->usagePreference());
     Vector<device::mojom::XRDepthDataFormat> preferred_format =
         ParseDepthFormats(session_init->depthSensing()->dataFormatPreference());
-
-    // If the depth API is required and either preferred usages or preferred
-    // formats are empty, we already know that the session creation will fail
-    // (as we won't be able to pick a supported usage & format combination), so
-    // let's fail it already:
-    if (query->RequiredFeatures().Contains(
-            device::mojom::XRSessionFeature::DEPTH) &&
-        (preferred_usage.empty() || preferred_format.empty())) {
-      query->RejectWithDOMException(DOMExceptionCode::kNotSupportedError,
-                                    kDepthSensingConfigurationNotSupported,
-                                    &exception_state);
-      return promise;
-    }
 
     query->SetDepthSensingConfiguration(preferred_usage, preferred_format);
   }

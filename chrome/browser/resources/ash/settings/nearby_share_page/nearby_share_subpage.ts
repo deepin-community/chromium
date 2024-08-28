@@ -8,7 +8,7 @@
  * Nearby Share feature.
  */
 
-import 'chrome://resources/cr_components/settings_prefs/prefs.js';
+import '/shared/settings/prefs/prefs.js';
 import 'chrome://resources/ash/common/cr_elements/cr_shared_style.css.js';
 import 'chrome://resources/ash/common/cr_elements/cr_link_row/cr_link_row.js';
 import 'chrome://resources/polymer/v3_0/iron-flex-layout/iron-flex-layout-classes.js';
@@ -22,7 +22,7 @@ import './nearby_share_receive_dialog.js';
 import {getContactManager} from '/shared/nearby_contact_manager.js';
 import {ReceiveObserverReceiver, ShareTarget, TransferMetadata} from '/shared/nearby_share.mojom-webui.js';
 import {NearbySettings} from '/shared/nearby_share_settings_mixin.js';
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {assertNotReached} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -128,6 +128,14 @@ export class SettingsNearbyShareSubpageElement extends
         computed: `computeShouldShowFastInititationNotificationToggle_(
                 settings.isFastInitiationHardwareSupported)`,
       },
+
+      /**
+       * Determines whether the QuickShareV2 flag is enabled.
+       */
+      isQuickShareV2Enabled_: {
+        type: Boolean,
+        value: () => loadTimeData.getBoolean('isQuickShareV2Enabled'),
+      },
     };
   }
 
@@ -137,6 +145,7 @@ export class SettingsNearbyShareSubpageElement extends
 
   isSettingsRetreived: boolean;
   private inHighVisibility_: boolean;
+  private isQuickShareV2Enabled_: boolean;
   private manageContactsUrl_: string;
   private profileLabel_: string;
   private profileName_: string;
@@ -321,7 +330,7 @@ export class SettingsNearbyShareSubpageElement extends
 
   private getHighVisibilityToggleText_(inHighVisibility: boolean): TrustedHTML
       |string {
-    // TODO(crbug.com/1154830): Add logic to show how much time the user
+    // TODO(crbug.com/40159645): Add logic to show how much time the user
     // actually has left.
     return inHighVisibility ?
         this.i18n('nearbyShareHighVisibilityOn', 5) :

@@ -277,7 +277,7 @@ void DnsProbeBrowserTest::SetFakeHostResolverResults(
 void DnsProbeBrowserTest::NavigateToDnsError() {
   ASSERT_TRUE(NavigateToURL(
       active_browser_,
-      URLRequestFailedJob::GetMockHttpUrl(net::ERR_NAME_NOT_RESOLVED)));
+      URLRequestFailedJob::GetMockHttpsUrl(net::ERR_NAME_NOT_RESOLVED)));
 }
 
 void DnsProbeBrowserTest::NavigateToOtherError() {
@@ -411,7 +411,7 @@ class DnsProbeCurrentSecureConfigFailingProbesTest
     // Mark as not enterprise managed to prevent the secure DNS mode from
     // being downgraded to off.
     base::win::ScopedDomainStateForTesting scoped_domain(false);
-    // TODO(crbug.com/1339062): What is the correct function to use here?
+    // TODO(crbug.com/40229843): What is the correct function to use here?
     EXPECT_FALSE(base::win::IsEnrolledToDomain());
 #endif
 

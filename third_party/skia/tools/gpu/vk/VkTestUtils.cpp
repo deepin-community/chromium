@@ -5,6 +5,8 @@
  * found in the LICENSE file.
  */
 
+#include "src/gpu/vk/VulkanInterface.h"
+#include "tools/gpu/vk/VkTestMemoryAllocator.h"
 #include "tools/gpu/vk/VkTestUtils.h"
 
 #ifdef SK_VULKAN
@@ -28,7 +30,6 @@
 #if defined(__GLIBC__)
 #include <execinfo.h>
 #endif
-#include "include/gpu/vk/GrVkBackendContext.h"
 #include "include/gpu/vk/VulkanBackendContext.h"
 #include "include/gpu/vk/VulkanExtensions.h"
 #include "src/base/SkAutoMalloc.h"
@@ -456,50 +457,6 @@ static bool setup_features(const skgpu::VulkanGetProc& getProc, VkInstance inst,
     // If we want to disable any extension features do so here.
 }
 
-// TODO: remove once GrVkBackendContext is deprecated (skbug.com/309785258)
-void ConvertBackendContext(const skgpu::VulkanBackendContext& newStyle,
-                           GrVkBackendContext* oldStyle) {
-    oldStyle->fInstance = newStyle.fInstance;
-    oldStyle->fPhysicalDevice = newStyle.fPhysicalDevice;
-    oldStyle->fDevice = newStyle.fDevice;
-    oldStyle->fQueue = newStyle.fQueue;
-    oldStyle->fGraphicsQueueIndex = newStyle.fGraphicsQueueIndex;
-    oldStyle->fMaxAPIVersion = newStyle.fMaxAPIVersion;
-    oldStyle->fVkExtensions = newStyle.fVkExtensions;
-    oldStyle->fDeviceFeatures = newStyle.fDeviceFeatures;
-    oldStyle->fDeviceFeatures2 = newStyle.fDeviceFeatures2;
-    oldStyle->fMemoryAllocator = newStyle.fMemoryAllocator;
-    oldStyle->fGetProc = newStyle.fGetProc;
-    oldStyle->fProtectedContext = newStyle.fProtectedContext;
-}
-
-// TODO: remove once GrVkBackendContext is deprecated (skbug.com/309785258)
-bool CreateVkBackendContext(PFN_vkGetInstanceProcAddr getInstProc,
-                            GrVkBackendContext* ctx,
-                            skgpu::VulkanExtensions* extensions,
-                            VkPhysicalDeviceFeatures2* features,
-                            VkDebugReportCallbackEXT* debugCallback,
-                            uint32_t* presentQueueIndexPtr,
-                            const CanPresentFn& canPresent,
-                            bool isProtected) {
-    skgpu::VulkanBackendContext skgpuCtx;
-    if (!CreateVkBackendContext(getInstProc,
-                                &skgpuCtx,
-                                extensions,
-                                features,
-                                debugCallback,
-                                presentQueueIndexPtr,
-                                canPresent,
-                                isProtected)) {
-        return false;
-    }
-
-    SkASSERT(skgpuCtx.fProtectedContext == skgpu::Protected(isProtected));
-
-    ConvertBackendContext(skgpuCtx, ctx);
-    return true;
-}
-
 bool CreateVkBackendContext(PFN_vkGetInstanceProcAddr getInstProc,
                             skgpu::VulkanBackendContext* ctx,
                             skgpu::VulkanExtensions* extensions,
@@ -874,6 +831,13 @@ bool CreateVkBackendContext(PFN_vkGetInstanceProcAddr getInstProc,
         grVkGetDeviceQueue(device, graphicsQueueIndex, 0, &queue);
     }
 
+    skgpu::VulkanInterface interface = skgpu::VulkanInterface(
+            getProc, inst, device, instanceVersion, physDeviceVersion, extensions);
+    SkASSERT(interface.validate(instanceVersion, physDeviceVersion, extensions));
+
+    sk_sp<skgpu::VulkanMemoryAllocator> memoryAllocator = VkTestMemoryAllocator::Make(
+            inst, physDev, device, physDeviceVersion, extensions, &interface);
+
     ctx->fInstance = inst;
     ctx->fPhysicalDevice = physDev;
     ctx->fDevice = device;
@@ -884,6 +848,7 @@ bool CreateVkBackendContext(PFN_vkGetInstanceProcAddr getInstProc,
     ctx->fDeviceFeatures2 = features;
     ctx->fGetProc = getProc;
     ctx->fProtectedContext = skgpu::Protected(isProtected);
+    ctx->fMemoryAllocator = memoryAllocator;
 
     return true;
 }

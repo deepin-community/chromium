@@ -104,6 +104,8 @@ class MockRenderProcessHost : public RenderProcessHost {
   void OnMediaStreamRemoved() override;
   void OnForegroundServiceWorkerAdded() override;
   void OnForegroundServiceWorkerRemoved() override;
+  void OnBoostForLoadingAdded() override;
+  void OnBoostForLoadingRemoved() override;
   StoragePartition* GetStoragePartition() override;
   virtual void AddWord(const std::u16string& word);
   bool Shutdown(int exit_code) override;
@@ -128,9 +130,11 @@ class MockRenderProcessHost : public RenderProcessHost {
       RenderProcessHostPriorityClient* priority_client) override;
   void RemovePriorityClient(
       RenderProcessHostPriorityClient* priority_client) override;
+#if !BUILDFLAG(IS_ANDROID)
   void SetPriorityOverride(bool foreground) override;
   bool HasPriorityOverride() override;
   void ClearPriorityOverride() override;
+#endif
 #if BUILDFLAG(IS_ANDROID)
   ChildProcessImportance GetEffectiveImportance() override;
   base::android::ChildBindingState GetEffectiveChildBindingState() override;
@@ -157,10 +161,7 @@ class MockRenderProcessHost : public RenderProcessHost {
       override;
   const base::TimeTicks& GetLastInitTime() override;
   bool IsProcessBackgrounded() override;
-  size_t GetKeepAliveRefCount() const;
   size_t GetWorkerRefCount() const;
-  void IncrementKeepAliveRefCount(uint64_t handle_id) override;
-  void DecrementKeepAliveRefCount(uint64_t handle_id) override;
   std::string GetKeepAliveDurations() const override;
   size_t GetShutdownDelayRefCount() const override;
   int GetRenderFrameHostCount() const override;
@@ -195,6 +196,7 @@ class MockRenderProcessHost : public RenderProcessHost {
   void BindCacheStorage(
       const network::CrossOriginEmbedderPolicy&,
       mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>,
+      const network::DocumentIsolationPolicy& document_isolation_policy,
       const storage::BucketLocator& bucket,
       mojo::PendingReceiver<blink::mojom::CacheStorage> receiver) override;
   void BindFileSystemManager(
@@ -207,11 +209,12 @@ class MockRenderProcessHost : public RenderProcessHost {
       override {}
   void GetSandboxedFileSystemForBucket(
       const storage::BucketLocator& bucket,
+      const std::vector<std::string>& directory_path_components,
       blink::mojom::FileSystemAccessManager::GetSandboxedFileSystemCallback
           callback) override;
   void BindIndexedDB(
       const blink::StorageKey& storage_key,
-      const GlobalRenderFrameHostId& rfh_id,
+      BucketContext& bucket_context,
       mojo::PendingReceiver<blink::mojom::IDBFactory> receiver) override;
   void BindBucketManagerHost(
       base::WeakPtr<BucketContext> bucket_context,
@@ -323,18 +326,20 @@ class MockRenderProcessHost : public RenderProcessHost {
   base::ObserverList<RenderProcessHostObserver> observers_;
 
   StoragePartitionConfig storage_partition_config_;
-  base::flat_set<RenderProcessHostPriorityClient*> priority_clients_;
+  base::flat_set<raw_ptr<RenderProcessHostPriorityClient, CtnExperimental>>
+      priority_clients_;
   int prev_routing_id_;
   base::IDMap<IPC::Listener*> listeners_;
   bool shutdown_requested_;
   bool fast_shutdown_started_;
+  bool within_process_died_observer_ = false;
+  bool delayed_cleanup_ = false;
   bool deletion_callback_called_;
   bool is_for_guests_only_;
   bool is_process_backgrounded_;
   bool is_unused_;
   bool is_ready_ = false;
   base::Process process;
-  int keep_alive_ref_count_;
   int worker_ref_count_;
   int pending_reuse_ref_count_;
   int foreground_service_worker_count_;

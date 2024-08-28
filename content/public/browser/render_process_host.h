@@ -13,6 +13,7 @@
 
 #include "base/callback_list.h"
 #include "base/clang_profiling_buildflags.h"
+#include "base/containers/heap_array.h"
 #include "base/containers/id_map.h"
 #include "base/functional/function_ref.h"
 #include "base/memory/safety_checks.h"
@@ -87,6 +88,7 @@ class ChannelProxy;
 
 namespace network {
 struct CrossOriginEmbedderPolicy;
+struct DocumentIsolationPolicy;
 }  // namespace network
 
 namespace storage {
@@ -211,6 +213,12 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
   // used to determine if the process should be backgrounded or not.
   virtual void OnForegroundServiceWorkerAdded() = 0;
   virtual void OnForegroundServiceWorkerRemoved() = 0;
+
+  // This is an experimental code that keeps the renderer process foregrounded
+  // from CommitNavigation to DOMContentLoaded (crbug/351953350). This is used
+  // to determine if the process should be backgrounded or not.
+  virtual void OnBoostForLoadingAdded() = 0;
+  virtual void OnBoostForLoadingRemoved() = 0;
 
   // Indicates whether the current RenderProcessHost is exclusively hosting
   // guest RenderFrames. Not all guest RenderFrames are created equal.  A guest,
@@ -344,11 +352,14 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
   virtual void RemovePriorityClient(
       RenderProcessHostPriorityClient* priority_client) = 0;
 
+#if !BUILDFLAG(IS_ANDROID)
   // Sets a process priority override. This overrides the entire built-in
   // priority setting mechanism for the process.
+  // TODO(pmonette): Make this work well on Android.
   virtual void SetPriorityOverride(bool foreground) = 0;
   virtual bool HasPriorityOverride() = 0;
   virtual void ClearPriorityOverride() = 0;
+#endif
 
 #if BUILDFLAG(IS_ANDROID)
   // Return the highest importance of all widgets in this process.
@@ -399,8 +410,7 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
   virtual void DisableAudioDebugRecordings() = 0;
 
   using WebRtcRtpPacketCallback =
-      base::RepeatingCallback<void(std::unique_ptr<uint8_t[]> packet_header,
-                                   size_t header_length,
+      base::RepeatingCallback<void(base::HeapArray<uint8_t> packet_header,
                                    size_t packet_length,
                                    bool incoming)>;
 
@@ -441,29 +451,6 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
   // Returns true if this process currently has backgrounded priority.
   virtual bool IsProcessBackgrounded() = 0;
 
-  // "Keep alive ref count" represents the number of the customers of this
-  // render process who wish the renderer process to be alive. While the ref
-  // count is positive, |this| object will keep the renderer process alive,
-  // unless DisableRefCounts() is called. |handle_id| is a unique identifier
-  // associated with each keep-alive request.
-  // TODO(wjmaclean): Remove |handle_id| once the causes behind
-  // https://crbug.com/1148542 are known.
-  //
-  // Here is the list of users:
-  //  - Keepalive request (if the KeepAliveRendererForKeepaliveRequests
-  //    feature is enabled):
-  //    When a fetch request with keepalive flag
-  //    (https://fetch.spec.whatwg.org/#request-keepalive-flag) specified is
-  //    pending, it wishes the renderer process to be kept alive.
-  //  - Unload handlers:
-  //    Keeps the process alive briefly to give subframe unload handlers a
-  //    chance to execute after their parent frame navigates or is detached.
-  //    See https://crbug.com/852204.
-  //  - Process reuse timer (experimental):
-  //    Keeps the process alive for a set period of time in case it can be
-  //    reused for the same site. See https://crbug.com/894253.
-  virtual void IncrementKeepAliveRefCount(uint64_t handle_id) = 0;
-  virtual void DecrementKeepAliveRefCount(uint64_t handle_id) = 0;
   // Returns a list of durations for active KeepAlive requests.
   // For debugging only. TODO(wjmaclean): Remove once the causes behind
   // https://crbug.com/1148542 are known.
@@ -473,6 +460,7 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
   // For debugging only. TODO(wjmaclean): Remove once the causes behind
   // https://crbug.com/1148542 are known.
   virtual size_t GetShutdownDelayRefCount() const = 0;
+
   // Diagnostic code for https://crbug/1148542. This will be removed prior to
   // resolving that issue. It counts all RenderFrameHosts that have not been
   // destroyed, including speculative ones and pending deletion ones. This
@@ -609,6 +597,7 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
       const network::CrossOriginEmbedderPolicy& cross_origin_embedder_policy,
       mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
           coep_reporter_remote,
+      const network::DocumentIsolationPolicy& document_isolation_policy,
       const storage::BucketLocator& bucket_locator,
       mojo::PendingReceiver<blink::mojom::CacheStorage> receiver) = 0;
   virtual void BindFileSystemManager(
@@ -620,11 +609,12 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
           receiver) = 0;
   virtual void GetSandboxedFileSystemForBucket(
       const storage::BucketLocator& bucket_locator,
+      const std::vector<std::string>& directory_path_components,
       blink::mojom::FileSystemAccessManager::GetSandboxedFileSystemCallback
           callback) = 0;
   virtual void BindIndexedDB(
       const blink::StorageKey& storage_key,
-      const GlobalRenderFrameHostId& rfh_id,
+      BucketContext& bucket_context,
       mojo::PendingReceiver<blink::mojom::IDBFactory> receiver) = 0;
   virtual void BindBucketManagerHost(
       base::WeakPtr<BucketContext> bucket_context,
@@ -775,7 +765,7 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
 
   // Return the spare RenderProcessHost, if it exists. There is at most one
   // globally-used spare RenderProcessHost at any time.
-  // TODO(crbug.com/1519190): remove the non-test method once the performance
+  // TODO(crbug.com/41492171): remove the non-test method once the performance
   // investigation is finished.
   static RenderProcessHost* GetSpareRenderProcessHost();
   static RenderProcessHost* GetSpareRenderProcessHostForTesting();

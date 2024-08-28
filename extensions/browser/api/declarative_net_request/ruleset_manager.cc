@@ -7,11 +7,13 @@
 #include <iterator>
 #include <optional>
 #include <tuple>
+
 #include "base/check_op.h"
+#include "base/command_line.h"
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/ranges/algorithm.h"
 #include "base/time/time.h"
@@ -22,6 +24,7 @@
 #include "extensions/browser/api/declarative_net_request/request_action.h"
 #include "extensions/browser/api/declarative_net_request/request_params.h"
 #include "extensions/browser/api/declarative_net_request/utils.h"
+#include "extensions/browser/api/declarative_webrequest/request_stage.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/api/web_request/permission_helper.h"
 #include "extensions/browser/api/web_request/web_request_info.h"
@@ -30,6 +33,7 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/common/api/declarative_net_request.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/switches.h"
 #include "url/origin.h"
 
 namespace extensions::declarative_net_request {
@@ -79,14 +83,12 @@ RulesetManager::~RulesetManager() {
 void RulesetManager::AddRuleset(const ExtensionId& extension_id,
                                 std::unique_ptr<CompositeMatcher> matcher) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(!GetMatcherForExtension(extension_id))
+      << "AddRuleset called twice in succession for " << extension_id;
 
-  bool inserted =
-      rulesets_
-          .emplace(extension_id, prefs_->GetLastUpdateTime(extension_id),
-                   std::move(matcher))
-          .second;
-  DCHECK(inserted) << "AddRuleset called twice in succession for "
-                   << extension_id;
+  base::Time update_time = prefs_->GetLastUpdateTime(extension_id);
+  rulesets_.emplace(extension_id, update_time, std::move(matcher));
+  extension_install_times_[extension_id] = update_time;
 
   if (test_observer_)
     test_observer_->OnRulesetCountChanged(rulesets_.size());
@@ -103,6 +105,7 @@ void RulesetManager::RemoveRuleset(const ExtensionId& extension_id) {
         return ruleset_data.extension_id == extension_id;
       };
 
+  extension_install_times_.erase(extension_id);
   size_t erased_count = base::EraseIf(rulesets_, compare_by_id);
   DCHECK_EQ(1u, erased_count)
       << "RemoveRuleset called without a corresponding AddRuleset for "
@@ -148,7 +151,7 @@ const CompositeMatcher* RulesetManager::GetMatcherForExtension(
   return iter->matcher.get();
 }
 
-const std::vector<RequestAction>& RulesetManager::EvaluateRequest(
+const std::vector<RequestAction>& RulesetManager::EvaluateBeforeRequest(
     const WebRequestInfo& request,
     bool is_incognito_context) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -159,36 +162,51 @@ const std::vector<RequestAction>& RulesetManager::EvaluateRequest(
   // |is_incognito_context| will stay the same for a given |request|. This also
   // assumes that the core state of the WebRequestInfo isn't changed between the
   // different EvaluateRequest invocations.
+  // Note: Since this is called before the request is sent, `response_headers`
+  // have not been received yet and is null.
   if (!request.dnr_actions) {
-    request.dnr_actions =
-        EvaluateRequestInternal(request, is_incognito_context);
+    request.dnr_actions = EvaluateRequestInternal(
+        request, /*response_headers=*/nullptr, is_incognito_context);
   }
 
   return *request.dnr_actions;
 }
 
+std::vector<RequestAction> RulesetManager::EvaluateRequestWithHeaders(
+    const WebRequestInfo& request,
+    const net::HttpResponseHeaders* response_headers,
+    bool is_incognito_context) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(response_headers);
+  return EvaluateRequestInternal(request, response_headers,
+                                 is_incognito_context);
+}
+
 bool RulesetManager::HasAnyExtraHeadersMatcher() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  for (const auto& ruleset : rulesets_) {
-    if (ruleset.matcher->HasAnyExtraHeadersMatcher())
-      return true;
-  }
-
-  return false;
+  return base::ranges::any_of(
+      rulesets_, [](const ExtensionRulesetData& ruleset) {
+        return ruleset.matcher->HasAnyExtraHeadersMatcher();
+      });
 }
 
 bool RulesetManager::HasExtraHeadersMatcherForRequest(
     const WebRequestInfo& request,
     bool is_incognito_context) const {
   const std::vector<RequestAction>& actions =
-      EvaluateRequest(request, is_incognito_context);
+      EvaluateBeforeRequest(request, is_incognito_context);
 
   static_assert(flat::ActionType_count == 6,
                 "Modify this method to ensure HasExtraHeadersMatcherForRequest "
                 "is updated as new actions are added.");
 
-  return base::Contains(actions, RequestAction::Type::MODIFY_HEADERS,
+  // TODO(kelvinjiang): We can optimize this check for the onHeadersReceived
+  // stage by looking for particular headers required for extraHeaders or if the
+  // request would potentially match any onHeadersReceived rules based on
+  // non-header parameters.
+  return HasRulesets(RulesetMatchingStage::kOnHeadersReceived) ||
+         base::Contains(actions, RequestAction::Type::MODIFY_HEADERS,
                         &RequestAction::type);
 }
 
@@ -206,6 +224,47 @@ void RulesetManager::OnDidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   for (ExtensionRulesetData& ruleset : rulesets_)
     ruleset.matcher->OnDidFinishNavigation(navigation_handle);
+}
+
+bool RulesetManager::HasRulesets(RulesetMatchingStage stage) const {
+  return base::ranges::any_of(rulesets_,
+                              [stage](const ExtensionRulesetData& ruleset) {
+                                return ruleset.matcher->HasRulesets(stage);
+                              });
+}
+
+std::vector<RequestAction> RulesetManager::MergeModifyHeaderActions(
+    std::vector<RequestAction> lhs_actions,
+    std::vector<RequestAction> rhs_actions) const {
+  std::vector<RequestAction> merged_actions;
+  merged_actions.reserve(lhs_actions.size() + rhs_actions.size());
+
+  merged_actions.insert(merged_actions.end(),
+                        std::make_move_iterator(lhs_actions.begin()),
+                        std::make_move_iterator(lhs_actions.end()));
+  merged_actions.insert(merged_actions.end(),
+                        std::make_move_iterator(rhs_actions.begin()),
+                        std::make_move_iterator(rhs_actions.end()));
+
+  std::sort(
+      merged_actions.begin(), merged_actions.end(),
+      [this](const RequestAction& lhs, const RequestAction& rhs) {
+        auto lhs_install_time_it =
+            extension_install_times_.find(lhs.extension_id);
+        CHECK(lhs_install_time_it != extension_install_times_.end(),
+              base::NotFatalUntil::M130);
+
+        auto rhs_install_time_it =
+            extension_install_times_.find(rhs.extension_id);
+        CHECK(rhs_install_time_it != extension_install_times_.end(),
+              base::NotFatalUntil::M130);
+
+        // Same comparator as ExtensionRulesetData's for actions from different
+        // extensions. Otherwise, default to RequestAction's comparator.
+        return std::tie(lhs_install_time_it->second, lhs.extension_id, lhs) >
+               std::tie(rhs_install_time_it->second, rhs.extension_id, rhs);
+      });
+  return merged_actions;
 }
 
 void RulesetManager::SetObserverForTest(TestObserver* observer) {
@@ -236,10 +295,11 @@ bool RulesetManager::ExtensionRulesetData::operator<(
          std::tie(other.extension_install_time, other.extension_id);
 }
 
-std::optional<RequestAction> RulesetManager::GetBeforeRequestAction(
+std::optional<RequestAction> RulesetManager::GetAction(
     const std::vector<RulesetAndPageAccess>& rulesets,
     const WebRequestInfo& request,
-    const RequestParams& params) const {
+    const RequestParams& params,
+    RulesetMatchingStage stage) const {
   DCHECK(std::is_sorted(rulesets.begin(), rulesets.end(),
                         [](RulesetAndPageAccess a, RulesetAndPageAccess b) {
                           return *a.first < *b.first;
@@ -261,7 +321,7 @@ std::optional<RequestAction> RulesetManager::GetBeforeRequestAction(
       case RequestAction::Type::ALLOW_ALL_REQUESTS:
         return 1;
       case RequestAction::Type::MODIFY_HEADERS:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         return 0;
     }
   };
@@ -275,8 +335,7 @@ std::optional<RequestAction> RulesetManager::GetBeforeRequestAction(
     const ExtensionRulesetData* ruleset = ruleset_and_access.first;
 
     CompositeMatcher::ActionInfo action_info =
-        ruleset->matcher->GetBeforeRequestAction(params,
-                                                 ruleset_and_access.second);
+        ruleset->matcher->GetAction(params, stage, ruleset_and_access.second);
 
     DCHECK(!(action_info.action && action_info.notify_request_withheld));
     if (action_info.notify_request_withheld) {
@@ -284,6 +343,8 @@ std::optional<RequestAction> RulesetManager::GetBeforeRequestAction(
       continue;
     }
 
+    // If there is a tie here, `action` (from the more recently installed
+    // extension) wins.
     if (action_priority(action_info.action) > action_priority(action))
       action = std::move(action_info.action);
   }
@@ -294,7 +355,8 @@ std::optional<RequestAction> RulesetManager::GetBeforeRequestAction(
 std::vector<RequestAction> RulesetManager::GetModifyHeadersActions(
     const std::vector<RulesetAndPageAccess>& rulesets,
     const WebRequestInfo& request,
-    const RequestParams& params) const {
+    const RequestParams& params,
+    RulesetMatchingStage stage) const {
   DCHECK(std::is_sorted(rulesets.begin(), rulesets.end(),
                         [](RulesetAndPageAccess a, RulesetAndPageAccess b) {
                           return *a.first < *b.first;
@@ -311,7 +373,7 @@ std::vector<RequestAction> RulesetManager::GetModifyHeadersActions(
 
     const ExtensionRulesetData* ruleset = ruleset_and_access.first;
     std::vector<RequestAction> actions_for_matcher =
-        ruleset->matcher->GetModifyHeadersActions(params);
+        ruleset->matcher->GetModifyHeadersActions(params, stage);
 
     // Evaluate modifyHeaders rules for this extension if and only if it has
     // host permissions for the request url and initiator.
@@ -329,7 +391,7 @@ std::vector<RequestAction> RulesetManager::GetModifyHeadersActions(
     }
   }
 
-  // |modify_headers_actions| is implicitly sorted in descreasing order by
+  // `modify_headers_actions` is implicitly sorted in decreasing order by
   // priority.
   //  - Within an extension: each CompositeMatcher returns a vector sorted by
   //  priority.
@@ -340,15 +402,24 @@ std::vector<RequestAction> RulesetManager::GetModifyHeadersActions(
 
 std::vector<RequestAction> RulesetManager::EvaluateRequestInternal(
     const WebRequestInfo& request,
+    const net::HttpResponseHeaders* response_headers,
     bool is_incognito_context) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!request.dnr_actions);
+
+  RulesetMatchingStage stage = response_headers
+                                   ? RulesetMatchingStage::kOnHeadersReceived
+                                   : RulesetMatchingStage::kOnBeforeRequest;
+  if (!response_headers) {
+    DCHECK(!request.dnr_actions);
+  }
 
   std::vector<RequestAction> actions;
 
   if (!ShouldEvaluateRequest(request))
     return actions;
 
+  // TODO(crbug.com/40727004): Add some context on which request stage this
+  // event took place in the observer method if/when needed for tests.
   if (test_observer_)
     test_observer_->OnEvaluateRequest(request, is_incognito_context);
 
@@ -370,15 +441,18 @@ std::vector<RequestAction> RulesetManager::EvaluateRequestInternal(
     rulesets_to_evaluate.emplace_back(&ruleset, host_permission_access);
   }
 
-  // TODO(crbug.com/1141166): Add response headers here.
-  const RequestParams params(request, /*response_headers=*/nullptr);
-  std::optional<RequestAction> before_request_action =
-      GetBeforeRequestAction(rulesets_to_evaluate, request, params);
+  // Check that the allow rule priority cache from `request` is empty if the
+  // request has not been evaluated yet in the kOnBeforeRequest stage.
+  CHECK(stage != RulesetMatchingStage::kOnBeforeRequest ||
+        request.max_priority_allow_action.empty());
 
-  if (before_request_action) {
-    bool is_request_modifying_action =
-        !before_request_action->IsAllowOrAllowAllRequests();
-    actions.push_back(std::move(*before_request_action));
+  const RequestParams params(request, response_headers);
+  std::optional<RequestAction> action =
+      GetAction(rulesets_to_evaluate, request, params, stage);
+
+  if (action) {
+    bool is_request_modifying_action = !action->IsAllowOrAllowAllRequests();
+    actions.push_back(std::move(*action));
 
     // If the request is blocked/redirected, no further modifications can
     // happen.
@@ -389,7 +463,13 @@ std::vector<RequestAction> RulesetManager::EvaluateRequestInternal(
   // This returns any matching modifyHeaders rules with priority greater than
   // matching allow/allowAllRequests rules.
   std::vector<RequestAction> modify_headers_actions =
-      GetModifyHeadersActions(rulesets_to_evaluate, request, params);
+      GetModifyHeadersActions(rulesets_to_evaluate, request, params, stage);
+
+  // Pass the allow rule priority cache to `request` so its current value can be
+  // reused in later rule matching stages.
+  request.max_priority_allow_action =
+      std::move(params.max_priority_allow_action);
+
   if (!modify_headers_actions.empty())
     return modify_headers_actions;
 
@@ -418,6 +498,23 @@ bool RulesetManager::ShouldEvaluateRulesetForRequest(
     const WebRequestInfo& request,
     bool is_incognito_context,
     PageAccess& host_permission_access) const {
+  // Extensions should not generally have access to requests initiated by other
+  // extensions, though the --extensions-on-chrome-urls switch overrides that
+  // restriction.
+  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kExtensionsOnChromeURLs) &&
+      request.initiator) {
+    // Checking the precursor is necessary here since requests initiated by
+    // manifest sandbox pages have an opaque initiator origin, but still
+    // originate from an extension.
+    auto initator_precursor =
+        request.initiator->GetTupleOrPrecursorTupleIfOpaque();
+    if (initator_precursor.scheme() == kExtensionScheme &&
+        initator_precursor.host() != ruleset.extension_id) {
+      return false;
+    }
+  }
+
   // Only extensions enabled in incognito should have access to requests in an
   // incognito context.
   if (is_incognito_context &&

@@ -31,8 +31,8 @@
 #include "third_party/blink/renderer/core/style/shadow_list.h"
 #include "third_party/blink/renderer/core/style/style_fetched_image.h"
 #include "third_party/blink/renderer/core/style/style_mask_source_image.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/graphics/bitmap_image.h"
+#include "third_party/blink/renderer/platform/graphics/draw_looper_builder.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context_state_saver.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_controller.h"
@@ -213,6 +213,13 @@ void AdjustRectForSideClipping(gfx::RectF& rect,
   }
 }
 
+// A box-shadow is always obscured by the box geometry regardless of its color,
+// if the shadow has an offset of zero, no blur and no spread. In that case it
+// will have no visual effect and can be skipped.
+bool ShadowIsFullyObscured(const ShadowData& shadow) {
+  return shadow.Offset().IsZero() && shadow.Blur() == 0 && shadow.Spread() == 0;
+}
+
 }  // namespace
 
 void BoxPainterBase::PaintNormalBoxShadow(const PaintInfo& info,
@@ -239,13 +246,9 @@ void BoxPainterBase::PaintNormalBoxShadow(const PaintInfo& info,
     const ShadowData& shadow = shadow_list->Shadows()[i];
     if (shadow.Style() != ShadowStyle::kNormal)
       continue;
-
-    gfx::Vector2dF shadow_offset = shadow.Offset();
-    float shadow_blur = shadow.Blur();
-    float shadow_spread = shadow.Spread();
-
-    if (shadow_offset.IsZero() && !shadow_blur && !shadow_spread)
+    if (ShadowIsFullyObscured(shadow)) {
       continue;
+    }
 
     Color resolved_shadow_color = shadow.GetColor().Resolve(
         style.VisitedDependentColor(GetCSSPropertyColor()),
@@ -261,7 +264,7 @@ void BoxPainterBase::PaintNormalBoxShadow(const PaintInfo& info,
             : resolved_shadow_color;
 
     gfx::RectF fill_rect = border.Rect();
-    fill_rect.Outset(shadow_spread);
+    fill_rect.Outset(shadow.Spread());
     if (fill_rect.IsEmpty())
       continue;
 
@@ -287,19 +290,19 @@ void BoxPainterBase::PaintNormalBoxShadow(const PaintInfo& info,
     // Draw only the shadow. If the color of the shadow is transparent we will
     // set an empty draw looper.
     DrawLooperBuilder draw_looper_builder;
-    draw_looper_builder.AddShadow(shadow_offset, shadow_blur, shadow_color,
+    draw_looper_builder.AddShadow(shadow.Offset(), shadow.Blur(), shadow_color,
                                   DrawLooperBuilder::kShadowRespectsTransforms,
                                   DrawLooperBuilder::kShadowIgnoresAlpha);
     context.SetDrawLooper(draw_looper_builder.DetachDrawLooper());
 
     if (has_border_radius) {
       FloatRoundedRect rounded_fill_rect(fill_rect, border.GetRadii());
-      ApplySpreadToShadowShape(rounded_fill_rect, shadow_spread);
+      ApplySpreadToShadowShape(rounded_fill_rect, shadow.Spread());
       context.FillRoundedRect(
           rounded_fill_rect, Color::kBlack,
           PaintAutoDarkMode(style, DarkModeFilter::ElementRole::kBackground));
     } else {
-      fill_rect.Outset(shadow_spread);
+      fill_rect.Outset(shadow.Spread());
       context.FillRect(
           fill_rect, Color::kBlack,
           PaintAutoDarkMode(style, DarkModeFilter::ElementRole::kBackground));
@@ -358,8 +361,9 @@ void BoxPainterBase::PaintInsetBoxShadow(const PaintInfo& info,
     const ShadowData& shadow = shadow_list->Shadows()[i];
     if (shadow.Style() != ShadowStyle::kInset)
       continue;
-    if (!shadow.X() && !shadow.Y() && !shadow.Blur() && !shadow.Spread())
+    if (ShadowIsFullyObscured(shadow)) {
       continue;
+    }
 
     Color resolved_shadow_color = shadow.GetColor().Resolve(
         style.VisitedDependentColor(GetCSSPropertyColor()),
@@ -485,6 +489,7 @@ BoxPainterBase::FillLayerInfo::FillLayerInfo(
     if (image || should_paint_background_color) {
       color = Color::kWhite;
       image = nullptr;
+      background_forced_to_white = true;
     }
   }
 
@@ -719,14 +724,8 @@ scoped_refptr<Image> GetBGColorPaintWorkletImage(const Document& document,
   // The generator can be null in testing environment.
   if (!generator)
     return nullptr;
-  Vector<Color> animated_colors;
-  Vector<double> offsets;
-  std::optional<double> progress;
-  if (!generator->GetBGColorPaintWorkletParams(node, &animated_colors, &offsets,
-                                               &progress)) {
-    return nullptr;
-  }
-  return generator->Paint(image_size, node, animated_colors, offsets, progress);
+
+  return generator->Paint(image_size, node);
 }
 
 // Returns true if the background color was painted by the paint worklet.
@@ -742,12 +741,13 @@ bool PaintBGColorWithPaintWorklet(const Document& document,
   CompositedPaintStatus status = CompositedBackgroundColorStatus(node);
 
   switch (status) {
+    case CompositedPaintStatus::kNoAnimation:
     case CompositedPaintStatus::kNotComposited:
       // Once an animation has been downgraded to run on the main thread, it
       // cannot restart on the compositor without a pending animation update.
       return false;
 
-    case CompositedPaintStatus::kNeedsRepaintOrNoAnimation:
+    case CompositedPaintStatus::kNeedsRepaint:
     case CompositedPaintStatus::kComposited:
       if (CanCompositeBackgroundColorAnimation(node)) {
         SetHasNativeBackgroundPainter(node, true);
@@ -971,7 +971,7 @@ FloatRoundedRect BackgroundRoundedRectAdjustedForBleedAvoidance(
   // TODO(fmalita): we should be able to fold these parameters into
   // BoxBorderInfo or BoxDecorationData and avoid calling getBorderEdgeInfo
   // redundantly here.
-  BorderEdge edges[4];
+  BorderEdgeArray edges;
   style.GetBorderEdgeInfo(edges, sides_to_include);
 
   // Use the most conservative inset to avoid mixed-style corner issues.
@@ -1157,6 +1157,11 @@ void BoxPainterBase::PaintFillLayer(
       !fill_layer_info.should_paint_color)
     return;
 
+  if (fill_layer_info.background_forced_to_white &&
+      bg_paint_context.ShouldSkipBackgroundIfWhite()) {
+    return;
+  }
+
   GraphicsContext& context = paint_info.context;
   GraphicsContextStateSaver clip_with_scrolling_state_saver(
       context, fill_layer_info.is_clipped_with_local_scrolling);
@@ -1297,7 +1302,7 @@ void BoxPainterBase::PaintFillLayer(
         break;
       case EFillBox::kText:  // fall through
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
     }
   }

@@ -18,10 +18,19 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_CUDA_CUDA_DRIVER_H_
 #define XLA_STREAM_EXECUTOR_CUDA_CUDA_DRIVER_H_
 
+#include <algorithm>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "absl/container/node_hash_map.h"
-#include "absl/memory/memory.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
+#include "third_party/gpus/cuda/include/cuda.h"
 #include "xla/stream_executor/gpu/gpu_driver.h"
 
 namespace stream_executor {
@@ -38,6 +47,11 @@ static std::string ToString(CUresult result) {
   }
   return absl::StrCat(error_name, ": ", error_string);
 }
+
+// Polls (without blocking) to determine the status of an event - pending or
+// complete (or an error status).
+// http://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__EVENT.html#group__CUDA__EVENT_1g6f0704d755066b0ee705749ae911deef
+absl::StatusOr<CUresult> QueryEvent(GpuContext* context, CUevent event);
 
 // CUDAContext wraps a cuda CUcontext handle, and includes a unique id. The
 // unique id is positive, and ids are not repeated within the process.
@@ -152,8 +166,6 @@ class CreatedContexts {
 }  // namespace gpu
 
 namespace cuda {
-
-using MemorySpace = gpu::MemorySpace;
 
 using CUDADriver = gpu::GpuDriver;
 

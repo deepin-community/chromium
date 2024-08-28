@@ -22,6 +22,7 @@
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/scroll/smooth_scroll_sequencer.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "ui/gfx/geometry/rect_f.h"
 
@@ -120,6 +121,7 @@ std::optional<PhysicalRect> PerformBubblingScrollIntoView(
     const LayoutBox& box,
     const PhysicalRect& absolute_rect,
     mojom::blink::ScrollIntoViewParamsPtr& params,
+    const PhysicalBoxStrut& scroll_margin,
     bool from_remote_frame) {
   DCHECK(params->type == mojom::blink::ScrollType::kProgrammatic ||
          params->type == mojom::blink::ScrollType::kUser);
@@ -129,6 +131,11 @@ std::optional<PhysicalRect> PerformBubblingScrollIntoView(
 
   const LayoutBox* current_box = &box;
   PhysicalRect absolute_rect_to_scroll = absolute_rect;
+  PhysicalBoxStrut active_scroll_margin = scroll_margin;
+  bool scrolled_to_area = false;
+  bool will_sequence_scrolls =
+      !RuntimeEnabledFeatures::MultiSmoothScrollIntoViewEnabled() &&
+      params->is_for_scroll_sequence;
 
   // TODO(bokan): Temporary, to track cross-origin scroll-into-view prevalence.
   // https://crbug.com/1339003.
@@ -166,15 +173,16 @@ std::optional<PhysicalRect> PerformBubblingScrollIntoView(
 
     if (area_to_scroll) {
       ScrollOffset scroll_before = area_to_scroll->GetScrollOffset();
-      CHECK(!params->is_for_scroll_sequence ||
+      CHECK(!will_sequence_scrolls ||
             area_to_scroll->GetSmoothScrollSequencer());
       wtf_size_t num_scroll_sequences =
-          params->is_for_scroll_sequence
+          will_sequence_scrolls
               ? area_to_scroll->GetSmoothScrollSequencer()->GetCount()
               : 0ul;
 
-      absolute_rect_to_scroll =
-          area_to_scroll->ScrollIntoView(absolute_rect_to_scroll, params);
+      absolute_rect_to_scroll = area_to_scroll->ScrollIntoView(
+          absolute_rect_to_scroll, active_scroll_margin, params);
+      scrolled_to_area = true;
 
       // TODO(bokan): Temporary, to track cross-origin scroll-into-view
       // prevalence. https://crbug.com/1339003.
@@ -184,7 +192,7 @@ std::optional<PhysicalRect> PerformBubblingScrollIntoView(
       // check instead if an entry was added to the sequence which occurs only
       // if the scroll offset is changed as a result of ScrollIntoView.
       bool scroll_changed =
-          params->is_for_scroll_sequence
+          will_sequence_scrolls
               ? area_to_scroll->GetSmoothScrollSequencer()->GetCount() !=
                     num_scroll_sequences
               : area_to_scroll->GetScrollOffset() != scroll_before;
@@ -225,7 +233,9 @@ std::optional<PhysicalRect> PerformBubblingScrollIntoView(
             current_box->GetFrame()
                 ->GetPage()
                 ->GetVisualViewport()
-                .ScrollIntoView(absolute_rect_to_scroll, params);
+                .ScrollIntoView(absolute_rect_to_scroll, active_scroll_margin,
+                                params);
+        scrolled_to_area = true;
       }
 
       // TODO(bokan): To be correct we should continue to bubble the scroll
@@ -257,6 +267,17 @@ std::optional<PhysicalRect> PerformBubblingScrollIntoView(
           kTraverseDocumentBoundaries);
     }
 
+    // Once we've taken the scroll-margin into account, don't apply it to
+    // ancestor scrollers.
+    // TODO(crbug.com/1325839): Instead of just nullifying the scroll-margin,
+    // maybe we should be applying the scroll-margin of the containing
+    // scrollers themselves? This will probably need to be spec'd as the current
+    // scroll-into-view spec[1] only refers to the bounding border box.
+    // [1] https://drafts.csswg.org/cssom-view-1/#scroll-a-target-into-view
+    if (scrolled_to_area) {
+      active_scroll_margin = PhysicalBoxStrut();
+    }
+
     current_box = next_box;
   }
 
@@ -279,18 +300,33 @@ void ScrollRectToVisible(const LayoutObject& layout_object,
 
   params->is_for_scroll_sequence |=
       params->type == mojom::blink::ScrollType::kProgrammatic;
+  bool will_sequence_scrolls =
+      !RuntimeEnabledFeatures::MultiSmoothScrollIntoViewEnabled() &&
+      params->is_for_scroll_sequence;
 
   SmoothScrollSequencer* old_sequencer = nullptr;
-  if (params->is_for_scroll_sequence) {
+  if (will_sequence_scrolls) {
     old_sequencer = frame->CreateNewSmoothScrollSequence();
     frame->GetSmoothScrollSequencer()->SetScrollType(params->type);
   }
 
-  std::optional<PhysicalRect> updated_absolute_rect =
-      PerformBubblingScrollIntoView(*enclosing_box, absolute_rect, params,
-                                    from_remote_frame);
+  PhysicalBoxStrut scroll_margin = PhysicalBoxStrut();
+  PhysicalRect scroll_into_view_rect = absolute_rect;
+  if (const auto* object_style = layout_object.Style()) {
+    scroll_margin =
+        PhysicalBoxStrut(LayoutUnit(object_style->ScrollMarginTop()),
+                         LayoutUnit(object_style->ScrollMarginRight()),
+                         LayoutUnit(object_style->ScrollMarginBottom()),
+                         LayoutUnit(object_style->ScrollMarginLeft()));
+    scroll_into_view_rect.ExpandEdges(scroll_margin.top, scroll_margin.right,
+                                      scroll_margin.bottom, scroll_margin.left);
+  }
 
-  if (params->is_for_scroll_sequence) {
+  std::optional<PhysicalRect> updated_absolute_rect =
+      PerformBubblingScrollIntoView(*enclosing_box, scroll_into_view_rect,
+                                    params, scroll_margin, from_remote_frame);
+
+  if (will_sequence_scrolls) {
     if (frame->GetSmoothScrollSequencer()->IsEmpty()) {
       // If the scroll into view was a no-op (the element was already in the
       // proper place), reinstate any previously running smooth scroll sequence

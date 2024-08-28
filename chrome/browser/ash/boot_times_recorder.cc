@@ -9,7 +9,6 @@
 
 #include <vector>
 
-#include "ash/shell.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
@@ -82,11 +81,9 @@ constexpr char kLogoutTimes[] = "logout-times";
 static base::LazyInstance<BootTimesRecorder>::DestructorAtExit
     g_boot_times_recorder = LAZY_INSTANCE_INITIALIZER;
 
-BootTimesRecorder::BootTimesRecorder()
-    : login_started_(false), login_done_(false), restart_requested_(false) {}
+BootTimesRecorder::BootTimesRecorder() = default;
 
-BootTimesRecorder::~BootTimesRecorder() {
-}
+BootTimesRecorder::~BootTimesRecorder() = default;
 
 // static
 BootTimesRecorder* BootTimesRecorder::Get() {
@@ -109,8 +106,6 @@ void BootTimesRecorder::LoginDone(bool is_user_new) {
   login_done_ = true;
   login_started_ = false;
   AddLoginTimeMarker("LoginDone", false);
-  ash::Shell::Get()->login_unlock_throughput_recorder()->AddLoginTimeMarker(
-      kUmaLogin);
   RecordCurrentStats(kChromeFirstRender);
   LoginEventRecorder::Get()->ScheduleWriteLoginTimes(
       kLoginTimes, (is_user_new ? kUmaLoginNewUser : kUmaLogin),
@@ -265,7 +260,6 @@ void BootTimesRecorder::RenderFrameHostChanged(
 void BootTimesRecorder::RenderWidgetHostDidUpdateVisualProperties(
     content::RenderWidgetHost* widget_host) {
   AddLoginTimeMarkerWithURL("TabPaint", GetTabUrl(widget_host));
-  LoginDone(user_manager::UserManager::Get()->IsCurrentUserNew());
 }
 
 void BootTimesRecorder::RenderWidgetHostDestroyed(

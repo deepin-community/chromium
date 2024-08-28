@@ -289,8 +289,7 @@ TEST(EventReportWindowsTest, Parse) {
             "start_time":"0",
             "end_times":[96000,172800]
           }})json",
-          ErrorIs(
-              SourceRegistrationError::kEventReportWindowsStartTimeWrongType),
+          ErrorIs(SourceRegistrationError::kEventReportWindowsStartTimeInvalid),
       },
       {
           "event_report_windows_start_time_negative",
@@ -324,7 +323,7 @@ TEST(EventReportWindowsTest, Parse) {
             "end_times":96000
           }})json",
           ErrorIs(
-              SourceRegistrationError::kEventReportWindowsEndTimesWrongType),
+              SourceRegistrationError::kEventReportWindowsEndTimesListInvalid),
       },
       {
           "event_report_windows_end_times_list_empty",
@@ -333,7 +332,7 @@ TEST(EventReportWindowsTest, Parse) {
             "end_times":[]
           }})json",
           ErrorIs(
-              SourceRegistrationError::kEventReportWindowsEndTimesListEmpty),
+              SourceRegistrationError::kEventReportWindowsEndTimesListInvalid),
       },
       {
           "event_report_windows_end_times_list_too_long",
@@ -342,7 +341,7 @@ TEST(EventReportWindowsTest, Parse) {
             "end_times":[3600,7200,10800,14400,18000,21600]
           }})json",
           ErrorIs(
-              SourceRegistrationError::kEventReportWindowsEndTimesListTooLong),
+              SourceRegistrationError::kEventReportWindowsEndTimesListInvalid),
       },
       {
           "event_report_windows_end_times_value_wrong_type",
@@ -350,8 +349,8 @@ TEST(EventReportWindowsTest, Parse) {
             "start_time":0,
             "end_times":["3600"]
           }})json",
-          ErrorIs(SourceRegistrationError::
-                      kEventReportWindowsEndTimeValueWrongType),
+          ErrorIs(
+              SourceRegistrationError::kEventReportWindowsEndTimeValueInvalid),
       },
       {
           "event_report_windows_end_times_value_negative",
@@ -499,6 +498,10 @@ TEST(EventReportWindowsTest, ComputeReportTime) {
           .expected = kSourceTime + base::Hours(2),
       },
       {
+          .trigger_time = kSourceTime - base::Seconds(1),
+          .expected = kSourceTime + base::Hours(2),
+      },
+      {
           .trigger_time = kSourceTime + base::Hours(2) - base::Milliseconds(1),
           .expected = kSourceTime + base::Hours(2),
       },
@@ -556,6 +559,36 @@ TEST(EventReportWindowsTest, ReportTimeAtWindow) {
   }
 }
 
+TEST(EventReportWindowsTest, StartTimeAtWindow) {
+  const EventReportWindows kDefaultReportWindows = *EventReportWindows::Create(
+      base::Hours(0), {base::Hours(1), base::Days(3), base::Days(7)});
+  base::Time kSourceTime = base::Time();
+
+  const struct {
+    int index;
+    base::Time expected;
+  } kTestCases[] = {
+      {
+          .index = 0,
+          .expected = kSourceTime,
+      },
+      {
+          .index = 1,
+          .expected = kSourceTime + base::Hours(1),
+      },
+      {
+          .index = 2,
+          .expected = kSourceTime + base::Days(3),
+      },
+  };
+
+  for (const auto& test_case : kTestCases) {
+    EXPECT_EQ(
+        kDefaultReportWindows.StartTimeAtWindow(kSourceTime, test_case.index),
+        test_case.expected);
+  }
+}
+
 TEST(EventReportWindowsTest, FallsWithin) {
   const EventReportWindows kDefaultReportWindows =
       *EventReportWindows::Create(base::Hours(1), {base::Hours(2)});
@@ -592,7 +625,7 @@ TEST(EventReportWindowsTest, FallsWithin) {
           .trigger_moment = base::Hours(2),
           .expected = WindowResult::kPassed,
       },
-      // TODO(crbug.com/1489333): Remove case once DCHECK is used in
+      // TODO(crbug.com/40283992): Remove case once DCHECK is used in
       // implementation.
       {
           .report_windows = kDefaultReportWindowsNoStartTime,
@@ -635,11 +668,6 @@ TEST(EventReportWindowsTest, Serialize) {
     test_case.input.Serialize(actual);
     EXPECT_THAT(actual, base::test::IsJson(test_case.expected));
   }
-}
-
-TEST(EventReportWindowsTest, LastTriggerTimeForReportTime) {
-  const base::Time time = base::Time::Now();
-  EXPECT_EQ(LastTriggerTimeForReportTime(time), time - base::Milliseconds(1));
 }
 
 }  // namespace

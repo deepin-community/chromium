@@ -30,7 +30,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include <vector>
 
 #include "src/tint/lang/wgsl/ast/disable_validation_attribute.h"
 #include "src/tint/lang/wgsl/program/clone_context.h"
@@ -217,7 +216,6 @@ struct ModuleScopeVarToEntryPointParam::State {
                 break;  // Ignore
             default: {
                 TINT_ICE() << "unhandled module-scope address space (" << sc << ")";
-                break;
             }
         }
     }
@@ -245,9 +243,8 @@ struct ModuleScopeVarToEntryPointParam::State {
             case core::AddressSpace::kWorkgroup:
                 break;
             case core::AddressSpace::kPushConstant: {
-                ctx.dst->Diagnostics().AddError(
-                    diag::System::Transform,
-                    "unhandled module-scope address space (" + tint::ToString(sc) + ")");
+                ctx.dst->Diagnostics().AddError(Source{})
+                    << "unhandled module-scope address space (" << sc << ")";
                 break;
             }
             default: {

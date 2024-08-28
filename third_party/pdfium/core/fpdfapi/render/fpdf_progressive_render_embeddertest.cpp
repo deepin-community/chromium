@@ -7,13 +7,13 @@
 #include <utility>
 
 #include "build/build_config.h"
+#include "core/fxcrt/check.h"
 #include "core/fxge/cfx_defaultrenderdevice.h"
 #include "core/fxge/dib/fx_dib.h"
 #include "public/fpdf_progressive.h"
 #include "testing/embedder_test.h"
 #include "testing/embedder_test_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/base/check.h"
 
 namespace {
 
@@ -449,11 +449,11 @@ TEST_F(FPDFProgressiveRenderEmbedderTest, RenderInkWithColorScheme) {
   const char* content_with_ink_checksum = []() {
     if (CFX_DefaultRenderDevice::UseSkiaRenderer()) {
 #if BUILDFLAG(IS_WIN)
-      return "f6dfec1a38800973e57bba5da4fe77fe";
+      return "cddb7472b064782b2866aa3dc87ca73e";
 #elif BUILDFLAG(IS_APPLE)
-      return "5108aa537b6ecc37b3f0a35b76c1b379";
+      return "0ef02da77fc1e08455148ecadd257e06";
 #else
-      return "b39d9f68ff71963d82c43eb20caa8f4d";
+      return "bd9d457356dba5fcf33ec9afdaefcab8";
 #endif
     }
     return "797bce7dc6c50ee86b095405df9fe5aa";
@@ -471,11 +471,11 @@ TEST_F(FPDFProgressiveRenderEmbedderTest, RenderStampWithColorScheme) {
   const char* content_with_stamp_checksum = []() {
     if (CFX_DefaultRenderDevice::UseSkiaRenderer()) {
 #if BUILDFLAG(IS_WIN)
-      return "9365cd179a0109640bb2b7456f211524";
+      return "ebe483b5e9b8375b3c06417b59d70c4a";
 #elif BUILDFLAG(IS_APPLE)
-      return "42d4d73d939cb4a1b40d003985eaf11e";
+      return "49dfb40a174f2525a2c33079aec7ae33";
 #else
-      return "6e028012a4854ebfd9ee92da862bf679";
+      return "9095a907e943ade4be06b6e508fa74ee";
 #endif
     }
 #if BUILDFLAG(IS_APPLE)

@@ -11,10 +11,11 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 
@@ -60,7 +61,7 @@ class HttpServer {
                        const HttpServerRequestInfo& request,
                        NetworkTrafficAnnotationTag traffic_annotation);
   void SendOverWebSocket(int connection_id,
-                         base::StringPiece data,
+                         std::string_view data,
                          NetworkTrafficAnnotationTag traffic_annotation);
   // Sends the provided data directly to the given connection. No validation is
   // performed that data constitutes a valid HTTP response. A valid HTTP
@@ -128,12 +129,20 @@ class HttpServer {
   // Whether or not Close() has been called during delegate callback processing.
   bool HasClosedConnection(HttpConnection* connection);
 
+  void DestroyClosedConnections();
+
   const std::unique_ptr<ServerSocket> server_socket_;
   std::unique_ptr<StreamSocket> accepted_socket_;
   const raw_ptr<HttpServer::Delegate> delegate_;
 
   int last_id_ = 0;
   std::map<int, std::unique_ptr<HttpConnection>> id_to_connection_;
+
+  // Vector of connections whose destruction is pending. Connections may have
+  // WebSockets with raw pointers to `this`, so should not out live this, but
+  // also cannot safely be destroyed synchronously, so on connection close, add
+  // a Connection here, and post a task to destroy them.
+  std::vector<std::unique_ptr<HttpConnection>> closed_connections_;
 
   base::WeakPtrFactory<HttpServer> weak_ptr_factory_{this};
 };

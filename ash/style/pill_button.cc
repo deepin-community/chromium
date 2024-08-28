@@ -12,6 +12,7 @@
 #include "ash/style/style_util.h"
 #include "ash/style/typography.h"
 #include "chromeos/constants/chromeos_features.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/layer.h"
@@ -118,7 +119,8 @@ std::optional<ui::ColorId> GetDefaultBackgroundColorId(PillButton::Type type) {
       color_id = kColorAshControlBackgroundColorInactive;
       break;
     default:
-      NOTREACHED() << "Invalid and floating pill button type: " << type;
+      NOTREACHED_IN_MIGRATION()
+          << "Invalid and floating pill button type: " << type;
   }
 
   return color_id;
@@ -164,7 +166,7 @@ std::optional<ui::ColorId> GetDefaultButtonTextIconColorId(
       color_id = kColorAshButtonLabelColorBlue;
       break;
     default:
-      NOTREACHED() << "Invalid pill button type: " << type;
+      NOTREACHED_IN_MIGRATION() << "Invalid pill button type: " << type;
   }
 
   return color_id;
@@ -208,8 +210,12 @@ PillButton::PillButton(PressedCallback callback,
 
 PillButton::~PillButton() = default;
 
-gfx::Size PillButton::CalculatePreferredSize() const {
-  int button_width = label()->GetPreferredSize().width();
+gfx::Size PillButton::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  int button_width =
+      label()
+          ->GetPreferredSize(views::SizeBounds(label()->width(), {}))
+          .width();
 
   if (IsIconPillButton(type_)) {
     // Add the padding on two sides.
@@ -368,6 +374,10 @@ void PillButton::SetEnableBackgroundBlur(bool enable) {
 
   enable_background_blur_ = enable;
   UpdateBackgroundColor();
+}
+
+void PillButton::SetTextWithStringId(int message_id) {
+  SetText(l10n_util::GetStringUTF16(message_id));
 }
 
 void PillButton::Init() {

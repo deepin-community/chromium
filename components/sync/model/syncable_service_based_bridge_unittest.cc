@@ -4,6 +4,7 @@
 
 #include "components/sync/model/syncable_service_based_bridge.h"
 
+#include <string_view>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -21,7 +22,7 @@
 #include "components/sync/model/model_error.h"
 #include "components/sync/model/sync_change.h"
 #include "components/sync/model/syncable_service.h"
-#include "components/sync/protocol/entity_specifics.pb.h"
+#include "components/sync/protocol/persisted_entity_data.pb.h"
 #include "components/sync/test/mock_model_type_change_processor.h"
 #include "components/sync/test/mock_model_type_worker.h"
 #include "components/sync/test/model_type_store_test_util.h"
@@ -41,7 +42,7 @@ using testing::Pair;
 using testing::Return;
 
 const ModelType kModelType = PREFERENCES;
-const base::StringPiece kSyncableServiceStartTimeHistogramName =
+const std::string_view kSyncableServiceStartTimeHistogramName =
     "Sync.SyncableServiceStartTime.PREFERENCE";
 
 sync_pb::EntitySpecifics GetTestSpecifics(const std::string& name = "name") {
@@ -151,27 +152,17 @@ class SyncableServiceBasedBridgeTest : public ::testing::Test {
         GetTestActivationRequest(),
         base::BindLambdaForTesting(
             [&](std::unique_ptr<syncer::DataTypeActivationResponse> response) {
-              worker_ = std::make_unique<MockModelTypeWorker>(
-                  response->model_type_state, real_processor_.get());
+              worker_ = MockModelTypeWorker::CreateWorkerAndConnectSync(
+                  std::move(response));
               loop.Quit();
             }));
     loop.Run();
 
-    // ClientTagBasedModelTypeProcessor requires connecting before other
-    // interactions with the worker happen.
-    DCHECK(worker_);
-    real_processor_->ConnectSync(worker_->MakeForwardingCommitQueue());
+    ASSERT_NE(nullptr, worker_);
   }
 
   std::map<std::string, std::unique_ptr<EntityData>> GetAllData() {
-    base::RunLoop loop;
-    std::unique_ptr<DataBatch> batch;
-    bridge_->GetAllDataForDebugging(base::BindLambdaForTesting(
-        [&loop, &batch](std::unique_ptr<DataBatch> input_batch) {
-          batch = std::move(input_batch);
-          loop.Quit();
-        }));
-    loop.Run();
+    std::unique_ptr<DataBatch> batch = bridge_->GetAllDataForDebugging();
     EXPECT_NE(nullptr, batch);
 
     std::map<std::string, std::unique_ptr<EntityData>> storage_key_to_data;
@@ -448,7 +439,7 @@ TEST_F(SyncableServiceBasedBridgeTest, ShouldPropagateLocalDeletion) {
   ASSERT_THAT(GetAllData(),
               ElementsAre(Pair(kClientTagHash.value(), HasName("name1"))));
 
-  EXPECT_CALL(mock_processor_, Delete(kClientTagHash.value(), NotNull()));
+  EXPECT_CALL(mock_processor_, Delete(kClientTagHash.value(), _, NotNull()));
 
   SyncChangeList change_list;
   change_list.emplace_back(FROM_HERE, SyncChange::ACTION_DELETE,
@@ -550,7 +541,7 @@ TEST(SyncableServiceBasedBridgeLocalChangeProcessorTest,
   SyncableServiceBasedBridge::InMemoryStore in_memory_store;
   testing::NiceMock<MockModelTypeChangeProcessor> mock_processor;
 
-  in_memory_store[kClientTagHash] = sync_pb::EntitySpecifics();
+  in_memory_store[kClientTagHash] = sync_pb::PersistedEntityData();
 
   std::unique_ptr<SyncChangeProcessor> sync_change_processor =
       SyncableServiceBasedBridge::CreateLocalChangeProcessorForTesting(
@@ -585,7 +576,7 @@ TEST(SyncableServiceBasedBridgeLocalChangeProcessorTest,
   SyncableServiceBasedBridge::InMemoryStore in_memory_store;
   testing::NiceMock<MockModelTypeChangeProcessor> mock_processor;
 
-  in_memory_store[kClientTagHash] = sync_pb::EntitySpecifics();
+  in_memory_store[kClientTagHash] = sync_pb::PersistedEntityData();
 
   std::unique_ptr<SyncChangeProcessor> sync_change_processor =
       SyncableServiceBasedBridge::CreateLocalChangeProcessorForTesting(

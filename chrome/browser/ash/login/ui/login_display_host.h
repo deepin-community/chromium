@@ -5,9 +5,9 @@
 #ifndef CHROME_BROWSER_ASH_LOGIN_UI_LOGIN_DISPLAY_HOST_H_
 #define CHROME_BROWSER_ASH_LOGIN_UI_LOGIN_DISPLAY_HOST_H_
 
-#include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "ash/public/cpp/login_accelerators.h"
 #include "base/functional/callback_forward.h"
@@ -35,7 +35,6 @@ namespace ash {
 
 class ExistingUserController;
 class KioskAppId;
-class KioskLaunchController;
 class OobeUI;
 class WebUILoginView;
 class WizardContext;
@@ -115,9 +114,6 @@ class LoginDisplayHost {
   // call the instance will be gone.
   virtual void FinalizeImmediately() = 0;
 
-  // Toggles status area visibility.
-  virtual void SetStatusAreaVisible(bool visible) = 0;
-
   // Starts out-of-box-experience flow or shows other screen handled by
   // Wizard controller i.e. camera, recovery.
   // One could specify start screen with `first_screen`.
@@ -130,10 +126,6 @@ class LoginDisplayHost {
   virtual WizardContext* GetWizardContext() = 0;
 
   virtual OobeMetricsHelper* GetOobeMetricsHelper() = 0;
-
-  // Returns current KioskLaunchController, if it exists.
-  // Result should not be stored.
-  virtual KioskLaunchController* GetKioskLaunchController() = 0;
 
   // Cancel addint user into session.
   virtual void CancelUserAdding() = 0;
@@ -181,7 +173,6 @@ class LoginDisplayHost {
   virtual void UpdateOobeDialogState(OobeDialogState state) = 0;
 
   // Confirms sign in by provided credentials in `user_context`.
-  // Used for new user login via GAIA extension.
   virtual void CompleteLogin(const UserContext& user_context) = 0;
 
   // Notify the backend controller when the GAIA UI is finished loading.
@@ -203,14 +194,6 @@ class LoginDisplayHost {
   // ----- Password change flow methods -----
   // Cancels current password changed flow.
   virtual void CancelPasswordChangedFlow() = 0;
-
-  // Decrypt cryptohome using user provided `old_password` and migrate to new
-  // password.
-  virtual void MigrateUserData(const std::string& old_password) = 0;
-
-  // Ignore password change, remove existing cryptohome and force full sync of
-  // user data.
-  virtual void ResyncUserData() = 0;
 
   // Handles an accelerator action.
   // Returns `true` if the accelerator was handled.

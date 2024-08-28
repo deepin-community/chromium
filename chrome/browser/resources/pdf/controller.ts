@@ -5,7 +5,8 @@
 import {assert} from 'chrome://resources/js/assert.js';
 import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
 
-import type {NamedDestinationMessageData, Rect, SaveRequestType} from './constants.js';
+// <if expr="enable_pdf_ink2">
+import type {AnnotationBrush, NamedDestinationMessageData, Rect, SaveRequestType} from './constants.js';
 import type {PdfPluginElement} from './internal_plugin.js';
 import type {Viewport} from './viewport.js';
 import {PinchPhase} from './viewport.js';
@@ -41,6 +42,14 @@ interface ThumbnailMessageData {
   height: number;
 }
 
+// <if expr="enable_pdf_ink2">
+// The message sent to the backend to set the annotation brush.
+interface AnnotationBrushMessage {
+  type: string;
+  data: Partial<AnnotationBrush>;
+}
+// </if>
+
 /**
  * Creates a cryptographically secure pseudorandom 128-bit token.
  * @return The generated token as a hex string.
@@ -66,10 +75,10 @@ export interface ContentController {
   /** Triggers printing of the current document. */
   print(): void;
 
-  /** Undo an edit action. */
+  /** Undo an annotation mode edit action. */
   undo(): void;
 
-  /** Redo an edit action. */
+  /** Redo an annotation mode edit action. */
   redo(): void;
 
   /**
@@ -99,6 +108,9 @@ export interface ContentController {
 
 /** Event types dispatched by the plugin controller. */
 export enum PluginControllerEventType {
+  // <if expr="enable_pdf_ink2">
+  FINISH_INK_STROKE = 'PluginControllerEventType.FINISH_INK_STROKE',
+  // </if>
   IS_ACTIVE_CHANGED = 'PluginControllerEventType.IS_ACTIVE_CHANGED',
   PLUGIN_MESSAGE = 'PluginControllerEventType.PLUGIN_MESSAGE',
 }
@@ -128,21 +140,13 @@ export class PluginController implements ContentController {
       plugin: HTMLEmbedElement, viewport: Viewport,
       getIsUserInitiatedCallback: () => boolean,
       getLoadedCallback: () => Promise<void>| null) {
-    this.plugin_ = plugin as PdfPluginElement;
-    this.plugin_.addEventListener(
-        'message', e => this.handlePluginMessage_(e as MessageEvent), false);
-    this.plugin_.postMessage = (message, transfer) => {
-      this.delayedMessages_!.push({message, transfer});
-    };
-
     this.viewport_ = viewport;
     this.getIsUserInitiatedCallback_ = getIsUserInitiatedCallback;
     this.getLoadedCallback_ = getLoadedCallback;
     this.pendingTokens_ = new Map();
     this.requestResolverMap_ = new Map();
 
-    this.viewport_.setContent(this.plugin_);
-    this.viewport_.setRemoteContent(this.plugin_);
+    this.setPlugin_(plugin);
   }
 
   get isActive(): boolean {
@@ -161,6 +165,20 @@ export class PluginController implements ContentController {
         PluginControllerEventType.IS_ACTIVE_CHANGED, {detail: this.isActive}));
   }
 
+  private setPlugin_(plugin: HTMLEmbedElement) {
+    this.plugin_ = plugin as PdfPluginElement;
+    this.plugin_.addEventListener(
+        'message', e => this.handlePluginMessage_(e as MessageEvent), false);
+    if (this.delayedMessages_) {
+      this.plugin_.postMessage = (message, transfer) => {
+        this.delayedMessages_!.push({message, transfer});
+      };
+    }
+
+    this.viewport_.setContent(this.plugin_);
+    this.viewport_.setRemoteContent(this.plugin_);
+  }
+
   private createUid_(): number {
     return this.uidCounter_++;
   }
@@ -171,9 +189,35 @@ export class PluginController implements ContentController {
 
   viewportChanged() {}
 
-  redo() {}
+  // <if expr="enable_pdf_ink2">
+  setAnnotationMode(enable: boolean) {
+    this.postMessage_({
+      type: 'setAnnotationMode',
+      enable,
+    });
+  }
 
-  undo() {}
+  setAnnotationBrush(brush: AnnotationBrush) {
+    const message: AnnotationBrushMessage = {
+      type: 'setAnnotationBrush',
+      data: brush,
+    };
+
+    this.postMessage_(message);
+  }
+  // </if>
+
+  redo() {
+    // <if "enable_pdf_ink2">
+    this.postMessage_({type: 'annotationRedo'});
+    // </if>
+  }
+
+  undo() {
+    // <if "enable_pdf_ink2">
+    this.postMessage_({type: 'annotationUndo'});
+    // </if>
+  }
 
   /**
    * Notify the plugin to stop reacting to scroll events while zoom is taking
@@ -392,7 +436,7 @@ export class PluginController implements ContentController {
   /**
    * Binds an event handler for messages received from the plugin.
    *
-   * TODO(crbug.com/1228987): Remove this method when a permanent postMessage()
+   * TODO(crbug.com/40189769): Remove this method when a permanent postMessage()
    * bridge is implemented for the viewer.
    */
   bindMessageHandler(port: MessagePort) {
@@ -494,6 +538,12 @@ export class PluginController implements ContentController {
 
     resolver.resolve(messageData);
   }
+
+  // <if expr="enable_pdf_ink2">
+  setPluginForTesting(plugin: HTMLEmbedElement) {
+    this.setPlugin_(plugin);
+  }
+  // </if>
 
   static getInstance(): PluginController {
     return instance || (instance = new PluginController());

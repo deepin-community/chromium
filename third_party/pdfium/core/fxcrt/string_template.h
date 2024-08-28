@@ -11,11 +11,20 @@
 
 #include <type_traits>
 
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/retain_ptr.h"
+#include "core/fxcrt/span.h"
 #include "core/fxcrt/string_data_template.h"
 #include "core/fxcrt/string_view_template.h"
 
 namespace fxcrt {
+
+inline constexpr const char* EmptyString(char*) {
+  return "";
+}
+inline constexpr const wchar_t* EmptyString(wchar_t*) {
+  return L"";
+}
 
 // Base class for a  mutable string with shared buffers using copy-on-write
 // semantics that avoids std::string's iterator stability guarantees.
@@ -31,28 +40,60 @@ class StringTemplate {
   bool IsEmpty() const { return !GetLength(); }
   size_t GetLength() const { return m_pData ? m_pData->m_nDataLength : 0; }
 
+  // Return length as determined by the position of the first NUL.
+  size_t GetStringLength() const {
+    return m_pData ? m_pData->GetStringLength() : 0;
+  }
+
   // Explicit conversion to UnsignedType*. May return nullptr.
   // Note: Any subsequent modification of |this| will invalidate the result.
-  const UnsignedType* raw_str() const {
+  const UnsignedType* unsigned_str() const {
     return m_pData ? reinterpret_cast<const UnsignedType*>(m_pData->m_String)
                    : nullptr;
   }
 
   // Explicit conversion to StringView.
   // Note: Any subsequent modification of |this| will invalidate the result.
-  StringView AsStringView() const { return StringView(raw_str(), GetLength()); }
+  StringView AsStringView() const { return StringView(unsigned_span()); }
+
+  // Explicit conversion to C-style string. The result is never nullptr,
+  // and is always NUL terminated.
+  // Note: Any subsequent modification of |this| will invalidate the result.
+  const CharType* c_str() const {
+    return m_pData ? m_pData->m_String
+                   : EmptyString(static_cast<CharType*>(nullptr));
+  }
 
   // Explicit conversion to span.
   // Note: Any subsequent modification of |this| will invalidate the result.
   pdfium::span<const CharType> span() const {
-    return pdfium::make_span(m_pData ? m_pData->m_String : nullptr,
-                             GetLength());
+    return m_pData ? m_pData->span() : pdfium::span<const CharType>();
   }
 
   // Explicit conversion to spans of unsigned types.
   // Note: Any subsequent modification of |this| will invalidate the result.
-  pdfium::span<const UnsignedType> raw_span() const {
-    return pdfium::make_span(raw_str(), GetLength());
+  pdfium::span<const UnsignedType> unsigned_span() const {
+    return reinterpret_span<const UnsignedType>(span());
+  }
+
+  // Explicit conversion to spans including the NUL terminator. The result is
+  // never an empty span. Only a const-form is provided to preclude modifying
+  // the terminator. Usage should be rare and carefully considered.
+  // Note: Any subsequent modification of |this| will invalidate the result.
+  pdfium::span<const CharType> span_with_terminator() const {
+    // SAFETY: EmptyString() returns one NUL byte.
+    return m_pData ? m_pData->span_with_terminator()
+                   : UNSAFE_BUFFERS(pdfium::make_span(
+                         EmptyString(static_cast<CharType*>(nullptr)), 1u));
+  }
+
+  // Explicit conversion to spans of unsigned types including the NUL
+  // terminator. The result is never an empty span. Only a const-form is
+  // provided to preclude modifying the terminator. Usage should be rare
+  // and carefully considered.
+  // Note: Any subsequent modification of |this| will invalidate the result.
+  pdfium::span<const UnsignedType> unsigned_span_with_terminator() const {
+    return reinterpret_span<const UnsignedType>(span_with_terminator());
   }
 
   // Note: Any subsequent modification of |this| will invalidate iterators.
@@ -133,6 +174,16 @@ class StringTemplate {
   void SetAt(size_t index, T ch);
 
   void Reserve(size_t len) { GetBuffer(len); }
+
+  // Remove character `ch` from  both/front/back of string.
+  void Trim(T ch);
+  void TrimFront(T ch);
+  void TrimBack(T ch);
+
+  // Remove all characters in `targets` from both/front/back of string.
+  void Trim(StringView targets);
+  void TrimFront(StringView targets);
+  void TrimBack(StringView targets);
 
  protected:
   using StringData = StringDataTemplate<T>;

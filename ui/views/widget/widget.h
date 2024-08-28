@@ -13,11 +13,13 @@
 
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/safety_checks.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "ui/base/class_property.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-forward.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_types.h"
@@ -27,7 +29,6 @@
 #include "ui/color/color_provider_utils.h"
 #include "ui/display/types/display_constants.h"
 #include "ui/events/event_source.h"
-#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/native_theme/native_theme_observer.h"
@@ -41,6 +42,7 @@ class TimeDelta;
 }
 
 namespace gfx {
+class Insets;
 class Point;
 class Rect;
 }  // namespace gfx
@@ -109,7 +111,14 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
                             public FocusTraversable,
                             public ui::NativeThemeObserver,
                             public ui::ColorProviderSource,
+                            public ui::PropertyHandler,
                             public ui::metadata::MetaDataProvider {
+  // Do not remove this macro!
+  // The macro is maintained by the memory safety team.
+  // `Widget` is used extensively and has a complicated lifetime. This macro
+  // enables additional lifetime checks.
+  ADVANCED_MEMORY_SAFETY_CHECKS();
+
  public:
   METADATA_HEADER_BASE(Widget);
   using Widgets = std::set<raw_ptr<Widget, SetExperimental>>;
@@ -219,10 +228,16 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
       // e.g. a scoped_ptr in tests. Production use is discouraged because the
       // Widget API might become unsafe after the platform window is closed.
       WIDGET_OWNS_NATIVE_WIDGET,
-      // NOT READY FOR PRODUCTION USE.
-      // This is intended to be a safe replacement for
-      // WIDGET_OWNS_NATIVE_WIDGET.
-      // The NativeWidget will be closed along with the platform window.
+      // Preferred Ownership mode. This is intended to be a safe replacement for
+      // WIDGET_OWNS_NATIVE_WIDGET. The NativeWidget will be closed along with
+      // the platform window.
+      // The above "default" reflects the behavior of various platforms in which
+      // the NativeWidget is effectively "owned" by the platform itself. It is
+      // possible that the NativeWidget is destroyed at the behest of the plat-
+      // form, leaving the associated Widget reference dangling.
+      // Using this ownership mode allows for the Widget being resilient to the
+      // NativeWidget being destroyed out from under the Widget while being
+      // able to manage the Widget independently.
       CLIENT_OWNS_WIDGET
     };
 
@@ -235,11 +250,15 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
                  // relationship to other windows.
     };
 
-    // Default initialization with |type| set to TYPE_WINDOW.
-    InitParams();
-
-    // Initialization for other |type| types.
+    // TODO(crbug.com/339619005): Remove this constructor once call sites
+    //                            have been migrated to always specifying
+    //                            the ownership mode as well as the type.
     explicit InitParams(Type type);
+
+    // The preferred constructor. Must specify the ownership mode. The ownership
+    // mode will eventually go away and will implicitly be CLIENT_OWNS_WIDGET.
+    // This is here for migration purposes.
+    explicit InitParams(Ownership ownership, Type type = TYPE_WINDOW);
 
     InitParams(InitParams&& other);
     ~InitParams();
@@ -259,7 +278,7 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     // are set.
     bool ShouldInitAsHeadless() const;
 
-    Type type = TYPE_WINDOW;
+    Type type;
 
     // If null, a default implementation will be constructed. The default
     // implementation deletes itself when the Widget closes.
@@ -272,7 +291,7 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     // top-level widget has its own focus and IME state, independent of any
     // other widget. A widget for which child is true should have a parent; if
     // it doesn't, it will not handle keyboard events or IME input at all.
-    // TODO(https://crbug.com/1057758): DCHECK(parent || !child)
+    // TODO(crbug.com/40120838): DCHECK(parent || !child)
     bool child = false;
 
     // If kTranslucent, the widget may be fully or partially transparent.
@@ -299,7 +318,7 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     bool visible_on_all_workspaces = false;
 
     // See Widget class comment above.
-    Ownership ownership = NATIVE_WIDGET_OWNS_WIDGET;
+    Ownership ownership;
 
     bool mirror_origin_in_rtl = false;
 
@@ -308,11 +327,6 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     // A hint about the size of the shadow if the type is ShadowType::kDrop. May
     // be ignored on some platforms. No value indicates no preference.
     std::optional<int> shadow_elevation;
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    ui::ColorProviderKey::ElevationMode background_elevation =
-        ui::ColorProviderKey::ElevationMode::kLow;
-#endif
 
     // The window corner radius. May be ignored on some platforms.
     std::optional<int> corner_radius;
@@ -346,7 +360,7 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     // windows instead need a "context". On Aura systems, if a widget has no
     // parent set, its backing aura::Window is parented to the Aura root window.
     //
-    // TODO(https://crbug.com/1057758): It makes no sense that this is a
+    // TODO(crbug.com/40120838): It makes no sense that this is a
     // NativeView instead of a NativeWindow. On Aura, NativeView and
     // NativeWindow are synonyms, and NativeWidgetAura immediately treats the
     // provided NativeView as an aura::Window; on Mac, the NativeView is
@@ -420,11 +434,18 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     // If set, the widget was created in headless mode.
     bool headless_mode = false;
 
-#if defined(USE_AURA) && (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
-    // Indicates whether the desktop native widget is required for the widget.
-    // This may enforce changing the type of the underlying platform window.
+    // If set, the window size will follow the content preferred size.
+    bool autosize = false;
+
+#if BUILDFLAG(IS_OZONE)
+    // Specifies whether the Widget should use a desktop native widget.
+    //   true: desktop native widget will always be used
+    //   false: desktop native widget will never be used
+    //   unspecified: depends on experiment kOzoneBubblesUsePlatformWidgets and
+    //     whether the platform actually supports desktop native subwindows (see
+    //     ozone_platform.h `supports_subwindows_as_accelerated_widgets`)
     // See crbug.com/1280332
-    bool requires_accelerated_widget = false;
+    std::optional<bool> use_accelerated_widget_override;
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
@@ -451,10 +472,6 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     // window should request the wayland compositor to send key events,
     // even if it matches with the compositor's keyboard shortcuts.
     bool inhibit_keyboard_shortcuts = false;
-
-    // Specifies the insets of the Widget. Default is empty, which means no
-    // insets are to be set.
-    gfx::Insets frame_insets;
 #endif
 
     // Directly sets the NativeTheme used by the Widget. Providing the
@@ -462,6 +479,13 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     // notifications of theme changes.
     // A value of null results in the default theme being used.
     raw_ptr<ui::NativeTheme> native_theme = nullptr;
+
+#if BUILDFLAG(IS_MAC)
+    // If set to true, tags the widget as an invisible overlay widget that
+    // allows the Views tree to be broken up into distinct NSViews for use by
+    // immersive fullscreen. Not for general use.
+    bool is_overlay = false;
+#endif
   };
 
   // Represents a lock held on the widget's ShouldPaintAsActive() state. As
@@ -659,11 +683,16 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   std::string GetWorkspace() const;
 
   // Sizes and/or places the widget to the specified bounds, size or position.
+  // `bounds` is in screen coordinates.
   void SetBounds(const gfx::Rect& bounds);
   void SetSize(const gfx::Size& size);
 
   // Retrieves the restored size for the window.
   gfx::Size GetSize() const;
+
+  // Returns the insets that each widget implementation can customize. It
+  // returns empty insets by default.
+  virtual gfx::Insets GetCustomInsetsInDIP() const;
 
   // Sizes the window to the specified size and centers it.
   void CenterWindow(const gfx::Size& size);
@@ -874,16 +903,21 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   SublevelManager* GetSublevelManager();
 
   // Starts a drag operation for the specified view. This blocks until the drag
-  // operation completes. |view| can be NULL.
+  // operation completes or is cancelled by calling `CancelShellDrag()`.
+  // |view| can be NULL.
   // If the view is non-NULL it can be accessed during the drag by calling
   // dragged_view(). If the view has not been deleted during the drag,
   // OnDragDone() is called on it. |location| is in the widget's coordinate
-  // system.
+  // system. |view| must be hosted by this widget.
   void RunShellDrag(View* view,
                     std::unique_ptr<ui::OSExchangeData> data,
                     const gfx::Point& location,
                     int operation,
                     ui::mojom::DragEventSource source);
+
+  // Cancels a currently running drag operation for the specified view. |view|
+  // can be NULL.
+  void CancelShellDrag(View* view);
 
   // Returns the view that requested the current drag operation via
   // RunShellDrag(), or NULL if there is no such view or drag operation.
@@ -899,6 +933,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // Schedule a layout to occur. This is called by RootView, client code should
   // not need to call this.
   void ScheduleLayout();
+
+  // Called when the contents view receives an `InvalidateLayout()`.
+  void OnRootViewLayoutInvalidated();
 
   // Sets the currently visible cursor.
   void SetCursor(const ui::Cursor& cursor);
@@ -1055,6 +1092,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // True if widget was created in headless mode.
   bool is_headless() const { return is_headless_; }
 
+  // True if the window size will follow the content preferred size.
+  bool is_autosized() const { return is_autosized_; }
+
   // True when window movement via mouse interaction with the frame is disabled.
   bool movement_disabled() const { return movement_disabled_; }
   void set_movement_disabled(bool disabled) { movement_disabled_ = disabled; }
@@ -1174,7 +1214,7 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
   // ui::ColorProviderSource:
   const ui::ColorProvider* GetColorProvider() const override;
-  const ui::RendererColorMap GetRendererColorMap(
+  ui::RendererColorMap GetRendererColorMap(
       ui::ColorProviderKey::ColorMode color_mode,
       ui::ColorProviderKey::ForcedColors forced_colors) const override;
 
@@ -1192,6 +1232,12 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
   // Returns the current ownership model of the widget.
   InitParams::Ownership ownership() const { return ownership_; }
+
+  bool native_widget_active() const { return native_widget_active_; }
+
+  // Called to enable or disable screenshots of this widget.
+  void SetAllowScreenshots(bool allow);
+  bool AreScreenshotsAllowed();
 
  protected:
   // Creates the RootView to be used within this Widget. Subclasses may override
@@ -1293,6 +1339,11 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // the native widget asynchronously invokes OnNativeWidgetVisibilityChanged().
   void HandleShowRequested();
 
+  // This holds the logic for handling of the destroying and destroyed
+  // notifications.
+  void HandleWidgetDestroying();
+  void HandleWidgetDestroyed();
+
   static DisableActivationChangeHandlingType
       g_disable_activation_change_handling_;
 
@@ -1318,6 +1369,11 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // For a desktop widget with a non-desktop parent, this value might be nullptr
   // during shutdown.
   base::WeakPtr<Widget> parent_ = nullptr;
+
+  // This boolean is true when the widget tree is being traversed for
+  // WidgetObserver event broadcasting. It is used to CHECK that the widget tree
+  // is not modified during the traversal.
+  bool is_traversing_widget_tree_ = false;
 
   // The root of the View hierarchy attached to this window.
   // WARNING: see warning in tooltip_manager_ for ordering dependencies with
@@ -1350,11 +1406,6 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // See set_is_secondary_widget().
   bool is_secondary_widget_ = true;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  ui::ColorProviderKey::ElevationMode background_elevation_ =
-      ui::ColorProviderKey::ElevationMode::kLow;
-#endif
-
   // If set, overrides this value is used instead of the one from NativeTheme
   // when constructing a ColorProvider.
   std::optional<ui::ColorProviderKey::ColorMode> color_mode_override_;
@@ -1381,6 +1432,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
   // Set to true if the widget is in the process of closing.
   bool widget_closed_ = false;
+
+  // Set to true after OnWidgetDestroyed called.
+  bool native_widget_destroyed_ = false;
 
   // The reason the widget was closed.
   // Note that this may be ClosedReason::kUnspecified if the deprecated Close()
@@ -1413,6 +1467,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
   // If set, the widget was created in headless mode.
   bool is_headless_ = false;
+
+  // If set, the window size will follow the content preferred size.
+  bool is_autosized_ = false;
 
   // True if capture losses should be ignored.
   bool ignore_capture_loss_ = false;

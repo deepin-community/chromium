@@ -40,7 +40,22 @@ inline constexpr char kCredentialProviderEnabledOnStartup[] =
     "credential_provider_enabled_on_startup";
 #endif
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_IOS)
+// Boolean pref controlled by the DeletingUndecryptablePasswordsEnabled policy.
+// If set to false it blocks deleting undecryptable passwords, otherwise the
+// deletion can happen.
+inline constexpr char kDeletingUndecryptablePasswordsEnabled[] =
+    "password_manager.deleteting_undecryptable_passwords_enabled";
+#endif
+
 #if BUILDFLAG(IS_ANDROID)
+
+// Boolean pref indicating if the one-time notice for account storage was shown.
+// The notice informs passwords will start being saved to the signed-in account.
+inline constexpr char kAccountStorageNoticeShown[] =
+    "password_manager.account_storage_notice_shown";
+
 // Boolean controlling whether the password manager allows automatic signing in
 // through Credential Management API. This pref is not synced. Its value is set
 // by fetching the latest value from Google Mobile Services. Except for
@@ -76,10 +91,32 @@ inline constexpr char kCurrentMigrationVersionToGoogleMobileServices[] =
     "current_migration_version_to_google_mobile_services";
 
 // Timestamps of when credentials from the GMS Core to the built in storage were
-// last time migrated, in microseconds since Windows epoch.
+// last time migrated, in milliseconds since UNIX epoch.
 inline constexpr char kTimeOfLastMigrationAttempt[] =
     "time_of_last_migration_attempt";
+#endif
 
+// The total amount of passwords available in Password Manager account store.
+inline constexpr char kTotalPasswordsAvailableForAccount[] =
+    "total_passwords_available_for_account";
+
+// The total amount of passwords available in Password Manager profile store.
+inline constexpr char kTotalPasswordsAvailableForProfile[] =
+    "total_passwords_available_for_profile";
+
+// The pref representing a bit vector that stores the reasons for password
+// deletion from the Password Manager account store. It gets reset on Chrome
+// startup, at most once per day.
+inline constexpr char kPasswordRemovalReasonForAccount[] =
+    "password_removal_reason_for_account";
+
+// The pref representing a bit vector that stores the reasons for password
+// deletion from the Password Manager profile store. It gets reset on Chrome
+// startup, at most once per day.
+inline constexpr char kPasswordRemovalReasonForProfile[] =
+    "password_removal_reason_for_profile";
+
+#if BUILDFLAG(IS_ANDROID)
 // Integer pref indicating whether the client is ready to use UPM for local
 // passwords and settings and split password stores for syncing users.
 // The preconditions for the pref to be set to true:
@@ -91,10 +128,12 @@ inline constexpr char kTimeOfLastMigrationAttempt[] =
 // their migration doesn't impact this pref.
 //
 // Do not renumber UseUpmLocalAndSeparateStoresState, values are persisted.
+// Values are also used for metrics recording.
 enum class UseUpmLocalAndSeparateStoresState {
   kOff = 0,
   kOffAndMigrationPending = 1,
   kOn = 2,
+  kMaxValue = kOn
 };
 inline constexpr char kPasswordsUseUPMLocalAndSeparateStores[] =
     "passwords_use_upm_local_and_separate_stores";
@@ -177,6 +216,10 @@ inline constexpr char kLocalPasswordMigrationWarningPrefsVersion[] =
 // in a row. The counter resets when the user applies password generation.
 inline constexpr char kPasswordGenerationBottomSheetDismissCount[] =
     "password_generation_bottom_sheet_dismiss_count";
+
+// Whether the post password migration sheet ahould be shown at startup.
+inline constexpr char kShouldShowPostPasswordMigrationSheetAtStartup[] =
+    "should_show_post_password_migration_sheet_at_startup";
 
 // Becomes true when a user received an error from GMSCore. It's later used to
 // guard activation algorithm of "Remove unenrollment" experiment.
@@ -265,9 +308,9 @@ inline constexpr char kPasswordDismissCompromisedAlertEnabled[] =
 // Boolean value indicating if the user has clicked on the "Password Manager"
 // item in settings after switching to the Unified Password Manager. A "New"
 // label is shown for the users who have not clicked on this item yet.
-// TODO(crbug.com/1217070): Remove this on Android once the feature is rolled
+// TODO(crbug.com/40185049): Remove this on Android once the feature is rolled
 // out.
-// TODO(crbug.com/1420597): Remove this for desktop once the feature is rolled
+// TODO(crbug.com/40258836): Remove this for desktop once the feature is rolled
 // out.
 inline constexpr char kPasswordsPrefWithNewLabelUsed[] =
     "passwords_pref_with_new_label_used";
@@ -288,27 +331,18 @@ inline constexpr char kBiometricAuthBeforeFillingPromoShownCounter[] =
 // before filling promo.
 inline constexpr char kHasUserInteractedWithBiometricAuthPromo[] =
     "password_manager.has_user_interacted_with_biometric_authentication_promo";
-// Boolean indicating whether user enabled biometric authentication before
-// filling.
-inline constexpr char kBiometricAuthenticationBeforeFilling[] =
-    "password_manager.biometric_authentication_filling";
 // Boolean indicating whether user had ever biometrics available on their
 // device.
 inline constexpr char kHadBiometricsAvailable[] =
     "password_manager.had_biometrics_available";
 #endif
 
-#if BUILDFLAG(IS_IOS)
-// Boolean pref indicating if the one-time notice for account storage was shown.
-// The notice informs passwords will start being saved to the signed-in account.
-inline constexpr char kAccountStorageNoticeShown[] =
-    "password_manager.account_storage_notice_shown";
-
-// Integer value indicating the number of times the "new feature icon" was
-// displayed with the account storage opt-out toggle.
-inline constexpr char kAccountStorageNewFeatureIconImpressions[] =
-    "password_manager.account_storage_new_feature_icon_impressions";
-#endif  // BUILDFLAG(IS_IOS)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
+// Boolean indicating whether user enabled biometric authentication before
+// filling.
+inline constexpr char kBiometricAuthenticationBeforeFilling[] =
+    "password_manager.biometric_authentication_filling";
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)  // Desktop
 // How many times in a row the password generation popup in `kNudgePassword`
@@ -321,6 +355,14 @@ inline constexpr char kPasswordGenerationNudgePasswordDismissCount[] =
 // in the Password Manager UI.
 inline constexpr char kPasswordManagerPromoCardsList[] =
     "password_manager.password_promo_cards_list";
+
+// A cache of whether the profile LoginDatabase has autofillable credentials.
+inline constexpr char kAutofillableCredentialsProfileStoreLoginDatabase[] =
+    "password_manager.autofillable_credentials_profile_store_login_database";
+
+// A cache of whether the account LoginDatabase has autofillable credentials.
+inline constexpr char kAutofillableCredentialsAccountStoreLoginDatabase[] =
+    "password_manager.autofillable_credentials_account_store_login_database";
 #endif
 
 // Boolean pref indicating whether password sharing is enabled. Enables both
@@ -332,6 +374,13 @@ inline constexpr char kPasswordSharingEnabled[] =
 // Integer pref indicating how many times relaunch Chrome bubble was dismissed.
 inline constexpr char kRelaunchChromeBubbleDismissedCounter[] =
     "password_manager.relaunch_chrome_bubble_dismissed_counter";
+#endif
+
+#if !BUILDFLAG(IS_ANDROID)
+// Boolean pref indicating if the user is in one of the groups of the
+// kClearUndecryptablePasswords experiment.
+inline constexpr char kClearingUndecryptablePasswords[] =
+    "password_manager.clearing_undecryptable_passwords";
 #endif
 
 }  // namespace password_manager::prefs

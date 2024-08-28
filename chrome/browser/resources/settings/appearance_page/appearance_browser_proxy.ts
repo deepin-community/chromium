@@ -4,7 +4,8 @@
 
 // clang-format off
 import {sendWithPromise} from 'chrome://resources/js/cr.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+
+import {loadTimeData} from '../i18n_setup.js';
 // clang-format on
 
 export interface AppearanceBrowserProxy {
@@ -14,8 +15,10 @@ export interface AppearanceBrowserProxy {
   /** @return Whether the current profile is a child account. */
   isChildAccount(): boolean;
 
+  openCustomizeChrome(): void;
+  openCustomizeChromeToolbarSection(): void;
   recordHoverCardImagesEnabledChanged(enabled: boolean): void;
-
+  resetPinnedToolbarActions(): void;
   useDefaultTheme(): void;
 
   // <if expr="is_linux">
@@ -39,9 +42,21 @@ export class AppearanceBrowserProxyImpl implements AppearanceBrowserProxy {
     return loadTimeData.getBoolean('isChildAccount');
   }
 
+  openCustomizeChrome() {
+    chrome.send('openCustomizeChrome');
+  }
+
+  openCustomizeChromeToolbarSection() {
+    chrome.send('openCustomizeChromeToolbarSection');
+  }
+
   recordHoverCardImagesEnabledChanged(enabled: boolean) {
     chrome.metricsPrivate.recordBoolean(
         'Settings.HoverCards.ImagePreview.Enabled', enabled);
+  }
+
+  resetPinnedToolbarActions() {
+    chrome.send('resetPinnedToolbarActions');
   }
 
   useDefaultTheme() {

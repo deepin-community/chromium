@@ -2,16 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/renderer/render_thread_impl.h"
 
+#include <atomic>
 #include <limits>
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/allocator/allocator_extension.h"
 #include "base/allocator/partition_alloc_support.h"
 #include "base/at_exit.h"
 #include "base/command_line.h"
@@ -27,11 +33,13 @@
 #include "base/message_loop/message_pump.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/metrics/field_trial.h"
+#include "base/metrics/histogram.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/histogram_macros_local.h"
 #include "base/observer_list.h"
 #include "base/path_service.h"
+#include "base/process/process.h"
 #include "base/process/process_metrics.h"
 #include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
@@ -62,7 +70,6 @@
 #include "cc/trees/layer_tree_frame_sink.h"
 #include "cc/trees/layer_tree_settings.h"
 #include "cc/trees/raster_context_provider_wrapper.h"
-#include "cc/trees/ukm_manager.h"
 #include "components/discardable_memory/client/client_discardable_shared_memory_manager.h"
 #include "components/metrics/public/mojom/single_sample_metrics.mojom.h"
 #include "components/metrics/single_sample_metrics.h"
@@ -111,6 +118,7 @@
 #include "gpu/config/gpu_driver_bug_workarounds.h"
 #include "gpu/config/gpu_finch_features.h"
 #include "gpu/config/gpu_switches.h"
+#include "gpu/ipc/client/client_shared_image_interface.h"
 #include "gpu/ipc/client/command_buffer_proxy_impl.h"
 #include "gpu/ipc/client/gpu_channel_host.h"
 #include "ipc/ipc_channel_handle.h"
@@ -161,6 +169,7 @@
 #include "third_party/blink/public/web/web_render_theme.h"
 #include "third_party/blink/public/web/web_security_policy.h"
 #include "third_party/blink/public/web/web_user_level_memory_pressure_signal_generator.h"
+#include "third_party/blink/public/web/web_v8_features.h"
 #include "third_party/blink/public/web/web_view.h"
 #include "third_party/skia/include/core/SkFontMgr.h"
 #include "third_party/skia/include/core/SkGraphics.h"
@@ -182,7 +191,9 @@
 
 #if BUILDFLAG(IS_WIN)
 #include <objbase.h>
+
 #include <windows.h>
+
 #include "content/renderer/media/win/dcomp_texture_factory.h"
 #include "content/renderer/media/win/overlay_state_service_provider.h"
 #include "media/base/win/mf_feature_checks.h"
@@ -260,8 +271,9 @@ static_assert(
 // Feature to migrate the Media thread to a SequencedTaskRunner backed from
 // the base::ThreadPool. Does not currently work on Fuchsia due to FIDL
 // requiring thread affinity.
-BASE_DECLARE_FEATURE(kUseThreadPoolForMediaTaskRunner){
-    "UseThreadPoolForMediaTaskRunner", base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kUseThreadPoolForMediaTaskRunner,
+             "UseThreadPoolForMediaTaskRunner",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Updates the crash key for whether this renderer is foregrounded.
 void UpdateForegroundCrashKey(bool foreground) {
@@ -320,6 +332,21 @@ void CreateSingleSampleMetricsProvider(
 static bool IsSingleProcess() {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kSingleProcess);
+}
+
+// Returns true if `process_priority` should be considered as backgrounded.
+bool IsBackgrounded(std::optional<base::Process::Priority> process_priority) {
+  // Not backgrounded until we've received a state from the browser.
+  if (!process_priority.has_value()) {
+    return false;
+  }
+  switch (*process_priority) {
+    case base::Process::Priority::kBestEffort:
+      return true;
+    case base::Process::Priority::kUserVisible:
+    case base::Process::Priority::kUserBlocking:
+      return false;
+  }
 }
 
 }  // namespace
@@ -411,7 +438,7 @@ bool RenderThreadImpl::HistogramCustomizer::IsAlexaTop10NonGoogleSite(
     return true;
 
   if (!sanitized_host.empty()) {
-    std::vector<base::StringPiece> host_tokens = base::SplitStringPiece(
+    std::vector<std::string_view> host_tokens = base::SplitStringPiece(
         sanitized_host, ".", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
 
     if (host_tokens.size() >= 2) {
@@ -611,14 +638,7 @@ void RenderThreadImpl::Init() {
       discardable_memory_allocator_.get());
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-  // The SandboxedProcessThreadTypeHandler isn't created in
-  // render_thread_impl_browsertest.cc, nor in --single-process mode.
-  if (SandboxedProcessThreadTypeHandler* sandboxed_process_thread_type_handler =
-          SandboxedProcessThreadTypeHandler::Get()) {
-    sandboxed_process_thread_type_handler->HandleThreadTypeChange(
-        ChildProcess::current()->io_thread_id(),
-        base::ThreadType::kCompositing);
-  }
+  ChildProcess::current()->SetIOThreadType(base::ThreadType::kCompositing);
 #endif
 
   process_foregrounded_count_ = 0;
@@ -627,8 +647,7 @@ void RenderThreadImpl::Init() {
     BindHostReceiver(compositing_mode_reporter_.BindNewPipeAndPassReceiver());
 
     compositing_mode_reporter_->AddCompositingModeWatcher(
-        compositing_mode_watcher_receiver_.BindNewPipeAndPassRemote(
-            main_thread_scheduler_->CompositorTaskRunner()));
+        compositing_mode_watcher_receiver_.BindNewPipeAndPassRemote());
   }
 
   variations_observer_ = std::make_unique<VariationsRenderThreadObserver>();
@@ -645,6 +664,8 @@ void RenderThreadImpl::Init() {
   if (use_cached_routing_table_) {
     RequestNewItemsForFrameRoutingCache();
   }
+
+  blink::WebV8Features::InitializeMojoJSAllowedProtectedMemory();
 }
 
 RenderThreadImpl::~RenderThreadImpl() {
@@ -1067,20 +1088,17 @@ RenderThreadImpl::GetVideoFrameCompositorContextProvider(
 
   scoped_refptr<gpu::GpuChannelHost> gpu_channel_host =
       EstablishGpuChannelSync();
-  if (!gpu_channel_host)
+  if (!gpu_channel_host) {
     return nullptr;
+  }
 
   // This context is only used to create textures and mailbox them, so
   // use lower limits than the default.
   gpu::SharedMemoryLimits limits = gpu::SharedMemoryLimits::ForMailboxContext();
 
   bool support_locking = false;
-  bool support_gles2_interface = true;
-  // Use RasterInterface if kRasterInterfaceInVideoResourceUpdater is enabled.
-  if (base::FeatureList::IsEnabled(
-          media::kRasterInterfaceInVideoResourceUpdater)) {
-    support_gles2_interface = false;
-  }
+  // Use RasterInterface always.
+  bool support_gles2_interface = false;
   bool support_raster_interface = true;
   bool support_oop_rasterization = false;
   bool support_grcontext = false;
@@ -1092,6 +1110,27 @@ RenderThreadImpl::GetVideoFrameCompositorContextProvider(
       viz::command_buffer_metrics::ContextType::RENDER_COMPOSITOR,
       kGpuStreamIdMedia, kGpuStreamPriorityMedia);
   return video_frame_compositor_context_provider_;
+}
+
+scoped_refptr<gpu::ClientSharedImageInterface>
+RenderThreadImpl::GetVideoFrameCompositorSharedImageInterface() {
+  if (shared_image_interface_ &&
+      !shared_image_interface_->gpu_channel()->IsLost()) {
+    return shared_image_interface_;
+  }
+
+  shared_image_interface_.reset();
+
+  scoped_refptr<gpu::GpuChannelHost> gpu_channel_host =
+      EstablishGpuChannelSync();
+  if (!gpu_channel_host) {
+    return nullptr;
+  }
+
+  shared_image_interface_ =
+      gpu_channel_host->CreateClientSharedImageInterface();
+
+  return shared_image_interface_;
 }
 
 scoped_refptr<viz::ContextProviderCommandBuffer>
@@ -1284,7 +1323,7 @@ void RenderThreadImpl::OnProcessFinalRelease() {
   // caused race conditions, where the browser process was reusing renderer
   // processes that were shutting down.
   // See https://crbug.com/535246 or https://crbug.com/873541/#c8.
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 #if BUILDFLAG(CONTENT_ENABLE_LEGACY_IPC)
@@ -1299,16 +1338,31 @@ bool RenderThreadImpl::OnControlMessageReceived(const IPC::Message& msg) {
 #endif
 
 void RenderThreadImpl::SetProcessState(
-    mojom::RenderProcessBackgroundState background_state,
+    base::Process::Priority process_priority,
     mojom::RenderProcessVisibleState visible_state) {
-  DCHECK(background_state_ != background_state ||
+  DCHECK(process_priority_ != process_priority ||
          visible_state_ != visible_state);
 
-  if (background_state != background_state_) {
-    if (background_state == mojom::RenderProcessBackgroundState::kForegrounded)
-      OnRendererForegrounded();
-    else
+  bool was_backgrounded = IsBackgrounded(process_priority_);
+  bool is_backgrounded = IsBackgrounded(process_priority);
+
+  if (base::FeatureList::IsEnabled(features::kRestrictThreadPoolInBackground)) {
+    if (process_priority == base::Process::Priority::kUserBlocking) {
+      restrict_thread_pool_.reset();
+    } else if (!restrict_thread_pool_) {
+      restrict_thread_pool_.emplace();
+    }
+  }
+  if (base::FeatureList::IsEnabled(features::kSetIsolatesPriority)) {
+    blink::WebV8Features::SetIsolatePriority(process_priority);
+  }
+
+  if (!process_priority_.has_value() || is_backgrounded != was_backgrounded) {
+    if (is_backgrounded) {
       OnRendererBackgrounded();
+    } else {
+      OnRendererForegrounded();
+    }
   }
 
   if (visible_state != visible_state_) {
@@ -1326,18 +1380,14 @@ void RenderThreadImpl::SetProcessState(
       OnRendererHidden();
   }
 
-  background_state_ = background_state;
+  process_priority_ = process_priority;
   visible_state_ = visible_state;
 }
 
 void RenderThreadImpl::SetBatterySaverMode(bool battery_saver_mode_enabled) {
-  if (battery_saver_mode_enabled) {
-    base::MessagePump::OverrideAlignWakeUpsState(true, base::Milliseconds(32));
-  } else {
-    base::MessagePump::ResetAlignWakeUpsState();
+  if (base::FeatureList::IsEnabled(features::kBatterySaverModeRenderTuning)) {
+    blink::SetBatterySaverModeForAllIsolates(battery_saver_mode_enabled);
   }
-
-  blink::SetBatterySaverModeForAllIsolates(battery_saver_mode_enabled);
 }
 
 void RenderThreadImpl::SetIsLockedToSite() {
@@ -1372,6 +1422,9 @@ void RenderThreadImpl::CompositingModeFallbackToSoftware() {
   is_gpu_compositing_disabled_ = true;
 }
 
+bool RenderThreadImpl::IsGpuRemoteDisconnected() {
+  return gpu_->gpu_remote_disconnected();
+}
 scoped_refptr<gpu::GpuChannelHost> RenderThreadImpl::EstablishGpuChannelSync() {
   TRACE_EVENT0("gpu", "RenderThreadImpl::EstablishGpuChannelSync");
 
@@ -1419,18 +1472,25 @@ gpu::GpuChannelHost* RenderThreadImpl::GetGpuChannel() {
 }
 
 void RenderThreadImpl::CreateAgentSchedulingGroup(
-    mojo::PendingReceiver<IPC::mojom::ChannelBootstrap> bootstrap,
-    mojo::PendingRemote<blink::mojom::BrowserInterfaceBroker> broker_remote) {
-  agent_scheduling_groups_.emplace(std::make_unique<AgentSchedulingGroup>(
-      *this, std::move(bootstrap), std::move(broker_remote)));
+    mojo::PendingReceiver<IPC::mojom::ChannelBootstrap> bootstrap) {
+  agent_scheduling_groups_.emplace(
+      std::make_unique<AgentSchedulingGroup>(*this, std::move(bootstrap)));
 }
 
 void RenderThreadImpl::CreateAssociatedAgentSchedulingGroup(
     mojo::PendingAssociatedReceiver<mojom::AgentSchedulingGroup>
-        agent_scheduling_group,
-    mojo::PendingRemote<blink::mojom::BrowserInterfaceBroker> broker_remote) {
+        agent_scheduling_group) {
   agent_scheduling_groups_.emplace(std::make_unique<AgentSchedulingGroup>(
-      *this, std::move(agent_scheduling_group), std::move(broker_remote)));
+      *this, std::move(agent_scheduling_group)));
+}
+
+void RenderThreadImpl::TransferSharedLastForegroundTime(
+    base::ReadOnlySharedMemoryRegion last_foreground_time_region) {
+  last_foreground_time_mapping_ = last_foreground_time_region.Map();
+  CHECK(last_foreground_time_mapping_.IsValid());
+  base::internal::SetSharedLastForegroundTimeForMetrics(
+      last_foreground_time_mapping_
+          .GetMemoryAs<std::atomic<base::TimeTicks>>());
 }
 
 void RenderThreadImpl::OnNetworkConnectionChanged(
@@ -1463,7 +1523,7 @@ void RenderThreadImpl::SetWebKitSharedTimersSuspended(bool suspend) {
     main_thread_scheduler_->ResumeTimersForAndroidWebView();
   }
 #else
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 #endif
 }
 
@@ -1483,7 +1543,7 @@ void RenderThreadImpl::UpdateScrollbarTheme(
 #if BUILDFLAG(IS_APPLE)
   is_elastic_overscroll_enabled_ = params->scroll_view_rubber_banding;
 #else
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 #endif  // BUILDFLAG(IS_APPLE)
 }
 
@@ -1495,39 +1555,21 @@ void RenderThreadImpl::OnSystemColorsChanged(int32_t aqua_color_variant) {
   // that rely on system colors, such as the accent and highlight colors.
   blink::SystemColorsChanged();
 #else
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 #endif
 }
 
 void RenderThreadImpl::UpdateSystemColorInfo(
     mojom::UpdateSystemColorInfoParamsPtr params) {
-  bool color_providers_changed =
-      blink_platform_impl_->ThemeEngine()->UpdateColorProviders(
-          params->light_colors, params->dark_colors, params->forced_colors_map);
-  if (color_providers_changed) {
-    // Notify blink that the global ColorProvider instances for this renderer
-    // have changed. These color providers are only used to paint native
-    // controls and only require us to invalidate paint for local frames in this
-    // renderer.
-    blink::ColorProvidersChanged();
-  }
-
   auto* native_theme = ui::NativeTheme::GetInstanceForWeb();
 
-  bool did_system_color_info_change = native_theme->UpdateSystemColorInfo(
-      params->is_dark_mode, params->forced_colors, params->colors);
-
-  did_system_color_info_change |=
+  bool did_accent_color_change =
       native_theme->user_color() != params->accent_color;
   native_theme->set_user_color(params->accent_color);
 
-  if (did_system_color_info_change) {
-    // Notify blink of system color info changes. These give blink the
-    // opportunity to update internal state to reflect the NativeTheme's color
-    // scheme. These will also prompt blink to invalidate and recalculate styles
-    // for elements that rely on system colors, such as those leveraging the
-    // forced colors media feature. These can affect CSS styles and thus require
-    // action beyond simply invalidating paint on local frames.
+  if (did_accent_color_change) {
+    // Notify blink of accent color changes. These can affect CSS styles and
+    // thus require action beyond simply invalidating paint on local frames.
     blink::SystemColorsChanged();
     blink::ColorSchemeChanged();
   }
@@ -1540,7 +1582,7 @@ void RenderThreadImpl::PurgePluginListCache(bool reload_pages) {
   for (auto& observer : observers_)
     observer.PluginListChanged();
 #else
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 #endif
 }
 
@@ -1583,7 +1625,7 @@ RenderThreadImpl::GetMediaSequencedTaskRunner() {
 #if BUILDFLAG(IS_FUCHSIA)
     // Start IO thread on Fuchsia to make that thread usable for FIDL.
     base::Thread::Options options(base::MessagePumpType::IO, 0);
-    // TODO(crbug.com/1400772): Use kCompositing to address media latency on
+    // TODO(crbug.com/40250424): Use kCompositing to address media latency on
     // Fuchsia until alignment on new media thread types is achieved.
     options.thread_type = base::ThreadType::kCompositing;
 #else
@@ -1656,7 +1698,10 @@ bool RenderThreadImpl::RendererIsHidden() const {
 }
 
 void RenderThreadImpl::OnRendererHidden() {
-  blink::IsolateInBackgroundNotification();
+  if (!base::FeatureList::IsEnabled(features::kSetIsolatesPriority)) {
+    blink::WebV8Features::SetIsolatePriority(
+        base::Process::Priority::kBestEffort);
+  }
 
   // TODO(rmcilroy): Remove IdleHandler and replace it with an IdleTask
   // scheduled by the RendererScheduler - http://crbug.com/469210.
@@ -1666,7 +1711,10 @@ void RenderThreadImpl::OnRendererHidden() {
 }
 
 void RenderThreadImpl::OnRendererVisible() {
-  blink::IsolateInForegroundNotification();
+  if (!base::FeatureList::IsEnabled(features::kSetIsolatesPriority)) {
+    blink::WebV8Features::SetIsolatePriority(
+        base::Process::Priority::kUserBlocking);
+  }
 
   if (!GetContentClient()->renderer()->RunIdleHandlerWhenWidgetsHidden())
     return;
@@ -1674,8 +1722,7 @@ void RenderThreadImpl::OnRendererVisible() {
 }
 
 bool RenderThreadImpl::RendererIsBackgrounded() const {
-  return background_state_ ==
-         mojom::RenderProcessBackgroundState::kBackgrounded;
+  return IsBackgrounded(process_priority_);
 }
 
 void RenderThreadImpl::OnRendererBackgrounded() {
@@ -1683,6 +1730,7 @@ void RenderThreadImpl::OnRendererBackgrounded() {
   main_thread_scheduler_->SetRendererBackgrounded(true);
   discardable_memory_allocator_->OnBackgrounded();
   base::allocator::PartitionAllocSupport::Get()->OnBackgrounded();
+  blink::OnProcessBackgrounded();
 }
 
 void RenderThreadImpl::OnRendererForegrounded() {
@@ -1691,12 +1739,12 @@ void RenderThreadImpl::OnRendererForegrounded() {
   discardable_memory_allocator_->OnForegrounded();
   base::allocator::PartitionAllocSupport::Get()->OnForegrounded(
       MainFrameCounter::has_main_frame());
+  blink::OnProcessForegrounded();
   process_foregrounded_count_++;
 }
 
 void RenderThreadImpl::ReleaseFreeMemory() {
   TRACE_EVENT0("blink", "RenderThreadImpl::ReleaseFreeMemory()");
-  base::allocator::ReleaseFreeMemory();
   discardable_memory_allocator_->ReleaseFreeMemory();
 
   // Do not call into blink if it is not initialized.

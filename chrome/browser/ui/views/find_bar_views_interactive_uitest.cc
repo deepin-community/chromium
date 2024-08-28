@@ -12,6 +12,7 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
+#include "chrome/browser/ui/lens/lens_overlay_controller.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/view_ids.h"
@@ -26,9 +27,8 @@
 #include "components/find_in_page/find_notification_details.h"
 #include "components/find_in_page/find_tab_helper.h"
 #include "components/find_in_page/find_types.h"
+#include "components/lens/lens_features.h"
 #include "components/omnibox/common/omnibox_features.h"
-#include "content/public/browser/notification_service.h"
-#include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -112,12 +112,13 @@ class FindResulStateObserver : public ui::test::ObservationStateObserver<
 };
 DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(FindResulStateObserver, kFindResultState);
 
-// TODO(crbug.com/1509945): Remaining tests should be migrated to
+// TODO(crbug.com/41482547): Remaining tests should be migrated to
 // FindInPageTest.
 class LegacyFindInPageTest : public InProcessBrowserTest {
  public:
   LegacyFindInPageTest() {
-    FindBarHost::disable_animations_during_testing_ = true;
+    // TODO(https://crbug.com/40183900): Undo this in the destructor!
+    FindBarHost::SetEnableAnimationsForTesting(false);
   }
 
   LegacyFindInPageTest(const LegacyFindInPageTest&) = delete;
@@ -134,7 +135,9 @@ class LegacyFindInPageTest : public InProcessBrowserTest {
     return static_cast<FindBarHost*>(find_bar);
   }
 
-  FindBarView* GetFindBarView() { return GetFindBarHost()->find_bar_view(); }
+  FindBarView* GetFindBarView() {
+    return GetFindBarHost()->GetFindBarViewForTesting();
+  }
 
   std::u16string GetFindBarText() { return GetFindBarHost()->GetFindText(); }
 
@@ -146,20 +149,18 @@ class LegacyFindInPageTest : public InProcessBrowserTest {
 
   void ClickOnView(views::View* view) {
     // EventGenerator and ui_test_utils can't target the find bar (on Windows).
-    view->OnMousePressed(ui::MouseEvent(ui::ET_MOUSE_PRESSED, gfx::Point(),
-                                        gfx::Point(), base::TimeTicks(),
-                                        ui::EF_LEFT_MOUSE_BUTTON,
-                                        ui::EF_LEFT_MOUSE_BUTTON));
-    view->OnMouseReleased(ui::MouseEvent(ui::ET_MOUSE_PRESSED, gfx::Point(),
-                                         gfx::Point(), base::TimeTicks(),
-                                         ui::EF_LEFT_MOUSE_BUTTON,
-                                         ui::EF_LEFT_MOUSE_BUTTON));
+    view->OnMousePressed(ui::MouseEvent(
+        ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+        base::TimeTicks(), ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
+    view->OnMouseReleased(ui::MouseEvent(
+        ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+        base::TimeTicks(), ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
   }
 
   void TapOnView(views::View* view) {
     // EventGenerator and ui_test_utils can't target the find bar (on Windows).
     ui::GestureEvent event(0, 0, 0, base::TimeTicks(),
-                           ui::GestureEventDetails(ui::ET_GESTURE_TAP));
+                           ui::GestureEventDetails(ui::EventType::kGestureTap));
     view->OnGestureEvent(&event);
   }
 
@@ -182,7 +183,15 @@ class LegacyFindInPageTest : public InProcessBrowserTest {
 
 class FindInPageTest : public InteractiveBrowserTest {
  public:
-  FindInPageTest() { FindBarHost::disable_animations_during_testing_ = true; }
+  FindInPageTest() {
+    // TODO(https://crbug.com/40183900): Undo this in the destructor!
+    FindBarHost::SetEnableAnimationsForTesting(false);
+
+    feature_list_.InitAndEnableFeatureWithParameters(
+        lens::features::kLensOverlay, {
+                                          {"find-in-page-entry-point", "true"},
+                                      });
+  }
 
   void SetUp() override {
     ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
@@ -232,6 +241,8 @@ class FindInPageTest : public InteractiveBrowserTest {
     FindBar* find_bar = browser()->GetFindBarController()->find_bar();
     return static_cast<FindBarHost*>(find_bar);
   }
+
+  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(FindInPageTest, CrashEscHandlers) {
@@ -672,8 +683,7 @@ IN_PROC_BROWSER_TEST_F(LegacyFindInPageTest, MAYBE_CtrlEnter) {
 
   EXPECT_EQ(u"link", GetFindBarText());
 
-  ui_test_utils::UrlLoadObserver observer(
-      GURL("about:blank"), content::NotificationService::AllSources());
+  ui_test_utils::UrlLoadObserver observer(GURL("about:blank"));
 
   // Send Ctrl-Enter, should cause navigation to about:blank.
   ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
@@ -728,7 +738,8 @@ IN_PROC_BROWSER_TEST_F(LegacyFindInPageTest, ActiveMatchAfterNoResults) {
   EXPECT_EQ(0, details.active_match_ordinal());
 }
 
-IN_PROC_BROWSER_TEST_F(LegacyFindInPageTest, SelectionDuringFind) {
+// TODO (crbug.com/337186755): Investigate flakiness.
+IN_PROC_BROWSER_TEST_F(LegacyFindInPageTest, DISABLED_SelectionDuringFind) {
   ASSERT_TRUE(embedded_test_server()->Start());
   // Make sure Chrome is in the foreground, otherwise sending input
   // won't do anything and the test will hang.
@@ -877,4 +888,34 @@ IN_PROC_BROWSER_TEST_F(FindInPageTest, MatchOrdinalStableWhileTyping) {
       WaitForState(kFindResultState, []() { return FindResultState(1, 3); }),
       EnterText(FindBarView::kTextField, u"o", TextEntryMode::kAppend),
       WaitForState(kFindResultState, []() { return FindResultState(1, 3); }));
+}
+
+IN_PROC_BROWSER_TEST_F(FindInPageTest, LensButton) {
+  if (browser()
+          ->GetFindBarController()
+          ->find_bar()
+          ->HasGlobalFindPasteboard()) {
+    // The presence of a global find pasteboard does not guarantee the find bar
+    // will be empty on launch.
+    return;
+  }
+
+  constexpr char16_t kASearch[] = u"a";
+  const GURL page_a = embedded_test_server()->GetURL("/a.html");
+
+  RunTestSequence(
+      // Setup test and open Find Bar.
+      InstrumentTab(kTabId), NavigateWebContents(kTabId, page_a), ShowFindBar(),
+      EnsurePresent(FindBarView::kLensButtonElementId),
+      // Search for 'a'.
+      EnterText(FindBarView::kTextField, kASearch),
+      // Ensure Lens Button hides after a search is made.
+      WaitForHide(FindBarView::kLensButtonElementId),
+      // Delete the search text.
+      SendKeyPress(ui::VKEY_BACK, false, false),
+      // Ensure Lens Button comes back after no search is being made.
+      WaitForShow(FindBarView::kLensButtonElementId),
+      // Ensure clicking on the button triggers the Lens Overlay.
+      MoveMouseTo(FindBarView::kLensButtonElementId), ClickMouse(),
+      WaitForShow(kLensPermissionDialogOkButtonElementId));
 }

@@ -13,6 +13,7 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_span.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "ui/accessibility/ax_enums.mojom-forward.h"
@@ -45,7 +46,8 @@ class VIEWS_EXPORT BubbleDialogDelegate : public DialogDelegate {
   BubbleDialogDelegate(
       View* anchor_view,
       BubbleBorder::Arrow arrow,
-      BubbleBorder::Shadow shadow = BubbleBorder::DIALOG_SHADOW);
+      BubbleBorder::Shadow shadow = BubbleBorder::DIALOG_SHADOW,
+      bool autosize = false);
   BubbleDialogDelegate(const BubbleDialogDelegate& other) = delete;
   BubbleDialogDelegate& operator=(const BubbleDialogDelegate& other) = delete;
   ~BubbleDialogDelegate() override;
@@ -124,7 +126,7 @@ class VIEWS_EXPORT BubbleDialogDelegate : public DialogDelegate {
   // before another function call which also sets bounds, so that bounds are
   // not set multiple times in a row. When animating bounds changes, setting
   // bounds twice in a row can make the widget position jump.
-  // TODO(crbug.com/982880) It would be good to be able to re-target the
+  // TODO(crbug.com/41470150) It would be good to be able to re-target the
   // animation rather than expect callers to use SetArrowWithoutResizing if they
   // are also changing the anchor rect, or similar.
   void SetArrowWithoutResizing(BubbleBorder::Arrow arrow);
@@ -166,6 +168,9 @@ class VIEWS_EXPORT BubbleDialogDelegate : public DialogDelegate {
 
   bool GetSubtitleAllowCharacterBreak() const;
   void SetSubtitleAllowCharacterBreak(bool allow);
+
+  // No setter: autosize_ should not be changed after construction.
+  bool is_autosized() const { return autosize_; }
 
   //////////////////////////////////////////////////////////////////////////////
   // Miscellaneous bubble behaviors:
@@ -319,6 +324,8 @@ class VIEWS_EXPORT BubbleDialogDelegate : public DialogDelegate {
   // should be called only if you need to force update the bounds of the widget
   // and/or position of the bubble, for example if the size of the bubble's
   // content view changed.
+  // TODO(crbug.com/41493925) Not recommended; Use autosize in the constructor
+  // instead.
   void SizeToContents();
 
  protected:
@@ -337,7 +344,7 @@ class VIEWS_EXPORT BubbleDialogDelegate : public DialogDelegate {
     void set_bubble_view(views::View* view) { bubble_view_ = view; }
 
     void set_allowed_class_names_for_testing(
-        const base::span<const char*>& value) {
+        const base::span<const char* const>& value) {
       allowed_class_names_for_testing_ = value;
     }
 
@@ -357,7 +364,8 @@ class VIEWS_EXPORT BubbleDialogDelegate : public DialogDelegate {
    private:
     std::optional<raw_ptr<views::View>> bubble_view_;
     std::optional<raw_ptr<views::BubbleDialogDelegate>> delegate_;
-    std::optional<base::span<const char*>> allowed_class_names_for_testing_;
+    std::optional<base::raw_span<const char* const>>
+        allowed_class_names_for_testing_;
     base::WeakPtrFactory<BubbleUmaLogger> weak_factory_{this};
   };
 
@@ -446,6 +454,8 @@ class VIEWS_EXPORT BubbleDialogDelegate : public DialogDelegate {
 
   void SetAnchoredDialogKey();
 
+  gfx::Rect GetDesiredBubbleBounds();
+
   gfx::Insets title_margins_;
   gfx::Insets footnote_margins_;
   BubbleBorder::Arrow arrow_ = BubbleBorder::NONE;
@@ -463,6 +473,10 @@ class VIEWS_EXPORT BubbleDialogDelegate : public DialogDelegate {
   ui::ImageModel main_image_;
   std::u16string subtitle_;
   bool subtitle_allow_character_break_ = false;
+
+  // Whether the bubble should automatically resize to match its contents'
+  // preferred size.
+  bool autosize_ = false;
 
   // A flag controlling bubble closure on deactivation.
   bool close_on_deactivate_ = true;
@@ -525,8 +539,8 @@ class VIEWS_EXPORT BubbleDialogDelegate : public DialogDelegate {
 // view.
 // TODO(pbos): Migrate existing uses of BubbleDialogDelegateView to directly
 // inherit or use BubbleDialogDelegate.
-class VIEWS_EXPORT BubbleDialogDelegateView : public BubbleDialogDelegate,
-                                              public View {
+class VIEWS_EXPORT BubbleDialogDelegateView : public View,
+                                              public BubbleDialogDelegate {
   METADATA_HEADER(BubbleDialogDelegateView, View)
 
  public:
@@ -550,7 +564,8 @@ class VIEWS_EXPORT BubbleDialogDelegateView : public BubbleDialogDelegate,
   BubbleDialogDelegateView(
       View* anchor_view,
       BubbleBorder::Arrow arrow,
-      BubbleBorder::Shadow shadow = BubbleBorder::DIALOG_SHADOW);
+      BubbleBorder::Shadow shadow = BubbleBorder::DIALOG_SHADOW,
+      bool autosize = false);
   BubbleDialogDelegateView(const BubbleDialogDelegateView&) = delete;
   BubbleDialogDelegateView& operator=(const BubbleDialogDelegateView&) = delete;
   ~BubbleDialogDelegateView() override;

@@ -24,6 +24,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_IMAGE_DECODERS_IMAGE_DECODER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_IMAGE_DECODERS_IMAGE_DECODER_H_
 
@@ -31,6 +36,7 @@
 #include <optional>
 
 #include "base/check_op.h"
+#include "base/containers/heap_array.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/numerics/checked_math.h"
@@ -52,14 +58,13 @@
 #include "third_party/skia/modules/skcms/skcms.h"
 
 class SkColorSpace;
+class SkData;
 
 namespace gfx {
 struct HDRMetadata;
 }  // namespace gfx
 
 namespace blink {
-
-struct DecodedImageMetaData;
 
 #if SK_B32_SHIFT
 inline skcms_PixelFormat XformColorFormat() {
@@ -107,17 +112,18 @@ class PLATFORM_EXPORT ColorProfile final {
   USING_FAST_MALLOC(ColorProfile);
 
  public:
-  ColorProfile(const skcms_ICCProfile&, std::unique_ptr<uint8_t[]> = nullptr);
+  ColorProfile(const skcms_ICCProfile&,
+               base::HeapArray<uint8_t> = base::HeapArray<uint8_t>());
   ColorProfile(const ColorProfile&) = delete;
   ColorProfile& operator=(const ColorProfile&) = delete;
-  static std::unique_ptr<ColorProfile> Create(const void* buffer, size_t size);
+  static std::unique_ptr<ColorProfile> Create(base::span<const uint8_t> buffer);
   ~ColorProfile();
 
   const skcms_ICCProfile* GetProfile() const { return &profile_; }
 
  private:
   skcms_ICCProfile profile_;
-  std::unique_ptr<uint8_t[]> buffer_;
+  base::HeapArray<uint8_t> buffer_;
 };
 
 class PLATFORM_EXPORT ColorProfileTransform final {
@@ -373,9 +379,10 @@ class PLATFORM_EXPORT ImageDecoder {
   ImageOrientationEnum Orientation() const { return orientation_; }
   gfx::Size DensityCorrectedSize() const { return density_corrected_size_; }
 
-  // Updates orientation, pixel density etc based on |metadata|.
-  void ApplyMetadata(const DecodedImageMetaData& metadata,
-                     const gfx::Size& physical_size);
+  // Updates orientation, pixel density etc based on the Exif metadata stored in
+  // |exif_data|.
+  void ApplyExifMetadata(const SkData* exif_data,
+                         const gfx::Size& physical_size);
 
   bool IgnoresColorSpace() const {
     return color_behavior_ == ColorBehavior::kIgnore;

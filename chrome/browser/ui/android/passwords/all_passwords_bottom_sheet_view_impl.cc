@@ -7,8 +7,8 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/android/features/keyboard_accessory/internal/jni/AllPasswordsBottomSheetBridge_jni.h"
 #include "chrome/browser/password_manager/android/all_passwords_bottom_sheet_controller.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/passwords/ui_utils.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/affiliations/core/browser/affiliation_utils.h"
@@ -16,6 +16,9 @@
 #include "components/password_manager/core/browser/password_manager_driver.h"
 #include "ui/android/window_android.h"
 #include "ui/base/l10n/l10n_util.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/features/keyboard_accessory/internal/jni/AllPasswordsBottomSheetBridge_jni.h"
 
 using autofill::mojom::FocusedFieldType;
 using base::android::AttachCurrentThread;
@@ -62,13 +65,10 @@ void AllPasswordsBottomSheetViewImpl::Show(
     }
 
     Java_AllPasswordsBottomSheetBridge_insertCredential(
-        env, java_object, index++,
-        ConvertUTF16ToJavaString(env, credential->username_value),
-        ConvertUTF16ToJavaString(env, credential->password_value),
-        ConvertUTF16ToJavaString(env, GetDisplayUsername(*credential)),
-        ConvertUTF8ToJavaString(env, credential->url.spec()),
-        facet.IsValidAndroidFacetURI(),
-        ConvertUTF8ToJavaString(env, app_display_name));
+        env, java_object, index++, credential->username_value,
+        credential->password_value, GetDisplayUsername(*credential),
+        credential->url.spec(), facet.IsValidAndroidFacetURI(),
+        app_display_name);
   }
 
   const bool is_password_field =
@@ -79,12 +79,11 @@ void AllPasswordsBottomSheetViewImpl::Show(
 
 void AllPasswordsBottomSheetViewImpl::OnCredentialSelected(
     JNIEnv* env,
-    const base::android::JavaParamRef<jstring>& username,
-    const base::android::JavaParamRef<jstring>& password,
+    std::u16string& username,
+    std::u16string& password,
     jboolean requests_to_fill_password) {
   controller_->OnCredentialSelected(
-      ConvertJavaStringToUTF16(env, username),
-      ConvertJavaStringToUTF16(env, password),
+      username, password,
       AllPasswordsBottomSheetController::RequestsToFillPassword(
           requests_to_fill_password));
 }
@@ -104,7 +103,7 @@ AllPasswordsBottomSheetViewImpl::GetOrCreateJavaObject() {
   }
   return java_object_internal_ = Java_AllPasswordsBottomSheetBridge_create(
              AttachCurrentThread(), reinterpret_cast<intptr_t>(this),
+             controller_->GetProfile()->GetJavaObject(),
              controller_->GetNativeView()->GetWindowAndroid()->GetJavaObject(),
-             ConvertUTF8ToJavaString(AttachCurrentThread(),
-                                     controller_->GetFrameUrl().spec()));
+             controller_->GetFrameUrl().spec());
 }

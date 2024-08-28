@@ -8,8 +8,8 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
-#include "base/containers/cxx20_erase.h"
 #include "base/notreached.h"
 #include "base/ranges/algorithm.h"
 #include "base/time/time.h"
@@ -217,7 +217,7 @@ void KeyframeEffect::Pause(base::TimeTicks timeline_time,
                            PauseCondition pause_condition) {
   bool did_pause = false;
   for (auto& keyframe_model : keyframe_models()) {
-    // TODO(crbug.com/1076012): KeyframeEffect is paused with local time for
+    // TODO(crbug.com/40688021): KeyframeEffect is paused with local time for
     // scroll-linked animations. To make sure the start event of a keyframe
     // model is sent to blink, we should not set its run state to PAUSED until
     // such event is sent. This should be revisited once KeyframeEffect is able
@@ -448,7 +448,7 @@ bool KeyframeEffect::DispatchAnimationEventToKeyframeModel(
       break;
 
     case AnimationEvent::Type::kTakeOver:
-      // TODO(crbug.com/1018213): Routing TAKEOVER events is broken.
+      // TODO(crbug.com/40655283): Routing TAKEOVER events is broken.
       // We need to purge KeyframeModels marked for deletion on CT.
       SetNeedsPushProperties();
       dispatched = true;
@@ -458,7 +458,7 @@ bool KeyframeEffect::DispatchAnimationEventToKeyframeModel(
       // TIME_UPDATED events are used to synchronize effect time between cc and
       // main thread worklet animations. Keyframe models are not involved in
       // this process.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   return dispatched;
@@ -484,7 +484,7 @@ bool KeyframeEffect::RequiresInvalidation() const {
 
 bool KeyframeEffect::AffectsNativeProperty() const {
   for (const auto& it : keyframe_models()) {
-    // TODO(crbug.com/1257778): include the SCROLL_OFFSET here so that we won't
+    // TODO(crbug.com/40796582): include the SCROLL_OFFSET here so that we won't
     // create a compositor animation frame sequence tracker when there is a
     // composited scroll.
     if (it->TargetProperty() != TargetProperty::CSS_CUSTOM_PROPERTY &&
@@ -628,7 +628,7 @@ void KeyframeEffect::MarkAbortedKeyframeModelsForDeletion(
 }
 
 void KeyframeEffect::PurgeKeyframeModelsMarkedForDeletion(bool impl_only) {
-  base::EraseIf(keyframe_models(), [impl_only](const auto& keyframe_model) {
+  std::erase_if(keyframe_models(), [impl_only](const auto& keyframe_model) {
     return keyframe_model->run_state() ==
                gfx::KeyframeModel::WAITING_FOR_DELETION &&
            (!impl_only || KeyframeModel::ToCcKeyframeModel(keyframe_model.get())
@@ -637,7 +637,7 @@ void KeyframeEffect::PurgeKeyframeModelsMarkedForDeletion(bool impl_only) {
 }
 
 void KeyframeEffect::PurgeDeletedKeyframeModels() {
-  base::EraseIf(keyframe_models(), [](const auto& keyframe_model) {
+  std::erase_if(keyframe_models(), [](const auto& keyframe_model) {
     return keyframe_model->run_state() ==
                gfx::KeyframeModel::WAITING_FOR_DELETION &&
            !KeyframeModel::ToCcKeyframeModel(keyframe_model.get())

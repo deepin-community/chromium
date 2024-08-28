@@ -44,6 +44,7 @@
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_browser_controller.h"
@@ -61,7 +62,6 @@
 #include "chrome/browser/web_applications/web_app_tab_helper.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chrome/common/chrome_features.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/site_engagement/content/site_engagement_service.h"
@@ -71,7 +71,6 @@
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/buildflags/buildflags.h"
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/ui_base_types.h"
@@ -142,17 +141,17 @@ Browser* ReparentWebContentsIntoAppBrowser(content::WebContents* contents,
     if (HasPinnedHomeTab(target_tabstrip)) {
       // Insert the web contents into the pinned home tab and delete the
       // existing home tab.
-      target_tabstrip->InsertWebContentsAt(
+      target_tabstrip->InsertDetachedTabAt(
           /*index=*/0,
-          source_tabstrip->DetachWebContentsAtForInsertion(
+          source_tabstrip->DetachTabAtForInsertion(
               source_tabstrip->GetIndexOfWebContents(contents)),
           (AddTabTypes::ADD_INHERIT_OPENER | AddTabTypes::ADD_ACTIVE |
            AddTabTypes::ADD_PINNED));
       target_tabstrip->DetachAndDeleteWebContentsAt(1);
     } else {
-      target_tabstrip->InsertWebContentsAt(
+      target_tabstrip->InsertDetachedTabAt(
           /*index=*/0,
-          source_tabstrip->DetachWebContentsAtForInsertion(
+          source_tabstrip->DetachTabAtForInsertion(
               source_tabstrip->GetIndexOfWebContents(contents)),
           (AddTabTypes::ADD_INHERIT_OPENER | AddTabTypes::ADD_ACTIVE |
            AddTabTypes::ADD_PINNED));
@@ -160,8 +159,8 @@ Browser* ReparentWebContentsIntoAppBrowser(content::WebContents* contents,
     SetWebContentsIsPinnedHomeTab(target_tabstrip->GetWebContentsAt(0));
   } else {
     MaybeAddPinnedHomeTab(target_browser, app_id);
-    target_tabstrip->AppendWebContents(
-        source_tabstrip->DetachWebContentsAtForInsertion(
+    target_tabstrip->AppendTab(
+        source_tabstrip->DetachTabAtForInsertion(
             source_tabstrip->GetIndexOfWebContents(contents)),
         true);
   }
@@ -365,7 +364,7 @@ Browser* ReparentWebContentsIntoAppBrowser(content::WebContents* contents,
           .TargetsExistingClients() ||
       registrar.IsPreventCloseEnabled(web_app->app_id())) {
     if (AppBrowserController::FindForWebApp(*profile, app_id)) {
-      // TODO(crbug.com/1385226): Use apps::AppServiceProxy::LaunchAppWithUrl()
+      // TODO(crbug.com/40246677): Use apps::AppServiceProxy::LaunchAppWithUrl()
       // instead to ensure all the usual wrapping code around web app launches
       // gets executed.
       apps::AppLaunchParams params(
@@ -570,7 +569,7 @@ content::WebContents* NavigateWebAppUsingParams(const std::string& app_id,
   // storage partition.
   if (base::FeatureList::IsEnabled(
           chromeos::features::kExperimentalWebAppStoragePartitionIsolation)) {
-    // TODO(crbug.com/1425284): Cover other app launch paths (e.g. restore
+    // TODO(crbug.com/40260833): Cover other app launch paths (e.g. restore
     // apps).
     auto partition_config = content::StoragePartitionConfig::Create(
         nav_params.browser->profile(),
@@ -632,13 +631,16 @@ void RecordAppWindowLaunchMetric(Profile* profile,
   }
 
   // Reparenting launches don't respect the launch_handler setting.
-  if (launch_source != apps::LaunchSource::kFromReparenting &&
-      base::FeatureList::IsEnabled(
-          blink::features::kWebAppEnableLaunchHandler)) {
+  if (launch_source != apps::LaunchSource::kFromReparenting) {
     base::UmaHistogramEnumeration(
         "Launch.WebAppLaunchHandlerClientMode",
         web_app->launch_handler().value_or(LaunchHandler()).client_mode);
   }
+
+  base::UmaHistogramEnumeration("Launch.WebApp.DiyOrCrafted",
+                                web_app->is_diy_app()
+                                    ? LaunchedAppType::kDiy
+                                    : LaunchedAppType::kCrafted);
 }
 
 void RecordAppTabLaunchMetric(Profile* profile,
@@ -668,9 +670,7 @@ void RecordAppTabLaunchMetric(Profile* profile,
   }
 
   // Reparenting launches don't respect the launch_handler setting.
-  if (launch_source != apps::LaunchSource::kFromReparenting &&
-      base::FeatureList::IsEnabled(
-          blink::features::kWebAppEnableLaunchHandler)) {
+  if (launch_source != apps::LaunchSource::kFromReparenting) {
     base::UmaHistogramEnumeration(
         "Launch.BrowserTab.WebAppLaunchHandlerClientMode",
         web_app->launch_handler().value_or(LaunchHandler()).client_mode);
@@ -757,19 +757,6 @@ void LaunchWebApp(apps::AppLaunchParams params,
     }
   }
 
-#if BUILDFLAG(IS_CHROMEOS)
-  // With Shortstand enabled all browser shortcuts (backed by shortcut web apps)
-  // open in a browser tab and all non-shortcut web apps open in a standalone
-  // window.
-  if (chromeos::features::IsCrosShortstandEnabled()) {
-    bool is_shortcut_app = lock.registrar().IsShortcutApp(params.app_id);
-    params.container = is_shortcut_app
-                           ? apps::LaunchContainer::kLaunchContainerTab
-                           : apps::LaunchContainer::kLaunchContainerWindow;
-    debug_value.Set("is_shortcut", is_shortcut_app);
-  }
-#endif
-
   DCHECK_NE(params.container, apps::LaunchContainer::kLaunchContainerNone);
 
   apps::LaunchContainer container;
@@ -781,9 +768,8 @@ void LaunchWebApp(apps::AppLaunchParams params,
     if (lock.registrar().IsInstalled(params.app_id)) {
       container = params.container;
       if (WebAppLaunchProcess::GetOpenApplicationCallbackForTesting()) {
-        web_contents =
-            WebAppLaunchProcess::GetOpenApplicationCallbackForTesting().Run(
-                std::move(params));
+        WebAppLaunchProcess::GetOpenApplicationCallbackForTesting().Run(
+            std::move(params));
       } else {
         web_contents = WebAppLaunchProcess::CreateAndRun(
             profile, lock.registrar(), lock.os_integration_manager(), params);

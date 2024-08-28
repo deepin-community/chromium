@@ -20,8 +20,14 @@
  * Boston, MA 02110-1301, USA.
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/core/html/html_meta_element.h"
 
+#include "base/metrics/histogram_macros.h"
 #include "third_party/blink/public/mojom/frame/color_scheme.mojom-blink.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -42,7 +48,6 @@
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/speculation_rules/document_speculation_rules.h"
-#include "third_party/blink/renderer/core/view_transition/view_transition_supplement.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/client_hints_preferences.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
@@ -425,7 +430,7 @@ void HTMLMetaElement::ProcessViewportKeyValuePair(
                             WebFeature::kInteractiveWidgetResizesVisual);
         } break;
         case ui::mojom::blink::VirtualKeyboardMode::kUnset: {
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
         } break;
       }
     } else {
@@ -468,7 +473,7 @@ static mojom::ConsoleMessageLevel ViewportErrorMessageLevel(
       return mojom::ConsoleMessageLevel::kWarning;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return mojom::ConsoleMessageLevel::kError;
 }
 
@@ -543,10 +548,6 @@ void HTMLMetaElement::NameRemoved(const AtomicString& name_value) {
     GetDocument().ColorSchemeMetaChanged();
   } else if (EqualIgnoringASCIICase(name_value, "supports-reduced-motion")) {
     GetDocument().SupportsReducedMotionMetaChanged();
-  } else if (RuntimeEnabledFeatures::ViewTransitionOnNavigationEnabled() &&
-             EqualIgnoringASCIICase(name_value, "view-transition")) {
-    ViewTransitionSupplement::From(GetDocument())
-        ->OnMetaTagChanged(g_null_atom);
   } else if (RuntimeEnabledFeatures::AppTitleEnabled(GetExecutionContext()) &&
              EqualIgnoringASCIICase(name_value, "app-title")) {
     GetDocument().UpdateAppTitle();
@@ -723,12 +724,9 @@ void HTMLMetaElement::ProcessContent() {
       UseCounter::Count(&GetDocument(),
                         WebFeature::kHTMLMetaElementMonetization);
     }
-  } else if (RuntimeEnabledFeatures::ViewTransitionOnNavigationEnabled() &&
-             EqualIgnoringASCIICase(name_value, "view-transition")) {
-    ViewTransitionSupplement::From(GetDocument())
-        ->OnMetaTagChanged(content_value);
   } else if (RuntimeEnabledFeatures::AppTitleEnabled(GetExecutionContext()) &&
              EqualIgnoringASCIICase(name_value, "app-title")) {
+    UseCounter::Count(&GetDocument(), WebFeature::kWebAppTitle);
     GetDocument().UpdateAppTitle();
   }
 }
@@ -780,9 +778,7 @@ void HTMLMetaElement::ProcessMetaCH(Document& document,
     return;
   }
 
-  if (!FrameFetchContext::AllowScriptFromSourceWithoutNotifying(
-          document.Url(), frame->GetContentSettingsClient(),
-          frame->GetSettings())) {
+  if (!frame->ScriptEnabled()) {
     // Do not allow configuring client hints if JavaScript is disabled.
     return;
   }

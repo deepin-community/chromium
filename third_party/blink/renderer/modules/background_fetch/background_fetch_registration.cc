@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/modules/background_fetch/background_fetch_registration.h"
 
 #include <optional>
@@ -133,12 +138,12 @@ ExecutionContext* BackgroundFetchRegistration::GetExecutionContext() const {
   return registration_->GetExecutionContext();
 }
 
-ScriptPromise BackgroundFetchRegistration::abort(
+ScriptPromise<IDLBoolean> BackgroundFetchRegistration::abort(
     ScriptState* script_state,
     ExceptionState& exception_state) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(
       script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
+  auto promise = resolver->Promise();
 
   DCHECK(registration_);
   DCHECK(registration_service_);
@@ -150,13 +155,13 @@ ScriptPromise BackgroundFetchRegistration::abort(
   return promise;
 }
 
-ScriptPromiseTyped<BackgroundFetchRecord> BackgroundFetchRegistration::match(
+ScriptPromise<BackgroundFetchRecord> BackgroundFetchRegistration::match(
     ScriptState* script_state,
     const V8RequestInfo* request,
     const CacheQueryOptions* options,
     ExceptionState& exception_state) {
   auto* resolver =
-      MakeGarbageCollected<ScriptPromiseResolverTyped<BackgroundFetchRecord>>(
+      MakeGarbageCollected<ScriptPromiseResolver<BackgroundFetchRecord>>(
           script_state, exception_state.GetContext());
   auto promise = resolver->Promise();
   MatchImpl(script_state, resolver, request,
@@ -165,11 +170,11 @@ ScriptPromiseTyped<BackgroundFetchRecord> BackgroundFetchRegistration::match(
   return promise;
 }
 
-ScriptPromiseTyped<IDLSequence<BackgroundFetchRecord>>
+ScriptPromise<IDLSequence<BackgroundFetchRecord>>
 BackgroundFetchRegistration::matchAll(ScriptState* script_state,
                                       ExceptionState& exception_state) {
   auto* resolver = MakeGarbageCollected<
-      ScriptPromiseResolverTyped<IDLSequence<BackgroundFetchRecord>>>(
+      ScriptPromiseResolver<IDLSequence<BackgroundFetchRecord>>>(
       script_state, exception_state.GetContext());
   auto promise = resolver->Promise();
   MatchImpl(script_state, resolver, /* request = */ nullptr,
@@ -178,13 +183,13 @@ BackgroundFetchRegistration::matchAll(ScriptState* script_state,
   return promise;
 }
 
-ScriptPromiseTyped<IDLSequence<BackgroundFetchRecord>>
+ScriptPromise<IDLSequence<BackgroundFetchRecord>>
 BackgroundFetchRegistration::matchAll(ScriptState* script_state,
                                       const V8RequestInfo* request,
                                       const CacheQueryOptions* options,
                                       ExceptionState& exception_state) {
   auto* resolver = MakeGarbageCollected<
-      ScriptPromiseResolverTyped<IDLSequence<BackgroundFetchRecord>>>(
+      ScriptPromiseResolver<IDLSequence<BackgroundFetchRecord>>>(
       script_state, exception_state.GetContext());
   auto promise = resolver->Promise();
   MatchImpl(script_state, resolver, request,
@@ -195,7 +200,7 @@ BackgroundFetchRegistration::matchAll(ScriptState* script_state,
 
 void BackgroundFetchRegistration::MatchImpl(
     ScriptState* script_state,
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolverBase* resolver,
     const V8RequestInfo* request,
     mojom::blink::CacheQueryOptionsPtr cache_query_options,
     ExceptionState& exception_state,
@@ -237,7 +242,7 @@ void BackgroundFetchRegistration::MatchImpl(
 }
 
 void BackgroundFetchRegistration::DidGetMatchingRequests(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolverBase* resolver,
     bool return_all,
     Vector<mojom::blink::BackgroundFetchSettledFetchPtr> settled_fetches) {
   DCHECK(resolver);
@@ -267,7 +272,7 @@ void BackgroundFetchRegistration::DidGetMatchingRequests(
   if (!return_all) {
     if (settled_fetches.empty()) {
       // Nothing was matched. Resolve with `undefined`.
-      resolver->Resolve();
+      resolver->DowncastTo<BackgroundFetchRecord>()->Resolve();
       return;
     }
 
@@ -313,7 +318,7 @@ bool BackgroundFetchRegistration::IsAborted() {
 }
 
 void BackgroundFetchRegistration::DidAbort(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<IDLBoolean>* resolver,
     mojom::blink::BackgroundFetchError error) {
   switch (error) {
     case mojom::blink::BackgroundFetchError::NONE:
@@ -337,7 +342,7 @@ void BackgroundFetchRegistration::DidAbort(
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 const String BackgroundFetchRegistration::result() const {
@@ -349,7 +354,7 @@ const String BackgroundFetchRegistration::result() const {
     case mojom::BackgroundFetchResult::UNSET:
       return "";
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 const String BackgroundFetchRegistration::failureReason() const {
@@ -378,7 +383,7 @@ const String BackgroundFetchRegistration::failureReason() const {
     case mojom::BackgroundFetchFailureReason::DOWNLOAD_TOTAL_EXCEEDED:
       return "download-total-exceeded";
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 bool BackgroundFetchRegistration::HasPendingActivity() const {

@@ -15,7 +15,7 @@ import {type ContextMenu} from './ContextMenu.js';
 import {type EventData, Events as TabbedPaneEvents, TabbedPane} from './TabbedPane.js';
 import {type ItemsProvider, Toolbar, type ToolbarItem, ToolbarMenuButton} from './Toolbar.js';
 import {createTextChild} from './UIUtils.js';
-import {type TabbedViewLocation, type View, type ViewLocation, type ViewLocationResolver} from './View.js';
+import {type TabbedViewLocation, type View, type ViewLocation} from './View.js';
 import viewContainersStyles from './viewContainers.css.legacy.js';
 import {
   getLocalizedViewLocationCategory,
@@ -30,7 +30,7 @@ import {
   ViewPersistence,
   type ViewRegistration,
 } from './ViewRegistration.js';
-import {VBox, type Widget, type WidgetElement} from './Widget.js';
+import {VBox, type Widget} from './Widget.js';
 
 const UIStrings = {
   /**
@@ -68,6 +68,10 @@ export class PreRegisteredView implements View {
 
   isPreviewFeature(): boolean {
     return Boolean(this.viewRegistration.isPreviewFeature);
+  }
+
+  iconName(): string|undefined {
+    return this.viewRegistration.iconName;
   }
 
   isTransient(): boolean {
@@ -154,7 +158,7 @@ export class ViewManager {
     // default ordering as defined by the views themselves.
 
     const viewsByLocation = new Map<ViewLocationValues|'none', PreRegisteredView[]>();
-    for (const view of getRegisteredViewExtensions()) {
+    for (const view of getRegisteredViewExtensions(Common.Settings.Settings.instance().getHostConfig())) {
       const location = view.location() || 'none';
       const views = viewsByLocation.get(location) || [];
       views.push(view);
@@ -314,7 +318,7 @@ export class ViewManager {
 
   async resolveLocation(location?: string): Promise<Location|null> {
     if (!location) {
-      return Promise.resolve(null) as Promise<Location|null>;
+      return null;
     }
     const registeredResolvers = getRegisteredLocationResolvers().filter(resolver => resolver.name === location);
 
@@ -322,7 +326,7 @@ export class ViewManager {
       throw new Error('Duplicate resolver for location: ' + location);
     }
     if (registeredResolvers.length) {
-      const resolver = (await registeredResolvers[0].loadResolver() as ViewLocationResolver);
+      const resolver = await registeredResolvers[0].loadResolver();
       return resolver.resolveLocation(location) as Location | null;
     }
     throw new Error('Unresolved location: ' + location);
@@ -334,8 +338,8 @@ export class ViewManager {
     return new TabbedLocation(this, revealCallback, location, restoreSelection, allowReorder, defaultTab);
   }
 
-  createStackLocation(revealCallback?: (() => void), location?: string): ViewLocation {
-    return new StackLocation(this, revealCallback, location);
+  createStackLocation(revealCallback?: (() => void), location?: string, jslogContext?: string): ViewLocation {
+    return new StackLocation(this, revealCallback, location, jslogContext);
   }
 
   hasViewsForLocation(location: string): boolean {
@@ -424,8 +428,10 @@ class ExpandableContainerWidget extends VBox {
 
     this.titleElement = document.createElement('div');
     this.titleElement.classList.add('expandable-view-title');
-    this.titleElement.setAttribute(
-        'jslog', `${VisualLogging.sectionHeader().context(view.viewId()).track({click: true})}`);
+    this.titleElement.setAttribute('jslog', `${VisualLogging.sectionHeader().context(view.viewId()).track({
+                                     click: true,
+                                     keydown: 'Enter|Space|ArrowLeft|ArrowRight',
+                                   })}`);
     ARIAUtils.markAsTreeitem(this.titleElement);
     this.titleExpandIcon = IconButton.Icon.create('triangle-right', 'title-expand-icon');
     this.titleElement.appendChild(this.titleExpandIcon);
@@ -636,7 +642,9 @@ class TabbedLocation extends Location implements TabbedViewLocation {
   }
 
   enableMoreTabsButton(): ToolbarMenuButton {
-    const moreTabsButton = new ToolbarMenuButton(this.appendTabsToMenu.bind(this), undefined, 'more-tabs');
+    const moreTabsButton =
+        new ToolbarMenuButton(this.appendTabsToMenu.bind(this), /* isIconDropdown */ true, undefined, 'more-tabs');
+    moreTabsButton.setGlyph('dots-vertical');
     this.tabbedPaneInternal.leftToolbar().appendToolbarItem(moreTabsButton);
     this.tabbedPaneInternal.disableOverflowMenu();
     return moreTabsButton;
@@ -698,11 +706,12 @@ class TabbedLocation extends Location implements TabbedViewLocation {
         contextMenu.defaultSection().appendItem(title, () => {
           Host.userMetrics.issuesPanelOpenedFrom(Host.UserMetrics.IssueOpener.HamburgerMenu);
           void this.showView(view, undefined, true);
-        });
+        }, {jslogContext: 'issues-pane'});
         continue;
       }
 
-      contextMenu.defaultSection().appendItem(title, this.showView.bind(this, view, undefined, true));
+      contextMenu.defaultSection().appendItem(
+          title, this.showView.bind(this, view, undefined, true), {jslogContext: view.viewId()});
     }
   }
 
@@ -710,6 +719,11 @@ class TabbedLocation extends Location implements TabbedViewLocation {
     this.tabbedPaneInternal.appendTab(
         view.viewId(), view.title(), new ContainerWidget(view), undefined, false,
         view.isCloseable() || view.isTransient(), view.isPreviewFeature(), index);
+    const iconName = view.iconName();
+    if (iconName) {
+      const icon = IconButton.Icon.create(iconName);
+      this.tabbedPaneInternal.setTabIcon(view.viewId(), icon);
+    }
   }
 
   appendView(view: View, insertBefore?: View|null): void {
@@ -834,9 +848,9 @@ class StackLocation extends Location implements ViewLocation {
   private readonly vbox: VBox;
   private readonly expandableContainers: Map<string, ExpandableContainerWidget>;
 
-  constructor(manager: ViewManager, revealCallback?: (() => void), location?: string) {
+  constructor(manager: ViewManager, revealCallback?: (() => void), location?: string, jslogContext?: string) {
     const vbox = new VBox();
-    vbox.element.setAttribute('jslog', `${VisualLogging.pane('sidebar')}`);
+    vbox.element.setAttribute('jslog', `${VisualLogging.pane(jslogContext || 'sidebar').track({resize: true})}`);
     super(manager, vbox, revealCallback);
     this.vbox = vbox;
     ARIAUtils.markAsTree(vbox.element);
@@ -859,7 +873,7 @@ class StackLocation extends Location implements ViewLocation {
       locationForView.set(view, this);
       this.manager.views.set(view.viewId(), view);
       container = new ExpandableContainerWidget(view);
-      let beforeElement: (WidgetElement|null)|null = null;
+      let beforeElement: Node|null = null;
       if (insertBefore) {
         const beforeContainer = expandableContainerForView.get(insertBefore);
         beforeElement = beforeContainer ? beforeContainer.element : null;

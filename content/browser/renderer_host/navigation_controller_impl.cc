@@ -46,7 +46,6 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/escape.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -81,6 +80,7 @@
 #include "content/browser/site_info.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/common/content_constants_internal.h"
+#include "content/common/content_navigation_policy.h"
 #include "content/common/navigation_params_utils.h"
 #include "content/common/trace_utils.h"
 #include "content/public/browser/browser_context.h"
@@ -88,8 +88,6 @@
 #include "content/public/browser/disallow_activation_reason.h"
 #include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/navigation_details.h"
-#include "content/public/browser/notification_service.h"
-#include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -166,7 +164,7 @@ bool ShouldOverrideUserAgent(
     case NavigationController::UA_OVERRIDE_FALSE:
       return false;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return false;
 }
 
@@ -345,7 +343,7 @@ blink::mojom::NavigationType GetNavigationType(
     const GURL& new_url,
     ReloadType reload_type,
     NavigationEntryImpl* entry,
-    const FrameNavigationEntry& frame_entry,
+    FrameNavigationEntry* frame_entry,
     bool has_pending_cross_document_commit,
     bool is_currently_error_page,
     bool is_same_document_history_load,
@@ -388,7 +386,7 @@ blink::mojom::NavigationType GetNavigationType(
       !is_unfenced_top_navigation;
 
   // History navigations.
-  if (frame_entry.page_state().IsValid()) {
+  if (frame_entry && frame_entry->page_state().IsValid()) {
     return can_be_same_document && is_same_document_history_load
                ? blink::mojom::NavigationType::HISTORY_SAME_DOCUMENT
                : blink::mojom::NavigationType::HISTORY_DIFFERENT_DOCUMENT;
@@ -407,7 +405,7 @@ blink::mojom::NavigationType GetNavigationType(
   // navigation, but a different-document one. This is why history navigation
   // are classified before this check.
   bool is_same_doc = new_url.has_ref() && old_url.EqualsIgnoringRef(new_url) &&
-                     frame_entry.method() == "GET";
+                     frame_entry && frame_entry->method() == "GET";
 
   // The one case where we do the wrong thing here and incorrectly choose
   // SAME_DOCUMENT is if the navigation is browser-initiated but the document in
@@ -465,7 +463,8 @@ void ValidateRequestMatchesEntry(NavigationRequest* request,
   FrameNavigationEntry* frame_entry =
       entry->GetFrameEntry(request->frame_tree_node());
   if (!frame_entry) {
-    NOTREACHED();
+    // TODO(https://crbug.com/40467594): This case should be unreachable once
+    // all subframes have FrameNavigationEntries associated with them.
     return;
   }
 
@@ -478,7 +477,7 @@ void ValidateRequestMatchesEntry(NavigationRequest* request,
                 frame_entry->redirect_chain()[i]);
     }
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 }
 #endif  // DCHECK_IS_ON()
@@ -837,7 +836,7 @@ void NavigationControllerImpl::Restore(
   // Do not proceed if selected_navigation will be out of bounds for the updated
   // entries_ list, since it will be assigned to last_committed_entry_index_ and
   // used to index entries_.
-  // TODO(https://crbug.com/1287624): Consider also returning early if entries
+  // TODO(crbug.com/40816356): Consider also returning early if entries
   // is empty, since there should be no work to do (rather than marking the
   // existing entries as needing reload). Also consider returning early if the
   // selected index is -1, which represents a no-committed-entry state.
@@ -1195,7 +1194,7 @@ void NavigationControllerImpl::GoToIndex(int index) {
             /*navigation_api_key=*/nullptr);
 }
 
-void NavigationControllerImpl::GoToIndex(
+base::WeakPtr<NavigationRequest> NavigationControllerImpl::GoToIndex(
     int index,
     RenderFrameHostImpl* initiator_rfh,
     std::optional<blink::scheduler::TaskAttributionId>
@@ -1217,7 +1216,7 @@ void NavigationControllerImpl::GoToIndex(
     // legacy behavior where trying to reload when the main frame is on the
     // initial empty document won't result in a navigation. See also
     // https://crbug.com/1277414.
-    return;
+    return nullptr;
   }
 
   DiscardNonCommittedEntries();
@@ -1229,9 +1228,9 @@ void NavigationControllerImpl::GoToIndex(
   pending_entry_index_ = index;
   pending_entry_->SetTransitionType(ui::PageTransitionFromInt(
       pending_entry_->GetTransitionType() | ui::PAGE_TRANSITION_FORWARD_BACK));
-  NavigateToExistingPendingEntry(ReloadType::NONE, initiator_rfh,
-                                 soft_navigation_heuristics_task_id,
-                                 navigation_api_key);
+  return NavigateToExistingPendingEntry(ReloadType::NONE, initiator_rfh,
+                                        soft_navigation_heuristics_task_id,
+                                        navigation_api_key);
 }
 
 void NavigationControllerImpl::GoToOffset(int offset) {
@@ -1254,6 +1253,13 @@ void NavigationControllerImpl::GoToOffsetFromRenderer(
   GoToIndex(GetIndexForOffset(offset), initiator_rfh,
             soft_navigation_heuristics_task_id,
             /*navigation_api_key=*/nullptr);
+}
+
+base::WeakPtr<NavigationRequest>
+NavigationControllerImpl::GoToIndexAndReturnPrimaryMainFrameRequest(int index) {
+  return GoToIndex(index, /*initiator_rfh=*/nullptr,
+                   /*soft_navigation_heuristics_task_id=*/std::nullopt,
+                   /*navigation_api_key=*/nullptr);
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -1353,7 +1359,7 @@ base::WeakPtr<NavigationHandle> NavigationControllerImpl::LoadURLWithParams(
       break;
     case LOAD_TYPE_DATA:
       if (!params.url.SchemeIs(url::kDataScheme)) {
-        NOTREACHED() << "Data load must use data scheme.";
+        NOTREACHED_IN_MIGRATION() << "Data load must use data scheme.";
         return nullptr;
       }
       break;
@@ -1425,6 +1431,17 @@ bool NavigationControllerImpl::RendererDidNavigate(
     // be blocked by RenderFrameHostImpl::ValidateDidCommitParams() before
     // reaching here.
     CHECK(!is_same_document_navigation);
+
+    if (pending_entry_) {
+      // Before `entry_replaced_by_post_commit_error_` is moved back, make sure
+      // `pending_entry_` isn't pointing to the last committed entry.
+      // Instead, all reload approaches (e.g., in `Reload` and
+      // `LoadIfNecessary`) should attempt to load the
+      // `entry_replaced_by_post_commit_error_` instead of the post commit error
+      // entry itself.
+      CHECK_NE(pending_entry_, entries_[last_committed_entry_index_].get())
+          << "Incorrectly reloading the post commit error page entry.";
+    }
 
     // Any commit while a post-commit error page is showing should put the
     // original entry back, replacing the error page's entry.  This includes
@@ -1576,7 +1593,7 @@ bool NavigationControllerImpl::RendererDidNavigate(
   // navigation when a same document commit comes in unexpectedly from the
   // renderer.  Limit this to a very narrow set of conditions to avoid risks to
   // other navigation types. See https://crbug.com/900036.
-  // TODO(crbug.com/926009): Handle history.pushState() as well.
+  // TODO(crbug.com/41437754): Handle history.pushState() as well.
   bool keep_pending_entry =
       is_same_document_navigation &&
       navigation_type == NAVIGATION_TYPE_MAIN_FRAME_EXISTING_ENTRY &&
@@ -1612,7 +1629,7 @@ bool NavigationControllerImpl::RendererDidNavigate(
       }
       break;
     case NAVIGATION_TYPE_UNKNOWN:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 
@@ -1651,7 +1668,7 @@ bool NavigationControllerImpl::RendererDidNavigate(
   // `back_forward_cache_metrics()` may return null as we do not record
   // back-forward cache metrics for navigations in non-primary frame trees.
   if (active_entry->back_forward_cache_metrics()) {
-    // TODO(https://crbug.com/1338089): Remove this.
+    // TODO(crbug.com/40229455): Remove this.
     // These are both only available from details at this point, so we capture
     // them here.
     SCOPED_CRASH_KEY_NUMBER("BFCacheMismatch", "navigation_type",
@@ -1660,7 +1677,9 @@ bool NavigationControllerImpl::RendererDidNavigate(
                           details->did_replace_entry);
     active_entry->back_forward_cache_metrics()->DidCommitNavigation(
         navigation_request,
-        back_forward_cache_.IsAllowed(navigation_request->GetURL()));
+        IsBackForwardCacheEnabled() &&
+            rfh->delegate()->IsBackForwardCacheSupported() &&
+            back_forward_cache_.IsAllowed(navigation_request->GetURL()));
   }
 
   // Grab the corresponding FrameNavigationEntry for a few updates, but only if
@@ -1715,7 +1734,7 @@ bool NavigationControllerImpl::RendererDidNavigate(
 
   if (navigation_request->IsPrerenderedPageActivation()) {
     BroadcastHistoryOffsetAndLength();
-    // TODO(crbug.com/1222893): Broadcasting happens after the prerendered page
+    // TODO(crbug.com/40187392): Broadcasting happens after the prerendered page
     // is activated. As a result, a "prerenderingchange" event listener sees the
     // history.length which is not updated yet. We should guarantee that
     // history's length and offset should be updated before a
@@ -2083,10 +2102,11 @@ void NavigationControllerImpl::RendererDidNavigateToNewEntry(
         SSLStatus(request->GetSSLInfo().value_or(net::SSLInfo()));
   }
 
-  // TODO(crbug.com/1179428) - determine which parts of the entry need to be set
-  // for prerendered contents, if any. This is because prerendering/activation
-  // technically won't be creating a new document. Unlike BFCache, prerendering
-  // creates a new NavigationEntry rather than using an existing one.
+  // TODO(crbug.com/40169536) - determine which parts of the entry need to be
+  // set for prerendered contents, if any. This is because
+  // prerendering/activation technically won't be creating a new document.
+  // Unlike BFCache, prerendering creates a new NavigationEntry rather than
+  // using an existing one.
   if (!request->IsPrerenderedPageActivation()) {
     UpdateNavigationEntryDetails(new_entry.get(), rfh, params, request,
                                  NavigationEntryImpl::UpdatePolicy::kUpdate,
@@ -2235,11 +2255,11 @@ void NavigationControllerImpl::RendererDidNavigateToExistingEntry(
     // cases, we reuse the last committed entry.
     entry = GetLastCommittedEntry();
 
-    // TODO(crbug.com/751023): Set page transition type to PAGE_TRANSITION_LINK
-    // to avoid misleading interpretations (e.g. URLs paired with
-    // PAGE_TRANSITION_TYPED that haven't actually been typed) as well as to fix
-    // the inconsistency with what we report to observers (PAGE_TRANSITION_LINK
-    // | PAGE_TRANSITION_CLIENT_REDIRECT).
+    // TODO(crbug.com/40532777): Set page transition type to
+    // PAGE_TRANSITION_LINK to avoid misleading interpretations (e.g. URLs
+    // paired with PAGE_TRANSITION_TYPED that haven't actually been typed) as
+    // well as to fix the inconsistency with what we report to observers
+    // (PAGE_TRANSITION_LINK | PAGE_TRANSITION_CLIENT_REDIRECT).
 
     CopyReplacedNavigationEntryDataIfPreviouslyEmpty(entry, entry);
 
@@ -2491,47 +2511,8 @@ void NavigationControllerImpl::CopyStateFrom(NavigationController* temp,
   FinishRestore(source->last_committed_entry_index_, RestoreType::kRestored);
 }
 
-void NavigationControllerImpl::CopyStateFromAndPrune(NavigationController* temp,
-                                                     bool replace_entry) {
-  // It is up to callers to check the invariants before calling this.
-  CHECK(CanPruneAllButLastCommitted());
-
-  NavigationControllerImpl* source =
-      static_cast<NavigationControllerImpl*>(temp);
-
-  // Remove all the entries leaving the last committed entry.
-  PruneAllButLastCommittedInternal();
-
-  // We now have one entry, possibly with a new pending entry.  Ensure that
-  // adding the entries from source won't put us over the limit.
-  DCHECK_EQ(1, GetEntryCount());
-  if (!replace_entry)
-    source->PruneOldestSkippableEntryIfFull();
-
-  // Insert the entries from source. Ignore any pending entry, since it has not
-  // committed in source.
-  int max_source_index = source->last_committed_entry_index_;
-  DCHECK_NE(max_source_index, -1);
-  max_source_index++;
-
-  // Ignore the source's current entry if merging with replacement.
-  // TODO(davidben): This should preserve entries forward of the current
-  // too. http://crbug.com/317872
-  if (replace_entry && max_source_index > 0)
-    max_source_index--;
-
-  InsertEntriesFrom(source, max_source_index);
-
-  // Adjust indices such that the last entry and pending are at the end now.
-  last_committed_entry_index_ = GetEntryCount() - 1;
-
-  BroadcastHistoryOffsetAndLength();
-}
-
 bool NavigationControllerImpl::CanPruneAllButLastCommitted() {
-  // If there is no last committed entry, we cannot prune.  Even if there is a
-  // pending entry, it may not commit, leaving this WebContents blank, despite
-  // possibly giving it new entries via CopyStateFromAndPrune.
+  // If there is no last committed entry, we cannot prune.
   if (last_committed_entry_index_ == -1)
     return false;
 
@@ -2657,10 +2638,9 @@ bool NavigationControllerImpl::ValidateDataURLAsString(
   // From the GURL's POV, the only important part here is scheme, it doesn't
   // check the actual content. Thus we can take only the prefix of the url, to
   // avoid unneeded copying of a potentially long string.
-  const size_t kDataUriPrefixMaxLen = 64;
-  GURL data_url(
-      std::string(data_url_as_string->front_as<char>(),
-                  std::min(data_url_as_string->size(), kDataUriPrefixMaxLen)));
+  constexpr size_t kDataUriPrefixMaxLen = 64;
+  const size_t len = std::min(data_url_as_string->size(), kDataUriPrefixMaxLen);
+  GURL data_url(base::as_string_view(*data_url_as_string).substr(0u, len));
   if (!data_url.is_valid() || !data_url.SchemeIs(url::kDataScheme))
     return false;
 
@@ -2789,6 +2769,8 @@ void NavigationControllerImpl::NavigateFromFrameProxy(
     bool is_unfenced_top_navigation,
     bool force_new_browsing_instance,
     bool is_container_initiated,
+    bool has_rel_opener,
+    net::StorageAccessApiStatus storage_access_api_status,
     std::optional<std::u16string> embedder_shared_storage_context) {
   if (is_renderer_initiated)
     DCHECK(initiator_origin.has_value());
@@ -2908,6 +2890,7 @@ void NavigationControllerImpl::NavigateFromFrameProxy(
   params.is_form_submission = is_form_submission;
   params.initiator_activation_and_ad_status =
       initiator_activation_and_ad_status;
+  params.has_rel_opener = has_rel_opener;
 
   std::unique_ptr<NavigationRequest> request =
       CreateNavigationRequestFromLoadParams(
@@ -2916,7 +2899,7 @@ void NavigationControllerImpl::NavigateFromFrameProxy(
           ReloadType::NONE, entry.get(), frame_entry.get(),
           navigation_start_time, is_embedder_initiated_fenced_frame_navigation,
           is_unfenced_top_navigation, is_container_initiated,
-          embedder_shared_storage_context);
+          storage_access_api_status, embedder_shared_storage_context);
 
   if (!request)
     return;
@@ -3132,7 +3115,8 @@ void NavigationControllerImpl::PruneOldestSkippableEntryIfFull() {
   NotifyPrunedEntries(this, index, 1);
 }
 
-void NavigationControllerImpl::NavigateToExistingPendingEntry(
+base::WeakPtr<NavigationRequest>
+NavigationControllerImpl::NavigateToExistingPendingEntry(
     ReloadType reload_type,
     RenderFrameHostImpl* initiator_rfh,
     std::optional<blink::scheduler::TaskAttributionId>
@@ -3171,7 +3155,7 @@ void NavigationControllerImpl::NavigateToExistingPendingEntry(
     frame_tree_->StopLoading();
 
     DiscardNonCommittedEntries();
-    return;
+    return nullptr;
   }
 
   std::optional<blink::LocalFrameToken> initiator_frame_token;
@@ -3218,7 +3202,7 @@ void NavigationControllerImpl::NavigateToExistingPendingEntry(
     if (!navigation_request) {
       // If this navigation cannot start, delete the pending NavigationEntry.
       DiscardPendingEntry(false);
-      return;
+      return nullptr;
     }
     same_document_loads.push_back(std::move(navigation_request));
 
@@ -3261,7 +3245,16 @@ void NavigationControllerImpl::NavigateToExistingPendingEntry(
             blink::mojom::TraverseCancelledReason::kSandboxViolation);
       }
       DiscardPendingEntry(false);
-      return;
+
+      for (auto& unused_request : same_document_loads) {
+        unused_request->set_navigation_discard_reason(
+            NavigationDiscardReason::kNeverStarted);
+      }
+      for (auto& unused_request : different_document_loads) {
+        unused_request->set_navigation_discard_reason(
+            NavigationDiscardReason::kNeverStarted);
+      }
+      return nullptr;
     }
   }
 
@@ -3291,9 +3284,19 @@ void NavigationControllerImpl::NavigateToExistingPendingEntry(
         ReloadType::NONE, false /* is_same_document_history_load */,
         false /* is_history_navigation_in_new_child */, initiator_frame_token,
         initiator_process_id);
+    base::WeakPtr<NavigationRequest> request = navigation_request->GetWeakPtr();
     root->navigator().Navigate(std::move(navigation_request), ReloadType::NONE);
 
-    return;
+    for (auto& unused_request : same_document_loads) {
+      unused_request->set_navigation_discard_reason(
+          NavigationDiscardReason::kNeverStarted);
+    }
+    for (auto& unused_request : different_document_loads) {
+      unused_request->set_navigation_discard_reason(
+          NavigationDiscardReason::kNeverStarted);
+    }
+
+    return (request && request->IsInPrimaryMainFrame()) ? request : nullptr;
   }
 
   // History navigation might try to reuse a specific BrowsingInstance, already
@@ -3392,17 +3395,33 @@ void NavigationControllerImpl::NavigateToExistingPendingEntry(
         different_document_loads, same_document_loads);
   }
 
+  base::WeakPtr<NavigationRequest> primary_main_frame_request;
   // Send all the same document frame loads before the different document loads.
   for (auto& item : same_document_loads) {
     FrameTreeNode* frame = item->frame_tree_node();
+    // The request could be destroyed before `navigator().Navigate()` returns.
+    base::WeakPtr<NavigationRequest> request = item->GetWeakPtr();
     frame->navigator().Navigate(std::move(item), reload_type);
+    if (request && request->IsInPrimaryMainFrame()) {
+      // Only one primary main frame `NavigationRequest` should occur.
+      CHECK(!primary_main_frame_request);
+      primary_main_frame_request = request;
+    }
   }
   for (auto& item : different_document_loads) {
     FrameTreeNode* frame = item->frame_tree_node();
+    base::WeakPtr<NavigationRequest> request = item->GetWeakPtr();
     frame->navigator().Navigate(std::move(item), reload_type);
+    if (request && request->IsInPrimaryMainFrame()) {
+      // Only one primary main frame `NavigationRequest` should occur.
+      CHECK(!primary_main_frame_request);
+      primary_main_frame_request = request;
+    }
   }
 
   in_navigate_to_pending_entry_ = false;
+
+  return primary_main_frame_request;
 }
 
 NavigationControllerImpl::HistoryNavigationAction
@@ -3471,13 +3490,13 @@ NavigationControllerImpl::DetermineActionForHistoryNavigation(
     // In cases where the RenderFrameHost does not have a FrameNavigationEntry,
     // fall back to the last committed NavigationEntry's record for this frame.
     // This may happen in cases like the initial state of the RenderFrameHost.
-    // TODO(https://crbug.com/1304466): Ensure the RenderFrameHost always has an
+    // TODO(crbug.com/40217743): Ensure the RenderFrameHost always has an
     // accurate FrameNavigationEntry and eliminate this case.
     old_item = GetLastCommittedEntry()->GetFrameEntry(frame);
   }
   // If neither approach finds a FrameNavigationEntry, schedule a
   // different-document load.
-  // TODO(https://crbug.com/608402): Remove this case.
+  // TODO(crbug.com/40467594): Remove this case.
   if (!old_item)
     return HistoryNavigationAction::kDifferentDocument;
 
@@ -3762,7 +3781,7 @@ void NavigationControllerImpl::HandleRendererDebugURL(
   // Several tests expect a load of Chrome Debug URLs to send a DidStopLoading
   // notification, so set is loading to true here to properly surface it when
   // the renderer process is done handling the URL.
-  // TODO(crbug.com/1254130): Remove the test dependency on this behavior.
+  // TODO(crbug.com/40199456): Remove the test dependency on this behavior.
   if (!url.SchemeIs(url::kJavaScriptScheme)) {
     frame_tree_node->current_frame_host()->SetIsLoadingForRendererDebugURL();
   }
@@ -3879,9 +3898,15 @@ NavigationControllerImpl::CreateNavigationRequestFromLoadParams(
     bool is_embedder_initiated_fenced_frame_navigation,
     bool is_unfenced_top_navigation,
     bool is_container_initiated,
+    net::StorageAccessApiStatus storage_access_api_status,
     std::optional<std::u16string> embedder_shared_storage_context) {
   DCHECK_EQ(-1, GetIndexOfEntry(entry));
-  DCHECK(frame_entry);
+
+  // TODO(https://crbug.com/40467594): Add a CHECK(frame_entry) once all
+  // subframes have FrameNavigationEntries associated with them. Until then,
+  // there may be cases where a subframe navigation is missing `frame_entry`
+  // (e.g., see https://crbug.com/358084015).
+
   // All renderer-initiated navigations must have an initiator_origin.
   DCHECK(!params.is_renderer_initiated || params.initiator_origin.has_value());
 
@@ -3910,9 +3935,11 @@ NavigationControllerImpl::CreateNavigationRequestFromLoadParams(
     // NavigationRequest and FrameEntry. This will be fixed once we remove the
     // pending NavigationEntry, as we'll only make one call to
     // RewriteUrlForNavigation.
-    VLOG_IF(1, (url_to_load != frame_entry->url()))
-        << "NavigationRequest and FrameEntry have different URLs: "
-        << url_to_load << " vs " << frame_entry->url();
+    if (frame_entry) {
+      VLOG_IF(1, (url_to_load != frame_entry->url()))
+          << "NavigationRequest and FrameEntry have different URLs: "
+          << url_to_load << " vs " << frame_entry->url();
+    }
 
     // TODO(clamy): In order to remove the pending NavigationEntry,
     // |virtual_url| and |ignored_reverse_on_redirect| should be stored in the
@@ -3942,7 +3969,7 @@ NavigationControllerImpl::CreateNavigationRequestFromLoadParams(
 
   blink::mojom::NavigationType navigation_type = GetNavigationType(
       /*old_url=*/node->current_url(),
-      /*new_url=*/url_to_load, reload_type, entry, *frame_entry,
+      /*new_url=*/url_to_load, reload_type, entry, frame_entry,
       has_pending_cross_document_commit, is_currently_error_page,
       /*is_same_document_history_load=*/false,
       is_embedder_initiated_fenced_frame_navigation,
@@ -3958,6 +3985,9 @@ NavigationControllerImpl::CreateNavigationRequestFromLoadParams(
   // Update |download_policy| if the virtual URL is view-source.
   if (is_view_source_mode)
     download_policy.SetDisallowed(blink::NavigationDownloadType::kViewSource);
+
+  std::string page_state_data =
+      frame_entry ? frame_entry->page_state().ToEncodedData() : std::string();
 
   blink::mojom::CommonNavigationParamsPtr common_params =
       blink::mojom::CommonNavigationParams::New(
@@ -3979,16 +4009,14 @@ NavigationControllerImpl::CreateNavigationRequestFromLoadParams(
   blink::mojom::CommitNavigationParamsPtr commit_params =
       blink::mojom::CommitNavigationParams::New(
           std::nullopt,
-          // The correct storage key and session storage key will be computed
-          // before committing the navigation.
-          blink::StorageKey(), blink::StorageKey(), override_user_agent,
-          params.redirect_chain,
+          // The correct storage key will be computed before committing the
+          // navigation.
+          blink::StorageKey(), override_user_agent, params.redirect_chain,
           std::vector<network::mojom::URLResponseHeadPtr>(),
           std::vector<net::RedirectInfo>(), params.post_content_type,
           common_params->url, common_params->method,
-          params.can_load_local_resources,
-          frame_entry->page_state().ToEncodedData(), entry->GetUniqueID(),
-          entry->GetSubframeUniqueNames(node),
+          params.can_load_local_resources, page_state_data,
+          entry->GetUniqueID(), entry->GetSubframeUniqueNames(node),
           /*intended_as_new_entry=*/true,
           /*pending_history_list_offset=*/-1,
           params.should_clear_history_list ? -1 : GetLastCommittedEntryIndex(),
@@ -4010,7 +4038,9 @@ NavigationControllerImpl::CreateNavigationRequestFromLoadParams(
           /*origin_agent_cluster_left_as_default=*/true,
           /*enabled_client_hints=*/
           std::vector<network::mojom::WebClientHintsType>(),
-          /*is_cross_browsing_instance=*/false, /*old_page_info=*/nullptr,
+          /*is_cross_site_cross_browsing_context_group=*/false,
+          /*should_have_sticky_user_activation=*/false,
+          /*old_page_info=*/nullptr,
           /*http_response_code=*/-1,
           blink::mojom::NavigationApiHistoryEntryArrays::New(),
           /*early_hints_preloaded_resources=*/std::vector<GURL>(),
@@ -4027,13 +4057,16 @@ NavigationControllerImpl::CreateNavigationRequestFromLoadParams(
           base::flat_map<::blink::mojom::RuntimeFeature, bool>(),
           /*fenced_frame_properties=*/std::nullopt,
           /*not_restored_reasons=*/nullptr,
-          /*load_with_storage_access=*/false,
+          /*load_with_storage_access=*/
+          net::StorageAccessApiStatus::kNone,
           /*browsing_context_group_info=*/std::nullopt,
           /*lcpp_hint=*/nullptr, blink::CreateDefaultRendererContentSettings(),
-          /*cookie_deprecation_label=*/std::nullopt);
+          /*cookie_deprecation_label=*/std::nullopt,
+          /*visited_link_salt=*/std::nullopt,
+          /*local_surface_id=*/std::nullopt);
 #if BUILDFLAG(IS_ANDROID)
   if (ValidateDataURLAsString(params.data_url_as_string)) {
-    commit_params->data_url_as_string = params.data_url_as_string->data();
+    commit_params->data_url_as_string = params.data_url_as_string->as_string();
   }
 #endif
 
@@ -4054,11 +4087,15 @@ NavigationControllerImpl::CreateNavigationRequestFromLoadParams(
       params.navigation_ui_data ? params.navigation_ui_data->Clone() : nullptr,
       params.impression, params.initiator_activation_and_ad_status,
       params.is_pdf, is_embedder_initiated_fenced_frame_navigation,
-      is_container_initiated, embedder_shared_storage_context);
+      is_container_initiated, params.has_rel_opener, storage_access_api_status,
+      embedder_shared_storage_context);
   navigation_request->set_from_download_cross_origin_redirect(
       params.from_download_cross_origin_redirect);
   navigation_request->set_force_new_browsing_instance(
       params.force_new_browsing_instance);
+  if (params.force_no_https_upgrade) {
+    navigation_request->set_force_no_https_upgrade();
+  }
   return navigation_request;
 }
 
@@ -4119,7 +4156,7 @@ NavigationControllerImpl::CreateNavigationRequestFromEntry(
 
   blink::mojom::NavigationType navigation_type = GetNavigationType(
       /*old_url=*/frame_tree_node->current_url(),
-      /*new_url=*/dest_url, reload_type, entry, *frame_entry,
+      /*new_url=*/dest_url, reload_type, entry, frame_entry,
       has_pending_cross_document_commit, is_currently_error_page,
       is_same_document_history_load,
       /*is_embedder_initiated_fenced_frame_navigation=*/false,
@@ -4129,7 +4166,7 @@ NavigationControllerImpl::CreateNavigationRequestFromEntry(
   // back/forward/reload navigation that does a form resubmission.
   scoped_refptr<network::ResourceRequestBody> request_body;
   std::string post_content_type;
-  // TODO(https://crbug.com/931209) Store |is_form_submission| in the history
+  // TODO(crbug.com/41440869) Store |is_form_submission| in the history
   // entry. This way, it could be directly retrieved here. Right now, it is only
   // partially recovered when request.method == "POST" and request.body exists.
   bool is_form_submission = false;
@@ -4220,9 +4257,24 @@ void NavigationControllerImpl::LoadIfNecessary() {
                             needs_reload_type_);
 
   // Calling Reload() results in ignoring state, and not loading.
-  // Explicitly use NavigateToPendingEntry so that the renderer uses the
+  // Explicitly use NavigateToExistingPendingEntry so that the renderer uses the
   // cached state.
-  if (pending_entry_) {
+  if (entry_replaced_by_post_commit_error_) {
+    // If the current entry is a post commit error, we reload the entry it
+    // replaced instead. We leave the error entry in place until a commit
+    // replaces it, but the pending entry points to the original entry in the
+    // meantime. Note that NavigateToExistingPendingEntry is able to handle the
+    // case that pending_entry_ != entries_[pending_entry_index_].
+    // Note that this handling is similar to
+    // `NavigationControllerImpl::Reload()`.
+    pending_entry_ = entry_replaced_by_post_commit_error_.get();
+    pending_entry_index_ = GetCurrentEntryIndex();
+    NavigateToExistingPendingEntry(
+        ReloadType::NONE,
+        /*initiator_rfh=*/nullptr,
+        /*soft_navigation_heuristics_task_id=*/std::nullopt,
+        /*navigation_api_key=*/nullptr);
+  } else if (pending_entry_) {
     NavigateToExistingPendingEntry(
         ReloadType::NONE,
         /*initiator_rfh=*/nullptr,
@@ -4321,11 +4373,11 @@ void NavigationControllerImpl::NotifyEntryChanged(NavigationEntry* entry) {
 
 void NavigationControllerImpl::FinishRestore(int selected_index,
                                              RestoreType type) {
-  // TODO(https://crbug.com/1287624): Don't allow an index of -1, which would
+  // TODO(crbug.com/40816356): Don't allow an index of -1, which would
   // represent a no-committed-entry state.
   DCHECK(selected_index >= -1 && selected_index < GetEntryCount());
   ConfigureEntriesForRestore(&entries_, type);
-  // TODO(https://crbug.com/1287624): This will be pointing to the wrong entry
+  // TODO(crbug.com/40816356): This will be pointing to the wrong entry
   // if `entries_` contains pre-existing entries from the NavigationController
   // before restore, which would not be removed and will be at the front of the
   // entries list, causing the index to be off by the amount of pre-existing
@@ -4484,7 +4536,7 @@ NavigationControllerImpl::ComputePolicyContainerPoliciesForFrameEntry(
     FrameNavigationEntry* previous_frame_entry =
         GetLastCommittedEntry()->GetFrameEntry(rfh->frame_tree_node());
 
-    // TODO(https://crbug.com/608402): Remove this nullptr check when we can
+    // TODO(crbug.com/40467594): Remove this nullptr check when we can
     // ensure we always have a FrameNavigationEntry here.
     if (!previous_frame_entry)
       return nullptr;
@@ -4640,7 +4692,7 @@ NavigationControllerImpl::PopulateSingleNavigationApiHistoryEntryVector(
     // the same origin as the document being committed. Check the committed
     // origin, or if that is not available (during restore), check against the
     // FNE's url.
-    // TODO(crbug.com/1209092): Move this into ToNavigationApiHistoryEntry()
+    // TODO(crbug.com/40181982): Move this into ToNavigationApiHistoryEntry()
     // once we can be sure that entries with the same ISN will never be
     // cross-origin.
     url::Origin frame_entry_origin =
@@ -4764,7 +4816,7 @@ NavigationControllerImpl::GetNavigationApiHistoryEntryVectors(
         previous_entry->committed_origin().value_or(url::Origin::Resolve(
             previous_entry->url(),
             previous_entry->initiator_origin().value_or(url::Origin())));
-    // TODO(crbug.com/1209092): Move this into ToNavigationApiHistoryEntry()
+    // TODO(crbug.com/40181982): Move this into ToNavigationApiHistoryEntry()
     // once we can be sure that entries with the same ISN will never be
     // cross-origin.
     if (pending_origin.IsSameOriginWith(previous_entry_origin)) {
@@ -4806,7 +4858,7 @@ void NavigationControllerImpl::NavigateToNavigationApiKey(
   if (!current_entry)
     return;
 
-  // TODO(https://crbug.com/1383704): Make sure that the right task ID is passed
+  // TODO(crbug.com/40878000): Make sure that the right task ID is passed
   // when `navigation.traverseTo()` is called.
 
   // We want to find the nearest matching entry that is contiguously
@@ -4847,7 +4899,7 @@ bool NavigationControllerImpl::ShouldProtectUrlInNavigationApi(
 
 bool NavigationControllerImpl::ShouldMaintainTrivialSessionHistory(
     const FrameTreeNode* frame_tree_node) const {
-  // TODO(https://crbug.com/1197384): We may have to add portals in addition to
+  // TODO(crbug.com/40176906): We may have to add portals in addition to
   // prerender and fenced frames. This should be kept in sync with
   // LocalFrame version, LocalFrame::ShouldMaintainTrivialSessionHistory.
   // The preview mode appears as prerendered page in renderers, and

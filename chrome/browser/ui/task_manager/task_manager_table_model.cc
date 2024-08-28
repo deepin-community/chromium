@@ -468,7 +468,7 @@ std::u16string TaskManagerTableModel::GetText(size_t row, int column) {
     }
 
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return std::u16string();
   }
 }
@@ -580,7 +580,7 @@ int TaskManagerTableModel::CompareValues(size_t row1,
           return ValueCompare(stats1.css_style_sheets.size,
                               stats2.css_style_sheets.size);
         default:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     }
@@ -636,7 +636,7 @@ int TaskManagerTableModel::CompareValues(size_t row1,
           observed_task_manager()->GetKeepaliveCount(tasks_[row2]));
     }
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return 0;
   }
 }
@@ -694,6 +694,13 @@ void TaskManagerTableModel::OnTasksRefreshed(
     const TaskIdList& task_ids) {
   tasks_ = task_ids;
   OnRefresh();
+}
+
+void TaskManagerTableModel::OnActiveTaskFetched(TaskId id) {
+  if (!active_task_id_.has_value()) {
+    active_task_id_ = id;
+    table_view_delegate_->MaybeHighlightActiveTask();
+  }
 }
 
 void TaskManagerTableModel::ActivateTask(size_t row_index) {
@@ -806,7 +813,7 @@ void TaskManagerTableModel::UpdateRefreshTypes(int column_id, bool visibility) {
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
 
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return;
   }
 
@@ -898,6 +905,17 @@ std::optional<size_t> TaskManagerTableModel::GetRowForWebContents(
   auto index = base::ranges::find(tasks_, task_id);
   if (index == tasks_.end())
     return std::nullopt;
+  return static_cast<size_t>(index - tasks_.begin());
+}
+
+std::optional<size_t> TaskManagerTableModel::GetRowForActiveTask() {
+  if (!active_task_id_.has_value()) {
+    return std::nullopt;
+  }
+  auto index = base::ranges::find(tasks_, active_task_id_.value());
+  if (index == tasks_.end()) {
+    return std::nullopt;
+  }
   return static_cast<size_t>(index - tasks_.begin());
 }
 

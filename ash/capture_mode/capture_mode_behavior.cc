@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ash/capture_mode/base_capture_mode_session.h"
+#include "ash/capture_mode/capture_mode_camera_controller.h"
 #include "ash/capture_mode/capture_mode_constants.h"
 #include "ash/capture_mode/capture_mode_controller.h"
 #include "ash/capture_mode/capture_mode_metrics.h"
@@ -22,6 +23,7 @@
 #include "ash/shelf/shelf_layout_manager.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_forward.h"
@@ -123,14 +125,17 @@ class ProjectorBehavior : public CaptureModeBehavior {
     switch (mode) {
       case AudioRecordingMode::kOff:
       case AudioRecordingMode::kSystem:
+        // Projector does not support turning off audio recording nor recording
+        // the system audio separately without the microphone.
         return false;
       case AudioRecordingMode::kMicrophone:
-        return true;
       case AudioRecordingMode::kSystemAndMicrophone:
-        return features::IsCaptureModeAudioMixingEnabled();
+        return true;
     }
   }
-  bool ShouldCreateRecordingOverlayController() const override { return true; }
+  bool ShouldCreateAnnotationsOverlayController() const override {
+    return true;
+  }
   bool ShouldShowUserNudge() const override { return false; }
   bool ShouldAutoSelectFirstCamera() const override { return true; }
   bool RequiresCaptureFolderCreation() const override { return true; }
@@ -176,13 +181,11 @@ class GameDashboardBehavior : public CaptureModeBehavior,
                               public aura::WindowObserver {
  public:
   GameDashboardBehavior()
-      : CaptureModeBehavior({CaptureModeType::kVideo,
-                             CaptureModeSource::kWindow, RecordingType::kWebM,
-                             features::IsCaptureModeAudioMixingEnabled()
-                                 ? AudioRecordingMode::kSystemAndMicrophone
-                                 : AudioRecordingMode::kMicrophone,
-                             /*demo_tools_enabled=*/false},
-                            BehaviorType::kGameDashboard) {}
+      : CaptureModeBehavior(
+            {CaptureModeType::kVideo, CaptureModeSource::kWindow,
+             RecordingType::kWebM, AudioRecordingMode::kSystemAndMicrophone,
+             /*demo_tools_enabled=*/false},
+            BehaviorType::kGameDashboard) {}
 
   GameDashboardBehavior(const GameDashboardBehavior&) = delete;
   GameDashboardBehavior operator=(const GameDashboardBehavior&) = delete;
@@ -230,7 +233,11 @@ class GameDashboardBehavior : public CaptureModeBehavior,
   bool ShouldDemoToolsSettingsBeIncluded() const override { return false; }
   bool ShouldGifBeSupported() const override { return false; }
   bool ShouldShowUserNudge() const override { return false; }
-  bool ShouldAutoSelectFirstCamera() const override { return true; }
+  bool ShouldAutoSelectFirstCamera() const override {
+    return !CaptureModeController::Get()
+                ->camera_controller()
+                ->did_user_ever_change_camera();
+  }
 
   std::unique_ptr<CaptureModeBarView> CreateCaptureModeBarView() override {
     return std::make_unique<GameCaptureBarView>();
@@ -342,10 +349,9 @@ bool CaptureModeBehavior::SupportsAudioRecordingMode(
   switch (mode) {
     case AudioRecordingMode::kOff:
     case AudioRecordingMode::kMicrophone:
-      return true;
     case AudioRecordingMode::kSystem:
     case AudioRecordingMode::kSystemAndMicrophone:
-      return features::IsCaptureModeAudioMixingEnabled();
+      return true;
   }
 }
 
@@ -373,7 +379,10 @@ bool CaptureModeBehavior::ShouldSkipVideoRecordingCountDown() const {
   return false;
 }
 
-bool CaptureModeBehavior::ShouldCreateRecordingOverlayController() const {
+bool CaptureModeBehavior::ShouldCreateAnnotationsOverlayController() const {
+  if (base::FeatureList::IsEnabled(ash::features::kAnnotatorMode)) {
+    return true;
+  }
   return false;
 }
 
@@ -391,7 +400,7 @@ bool CaptureModeBehavior::RequiresCaptureFolderCreation() const {
 
 void CaptureModeBehavior::CreateCaptureFolder(
     OnCaptureFolderCreatedCallback callback) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 std::vector<RecordingType> CaptureModeBehavior::GetSupportedRecordingTypes()
@@ -406,7 +415,7 @@ std::vector<RecordingType> CaptureModeBehavior::GetSupportedRecordingTypes()
 
 void CaptureModeBehavior::SetPreSelectedWindow(
     aura::Window* pre_selected_window) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 const char* CaptureModeBehavior::GetClientMetricComponent() const {

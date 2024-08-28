@@ -129,23 +129,6 @@ class AutofillPrivateRemoveEntryFunction : public ExtensionFunction {
   ResponseAction Run() override;
 };
 
-class AutofillPrivateMaskCreditCardFunction : public ExtensionFunction {
- public:
-  AutofillPrivateMaskCreditCardFunction() = default;
-  AutofillPrivateMaskCreditCardFunction(
-      const AutofillPrivateMaskCreditCardFunction&) = delete;
-  AutofillPrivateMaskCreditCardFunction& operator=(
-      const AutofillPrivateMaskCreditCardFunction&) = delete;
-  DECLARE_EXTENSION_FUNCTION("autofillPrivate.maskCreditCard",
-                             AUTOFILLPRIVATE_MASKCREDITCARD)
-
- protected:
-  ~AutofillPrivateMaskCreditCardFunction() override = default;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-};
-
 class AutofillPrivateGetCreditCardListFunction : public ExtensionFunction {
  public:
   AutofillPrivateGetCreditCardListFunction() = default;
@@ -211,26 +194,6 @@ class AutofillPrivateLogServerIbanLinkClickedFunction
 
  protected:
   ~AutofillPrivateLogServerIbanLinkClickedFunction() override = default;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-};
-
-class AutofillPrivateSetCreditCardFIDOAuthEnabledStateFunction
-    : public ExtensionFunction {
- public:
-  AutofillPrivateSetCreditCardFIDOAuthEnabledStateFunction() = default;
-  AutofillPrivateSetCreditCardFIDOAuthEnabledStateFunction(
-      const AutofillPrivateSetCreditCardFIDOAuthEnabledStateFunction&) = delete;
-  AutofillPrivateSetCreditCardFIDOAuthEnabledStateFunction& operator=(
-      const AutofillPrivateSetCreditCardFIDOAuthEnabledStateFunction&) = delete;
-  DECLARE_EXTENSION_FUNCTION(
-      "autofillPrivate.setCreditCardFIDOAuthEnabledState",
-      AUTOFILLPRIVATE_SETCREDITCARDFIDOAUTHENABLEDSTATE)
-
- protected:
-  ~AutofillPrivateSetCreditCardFIDOAuthEnabledStateFunction() override =
-      default;
 
   // ExtensionFunction overrides.
   ResponseAction Run() override;

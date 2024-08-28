@@ -5,7 +5,6 @@
 #ifndef COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_SYNC_PASSWORD_SYNC_BRIDGE_H_
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_SYNC_PASSWORD_SYNC_BRIDGE_H_
 
-#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "components/password_manager/core/browser/password_store/password_store_change.h"
@@ -13,6 +12,10 @@
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/model/model_type_sync_bridge.h"
 #include "components/sync/model/wipe_model_upon_sync_disabled_behavior.h"
+
+namespace base {
+class Location;
+}  // namespace base
 
 namespace syncer {
 class MetadataChangeList;
@@ -48,8 +51,10 @@ class PasswordSyncBridge : public syncer::ModelTypeSyncBridge {
 
   // Notifies the bridge of changes to the password database. Callers are
   // responsible for calling this function within the very same transaction as
-  // the data changes.
-  void ActOnPasswordStoreChanges(const PasswordStoreChangeList& changes);
+  // the data changes. |location| is used for logging purposes and
+  // investigations concerning deletions only.
+  void ActOnPasswordStoreChanges(const base::Location& location,
+                                 const PasswordStoreChangeList& changes);
 
   // ModelTypeSyncBridge implementation.
   std::unique_ptr<syncer::MetadataChangeList> CreateMetadataChangeList()
@@ -60,8 +65,9 @@ class PasswordSyncBridge : public syncer::ModelTypeSyncBridge {
   std::optional<syncer::ModelError> ApplyIncrementalSyncChanges(
       std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
       syncer::EntityChangeList entity_changes) override;
-  void GetData(StorageKeyList storage_keys, DataCallback callback) override;
-  void GetAllDataForDebugging(DataCallback callback) override;
+  std::unique_ptr<syncer::DataBatch> GetDataForCommit(
+      StorageKeyList storage_keys) override;
+  std::unique_ptr<syncer::DataBatch> GetAllDataForDebugging() override;
   std::string GetClientTag(const syncer::EntityData& entity_data) override;
   std::string GetStorageKey(const syncer::EntityData& entity_data) override;
   bool SupportsGetStorageKey() const override;

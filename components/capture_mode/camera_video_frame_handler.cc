@@ -7,6 +7,7 @@
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/shared_memory_mapping.h"
@@ -15,13 +16,8 @@
 #include "components/viz/common/gpu/context_lost_observer.h"
 #include "components/viz/common/gpu/context_provider.h"
 #include "gpu/command_buffer/client/client_shared_image.h"
-#include "gpu/command_buffer/client/gpu_memory_buffer_manager.h"
 #include "gpu/command_buffer/client/shared_image_interface.h"
-#include "gpu/command_buffer/common/context_result.h"
-#include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
-#include "gpu/ipc/common/gpu_memory_buffer_impl_shared_memory.h"
-#include "gpu/ipc/common/gpu_memory_buffer_support.h"
 #include "media/base/media_switches.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_types.h"
@@ -36,6 +32,10 @@
 #include "gpu/command_buffer/common/shared_image_capabilities.h"
 #endif
 
+#if BUILDFLAG(IS_MAC)
+#include "media/capture/video/apple/video_capture_device_factory_apple.h"
+#endif
+
 namespace capture_mode {
 
 namespace {
@@ -45,47 +45,13 @@ namespace {
 // SharedMemory GMBs are used.
 bool g_force_use_gpu_memory_buffer_for_test = false;
 
-// A constant flag that describes which APIs the shared image mailboxes created
-// for the video frame will be used with. They will be read via the raster
+// A constant flag that describes which APIs the shared images created
+// for the video frames will be used with. They will be read via the raster
 // interface (which will be going over GLES2 if OOP-R is not enabled), sent
 // to the display compositor, and may be used as overlays.
-constexpr uint32_t kSharedImageUsage =
+constexpr gpu::SharedImageUsageSet kSharedImageUsage =
     gpu::SHARED_IMAGE_USAGE_GLES2_READ | gpu::SHARED_IMAGE_USAGE_RASTER_READ |
     gpu::SHARED_IMAGE_USAGE_DISPLAY_READ | gpu::SHARED_IMAGE_USAGE_SCANOUT;
-
-// The usage of the GpuMemoryBuffer that backs the video frames on an actual
-// device (of type `NATIVE_PIXMAP`). The buffer is going to be presented on the
-// screen for rendering, will be used as a texture, and can be read by CPU and
-// potentially a video encode accelerator.
-constexpr gfx::BufferUsage kGpuMemoryBufferUsage =
-    gfx::BufferUsage::SCANOUT_VEA_CPU_READ;
-
-// The usage of the GpuMemoryBuffer that backs the video frames in unittests,
-// since the type of that buffer will be `SHARED_MEMORY_BUFFER` which doesn't
-// support the above on-device usage.
-constexpr gfx::BufferUsage kGpuMemoryBufferUsageForTest =
-    gfx::BufferUsage::SCANOUT_CPU_READ_WRITE;
-
-// The only supported video pixel format used on devices is `PIXEL_FORMAT_NV12`.
-// This maps to a buffer format of `YUV_420_BIPLANAR`.
-constexpr gfx::BufferFormat kGpuMemoryBufferFormat =
-    gfx::BufferFormat::YUV_420_BIPLANAR;
-
-// In unittests, the video pixel format used is `PIXEL_FORMAT_ARGB`, since the
-// video frames are painted and verified manually using Skia. The buffer format
-// used for this is `BGRA_8888`.
-constexpr gfx::BufferFormat kGpuMemoryBufferFormatForTest =
-    gfx::BufferFormat::BGRA_8888;
-
-gfx::BufferUsage GetBufferUsage() {
-  return g_force_use_gpu_memory_buffer_for_test ? kGpuMemoryBufferUsageForTest
-                                                : kGpuMemoryBufferUsage;
-}
-
-gfx::BufferFormat GetBufferFormat() {
-  return g_force_use_gpu_memory_buffer_for_test ? kGpuMemoryBufferFormatForTest
-                                                : kGpuMemoryBufferFormat;
-}
 
 viz::SharedImageFormat GetSharedImageFormat() {
   return g_force_use_gpu_memory_buffer_for_test
@@ -113,40 +79,6 @@ void AdjustParamsForCurrentConfig(media::VideoCaptureParams* params) {
   params->buffer_type = media::VideoCaptureBufferType::kGpuMemoryBuffer;
 }
 #endif
-
-// Whether to use the SharedImageInterface entrypoint taking a SharedImageFormat
-// to create multiplanar SharedImages via viz::MultiPlaneFormat rather than
-// going through the legacy entrypoint for SI creation that passes a GMB.
-bool CreateNonLegacyMultiPlaneSharedImage() {
-  return media::IsMultiPlaneFormatForHardwareVideoEnabled();
-}
-
-// Whether to use per-plane sampling rather than external sampling.
-bool UsePerPlaneSampling() {
-  return base::FeatureList::IsEnabled(
-      media::kMultiPlaneVideoCaptureSharedImages);
-}
-
-// Creates and returns a list of the buffer planes for each we'll need to create
-// a shared image and store it in `GpuMemoryBufferHandleHolder::shared_images_`.
-std::vector<gfx::BufferPlane> CreateGpuBufferPlanes() {
-  std::vector<gfx::BufferPlane> planes;
-  if (UsePerPlaneSampling() && !CreateNonLegacyMultiPlaneSharedImage()) {
-    planes.push_back(gfx::BufferPlane::Y);
-    planes.push_back(gfx::BufferPlane::UV);
-  } else {
-    planes.push_back(gfx::BufferPlane::DEFAULT);
-  }
-  return planes;
-}
-
-// Returns the buffer texture target used to create a `MailboxHolder` according
-// to our GPU buffer usage, buffer format, and the given `context_capabilities`.
-uint32_t CalculateBufferTextureTarget(
-    const gpu::Capabilities& context_capabilities) {
-  return gpu::GetBufferTextureTarget(GetBufferUsage(), GetBufferFormat(),
-                                     context_capabilities);
-}
 
 bool IsFatalError(media::VideoCaptureError error) {
   switch (error) {
@@ -184,6 +116,27 @@ bool IsD3DSharedImageSupported(ui::ContextFactory* context_factory) {
   }
   return false;
 }
+
+void AdjustWinParamsForCurrentConfig(media::VideoCaptureParams* params,
+                                     ui::ContextFactory* context_factory) {
+  if (media::IsMediaFoundationD3D11VideoCaptureEnabled() &&
+      params->requested_format.pixel_format == media::PIXEL_FORMAT_NV12) {
+    if (IsGpuRasterizationSupported(context_factory)) {
+      params->buffer_type = media::VideoCaptureBufferType::kGpuMemoryBuffer;
+    } else {
+      params->requested_format.pixel_format = media::PIXEL_FORMAT_I420;
+    }
+  }
+}
+#endif
+
+#if BUILDFLAG(IS_MAC)
+void AdjustMacParamsForCurrentConfig(media::VideoCaptureParams* params,
+                                     const std::string& device_id) {
+  if (media::ShouldEnableGpuMemoryBuffer(device_id)) {
+    params->buffer_type = media::VideoCaptureBufferType::kGpuMemoryBuffer;
+  }
+}
 #endif
 
 // -----------------------------------------------------------------------------
@@ -216,40 +169,30 @@ class SharedMemoryBufferHandleHolder : public BufferHandleHolder {
       video_capture::mojom::ReadyFrameInBufferPtr buffer) override {
     const size_t mapping_size = media::VideoFrame::AllocationSize(
         buffer->frame_info->pixel_format, buffer->frame_info->coded_size);
-    if (!MaybeUpdateMapping(mapping_size)) {
+
+    auto mapping = region_.Map();
+    if (!mapping.IsValid()) {
       return {};
     }
+    DCHECK_GE(mapping.size(), mapping_size);
 
     auto& frame_info = buffer->frame_info;
     auto frame = media::VideoFrame::WrapExternalData(
         frame_info->pixel_format, frame_info->coded_size,
         frame_info->visible_rect, frame_info->visible_rect.size(),
-        mapping_.GetMemoryAs<uint8_t>(), mapping_.size(),
-        frame_info->timestamp);
+        mapping.GetMemoryAs<uint8_t>(), mapping.size(), frame_info->timestamp);
+
+    if (frame) {
+      frame->AddDestructionObserver(
+          base::DoNothingWithBoundArgs(std::move(mapping)));
+    }
 
     return frame;
   }
 
  private:
-  // Maps a new region with a size `new_mapping_size` bytes if no `mapping_` is
-  // available. Returns true if already mapped, or mapping is successful, false
-  // otherwise.
-  bool MaybeUpdateMapping(size_t new_mapping_size) {
-    if (mapping_.IsValid()) {
-      DCHECK_GE(mapping_.size(), new_mapping_size);
-      return true;
-    }
-
-    mapping_ = region_.Map();
-    DCHECK_GE(mapping_.size(), new_mapping_size);
-    return mapping_.IsValid();
-  }
-
   // The held shared memory region associated with this object.
   base::UnsafeSharedMemoryRegion region_;
-
-  // Shared memory mapping associated with the held `region_`.
-  base::WritableSharedMemoryMapping mapping_;
 };
 
 // -----------------------------------------------------------------------------
@@ -264,15 +207,12 @@ class GpuMemoryBufferHandleHolder : public BufferHandleHolder,
                               ui::ContextFactory* context_factory)
       : gpu_memory_buffer_handle_(
             std::move(buffer_handle->get_gpu_memory_buffer_handle())),
-        buffer_planes_(CreateGpuBufferPlanes()),
         context_factory_(context_factory),
         context_provider_(
             context_factory_->SharedMainThreadRasterContextProvider()) {
     DCHECK(buffer_handle->is_gpu_memory_buffer_handle());
     if (context_provider_) {
       context_provider_->AddObserver(this);
-      buffer_texture_target_ = CalculateBufferTextureTarget(
-          context_provider_->ContextCapabilities());
     }
   }
 
@@ -291,13 +231,11 @@ class GpuMemoryBufferHandleHolder : public BufferHandleHolder,
         context_provider_->SharedImageInterface();
     DCHECK(shared_image_interface);
 
-    for (auto& si : shared_images_) {
-      if (!si) {
-        continue;
-      }
-      shared_image_interface->DestroySharedImage(release_sync_token_,
-                                                 std::move(si));
+    if (!shared_image_) {
+      return;
     }
+    shared_image_interface->DestroySharedImage(release_sync_token_,
+                                               std::move(shared_image_));
   }
 
   // BufferHandleHolder:
@@ -309,12 +247,12 @@ class GpuMemoryBufferHandleHolder : public BufferHandleHolder,
     }
 
     const auto& frame_info = buffer->frame_info;
-    if (!MaybeCreateSharedImages(frame_info)) {
+    if (!MaybeCreateSharedImage(frame_info)) {
       LOG(ERROR) << "Failed to initialize GpuMemoryBufferHandleHolder.";
       return {};
     }
 
-    return WrapMailboxesInVideoFrame(frame_info);
+    return WrapSharedImageInVideoFrame(frame_info);
   }
 
   // viz::ContextLostObserver:
@@ -322,19 +260,15 @@ class GpuMemoryBufferHandleHolder : public BufferHandleHolder,
     DCHECK(context_provider_);
     context_provider_->RemoveObserver(this);
 
-    // Clear the mailboxes so that we can recreate the shared images.
-    should_create_shared_images_ = true;
-    for (auto& si : shared_images_) {
-      si.reset();
-    }
+    // Clear the shared image so that we can recreate the shared image.
+    should_create_shared_image_ = true;
+    shared_image_.reset();
     release_sync_token_ = gpu::SyncToken();
 
     context_provider_ =
         context_factory_->SharedMainThreadRasterContextProvider();
     if (context_provider_) {
       context_provider_->AddObserver(this);
-      buffer_texture_target_ = CalculateBufferTextureTarget(
-          context_provider_->ContextCapabilities());
     }
   }
 
@@ -347,100 +281,54 @@ class GpuMemoryBufferHandleHolder : public BufferHandleHolder,
   }
 
  private:
-  // Creates and returns a new `GpuMemoryBuffer` from a cloned handle of our
-  // `gpu_memory_buffer_handle_`. The type of the buffer depends on the type of
-  // the handle and can only be either `NATIVE_PIXMAP` or
-  // `SHARED_MEMORY_BUFFER`.
-  std::unique_ptr<gfx::GpuMemoryBuffer> CreateGpuMemoryBufferFromHandle(
-      const gfx::Size& size) {
-    const auto buffer_format = GetBufferFormat();
-    const auto buffer_usage = GetBufferUsage();
-    if (gpu_memory_buffer_handle_.type ==
-        gpu::GpuMemoryBufferSupport::GetNativeGpuMemoryBufferType()) {
-      return gpu_memory_buffer_support_.CreateGpuMemoryBufferImplFromHandle(
-          gpu_memory_buffer_handle_.Clone(), size, buffer_format, buffer_usage,
-          base::DoNothing());
-    }
-
-    DCHECK_EQ(gpu_memory_buffer_handle_.type, gfx::SHARED_MEMORY_BUFFER);
-    DCHECK(g_force_use_gpu_memory_buffer_for_test);
-    return gpu::GpuMemoryBufferImplSharedMemory::CreateFromHandle(
-        gpu_memory_buffer_handle_.Clone(), size, buffer_format, buffer_usage,
-        base::DoNothing());
-  }
-
-  // Initializes this holder by creating shared images and storing them in
-  // `shared_images_`. These shared images are backed by a GpuMemoryBuffer whose
-  // handle is a clone of our `gpu_memory_buffer_handle_`. This operation should
-  // only be done the first ever time, or whenever the gpu context is lost.
-  // Returns true if shared images are already created or creation is
-  // successful. False otherwise.
-  bool MaybeCreateSharedImages(
+  // Initializes this holder by creating `shared_image_`. This shared image is
+  // backed by a GpuMemoryBuffer whose handle is a clone of our
+  // `gpu_memory_buffer_handle_`. This operation should only be done the first
+  // ever time, or whenever the gpu context is lost. Returns true if shared
+  // image is already created or creation is successful. False otherwise.
+  bool MaybeCreateSharedImage(
       const media::mojom::VideoFrameInfoPtr& frame_info) {
     DCHECK(context_provider_);
 
-    if (!should_create_shared_images_) {
+    if (!should_create_shared_image_) {
       return true;
-    }
-
-    // We clone our handle `gpu_memory_buffer_handle_` and use the cloned handle
-    // to create a new GpuMemoryBuffer which will be used to create the shared
-    // images. This way, the lifetime of our `gpu_memory_buffer_handle_` remains
-    // tied to the lieftime of this object (i.e. until `OnBufferRetired()` is
-    // called).
-    std::unique_ptr<gfx::GpuMemoryBuffer> gmb =
-        CreateGpuMemoryBufferFromHandle(frame_info->coded_size);
-
-    if (!gmb) {
-      LOG(ERROR) << "Failed to create a GpuMemoryBuffer.";
-      return false;
     }
 
     gpu::SharedImageInterface* shared_image_interface =
         context_provider_->SharedImageInterface();
     DCHECK(shared_image_interface);
 
-    if (CreateNonLegacyMultiPlaneSharedImage()) {
-      auto format = GetSharedImageFormat();
+    auto format = GetSharedImageFormat();
 #if BUILDFLAG(IS_OZONE)
-      // If format is not multiplanar it must be used for testing.
-      CHECK(format.is_multi_plane() || g_force_use_gpu_memory_buffer_for_test);
-      if (!UsePerPlaneSampling() && format.is_multi_plane()) {
-        format.SetPrefersExternalSampler();
-      }
-#endif
-      CHECK_EQ(buffer_planes_.size(), 1u);
-      shared_images_[0] = shared_image_interface->CreateSharedImage(
-          format, gmb->GetSize(), frame_info->color_space,
-          kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, kSharedImageUsage,
-          "CameraVideoFrame", gmb->CloneHandle());
-      CHECK(shared_images_[0]);
-    } else {
-      gpu::GpuMemoryBufferManager* gmb_manager =
-          context_factory_->GetGpuMemoryBufferManager();
-      for (size_t plane = 0; plane < buffer_planes_.size(); ++plane) {
-        shared_images_[plane] = shared_image_interface->CreateSharedImage(
-            gmb.get(), gmb_manager, buffer_planes_[plane],
-            frame_info->color_space, kTopLeft_GrSurfaceOrigin,
-            kPremul_SkAlphaType, kSharedImageUsage, "CameraVideoFrame");
-        CHECK(shared_images_[plane]);
-      }
+    // If format is not multiplanar it must be used for testing.
+    CHECK(format.is_multi_plane() || g_force_use_gpu_memory_buffer_for_test);
+    if (format.is_multi_plane()) {
+      format.SetPrefersExternalSampler();
     }
+#endif
+    // We clone our handle `gpu_memory_buffer_handle_` and use the cloned handle
+    // to create the shared image. This way, the lifetime of our
+    // `gpu_memory_buffer_handle_` remains tied to the lifetime of this object
+    // (i.e. until `OnBufferRetired()` is called).
+    shared_image_ = shared_image_interface->CreateSharedImage(
+        {format, frame_info->coded_size, frame_info->color_space,
+         kSharedImageUsage, "CameraVideoFrame"},
+        gpu_memory_buffer_handle_.Clone());
+    CHECK(shared_image_);
 
-    // Since this is the first time we create the shared images in
-    // `shared_images_`, we need to guarantee that the shared images are created
-    // before they're used.
+    // Since this is the first time we create the `shared_image_`, we need to
+    // guarantee that the shared image is created before it is used.
     mailbox_holder_sync_token_ = shared_image_interface->GenVerifiedSyncToken();
 
-    should_create_shared_images_ = false;
+    should_create_shared_image_ = false;
     return true;
   }
 
-  // Wraps the shared images in `shared_images_` in a video frame and returns it
+  // Wraps the `shared_image_` in a video frame and returns it
   // if wrapping was successful, or an empty refptr otherwise.
-  scoped_refptr<media::VideoFrame> WrapMailboxesInVideoFrame(
+  scoped_refptr<media::VideoFrame> WrapSharedImageInVideoFrame(
       const media::mojom::VideoFrameInfoPtr& frame_info) {
-    DCHECK(!should_create_shared_images_);
+    DCHECK(!should_create_shared_image_);
 
     if (frame_info->pixel_format !=
             media::VideoPixelFormat::PIXEL_FORMAT_NV12 &&
@@ -456,39 +344,30 @@ class GpuMemoryBufferHandleHolder : public BufferHandleHolder,
     DCHECK(!frame_info->is_premapped);
 #endif
 
-    gpu::MailboxHolder mailbox_holder_array[media::VideoFrame::kMaxPlanes];
-    for (size_t plane = 0; plane < buffer_planes_.size(); ++plane) {
-      DCHECK(shared_images_[plane]);
-      mailbox_holder_array[plane] = gpu::MailboxHolder(
-          shared_images_[plane]->mailbox(), mailbox_holder_sync_token_,
-          buffer_texture_target_);
-    }
-    mailbox_holder_sync_token_.Clear();
+    CHECK(shared_image_);
+    auto buffer_texture_target = shared_image_->GetTextureTarget();
 
-    auto frame = media::VideoFrame::WrapNativeTextures(
-        frame_info->pixel_format, mailbox_holder_array,
+    auto frame = media::VideoFrame::WrapSharedImage(
+        frame_info->pixel_format, shared_image_, mailbox_holder_sync_token_,
+        buffer_texture_target,
         base::BindOnce(&GpuMemoryBufferHandleHolder::OnMailboxReleased,
                        weak_ptr_factory_.GetWeakPtr()),
         frame_info->coded_size, frame_info->visible_rect,
         frame_info->visible_rect.size(), frame_info->timestamp);
+    mailbox_holder_sync_token_.Clear();
 
     if (!frame) {
       LOG(ERROR) << "Failed to create a video frame.";
       return frame;
     }
 
-    if (CreateNonLegacyMultiPlaneSharedImage()) {
-      auto format = GetSharedImageFormat();
-      // If format is not multiplanar it must be used for testing.
-      CHECK(format.is_multi_plane() || g_force_use_gpu_memory_buffer_for_test);
-      if (!UsePerPlaneSampling() && format.is_multi_plane()) {
-        frame->set_shared_image_format_type(
-            media::SharedImageFormatType::kSharedImageFormatExternalSampler);
-      } else {
-        frame->set_shared_image_format_type(
-            media::SharedImageFormatType::kSharedImageFormat);
-      }
-    }
+    auto format = shared_image_->format();
+    // If format is not multiplanar it must be used for testing.
+    CHECK(format.is_multi_plane() || g_force_use_gpu_memory_buffer_for_test);
+    frame->set_shared_image_format_type(
+        format.PrefersExternalSampler()
+            ? media::SharedImageFormatType::kSharedImageFormatExternalSampler
+            : media::SharedImageFormatType::kSharedImageFormat);
 
     if (frame_info->color_space.IsValid()) {
       frame->set_color_space(frame_info->color_space);
@@ -508,35 +387,22 @@ class GpuMemoryBufferHandleHolder : public BufferHandleHolder,
   // The held GPU buffer handle associated with this object.
   gfx::GpuMemoryBufferHandle gpu_memory_buffer_handle_;
 
-  // The buffer planes for each we need to create a shared image and store it in
-  // `shared_images_`.
-  const std::vector<gfx::BufferPlane> buffer_planes_;
-
   const raw_ptr<ui::ContextFactory> context_factory_;
-
-  // Used to create a GPU memory buffer from its handle.
-  gpu::GpuMemoryBufferSupport gpu_memory_buffer_support_;
 
   scoped_refptr<viz::RasterContextProvider> context_provider_;
 
-  // The texture target we use to create a `MailboxHolder`. This value is
-  // calculated for out GPU buffer format, and GPU buffer usage, and the current
-  // capabilities of `context_provider_`.
-  uint32_t buffer_texture_target_;
-
-  // Contains the shared images of the video frame planes created from the GPU
-  // memory buffer.
-  std::vector<scoped_refptr<gpu::ClientSharedImage>> shared_images_{
-      media::VideoFrame::kMaxPlanes};
+  // Contains the shared image of the video frame created from the GPU memory
+  // buffer.
+  scoped_refptr<gpu::ClientSharedImage> shared_image_;
 
   // The sync token used when creating a `MailboxHolder`. This will be a
   // verified sync token the first time we wrap a video frame around a mailbox.
   gpu::SyncToken mailbox_holder_sync_token_;
 
-  // The release sync token of the above `shared_images_`.
+  // The release sync token of the above `shared_image_`.
   gpu::SyncToken release_sync_token_;
 
-  bool should_create_shared_images_ = true;
+  bool should_create_shared_image_ = true;
 
   base::WeakPtrFactory<GpuMemoryBufferHandleHolder> weak_ptr_factory_{this};
 };
@@ -694,7 +560,8 @@ std::unique_ptr<BufferHandleHolder> BufferHandleHolder::Create(
 CameraVideoFrameHandler::CameraVideoFrameHandler(
     ui::ContextFactory* context_factory,
     mojo::Remote<video_capture::mojom::VideoSource> camera_video_source,
-    const media::VideoCaptureFormat& capture_format)
+    const media::VideoCaptureFormat& capture_format,
+    const std::string& device_id)
     : context_factory_(context_factory),
       camera_video_source_remote_(std::move(camera_video_source)) {
   CHECK(camera_video_source_remote_);
@@ -707,6 +574,10 @@ CameraVideoFrameHandler::CameraVideoFrameHandler(
   capture_params.requested_format = capture_format;
 #if BUILDFLAG(IS_CHROMEOS)
   AdjustParamsForCurrentConfig(&capture_params);
+#elif BUILDFLAG(IS_WIN)
+  AdjustWinParamsForCurrentConfig(&capture_params, context_factory_);
+#elif BUILDFLAG(IS_MAC)
+  AdjustMacParamsForCurrentConfig(&capture_params, device_id);
 #endif
 
   camera_video_source_remote_->CreatePushSubscription(
@@ -718,15 +589,8 @@ CameraVideoFrameHandler::CameraVideoFrameHandler(
       // if any.
       /*force_reopen_with_new_settings=*/false,
       camera_video_stream_subsciption_remote_.BindNewPipeAndPassReceiver(),
-      base::BindOnce(
-          [](video_capture::mojom::CreatePushSubscriptionResultCodePtr
-                 result_code,
-             const media::VideoCaptureParams& actual_params) {
-            if (result_code->is_error_code()) {
-              LOG(ERROR) << "Error in creating push subscription: "
-                         << static_cast<int>(result_code->get_error_code());
-            }
-          }));
+      base::BindOnce(&CameraVideoFrameHandler::OnSubscriptionCreationResult,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 CameraVideoFrameHandler::~CameraVideoFrameHandler() = default;
@@ -744,6 +608,13 @@ void CameraVideoFrameHandler::Close(base::OnceClosure close_complete_callback) {
   // `delegate_` might be freed any time after this point, so nullify it to
   // reflect that.
   delegate_ = nullptr;
+
+  // Since the destruction of `this` is postponed till `close_complete_callback`
+  // is invoked, there is a chance where `this` might outlive
+  // `context_factory_`. This is why we need to reset it.
+  buffer_map_.clear();
+  context_factory_ = nullptr;
+
   camera_video_stream_subsciption_remote_->Close(
       std::move(close_complete_callback));
 }
@@ -753,6 +624,10 @@ void CameraVideoFrameHandler::OnCaptureConfigurationChanged() {}
 void CameraVideoFrameHandler::OnNewBuffer(
     int buffer_id,
     media::mojom::VideoBufferHandlePtr buffer_handle) {
+  if (!active_) {
+    return;
+  }
+
   const auto pair = buffer_map_.emplace(
       buffer_id,
       BufferHandleHolder::Create(
@@ -801,7 +676,7 @@ void CameraVideoFrameHandler::OnFrameReadyInBuffer(
 }
 
 void CameraVideoFrameHandler::OnBufferRetired(int buffer_id) {
-  DCHECK(buffer_map_.contains(buffer_id));
+  DCHECK(buffer_map_.contains(buffer_id) || !active_);
   buffer_map_.erase(buffer_id);
 }
 
@@ -836,6 +711,17 @@ void CameraVideoFrameHandler::OnStopped() {}
 // static
 void CameraVideoFrameHandler::SetForceUseGpuMemoryBufferForTest(bool value) {
   g_force_use_gpu_memory_buffer_for_test = value;
+}
+
+void CameraVideoFrameHandler::OnSubscriptionCreationResult(
+    video_capture::mojom::CreatePushSubscriptionResultCodePtr result_code,
+    const media::VideoCaptureParams& actual_params) {
+  if (result_code->is_error_code()) {
+    LOG(ERROR) << "Error in creating push subscription: "
+               << static_cast<int>(result_code->get_error_code());
+  } else {
+    actual_params_.emplace(actual_params);
+  }
 }
 
 void CameraVideoFrameHandler::OnVideoFrameGone(int buffer_id) {

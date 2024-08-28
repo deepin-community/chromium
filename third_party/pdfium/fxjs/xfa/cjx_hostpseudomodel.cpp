@@ -6,13 +6,11 @@
 
 #include "fxjs/xfa/cjx_hostpseudomodel.h"
 
-#include <vector>
-
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/span.h"
 #include "fxjs/fxv8.h"
 #include "fxjs/js_resources.h"
 #include "fxjs/xfa/cfxjse_engine.h"
-#include "third_party/base/check.h"
 #include "v8/include/v8-object.h"
 #include "xfa/fxfa/cxfa_ffdoc.h"
 #include "xfa/fxfa/cxfa_ffnotify.h"
@@ -29,10 +27,10 @@ size_t FilterName(WideStringView wsExpression,
     return nLength;
 
   size_t nCount = 0;
+  pdfium::span<const wchar_t> pSrc = wsExpression.span();
   {
     // Span's lifetime must end before ReleaseBuffer() below.
     pdfium::span<wchar_t> pBuf = wsFilter.GetBuffer(nLength - nStart);
-    const wchar_t* pSrc = wsExpression.unterminated_c_str();
     while (nStart < nLength) {
       wchar_t wCur = pSrc[nStart++];
       if (wCur == ',')
@@ -42,7 +40,7 @@ size_t FilterName(WideStringView wsExpression,
     }
   }
   wsFilter.ReleaseBuffer(nCount);
-  wsFilter.Trim();
+  wsFilter.TrimWhitespace();
   return nStart;
 }
 

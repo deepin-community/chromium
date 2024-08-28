@@ -35,12 +35,12 @@
 #include <optional>
 
 #include "base/feature_list.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "net/http/structured_headers.h"
-#include "services/network/public/cpp/attribution_reporting_runtime_features.h"
 #include "services/network/public/cpp/client_hints.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/web_client_hints_types.mojom-blink.h"
@@ -88,6 +88,7 @@
 #include "third_party/blink/renderer/core/loader/interactive_detector.h"
 #include "third_party/blink/renderer/core/loader/loader_factory_for_frame.h"
 #include "third_party/blink/renderer/core/loader/mixed_content_checker.h"
+#include "third_party/blink/renderer/core/loader/resource/image_resource.h"
 #include "third_party/blink/renderer/core/loader/resource_load_observer_for_frame.h"
 #include "third_party/blink/renderer/core/loader/subresource_filter.h"
 #include "third_party/blink/renderer/core/page/page.h"
@@ -163,7 +164,7 @@ mojom::FetchCacheMode DetermineFrameCacheMode(Frame* frame) {
     case WebFrameLoadType::kReloadBypassingCache:
       return mojom::FetchCacheMode::kBypassCache;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return mojom::FetchCacheMode::kDefault;
 }
 
@@ -178,7 +179,7 @@ struct FrameFetchContext::FrozenState final : GarbageCollected<FrozenState> {
               float device_pixel_ratio,
               const String& user_agent,
               base::optional_ref<const UserAgentMetadata> user_agent_metadata,
-              bool is_svg_image_chrome_client,
+              bool is_isolated_svg_chrome_client,
               bool is_prerendering,
               const String& reduced_accept_language)
       : url(url),
@@ -189,7 +190,7 @@ struct FrameFetchContext::FrozenState final : GarbageCollected<FrozenState> {
         device_pixel_ratio(device_pixel_ratio),
         user_agent(user_agent),
         user_agent_metadata(user_agent_metadata.CopyAsOptional()),
-        is_svg_image_chrome_client(is_svg_image_chrome_client),
+        is_isolated_svg_chrome_client(is_isolated_svg_chrome_client),
         is_prerendering(is_prerendering),
         reduced_accept_language(reduced_accept_language) {}
 
@@ -202,7 +203,7 @@ struct FrameFetchContext::FrozenState final : GarbageCollected<FrozenState> {
   const float device_pixel_ratio;
   const String user_agent;
   const std::optional<UserAgentMetadata> user_agent_metadata;
-  const bool is_svg_image_chrome_client;
+  const bool is_isolated_svg_chrome_client;
   const bool is_prerendering;
   const String reduced_accept_language;
 
@@ -242,7 +243,6 @@ ResourceFetcher* FrameFetchContext::CreateFetcherForCommittedDocument(
   fetcher->SetResourceLoadObserver(
       MakeGarbageCollected<ResourceLoadObserverForFrame>(
           loader, document, fetcher->GetProperties()));
-  fetcher->SetImagesEnabled(frame->GetSettings()->GetImagesEnabled());
   fetcher->SetAutoLoadImages(
       frame->GetSettings()->GetLoadsImagesAutomatically());
   fetcher->SetEarlyHintsPreloadedResources(
@@ -271,6 +271,23 @@ scoped_refptr<const SecurityOrigin> FrameFetchContext::GetTopFrameOrigin()
   if (GetResourceFetcherProperties().IsDetached())
     return frozen_state_->top_frame_origin;
   return document_->TopFrameOrigin();
+}
+
+const Vector<KURL>& FrameFetchContext::GetPotentiallyUnusedPreloads() const {
+  if (LocalFrame* frame = GetFrame()) {
+    if (LCPCriticalPathPredictor* lcpp = frame->GetLCPP()) {
+      return lcpp->unused_preloads();
+    }
+  }
+  return empty_unused_preloads_;
+}
+
+void FrameFetchContext::AddLcpPredictedCallback(base::OnceClosure callback) {
+  if (LocalFrame* frame = FrameFetchContext::GetFrame()) {
+    if (LCPCriticalPathPredictor* lcpp = frame->GetLCPP()) {
+      lcpp->AddLCPPredictedCallback(std::move(callback));
+    }
+  }
 }
 
 SubresourceFilter* FrameFetchContext::GetSubresourceFilter() const {
@@ -335,8 +352,8 @@ void FrameFetchContext::PrepareRequest(
     return;
 
   request.SetUkmSourceId(document_->UkmSourceID());
-  request.SetHasStorageAccess(
-      document_->GetExecutionContext()->HasStorageAccess());
+  request.SetStorageAccessApiStatus(
+      document_->GetExecutionContext()->GetStorageAccessApiStatus());
 
   if (document_loader_->ForceFetchCacheMode())
     request.SetCacheMode(*document_loader_->ForceFetchCacheMode());
@@ -345,8 +362,6 @@ void FrameFetchContext::PrepareRequest(
           GetFrame()->GetAttributionSrcLoader()) {
     request.SetAttributionReportingSupport(
         attribution_src_loader->GetSupport());
-    request.SetAttributionReportingRuntimeFeatures(
-        attribution_src_loader->GetRuntimeFeatures());
   }
 
   // If the original request included the attribute to opt-in to shared storage,
@@ -400,11 +415,16 @@ void FrameFetchContext::AddResourceTiming(
       ->AddResourceTiming(std::move(info), initiator_type);
 }
 
-bool FrameFetchContext::AllowImage(bool images_enabled, const KURL& url) const {
+bool FrameFetchContext::AllowImage() const {
   if (GetResourceFetcherProperties().IsDetached())
     return true;
-  if (auto* settings_client = GetContentSettingsClient())
-    images_enabled = settings_client->AllowImage(images_enabled, url);
+
+  bool images_enabled = GetFrame()->ImagesEnabled();
+  if (!images_enabled) {
+    if (auto* settings_client = GetContentSettingsClient()) {
+      settings_client->DidNotAllowImage();
+    }
+  }
   return images_enabled;
 }
 
@@ -421,6 +441,10 @@ void FrameFetchContext::ModifyRequestForCSP(ResourceRequest& resource_request) {
 void FrameFetchContext::AddClientHintsIfNecessary(
     const std::optional<float> resource_width,
     ResourceRequest& request) {
+  if (GetResourceFetcherProperties().IsDetached()) {
+    return;
+  }
+
   // If the feature is enabled, then client hints are allowed only on secure
   // URLs.
   if (!ClientHintsPreferences::IsClientHintsAllowed(request.Url()))
@@ -428,8 +452,7 @@ void FrameFetchContext::AddClientHintsIfNecessary(
 
   // Check if |url| is allowed to run JavaScript. If not, client hints are not
   // attached to the requests that initiate on the render side.
-  if (!AllowScriptFromSourceWithoutNotifying(
-          request.Url(), GetContentSettingsClient(), GetSettings())) {
+  if (!GetFrame()->ScriptEnabled()) {
     return;
   }
 
@@ -440,9 +463,12 @@ void FrameFetchContext::AddClientHintsIfNecessary(
           ? document_->domWindow()->GetSecurityContext().GetPermissionsPolicy()
           : nullptr;
 
-  url::Origin resource_origin =
-      SecurityOrigin::Create(request.Url())->ToUrlOrigin();
-  bool is_1p_origin = IsFirstPartyOrigin(request.Url());
+  const scoped_refptr<SecurityOrigin> resource_origin =
+      SecurityOrigin::Create(request.Url());
+  bool is_1p_origin =
+      IsFirstPartyOrigin(base::FeatureList::IsEnabled(kAvoidWastefulHostCopies)
+                             ? resource_origin.get()
+                             : SecurityOrigin::Create(request.Url()).get());
 
   std::optional<UserAgentMetadata> ua = GetUserAgentMetadata();
 
@@ -477,8 +503,8 @@ void FrameFetchContext::AddClientHintsIfNecessary(
   // by browser (from accept-ch header on this response or previously persisted)
   // with renderer-parsed http-equiv merged in.
   BaseFetchContext::AddClientHintsIfNecessary(
-      GetClientHintsPreferences(), resource_origin, is_1p_origin, ua, policy,
-      image_info, prefers_color_scheme, prefers_reduced_motion,
+      GetClientHintsPreferences(), resource_origin->ToUrlOrigin(), is_1p_origin,
+      ua, policy, image_info, prefers_color_scheme, prefers_reduced_motion,
       prefers_reduced_transparency, request);
 }
 
@@ -486,17 +512,7 @@ void FrameFetchContext::AddReducedAcceptLanguageIfNecessary(
     ResourceRequest& request) {
   // If the feature is enabled, then reduce accept language are allowed only on
   // http and https.
-
-  // For detached frame, we check whether the feature flag turns on because it
-  // will crash when detach frame calls GetExecutionContext().
-  if (GetResourceFetcherProperties().IsDetached() &&
-      !base::FeatureList::IsEnabled(network::features::kReduceAcceptLanguage)) {
-    return;
-  }
-
-  if (!GetResourceFetcherProperties().IsDetached() &&
-      !RuntimeEnabledFeatures::ReduceAcceptLanguageEnabled(
-          GetExecutionContext())) {
+  if (!base::FeatureList::IsEnabled(network::features::kReduceAcceptLanguage)) {
     return;
   }
 
@@ -543,6 +559,18 @@ bool FrameFetchContext::DoesLCPPHaveAnyHintData() {
   return lcpp->HasAnyHintData();
 }
 
+bool FrameFetchContext::DoesLCPPHaveLcpElementLocatorHintData() {
+  if (GetResourceFetcherProperties().IsDetached()) {
+    return false;
+  }
+
+  LCPCriticalPathPredictor* lcpp = GetFrame()->GetLCPP();
+  if (!lcpp) {
+    return false;
+  }
+  return !lcpp->lcp_element_locators().empty();
+}
+
 void FrameFetchContext::SetFirstPartyCookie(ResourceRequest& request) {
   // Set the first party for cookies url if it has not been set yet (new
   // requests). This value will be updated during redirects, consistent with
@@ -551,29 +579,19 @@ void FrameFetchContext::SetFirstPartyCookie(ResourceRequest& request) {
     request.SetSiteForCookies(GetSiteForCookies());
 }
 
-bool FrameFetchContext::AllowScriptFromSource(const KURL& url) const {
-  if (AllowScriptFromSourceWithoutNotifying(url, GetContentSettingsClient(),
-                                            GetSettings())) {
-    return true;
+bool FrameFetchContext::AllowScript() const {
+  bool script_enabled = GetFrame()->ScriptEnabled();
+  if (!script_enabled) {
+    WebContentSettingsClient* settings_client = GetContentSettingsClient();
+    if (settings_client) {
+      settings_client->DidNotAllowScript();
+    }
   }
-  WebContentSettingsClient* settings_client = GetContentSettingsClient();
-  if (settings_client)
-    settings_client->DidNotAllowScript();
-  return false;
+  return script_enabled;
 }
 
-// static
-bool FrameFetchContext::AllowScriptFromSourceWithoutNotifying(
-    const KURL& url,
-    WebContentSettingsClient* settings_client,
-    Settings* settings) {
-  bool allow_script = !settings || settings->GetScriptEnabled();
-  if (settings_client)
-    allow_script = settings_client->AllowScriptFromSource(allow_script, url);
-  return allow_script;
-}
-
-bool FrameFetchContext::IsFirstPartyOrigin(const KURL& url) const {
+bool FrameFetchContext::IsFirstPartyOrigin(
+    const SecurityOrigin* resource_origin) const {
   if (GetResourceFetcherProperties().IsDetached())
     return false;
 
@@ -582,7 +600,7 @@ bool FrameFetchContext::IsFirstPartyOrigin(const KURL& url) const {
       .Top()
       .GetSecurityContext()
       ->GetSecurityOrigin()
-      ->IsSameOriginWith(SecurityOrigin::Create(url).get());
+      ->IsSameOriginWith(resource_origin);
 }
 
 bool FrameFetchContext::ShouldBlockRequestByInspector(const KURL& url) const {
@@ -613,11 +631,11 @@ ContentSecurityPolicy* FrameFetchContext::GetContentSecurityPolicyForWorld(
       world);
 }
 
-bool FrameFetchContext::IsSVGImageChromeClient() const {
+bool FrameFetchContext::IsIsolatedSVGChromeClient() const {
   if (GetResourceFetcherProperties().IsDetached())
-    return frozen_state_->is_svg_image_chrome_client;
+    return frozen_state_->is_isolated_svg_chrome_client;
 
-  return GetFrame()->GetChromeClient().IsSVGImageChromeClient();
+  return GetFrame()->GetChromeClient().IsIsolatedSVGChromeClient();
 }
 
 void FrameFetchContext::CountUsage(WebFeature feature) const {
@@ -769,10 +787,12 @@ String FrameFetchContext::GetReducedAcceptLanguage() const {
   // header as the overridden value.
   String override_accept_language;
   probe::ApplyAcceptLanguageOverride(Probe(), &override_accept_language);
-  return override_accept_language.empty()
-             ? frame->GetReducedAcceptLanguage().GetString()
-             : network_utils::GenerateAcceptLanguageHeader(
-                   override_accept_language);
+  if (override_accept_language.empty()) {
+    String expanded_language = network_utils::ExpandLanguageList(
+        frame->GetReducedAcceptLanguage().GetString());
+    return network_utils::GenerateAcceptLanguageHeader(expanded_language);
+  }
+  return network_utils::GenerateAcceptLanguageHeader(override_accept_language);
 }
 
 float FrameFetchContext::GetDevicePixelRatio() const {
@@ -793,7 +813,7 @@ FetchContext* FrameFetchContext::Detach() {
   frozen_state_ = MakeGarbageCollected<FrozenState>(
       Url(), GetContentSecurityPolicy(), GetSiteForCookies(),
       GetTopFrameOrigin(), client_hints_prefs, GetDevicePixelRatio(),
-      GetUserAgent(), GetUserAgentMetadata(), IsSVGImageChromeClient(),
+      GetUserAgent(), GetUserAgentMetadata(), IsIsolatedSVGChromeClient(),
       IsPrerendering(), GetReducedAcceptLanguage());
   document_loader_ = nullptr;
   document_ = nullptr;

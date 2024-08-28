@@ -40,7 +40,7 @@ class BaselineBatchCompiler {
   void EnsureQueueCapacity();
 
   // Enqueues SharedFunctionInfo.
-  void Enqueue(Handle<SharedFunctionInfo> shared);
+  void Enqueue(DirectHandle<SharedFunctionInfo> shared);
 
   // Returns true if the current batch exceeds the threshold and should be
   // compiled.
@@ -57,7 +57,7 @@ class BaselineBatchCompiler {
 
   // Tries to compile |maybe_sfi|. Returns false if compilation was not possible
   // (e.g. bytecode was fushed, weak handle no longer valid, ...).
-  bool MaybeCompileFunction(MaybeObject maybe_sfi);
+  bool MaybeCompileFunction(Tagged<MaybeObject> maybe_sfi);
 
   Isolate* isolate_;
 

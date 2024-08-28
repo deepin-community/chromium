@@ -62,6 +62,11 @@ class MockReferrerChainProvider : public ReferrerChainProvider {
                                      event_outermost_main_frame_id,
                                  int user_gesture_count_limit,
                                  ReferrerChain* out_referrer_chain));
+  MOCK_METHOD4(IdentifyReferrerChainByEventURL,
+               AttributionResult(const GURL& event_url,
+                                 SessionID event_tab_id,
+                                 int user_gesture_count_limit,
+                                 ReferrerChain* out_referrer_chain));
   MOCK_METHOD3(IdentifyReferrerChainByPendingEventURL,
                AttributionResult(const GURL& event_url,
                                  int user_gesture_count_limit,
@@ -240,7 +245,8 @@ TEST_F(ChromeEnterpriseRealTimeUrlLookupServiceTest,
       request_callback;
   base::MockCallback<RTLookupResponseCallback> response_callback;
   enterprise_rt_service()->StartLookup(url, response_callback.Get(),
-                                       content::GetIOThreadTaskRunner({}));
+                                       content::GetIOThreadTaskRunner({}),
+                                       SessionID::InvalidValue());
 
   test_url_loader_factory_.SetInterceptor(request_callback.Get());
   EXPECT_CALL(request_callback, Run(_)).Times(0);
@@ -266,7 +272,8 @@ TEST_F(ChromeEnterpriseRealTimeUrlLookupServiceTest,
 
   base::MockCallback<RTLookupResponseCallback> response_callback;
   enterprise_rt_service()->StartLookup(url, response_callback.Get(),
-                                       content::GetIOThreadTaskRunner({}));
+                                       content::GetIOThreadTaskRunner({}),
+                                       SessionID::InvalidValue());
 
   EXPECT_CALL(response_callback, Run(/* is_rt_lookup_successful */ true,
                                      /* is_cached_response */ false, _));
@@ -278,6 +285,7 @@ TEST_F(ChromeEnterpriseRealTimeUrlLookupServiceTest,
         ASSERT_TRUE(GetRequestProto(request, &request_proto));
         EXPECT_EQ("http://example.test/", request_proto.url());
         EXPECT_EQ("dm_token", request_proto.dm_token());
+        EXPECT_EQ("test@example.com", request_proto.email());
         EXPECT_EQ(ChromeUserPopulation::SAFE_BROWSING,
                   request_proto.population().user_population());
         EXPECT_TRUE(request_proto.population().is_history_sync_enabled());

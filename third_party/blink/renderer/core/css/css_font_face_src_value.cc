@@ -72,7 +72,7 @@ String TechnologyToString(CSSFontFaceSrcValue::FontTechnology font_technology) {
     case CSSFontFaceSrcValue::FontTechnology::kTechnologySBIX:
       return "color-sbix";
     case CSSFontFaceSrcValue::FontTechnology::kTechnologyUnknown:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return String();
   }
 }
@@ -206,6 +206,7 @@ bool CSSFontFaceSrcValue::Equals(const CSSFontFaceSrcValue& other) const {
 void CSSFontFaceSrcValue::TraceAfterDispatch(Visitor* visitor) const {
   visitor->Trace(src_value_);
   visitor->Trace(fetched_);
+  visitor->Trace(world_);
   CSSValue::TraceAfterDispatch(visitor);
 }
 

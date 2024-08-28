@@ -11,7 +11,6 @@
 #include "base/hash/sha1.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
-#include "base/sys_byteorder.h"
 #include "net/websockets/websocket_deflate_parameters.h"
 #include "net/websockets/websocket_extension.h"
 #include "net/websockets/websocket_handshake_constants.h"
@@ -149,7 +148,7 @@ void WebSocket::Send(
 
     default:
       // Only Pong and Text frame types are supported.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   server_->SendRaw(connection_->id(), encoded, traffic_annotation);
 }

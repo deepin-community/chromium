@@ -5,11 +5,11 @@
 #include "remoting/host/it2me/it2me_host.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include <optional>
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
@@ -110,7 +110,7 @@ void PrintTo(It2MeHostState state, std::ostream* os) {
     CASE(kError);
     CASE(kInvalidDomainError);
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   *os << "Unknown state " << static_cast<int>(state);
   return;
 }
@@ -539,7 +539,7 @@ TEST_F(It2MeHostTest, NatTraversalPolicyDisabled) {
   ASSERT_EQ(It2MeHostState::kDisconnected, last_host_state_);
 }
 
-// TODO(crbug/1122155): flaky test.
+// TODO(crbug.com/40715894): flaky test.
 TEST_F(It2MeHostTest,
        DISABLED_NatTraversalPolicyDisabledTransitionCausesDisconnect) {
   StartHost();
@@ -585,7 +585,7 @@ TEST_F(It2MeHostTest, RelayPolicyDisabled) {
   ASSERT_EQ(It2MeHostState::kDisconnected, last_host_state_);
 }
 
-// TODO(crbug.com/1126973): Flaky test.
+// TODO(crbug.com/40718796): Flaky test.
 TEST_F(It2MeHostTest, DISABLED_RelayPolicyDisabledTransitionCausesDisconnect) {
   StartHost();
   ASSERT_EQ(It2MeHostState::kReceivedAccessCode, last_host_state_);

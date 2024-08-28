@@ -7,8 +7,7 @@ import enum
 import pathlib
 import unittest
 
-from crossbench import compat, helper
-from crossbench import plt
+from crossbench import compat, helper, plt
 from tests import test_helper
 from tests.crossbench.mock_helper import CrossbenchFakeFsTestCase
 
@@ -55,8 +54,8 @@ class WaitTestCase(unittest.TestCase):
   def test_wait_with_backoff(self):
     data = []
     delta = 0.0005
-    for time_spent, time_left in helper.wait_with_backoff(
-        helper.WaitRange(min=0.01, max=0.05)):
+    for time_spent, time_left in helper.WaitRange(
+        min=0.01, max=0.05).wait_with_backoff():
       data.append((time_spent, time_left))
       if len(data) == 2:
         break
@@ -299,6 +298,7 @@ class UpdateUrlQueryTestCase(unittest.TestCase):
         "http://test.com?foo=bar&xyz=10#status",
         helper.update_url_query("http://test.com?foo=BAR&xyz=10#status",
                                 {"foo": "bar"}))
+
 
 if __name__ == "__main__":
   test_helper.run_pytest(__file__)

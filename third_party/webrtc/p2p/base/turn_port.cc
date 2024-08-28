@@ -37,6 +37,7 @@
 
 namespace cricket {
 
+using ::webrtc::IceCandidateType;
 using ::webrtc::SafeTask;
 using ::webrtc::TaskQueueBase;
 using ::webrtc::TimeDelta;
@@ -207,7 +208,68 @@ class TurnEntry : public sigslot::has_slots<> {
   webrtc::ScopedTaskSafety task_safety_;
 };
 
-TurnPort::TurnPort(TaskQueueBase* thread,
+TurnPort::TurnPort(const PortParametersRef& args,
+                   rtc::AsyncPacketSocket* socket,
+                   const ProtocolAddress& server_address,
+                   const RelayCredentials& credentials,
+                   int server_priority,
+                   const std::vector<std::string>& tls_alpn_protocols,
+                   const std::vector<std::string>& tls_elliptic_curves,
+                   webrtc::TurnCustomizer* customizer,
+                   rtc::SSLCertificateVerifier* tls_cert_verifier)
+    : Port(args, IceCandidateType::kRelay),
+      server_address_(server_address),
+      server_url_(ReconstructServerUrl()),
+      tls_alpn_protocols_(tls_alpn_protocols),
+      tls_elliptic_curves_(tls_elliptic_curves),
+      tls_cert_verifier_(tls_cert_verifier),
+      credentials_(credentials),
+      socket_(socket),
+      error_(0),
+      stun_dscp_value_(rtc::DSCP_NO_CHANGE),
+      request_manager_(
+          args.network_thread,
+          [this](const void* data, size_t size, StunRequest* request) {
+            OnSendStunPacket(data, size, request);
+          }),
+      next_channel_number_(TURN_CHANNEL_NUMBER_START),
+      state_(STATE_CONNECTING),
+      server_priority_(server_priority),
+      allocate_mismatch_retries_(0),
+      turn_customizer_(customizer) {}
+
+TurnPort::TurnPort(const PortParametersRef& args,
+                   uint16_t min_port,
+                   uint16_t max_port,
+                   const ProtocolAddress& server_address,
+                   const RelayCredentials& credentials,
+                   int server_priority,
+                   const std::vector<std::string>& tls_alpn_protocols,
+                   const std::vector<std::string>& tls_elliptic_curves,
+                   webrtc::TurnCustomizer* customizer,
+                   rtc::SSLCertificateVerifier* tls_cert_verifier)
+    : Port(args, IceCandidateType::kRelay, min_port, max_port),
+      server_address_(server_address),
+      server_url_(ReconstructServerUrl()),
+      tls_alpn_protocols_(tls_alpn_protocols),
+      tls_elliptic_curves_(tls_elliptic_curves),
+      tls_cert_verifier_(tls_cert_verifier),
+      credentials_(credentials),
+      socket_(nullptr),
+      error_(0),
+      stun_dscp_value_(rtc::DSCP_NO_CHANGE),
+      request_manager_(
+          args.network_thread,
+          [this](const void* data, size_t size, StunRequest* request) {
+            OnSendStunPacket(data, size, request);
+          }),
+      next_channel_number_(TURN_CHANNEL_NUMBER_START),
+      state_(STATE_CONNECTING),
+      server_priority_(server_priority),
+      allocate_mismatch_retries_(0),
+      turn_customizer_(customizer) {}
+
+TurnPort::TurnPort(webrtc::TaskQueueBase* thread,
                    rtc::PacketSocketFactory* factory,
                    const rtc::Network* network,
                    rtc::AsyncPacketSocket* socket,
@@ -221,34 +283,21 @@ TurnPort::TurnPort(TaskQueueBase* thread,
                    webrtc::TurnCustomizer* customizer,
                    rtc::SSLCertificateVerifier* tls_cert_verifier,
                    const webrtc::FieldTrialsView* field_trials)
-    : Port(thread,
-           RELAY_PORT_TYPE,
-           factory,
-           network,
-           username,
-           password,
-           field_trials),
-      server_address_(server_address),
-      server_url_(ReconstructServerUrl()),
-      tls_alpn_protocols_(tls_alpn_protocols),
-      tls_elliptic_curves_(tls_elliptic_curves),
-      tls_cert_verifier_(tls_cert_verifier),
-      credentials_(credentials),
-      socket_(socket),
-      error_(0),
-      stun_dscp_value_(rtc::DSCP_NO_CHANGE),
-      request_manager_(
-          thread,
-          [this](const void* data, size_t size, StunRequest* request) {
-            OnSendStunPacket(data, size, request);
-          }),
-      next_channel_number_(TURN_CHANNEL_NUMBER_START),
-      state_(STATE_CONNECTING),
-      server_priority_(server_priority),
-      allocate_mismatch_retries_(0),
-      turn_customizer_(customizer) {}
-
-TurnPort::TurnPort(TaskQueueBase* thread,
+    : TurnPort({.network_thread = thread,
+                .socket_factory = factory,
+                .network = network,
+                .ice_username_fragment = username,
+                .ice_password = password,
+                .field_trials = field_trials},
+               socket,
+               server_address,
+               credentials,
+               server_priority,
+               tls_alpn_protocols,
+               tls_elliptic_curves,
+               customizer,
+               tls_cert_verifier) {}
+TurnPort::TurnPort(webrtc::TaskQueueBase* thread,
                    rtc::PacketSocketFactory* factory,
                    const rtc::Network* network,
                    uint16_t min_port,
@@ -263,34 +312,21 @@ TurnPort::TurnPort(TaskQueueBase* thread,
                    webrtc::TurnCustomizer* customizer,
                    rtc::SSLCertificateVerifier* tls_cert_verifier,
                    const webrtc::FieldTrialsView* field_trials)
-    : Port(thread,
-           RELAY_PORT_TYPE,
-           factory,
-           network,
-           min_port,
-           max_port,
-           username,
-           password,
-           field_trials),
-      server_address_(server_address),
-      server_url_(ReconstructServerUrl()),
-      tls_alpn_protocols_(tls_alpn_protocols),
-      tls_elliptic_curves_(tls_elliptic_curves),
-      tls_cert_verifier_(tls_cert_verifier),
-      credentials_(credentials),
-      socket_(nullptr),
-      error_(0),
-      stun_dscp_value_(rtc::DSCP_NO_CHANGE),
-      request_manager_(
-          thread,
-          [this](const void* data, size_t size, StunRequest* request) {
-            OnSendStunPacket(data, size, request);
-          }),
-      next_channel_number_(TURN_CHANNEL_NUMBER_START),
-      state_(STATE_CONNECTING),
-      server_priority_(server_priority),
-      allocate_mismatch_retries_(0),
-      turn_customizer_(customizer) {}
+    : TurnPort({.network_thread = thread,
+                .socket_factory = factory,
+                .network = network,
+                .ice_username_fragment = username,
+                .ice_password = password,
+                .field_trials = field_trials},
+               min_port,
+               max_port,
+               server_address,
+               credentials,
+               server_priority,
+               tls_alpn_protocols,
+               tls_elliptic_curves,
+               customizer,
+               tls_cert_verifier) {}
 
 TurnPort::~TurnPort() {
   // TODO(juberti): Should this even be necessary?
@@ -308,6 +344,20 @@ TurnPort::~TurnPort() {
 
   if (!SharedSocket()) {
     delete socket_;
+  }
+}
+
+void TurnPort::set_realm(absl::string_view realm) {
+  if (realm.empty()) {
+    // Fail silently since this reduces the entropy going into the hash but log
+    // a warning.
+    RTC_LOG(LS_WARNING) << "Setting realm to the empty string, "
+                        << "this is not supported.";
+    return;
+  }
+  if (realm != realm_) {
+    realm_ = std::string(realm);
+    UpdateHash();
   }
 }
 
@@ -424,7 +474,7 @@ bool TurnPort::CreateTurnClientSocket() {
     tcp_options.tls_cert_verifier = tls_cert_verifier_;
     socket_ = socket_factory()->CreateClientTcpSocket(
         rtc::SocketAddress(Network()->GetBestIP(), 0), server_address_.address,
-        proxy(), user_agent(), tcp_options);
+        tcp_options);
   }
 
   if (!socket_) {
@@ -887,8 +937,9 @@ void TurnPort::OnAllocateSuccess(const rtc::SocketAddress& address,
              UDP_PROTOCOL_NAME,
              ProtoToString(server_address_.proto),  // The first hop protocol.
              "",  // TCP candidate type, empty for turn candidates.
-             RELAY_PORT_TYPE, GetRelayPreference(server_address_.proto),
-             server_priority_, server_url_, true);
+             IceCandidateType::kRelay,
+             GetRelayPreference(server_address_.proto), server_priority_,
+             server_url_, true);
 }
 
 void TurnPort::OnAllocateError(int error_code, absl::string_view reason) {
@@ -938,7 +989,9 @@ void TurnPort::Release() {
 
 void TurnPort::Close() {
   if (!ready()) {
-    OnAllocateError(SERVER_NOT_REACHABLE_ERROR, "");
+    OnAllocateError(
+        SERVER_NOT_REACHABLE_ERROR,
+        GetProtocol() != PROTO_UDP ? "Failed to establish connection" : "");
   }
   request_manager_.Clear();
   // Stop the port from creating new connections.
@@ -1246,8 +1299,8 @@ void TurnPort::SetCallbacksForTest(CallbacksForTest* callbacks) {
   callbacks_for_test_ = callbacks;
 }
 
-bool TurnPort::SetEntryChannelId(const rtc::SocketAddress& address,
-                                 int channel_id) {
+bool TurnPort::SetEntryChannelIdForTesting(const rtc::SocketAddress& address,
+                                           int channel_id) {
   TurnEntry* entry = FindEntry(address);
   if (!entry) {
     return false;

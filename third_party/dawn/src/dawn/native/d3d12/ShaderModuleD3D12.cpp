@@ -61,16 +61,15 @@ void DumpDXCCompiledShader(Device* device,
     std::ostringstream dumpedMsg;
     // The HLSL may be empty if compilation failed.
     if (!compiledShader.hlslSource.empty()) {
-        dumpedMsg << "/* Dumped generated HLSL */" << std::endl
-                  << compiledShader.hlslSource << std::endl;
+        dumpedMsg << "/* Dumped generated HLSL */\n" << compiledShader.hlslSource << "\n";
     }
 
     // The blob may be empty if DXC compilation failed.
     const Blob& shaderBlob = compiledShader.shaderBlob;
     if (!shaderBlob.Empty()) {
-        dumpedMsg << "/* DXC compile flags */ " << std::endl
-                  << dawn::native::d3d::CompileFlagsToString(compileFlags) << std::endl;
-        dumpedMsg << "/* Dumped disassembled DXIL */" << std::endl;
+        dumpedMsg << "/* DXC compile flags */\n"
+                  << dawn::native::d3d::CompileFlagsToString(compileFlags) << "\n";
+        dumpedMsg << "/* Dumped disassembled DXIL */\n";
         DxcBuffer dxcBuffer;
         dxcBuffer.Encoding = DXC_CP_UTF8;
         dxcBuffer.Ptr = shaderBlob.Data();
@@ -86,7 +85,7 @@ void DumpDXCCompiledShader(Device* device,
             dumpedMsg << std::string_view(static_cast<const char*>(disassembly->GetBufferPointer()),
                                           disassembly->GetBufferSize());
         } else {
-            dumpedMsg << "DXC disassemble failed" << std::endl;
+            dumpedMsg << "DXC disassemble failed\n";
             ComPtr<IDxcBlobEncoding> errors;
             if (dxcResult && dxcResult->HasOutput(DXC_OUT_ERRORS) &&
                 SUCCEEDED(dxcResult->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr))) {
@@ -107,15 +106,18 @@ void DumpDXCCompiledShader(Device* device,
 ResultOrError<Ref<ShaderModule>> ShaderModule::Create(
     Device* device,
     const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
+    const std::vector<tint::wgsl::Extension>& internalExtensions,
     ShaderModuleParseResult* parseResult,
     OwnedCompilationMessages* compilationMessages) {
-    Ref<ShaderModule> module = AcquireRef(new ShaderModule(device, descriptor));
+    Ref<ShaderModule> module = AcquireRef(new ShaderModule(device, descriptor, internalExtensions));
     DAWN_TRY(module->Initialize(parseResult, compilationMessages));
     return module;
 }
 
-ShaderModule::ShaderModule(Device* device, const UnpackedPtr<ShaderModuleDescriptor>& descriptor)
-    : ShaderModuleBase(device, descriptor) {}
+ShaderModule::ShaderModule(Device* device,
+                           const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
+                           std::vector<tint::wgsl::Extension> internalExtensions)
+    : ShaderModuleBase(device, descriptor, std::move(internalExtensions)) {}
 
 MaybeError ShaderModule::Initialize(ShaderModuleParseResult* parseResult,
                                     OwnedCompilationMessages* compilationMessages) {
@@ -139,9 +141,11 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
 
     d3d::D3DCompilationRequest req = {};
     req.tracePlatform = UnsafeUnkeyedValue(device->GetPlatform());
-    req.hlsl.shaderModel = device->GetDeviceInfo().shaderModel;
+    req.hlsl.shaderModel = ToBackend(device->GetPhysicalDevice())
+                               ->GetAppliedShaderModelUnderToggles(device->GetTogglesState());
     req.hlsl.disableSymbolRenaming = device->IsToggleEnabled(Toggle::DisableSymbolRenaming);
     req.hlsl.dumpShaders = device->IsToggleEnabled(Toggle::DumpShaders);
+    req.hlsl.useTintIR = device->IsToggleEnabled(Toggle::UseTintIR);
     req.hlsl.maxSubgroupSizeForFullSubgroups = maxSubgroupSizeForFullSubgroups;
 
     req.bytecode.hasShaderF16Feature = device->HasFeature(Feature::ShaderF16);
@@ -159,7 +163,7 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
         req.bytecode.dxcLibrary = device->GetDxcLibrary().Get();
         req.bytecode.dxcCompiler = device->GetDxcCompiler().Get();
         req.bytecode.compilerVersion = dxcVersionInfo.DxcCompilerVersion;
-        req.bytecode.dxcShaderProfile = device->GetDeviceInfo().shaderProfiles[stage];
+        req.bytecode.dxcShaderProfile = device->GetDxcShaderProfiles()[stage];
     } else {
         req.bytecode.compiler = d3d::Compiler::FXC;
         req.bytecode.d3dCompile = device->GetFunctions()->d3dCompile;
@@ -179,7 +183,7 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
 
     using tint::BindingPoint;
 
-    tint::ArrayLengthFromUniformOptions arrayLengthFromUniform;
+    tint::hlsl::writer::ArrayLengthFromUniformOptions arrayLengthFromUniform;
     arrayLengthFromUniform.ubo_binding = {layout->GetDynamicStorageBufferLengthsRegisterSpace(),
                                           layout->GetDynamicStorageBufferLengthsShaderRegister()};
 
@@ -226,8 +230,7 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
                 bindings.sampler.emplace(
                     srcBindingPoint, tint::hlsl::writer::binding::Sampler{dstBindingPoint.group,
                                                                           dstBindingPoint.binding});
-            } else if (std::holds_alternative<SampledTextureBindingInfo>(
-                           shaderBindingInfo.bindingInfo)) {
+            } else if (std::holds_alternative<TextureBindingInfo>(shaderBindingInfo.bindingInfo)) {
                 bindings.texture.emplace(
                     srcBindingPoint, tint::hlsl::writer::binding::Texture{dstBindingPoint.group,
                                                                           dstBindingPoint.binding});
@@ -259,7 +262,7 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
 
             if (bufferBindingInfo) {
                 const auto& bindingLayout =
-                    std::get<BufferBindingLayout>(bgl->GetBindingInfo(bindingIndex).bindingLayout);
+                    std::get<BufferBindingInfo>(bgl->GetBindingInfo(bindingIndex).bindingLayout);
 
                 // Declaring a read-only storage buffer in HLSL but specifying a storage
                 // buffer in the BGL produces the wrong output. Force read-only storage
@@ -338,6 +341,10 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
     req.hlsl.tintOptions.disable_workgroup_init =
         device->IsToggleEnabled(Toggle::DisableWorkgroupInit);
     req.hlsl.tintOptions.bindings = std::move(bindings);
+
+    req.hlsl.tintOptions.compiler = req.bytecode.compiler == d3d::Compiler::FXC
+                                        ? tint::hlsl::writer::Options::Compiler::kFXC
+                                        : tint::hlsl::writer::Options::Compiler::kDXC;
 
     if (entryPoint.usesNumWorkgroups) {
         req.hlsl.tintOptions.root_constant_binding_point = tint::BindingPoint{

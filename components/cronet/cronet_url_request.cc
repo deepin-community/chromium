@@ -29,6 +29,7 @@
 #include "net/ssl/ssl_info.h"
 #include "net/ssl/ssl_private_key.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_packets.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_types.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/redirect_info.h"
 #include "net/url_request/url_request_context.h"
@@ -146,7 +147,7 @@ void CronetURLRequest::FollowDeferredRedirect() {
 }
 
 bool CronetURLRequest::ReadData(net::IOBuffer* raw_read_buffer, int max_size) {
-  // TODO(https://crbug.com/1335423): Change to DCHECK() or remove after bug
+  // TODO(crbug.com/40847077): Change to DCHECK() or remove after bug
   // is fixed.
   CHECK(max_size == 0 || (raw_read_buffer && raw_read_buffer->data()));
 
@@ -391,7 +392,7 @@ void CronetURLRequest::NetworkTasks::ReportError(net::URLRequest* request,
   MaybeReportMetrics();
   callback_->OnError(
       net_error, net_error_details.quic_connection_error,
-      net::ErrorToString(net_error),
+      net_error_details.source, net::ErrorToString(net_error),
       received_byte_count_from_redirects_ + request->GetTotalReceivedBytes());
 }
 

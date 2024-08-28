@@ -36,6 +36,7 @@
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/animation_builder.h"
 #include "ui/views/background.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
@@ -94,11 +95,9 @@ void LayoutAppButtonsView(views::View* buttons_view) {
   if (visible_children.empty()) {
     return;
   }
-  const int visible_child_width =
-      std::accumulate(visible_children.cbegin(), visible_children.cend(), 0,
-                      [](int width, const views::View* v) {
-                        return width + v->GetPreferredSize().width();
-                      });
+  const int visible_child_width = std::transform_reduce(
+      visible_children.cbegin(), visible_children.cend(), 0, std::plus<>(),
+      [](const views::View* v) { return v->GetPreferredSize().width(); });
 
   int spacing = 0;
   if (visible_children.size() > 1) {
@@ -156,7 +155,7 @@ PhoneHubRecentAppsView::HeaderView::HeaderView(
     views::FocusRing::Get(error_button_)
         ->SetColorId(static_cast<ui::ColorId>(cros_tokens::kCrosSysFocusRing));
     views::InstallCircleHighlightPathGenerator(error_button_);
-    error_button_->SetAccessibleName(l10n_util::GetStringUTF16(
+    error_button_->GetViewAccessibility().SetName(l10n_util::GetStringUTF16(
         IDS_ASH_ECHE_APP_STREMING_ERROR_DIALOG_TITLE));
     error_button_->SetVisible(false);
   }
@@ -272,8 +271,8 @@ void PhoneHubRecentAppsView::OnRecentAppsUiStateUpdated() {
 }
 
 // views::View:
-gfx::Size PhoneHubRecentAppsView::RecentAppButtonsView::CalculatePreferredSize()
-    const {
+gfx::Size PhoneHubRecentAppsView::RecentAppButtonsView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   int width = kTrayMenuWidth - kBubbleHorizontalSidePaddingDip * 2;
   int height = kRecentAppButtonSize + kRecentAppButtonFocusPadding.height() +
                kRecentAppButtonsViewTopPadding;
@@ -325,7 +324,8 @@ PhoneHubRecentAppsView::LoadingView::LoadingView() {
 
 PhoneHubRecentAppsView::LoadingView::~LoadingView() = default;
 
-gfx::Size PhoneHubRecentAppsView::LoadingView::CalculatePreferredSize() const {
+gfx::Size PhoneHubRecentAppsView::LoadingView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   int width = kTrayMenuWidth - kBubbleHorizontalSidePaddingDip * 2;
   int height = kMoreAppsButtonSize + kRecentAppButtonFocusPadding.height() +
                kRecentAppButtonsViewTopPadding;

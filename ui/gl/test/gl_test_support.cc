@@ -115,8 +115,8 @@ void GLTestSupport::SetBufferDataToColor(int width,
       for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
           *reinterpret_cast<uint16_t*>(&data[y * stride + x * 2]) =
-              ((color[2] >> 3) << 11) | ((color[1] >> 2) << 5) |
-              (color[0] >> 3);
+              ((color[0] >> 3) << 11) | ((color[1] >> 2) << 5) |
+              (color[2] >> 3);
         }
       }
       return;
@@ -318,6 +318,6 @@ void GLTestSupport::SetBufferDataToColor(int width,
       return;
     }
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 }  // namespace gl

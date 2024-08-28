@@ -11,8 +11,10 @@
 #include <string>
 #include <utility>
 
+#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/not_fatal_until.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
@@ -216,13 +218,11 @@ bool PrefProvider::SetWebsiteSetting(
                                 ? GetCoarseVisitedTime(clock_->Now())
                                 : base::Time();
 
-  // If SessionModel is OneTime, we know for sure that a one time permission
-  // has been set by the One Time Provider, therefore we reset a potentially
-  // existing Allow Always setting.
-  if (constraints.session_model() == SessionModel::OneTime) {
-    DCHECK(content_type == ContentSettingsType::GEOLOCATION ||
-           content_type == ContentSettingsType::MEDIASTREAM_MIC ||
-           content_type == ContentSettingsType::MEDIASTREAM_CAMERA);
+  // If mojom::SessionModel is ONE_TIME, we know for sure that a one time
+  // permission has been set by the One Time Provider, therefore we reset a
+  // potentially existing Allow Always setting.
+  if (constraints.session_model() == mojom::SessionModel::ONE_TIME) {
+    DCHECK(base::Contains(GetTypesWithTemporaryGrantsInHcsm(), content_type));
     in_value = base::Value();
   }
 
@@ -401,7 +401,7 @@ void PrefProvider::ShutdownOnUIThread() {
 
 ContentSettingsPref* PrefProvider::GetPref(ContentSettingsType type) const {
   auto it = content_settings_prefs_.find(type);
-  DCHECK(it != content_settings_prefs_.end());
+  CHECK(it != content_settings_prefs_.end(), base::NotFatalUntil::M130);
   return it->second.get();
 }
 
@@ -431,6 +431,9 @@ void PrefProvider::DiscardOrMigrateObsoletePreferences() {
 
 void PrefProvider::SetClockForTesting(base::Clock* clock) {
   clock_ = clock;
+  for (auto& pref : content_settings_prefs_) {
+    pref.second->SetClockForTesting(clock);  // IN-TEST
+  }
 }
 
 }  // namespace content_settings

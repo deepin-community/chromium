@@ -11,7 +11,6 @@
 #include "ash/accessibility/accessibility_controller.h"
 #include "ash/accessibility/test_accessibility_controller_client.h"
 #include "ash/app_list/test/app_list_test_helper.h"
-#include "ash/constants/app_types.h"
 #include "ash/frame/non_client_frame_view_ash.h"
 #include "ash/keyboard/ui/keyboard_ui.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
@@ -35,6 +34,7 @@
 #include "ash/shelf/shelf_layout_manager.h"
 #include "ash/shell.h"
 #include "ash/shell_observer.h"
+#include "ash/style/rounded_label_widget.h"
 #include "ash/system/notification_center/ash_message_popup_collection.h"
 #include "ash/system/notification_center/message_popup_animation_waiter.h"
 #include "ash/system/notification_center/notification_center_tray.h"
@@ -326,8 +326,8 @@ TEST_F(WorkspaceLayoutManagerTest, MaximizeInDisplayToBeRestored) {
 
   // Restoring widget state.
   std::unique_ptr<views::Widget> w1(new views::Widget);
-  views::Widget::InitParams params;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   params.delegate = new MaximizeDelegateView(gfx::Rect(400, 0, 130, 40));
   params.context = GetContext();
   w1->Init(std::move(params));
@@ -1074,33 +1074,87 @@ TEST_F(WorkspaceLayoutManagerTest,
 }
 
 // Tests no crash after keyboard bounds change. Regression test for
-// https://b/325673844.
+// b/325673844.
 TEST_F(WorkspaceLayoutManagerTest,
        NoCrashAfterKeyboardDisplacingBoundsChanged) {
-  std::unique_ptr<aura::Window> window1(CreateTestWindow());
-  WindowState* window_state = WindowState::Get(window1.get());
+  std::unique_ptr<aura::Window> window(CreateTestWindow());
+  WindowState* window_state = WindowState::Get(window.get());
   const WindowSnapWMEvent snap_left(WM_EVENT_SNAP_PRIMARY);
   window_state->OnWMEvent(&snap_left);
+  const gfx::Rect bounds_without_vk(window->GetBoundsInScreen());
 
-  // Show the virtual keyboard.
+  // Show the virtual keyboard. Test the bounds are updated.
   SetVirtualKeyboardEnabled(true);
   auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboard(true);
   EXPECT_TRUE(window_state->IsSnapped());
+  gfx::Rect bounds_with_vk(GetPrimaryDisplay().work_area());
+  bounds_with_vk.set_width(bounds_with_vk.width() / 2);
+  EXPECT_EQ(bounds_with_vk, window->GetBoundsInScreen());
+  EXPECT_NE(bounds_without_vk, bounds_with_vk);
 
-  // Hide the virtual keyboard.
+  // Hide the virtual keyboard. Test the bounds are restored to the initial
+  // snapped bounds.
   keyboard_controller->HideKeyboardByUser();
   EXPECT_TRUE(window_state->IsSnapped());
+  EXPECT_EQ(bounds_without_vk, window->GetBoundsInScreen());
 
   // Test that click on the caption button does not crash.
-  const gfx::Rect window_bounds(window1->GetBoundsInScreen());
+  const gfx::Rect window_bounds(window->GetBoundsInScreen());
   const gfx::Point drag_point(window_bounds.CenterPoint().x(),
                               window_bounds.y() + 10);
   auto* event_generator = GetEventGenerator();
   event_generator->set_current_screen_location(drag_point);
   event_generator->ClickLeftButton();
+}
 
-  // TODO(sophiewen): Test the snapped window bounds.
+// Tests that when a window is snapped, then maximized, then dragged out to an
+// area *not* to snap, the window is *not* restored to snap state. Regression
+// test for http://b/324477985.
+TEST_F(WorkspaceLayoutManagerTest, DragToSnapThenMaximize) {
+  UpdateDisplay("800x600");
+
+  auto get_drag_point = [](aura::Window* win) {
+    auto* frame = NonClientFrameViewAsh::Get(win);
+    return frame->GetHeaderView()->GetBoundsInScreen().CenterPoint();
+  };
+
+  // Create a normal window, then drag to snap to the right.
+  std::unique_ptr<aura::Window> window(CreateAppWindow());
+  const gfx::Rect normal_bounds(window->GetBoundsInScreen());
+  ASSERT_EQ(gfx::Rect(0, 0, 300, 300), normal_bounds);
+  const gfx::Rect work_area =
+      screen_util::GetDisplayWorkAreaBoundsInParent(window.get());
+  auto* event_generator = GetEventGenerator();
+  event_generator->MoveMouseTo(get_drag_point(window.get()));
+  event_generator->DragMouseTo(work_area.right_center());
+  WindowState* window_state = WindowState::Get(window.get());
+  EXPECT_EQ(WindowStateType::kSecondarySnapped, window_state->GetStateType());
+  gfx::Rect snapped_bounds(work_area);
+  snapped_bounds.set_x(work_area.x() + work_area.width() / 2);
+  snapped_bounds.set_width(work_area.width() / 2);
+  ASSERT_EQ(snapped_bounds, window->GetBoundsInScreen());
+  ASSERT_NE(normal_bounds, snapped_bounds);
+
+  // Maximize the window. The window will have snapped restore state.
+  window_state->Maximize();
+  ASSERT_EQ(work_area, window->GetBoundsInScreen());
+  EXPECT_EQ(WindowStateType::kMaximized, window_state->GetStateType());
+  EXPECT_EQ(WindowStateType::kSecondarySnapped,
+            window_state->GetRestoreWindowState());
+
+  // Drag the maximized window to the center of the work area.
+  event_generator->MoveMouseTo(get_drag_point(window.get()));
+  event_generator->DragMouseTo(work_area.CenterPoint());
+  EXPECT_NE(WindowStateType::kSecondarySnapped, window_state->GetStateType());
+  EXPECT_NE(snapped_bounds, window->GetBoundsInScreen());
+  EXPECT_EQ(WindowStateType::kNormal, window_state->GetStateType());
+  EXPECT_EQ(WindowStateType::kNormal, window_state->GetRestoreWindowState());
+
+  // Drag the window to snap again.
+  event_generator->MoveMouseTo(get_drag_point(window.get()));
+  event_generator->DragMouseTo(work_area.right_center());
+  EXPECT_EQ(WindowStateType::kSecondarySnapped, window_state->GetStateType());
 }
 
 // Following "Solo" tests were originally written for BaseLayoutManager.
@@ -2087,8 +2141,9 @@ class WorkspaceLayoutManagerKeyboardTest : public AshTestBase {
     work_area_insets->UpdateWorkAreaInsetsForTest(root, gfx::Rect(),
                                                   gfx::Insets(), insets);
 
-    ash::KeyboardStateDescriptor state{true, keyboard_bounds_, keyboard_bounds_,
-                                       keyboard_bounds_};
+    ash::KeyboardStateDescriptor state{/*is_visible=*/true,
+                                       /*is_temporary=*/false, keyboard_bounds_,
+                                       keyboard_bounds_, keyboard_bounds_};
     work_area_insets->OnKeyboardAppearanceChanged(state);
   }
 
@@ -2098,8 +2153,9 @@ class WorkspaceLayoutManagerKeyboardTest : public AshTestBase {
     work_area_insets->UpdateWorkAreaInsetsForTest(
         root, gfx::Rect(), gfx::Insets(), restore_work_area_insets_);
 
-    ash::KeyboardStateDescriptor state{true, gfx::Rect(), gfx::Rect(),
-                                       gfx::Rect()};
+    ash::KeyboardStateDescriptor state{/*is_visible=*/true,
+                                       /*is_temporary=*/false, gfx::Rect(),
+                                       gfx::Rect(), gfx::Rect()};
     work_area_insets->OnKeyboardAppearanceChanged(state);
 
     layout_manager_->OnKeyboardDisplacingBoundsChanged(gfx::Rect());
@@ -2242,7 +2298,7 @@ TEST_F(WorkspaceLayoutManagerKeyboardTest,
 
   // Open keyboard in sticky mode.
   kb_controller->ShowKeyboard(true);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   int shift =
       work_area.height() - kb_controller->GetKeyboardWindow()->bounds().y();
@@ -2260,19 +2316,10 @@ TEST_F(WorkspaceLayoutManagerBackdropTest, BackdropForSplitViewTest) {
   SetTabletModeEnabled(true);
   Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
 
-  class SplitViewTestWindowDelegate : public aura::test::TestWindowDelegate {
-   public:
-    SplitViewTestWindowDelegate() = default;
-    ~SplitViewTestWindowDelegate() override = default;
-
-    // aura::test::TestWindowDelegate:
-    void OnWindowDestroying(aura::Window* window) override { window->Hide(); }
-    void OnWindowDestroyed(aura::Window* window) override { delete this; }
-  };
-
   auto CreateWindow = [this](const gfx::Rect& bounds) {
     aura::Window* window = CreateTestWindowInShellWithDelegate(
-        new SplitViewTestWindowDelegate, -1, bounds);
+        aura::test::TestWindowDelegate::CreateSelfDestroyingDelegate(), -1,
+        bounds);
     return window;
   };
 

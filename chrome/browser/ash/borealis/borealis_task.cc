@@ -230,12 +230,26 @@ StartBorealisVm::StartBorealisVm() : BorealisTask("StartBorealisVm") {}
 StartBorealisVm::~StartBorealisVm() = default;
 
 void StartBorealisVm::RunInternal(BorealisContext* context) {
+  ash::ConciergeClient::Get()->WaitForServiceToBeAvailable(
+      base::BindOnce(&StartBorealisVm::OnConciergeAvailable,
+                     weak_factory_.GetWeakPtr(), context));
+}
+
+void StartBorealisVm::OnConciergeAvailable(BorealisContext* context,
+                                           bool service_is_available) {
+  if (!service_is_available) {
+    Complete(BorealisStartupResult::kConciergeUnavailable,
+             "Concierge service is not available");
+    return;
+  }
+
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, base::MayBlock(),
       base::BindOnce(&MaybeOpenFile, context->launch_options().extra_disk),
       base::BindOnce(&StartBorealisVm::StartBorealisWithExternalDisk,
                      weak_factory_.GetWeakPtr(), context));
 }
+
 void StartBorealisVm::StartBorealisWithExternalDisk(
     BorealisContext* context,
     std::optional<base::File> external_disk) {
@@ -245,9 +259,7 @@ void StartBorealisVm::StartBorealisWithExternalDisk(
   request.set_owner_id(
       ash::ProfileHelper::GetUserIdHashFromProfile(context->profile()));
   request.set_enable_gpu(true);
-  request.set_software_tpm(false);
   request.set_enable_audio_capture(false);
-  request.set_enable_vulkan(true);
   if (base::FeatureList::IsEnabled(ash::features::kBorealisBigGl)) {
     request.set_enable_big_gl(true);
   }

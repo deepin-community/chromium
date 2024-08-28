@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/predictors/loading_predictor.h"
+
 #include <map>
 #include <memory>
 #include <set>
@@ -23,19 +25,18 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_features.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor_features.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor_preconnect_client.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/predictors/lcp_critical_path_predictor/lcp_critical_path_predictor_util.h"
-#include "chrome/browser/predictors/loading_predictor.h"
 #include "chrome/browser/predictors/loading_predictor_factory.h"
 #include "chrome/browser/predictors/loading_test_util.h"
 #include "chrome/browser/predictors/preconnect_manager.h"
 #include "chrome/browser/predictors/predictors_enums.h"
 #include "chrome/browser/predictors/predictors_features.h"
 #include "chrome/browser/predictors/predictors_switches.h"
-#include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/common/chrome_features.h"
@@ -55,6 +56,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/referrer.h"
+#include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/prerender_test_util.h"
@@ -71,6 +73,7 @@
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/cors/cors_error_status.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/cpp/network_quality_tracker.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/clear_data_filter.mojom.h"
@@ -392,7 +395,7 @@ class LoadingPredictorBrowserTest : public InProcessBrowserTest {
         {features::kLoadingOnlyLearnHighPriorityResources,
          features::kLoadingPreconnectToRedirectTarget,
          features::kNavigationPredictorPreconnectHoldback},
-        // TODO(crbug.com/1394910): Use HTTPS URLs in tests to avoid having to
+        // TODO(crbug.com/40248833): Use HTTPS URLs in tests to avoid having to
         // disable this feature.
         {features::kHttpsUpgrades});
   }
@@ -679,9 +682,6 @@ class TestPrerenderStopObserver
     }
   }
 
-  void OnPrefetchNetworkBytesChanged(
-      prerender::NoStatePrefetchHandle* handle) override {}
-
  private:
   base::OnceClosure on_stop_closure_;
 };
@@ -899,26 +899,31 @@ IN_PROC_BROWSER_TEST_F(LoadingPredictorBrowserTest, PreconnectNonCors) {
   EXPECT_EQ(0u, connection_tracker()->GetReadSocketCount());
 }
 
-// TODO(crbug.com/1419756): isolate test per feature.  Currently, it has
+// TODO(crbug.com/40063266): isolate test per feature.  Currently, it has
 // test for script observer and fonts.
 class LCPCriticalPathPredictorBrowserTest : public LoadingPredictorBrowserTest {
  public:
   LCPCriticalPathPredictorBrowserTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {blink::features::kLCPCriticalPathPredictor}, {});
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        {{blink::features::kLCPCriticalPathPredictor, {}},
+         {blink::features::kLCPPFontURLPredictor,
+          {{blink::features::kLCPPFontURLPredictorExcludedHosts.name,
+            "exclude.test,exclude2.test"}}}},
+        {});
   }
 
   std::vector<std::string> ExpectLcpElementLocatorsPrediction(
       const base::Location& from_here,
       const GURL& url,
       size_t expected_locator_count) {
-    auto lcpp_data =
-        loading_predictor()->resource_prefetch_predictor()->GetLcppData(url);
+    auto lcpp_stat =
+        loading_predictor()->resource_prefetch_predictor()->GetLcppStat(
+            /*initiator_origin=*/std::nullopt, url);
     std::vector<std::string> locators;
-    if (lcpp_data) {
+    if (lcpp_stat) {
       std::optional<blink::mojom::LCPCriticalPathPredictorNavigationTimeHint>
-          hint = ConvertLcppDataToLCPCriticalPathPredictorNavigationTimeHint(
-              *lcpp_data);
+          hint = ConvertLcppStatToLCPCriticalPathPredictorNavigationTimeHint(
+              *lcpp_stat);
       if (hint) {
         locators = hint->lcp_element_locators;
       }
@@ -942,6 +947,20 @@ class LCPCriticalPathPredictorBrowserTest : public LoadingPredictorBrowserTest {
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")))
         << from_here.ToString();
     lcp_element_waiter.Wait();
+  }
+
+  std::vector<std::string> GetLCPPFonts(const GURL& url) {
+    auto lcpp_stat =
+        loading_predictor()->resource_prefetch_predictor()->GetLcppStat(
+            /*initiator_origin=*/std::nullopt, url);
+    if (!lcpp_stat) {
+      return std::vector<std::string>();
+    }
+    std::vector<std::string> fonts;
+    for (const auto& it : lcpp_stat->fetched_font_url_stat().main_buckets()) {
+      fonts.push_back(it.first);
+    }
+    return fonts;
   }
 
  private:
@@ -1010,6 +1029,88 @@ IN_PROC_BROWSER_TEST_F(LCPCriticalPathPredictorBrowserTest,
   ExpectLcpElementLocatorsPrediction(FROM_HERE, kUrlC,
                                      /*expected_locator_count=*/0);
   EXPECT_EQ(locator_for_a, locators_6[1]);
+}
+
+IN_PROC_BROWSER_TEST_F(LCPCriticalPathPredictorBrowserTest, LearnLCPPFont) {
+  const GURL kUrlA =
+      embedded_test_server()->GetURL("p.com", "/predictors/lcpp_font.html");
+  const GURL kFontUrlA =
+      embedded_test_server()->GetURL("p.com", "/predictors/font.ttf");
+  const GURL kUrlB = embedded_test_server()->GetURL(
+      "exclude.test", "/predictors/lcpp_font.html");
+  const GURL kUrlC = embedded_test_server()->GetURL(
+      "exclude2.test", "/predictors/lcpp_font.html");
+
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlA));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlB));
+
+  std::vector<std::string> expected;
+  expected.push_back(kFontUrlA.spec());
+  NavigateAndWaitForLcpElement(FROM_HERE, kUrlA);
+  EXPECT_EQ(expected, GetLCPPFonts(kUrlA));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlB));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlC));
+
+  NavigateAndWaitForLcpElement(FROM_HERE, kUrlB);
+  EXPECT_EQ(expected, GetLCPPFonts(kUrlA));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlB));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlC));
+
+  NavigateAndWaitForLcpElement(FROM_HERE, kUrlC);
+  EXPECT_EQ(expected, GetLCPPFonts(kUrlA));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlB));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlC));
+}
+
+class SuppressesLoadingPredictorOnSlowNetworkBrowserTest
+    : public LoadingPredictorBrowserTest {
+ public:
+  SuppressesLoadingPredictorOnSlowNetworkBrowserTest() {
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        {{features::kSuppressesLoadingPredictorOnSlowNetwork,
+          {{features::kSuppressesLoadingPredictorOnSlowNetworkThreshold.name,
+            "500ms"}}}},
+        {});
+  }
+
+  network::NetworkQualityTracker& GetNetworkQualityTracker() const {
+    return *g_browser_process->network_quality_tracker();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Tests that kSuppressesLoadingPredictorOnSlowNetwork feature suppresses
+// LoadingPredictor on slow network.
+IN_PROC_BROWSER_TEST_F(SuppressesLoadingPredictorOnSlowNetworkBrowserTest,
+                       SuppressesOnSlowNetwork) {
+  GURL url = embedded_test_server()->GetURL("/nocontent");
+  base::TimeDelta http_rtt = GetNetworkQualityTracker().GetHttpRTT();
+  int32_t downstream_throughput_kbps =
+      GetNetworkQualityTracker().GetDownstreamThroughputKbps();
+
+  {
+    // LoadingPredictor will be suppressed on slow networks.
+    GetNetworkQualityTracker().ReportRTTsAndThroughputForTesting(
+        base::Milliseconds(501), downstream_throughput_kbps);
+    auto observer = NavigateToURLAsync(url);
+    ASSERT_TRUE(observer->WaitForNavigationFinished());
+    EXPECT_EQ(0u, loading_predictor()->GetTotalHintsActivatedForTesting());
+  }
+
+  {
+    // LoadingPredictor will not be suppressed on fast networks.
+    GetNetworkQualityTracker().ReportRTTsAndThroughputForTesting(
+        base::Milliseconds(500), downstream_throughput_kbps);
+    auto observer = NavigateToURLAsync(url);
+    ASSERT_TRUE(observer->WaitForNavigationFinished());
+    EXPECT_EQ(1u, loading_predictor()->GetTotalHintsActivatedForTesting());
+  }
+
+  // Reset to the original values.
+  GetNetworkQualityTracker().ReportRTTsAndThroughputForTesting(
+      http_rtt, downstream_throughput_kbps);
 }
 
 enum class NetworkIsolationKeyMode {
@@ -1820,10 +1921,19 @@ IN_PROC_BROWSER_TEST_P(LoadingPredictorBrowserTestWithOptimizationGuide,
   content::AwaitDocumentOnLoadCompleted(observer->web_contents());
   ASSERT_TRUE(observer->WaitForNavigationFinished());
 
-  // Navigate to another URL - make sure optimization guide prediction is
-  // cleared.
+  // Navigate to another URL and wait until the previous RFH is destroyed (i.e.
+  // until the optimization guide prediction is cleared and metrics are
+  // recorded).
+  content::RenderFrameHostWrapper rfh(
+      observer->web_contents()->GetPrimaryMainFrame());
+  // Disable BFCache to ensure the navigation below unloads |rfh|.
+  content::DisableBackForwardCacheForTesting(
+      browser()->tab_strip_model()->GetActiveWebContents(),
+      content::BackForwardCache::DisableForTestingReason::
+          TEST_REQUIRES_NO_CACHING);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL("nohints.com", "/")));
+  ASSERT_TRUE(rfh.WaitUntilRenderFrameDeleted());
 
   histogram_tester.ExpectUniqueSample(
       "LoadingPredictor.PreconnectLearningRecall.OptimizationGuide", 0, 1);

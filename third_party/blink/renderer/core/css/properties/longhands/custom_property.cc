@@ -87,8 +87,7 @@ void CustomProperty::ApplyInitial(StyleResolverState& state) const {
     return;
   }
 
-  const StyleInitialData* initial_data =
-      state.StyleBuilder().InitialData().get();
+  const StyleInitialData* initial_data = state.StyleBuilder().InitialData();
   DCHECK(initial_data);
   CSSVariableData* initial_variable_data = initial_data->GetVariableData(name_);
   const CSSValue* initial_value = initial_data->GetVariableValue(name_);
@@ -115,6 +114,13 @@ void CustomProperty::ApplyInherit(StyleResolverState& state) const {
 void CustomProperty::ApplyValue(StyleResolverState& state,
                                 const CSSValue& value,
                                 ValueMode value_mode) const {
+  // Highlight Pseudos do not allow custom property definitions.
+  // Properties are copied from the originating element when the
+  // style is created.
+  if (state.UsesHighlightPseudoInheritance()) {
+    return;
+  }
+
   ComputedStyleBuilder& builder = state.StyleBuilder();
   DCHECK(!value.IsCSSWideKeyword());
 
@@ -199,7 +205,7 @@ void CustomProperty::ApplyValue(StyleResolverState& state,
 
   registered_value = &StyleBuilderConverter::ConvertRegisteredPropertyValue(
       state, *registered_value, context);
-  scoped_refptr<CSSVariableData> data =
+  CSSVariableData* data =
       StyleBuilderConverter::ConvertRegisteredPropertyVariableData(
           *registered_value, is_animation_tainted);
 
@@ -208,17 +214,18 @@ void CustomProperty::ApplyValue(StyleResolverState& state,
 }
 
 const CSSValue* CustomProperty::ParseSingleValue(
-    CSSParserTokenRange& range,
+    CSSParserTokenStream& stream,
     const CSSParserContext& context,
     const CSSParserLocalContext& local_context) const {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return nullptr;
 }
 
 const CSSValue* CustomProperty::CSSValueFromComputedStyleInternal(
     const ComputedStyle& style,
     const LayoutObject*,
-    bool allow_visited_style) const {
+    bool allow_visited_style,
+    CSSValuePhase value_phase) const {
   if (registration_) {
     const CSSValue* value = style.GetVariableValue(name_, IsInherited());
     if (value) {

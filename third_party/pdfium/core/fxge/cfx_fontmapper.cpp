@@ -13,41 +13,41 @@
 #include <utility>
 
 #include "build/build_config.h"
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/containers/adapters.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_memory.h"
-#include "core/fxcrt/fx_memory_wrappers.h"
 #include "core/fxcrt/unowned_ptr_exclusion.h"
 #include "core/fxge/cfx_fontmgr.h"
 #include "core/fxge/cfx_substfont.h"
 #include "core/fxge/fx_font.h"
 #include "core/fxge/systemfontinfo_iface.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/containers/adapters.h"
-#include "third_party/base/containers/contains.h"
 
 namespace {
 
 static_assert(CFX_FontMapper::kLast + 1 == CFX_FontMapper::kNumStandardFonts,
               "StandardFont enum count mismatch");
 
-const char* const kBase14FontNames[CFX_FontMapper::kNumStandardFonts] = {
-    "Courier",
-    "Courier-Bold",
-    "Courier-BoldOblique",
-    "Courier-Oblique",
-    "Helvetica",
-    "Helvetica-Bold",
-    "Helvetica-BoldOblique",
-    "Helvetica-Oblique",
-    "Times-Roman",
-    "Times-Bold",
-    "Times-BoldItalic",
-    "Times-Italic",
-    "Symbol",
-    "ZapfDingbats",
-};
+constexpr std::array<const char*, CFX_FontMapper::kNumStandardFonts>
+    kBase14FontNames = {{
+        "Courier",
+        "Courier-Bold",
+        "Courier-BoldOblique",
+        "Courier-Oblique",
+        "Helvetica",
+        "Helvetica-Bold",
+        "Helvetica-BoldOblique",
+        "Helvetica-Oblique",
+        "Times-Roman",
+        "Times-Bold",
+        "Times-BoldItalic",
+        "Times-Italic",
+        "Symbol",
+        "ZapfDingbats",
+    }};
 
 struct AltFontName {
   const char* m_pName;  // Raw, POD struct.
@@ -176,24 +176,26 @@ ByteString TT_NormalizeName(ByteString norm) {
   return norm;
 }
 
-void GetFontFamily(uint32_t nStyle, ByteString* fontName) {
-  if (fontName->Contains("Script")) {
-    if (FontStyleIsForceBold(nStyle))
-      *fontName = "ScriptMTBold";
-    else if (fontName->Contains("Palace"))
-      *fontName = "PalaceScriptMT";
-    else if (fontName->Contains("French"))
-      *fontName = "FrenchScriptMT";
-    else if (fontName->Contains("FreeStyle"))
-      *fontName = "FreeStyleScript";
-    return;
+const char* GetFontFamily(uint32_t nStyle, const ByteString& fontname) {
+  if (fontname.Contains("Script")) {
+    if (FontStyleIsForceBold(nStyle)) {
+      return "ScriptMTBold";
+    }
+    if (fontname.Contains("Palace")) {
+      return "PalaceScriptMT";
+    } else if (fontname.Contains("French")) {
+      return "FrenchScriptMT";
+    } else if (fontname.Contains("FreeStyle")) {
+      return "FreeStyleScript";
+    }
+    return nullptr;
   }
   for (const auto& alternate : kAltFontFamilies) {
-    if (fontName->Contains(alternate.m_pFontName)) {
-      *fontName = alternate.m_pFontFamily;
-      return;
+    if (fontname.Contains(alternate.m_pFontName)) {
+      return alternate.m_pFontFamily;
     }
   }
+  return nullptr;
 }
 
 ByteString ParseStyle(const ByteString& bsStyle, size_t iStart) {
@@ -414,14 +416,13 @@ std::unique_ptr<SystemFontInfoIface> CFX_FontMapper::TakeSystemFontInfo() {
 
 uint32_t CFX_FontMapper::GetChecksumFromTT(void* font_handle) {
   uint32_t buffer[256];
-  m_pFontInfo->GetFontData(
-      font_handle, kTableTTCF,
-      pdfium::as_writable_bytes(pdfium::make_span(buffer)));
+  m_pFontInfo->GetFontData(font_handle, kTableTTCF,
+                           pdfium::as_writable_byte_span(buffer));
 
   uint32_t checksum = 0;
-  for (auto x : buffer)
+  for (auto x : buffer) {
     checksum += x;
-
+  }
   return checksum;
 }
 
@@ -476,12 +477,12 @@ void CFX_FontMapper::LoadInstalledFonts() {
 
 ByteString CFX_FontMapper::MatchInstalledFonts(const ByteString& norm_name) {
   LoadInstalledFonts();
-  for (const ByteString& font : pdfium::base::Reversed(m_InstalledTTFonts)) {
+  for (const ByteString& font : pdfium::Reversed(m_InstalledTTFonts)) {
     if (TT_NormalizeName(font) == norm_name) {
       return font;
     }
   }
-  for (const auto& font_data : pdfium::base::Reversed(m_LocalizedTTFonts)) {
+  for (const auto& font_data : pdfium::Reversed(m_LocalizedTTFonts)) {
     if (TT_NormalizeName(font_data.first) == norm_name) {
       return font_data.second;
     }
@@ -656,7 +657,11 @@ RetainPtr<CFX_Face> CFX_FontMapper::FindSubstFont(const ByteString& name,
   const bool is_cjk = FX_CharSetIsCJK(Charset);
   bool is_italic = FontStyleIsItalic(nStyle);
 
-  GetFontFamily(nStyle, &family);
+  const char* maybe_family = GetFontFamily(nStyle, family);
+  if (maybe_family) {
+    family = ByteString(maybe_family);
+  }
+
   ByteString match = MatchInstalledFonts(TT_NormalizeName(family));
   if (match.IsEmpty() && family != subst_name &&
       (!has_comma && (!has_hyphen || (has_hyphen && !is_style_available)))) {

@@ -27,7 +27,7 @@ BASE_FEATURE(kSegmentationPlatformUserVisibleTaskRunner,
 
 BASE_FEATURE(kSegmentationPlatformAdaptiveToolbarV2Feature,
              "SegmentationPlatformAdaptiveToolbarV2Feature",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSegmentationPlatformLowEngagementFeature,
              "SegmentationPlatformLowEngagementFeature",
@@ -67,10 +67,6 @@ BASE_FEATURE(kFrequentFeatureUserSegmentFeature,
 
 BASE_FEATURE(kContextualPageActions,
              "ContextualPageActions",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kContextualPageActionPriceTracking,
-             "ContextualPageActionPriceTracking",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kContextualPageActionReaderMode,
@@ -116,13 +112,17 @@ BASE_FEATURE(kSegmentationPlatformTabResumptionRanker,
 BASE_FEATURE(kSegmentationPlatformIosModuleRanker,
              "SegmentationPlatformIosModuleRanker",
 #if BUILDFLAG(IS_IOS)
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 #else
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif
 
 BASE_FEATURE(kSegmentationPlatformAndroidHomeModuleRanker,
              "SegmentationPlatformAndroidHomeModuleRanker",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSegmentationPlatformAndroidHomeModuleRankerV2,
+             "SegmentationPlatformAndroidHomeModuleRankerV2",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSegmentationPlatformTimeDelaySampling,
@@ -145,5 +145,25 @@ BASE_FEATURE(kSegmentationPlatformSignalDbCache,
 #else
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif
+
+BASE_FEATURE(kSegmentationPlatformComposePromotion,
+             "SegmentationPlatformComposePromotion",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSegmentationPlatformUmaFromSqlDb,
+             "SegmentationPlatformUmaFromSqlDb",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSegmentationPlatformIosModuleRankerSplitBySurface,
+             "SegmentationPlatformIosModuleRankerSplitBySurface",
+#if BUILDFLAG(IS_IOS)
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
+
+BASE_FEATURE(kSegmentationPlatformURLVisitResumptionRanker,
+             "SegmentationPlatformURLVisitResumptionRanker",
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace segmentation_platform::features

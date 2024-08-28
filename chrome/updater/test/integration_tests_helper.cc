@@ -32,8 +32,8 @@
 #include "chrome/updater/constants.h"
 #include "chrome/updater/ipc/ipc_support.h"
 #include "chrome/updater/test/integration_tests_impl.h"
+#include "chrome/updater/test/unit_test_util.h"
 #include "chrome/updater/updater_scope.h"
-#include "chrome/updater/util/unit_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -42,8 +42,7 @@
 #include "chrome/updater/util/win_util.h"
 #endif
 
-namespace updater {
-namespace test {
+namespace updater::test {
 namespace {
 
 using ::testing::EmptyTestEventListener;
@@ -289,10 +288,12 @@ void AppTestHelper::FirstTaskRun() {
           {"enter_test_mode",
            WithSwitch(
                "idle_timeout",
-               WithSwitch("device_management_url",
-                          WithSwitch("crash_upload_url",
-                                     WithSwitch("update_url",
-                                                Wrap(&EnterTestMode)))))},
+               WithSwitch(
+                   "app_logo_url",
+                   WithSwitch("device_management_url",
+                              WithSwitch("crash_upload_url",
+                                         WithSwitch("update_url",
+                                                    Wrap(&EnterTestMode))))))},
           {"exit_test_mode", WithSystemScope(Wrap(&ExitTestMode))},
           {"set_group_policies", WithSwitch("values", Wrap(&SetGroupPolicies))},
           {"set_platform_policies",
@@ -308,9 +309,12 @@ void AppTestHelper::FirstTaskRun() {
           {"expect_app_tag",
            WithSwitch("tag", WithSwitch("app_id",
                                         WithSystemScope(Wrap(&ExpectAppTag))))},
+          {"set_app_tag",
+           WithSwitch("tag",
+                      WithSwitch("app_id", WithSystemScope(Wrap(&SetAppTag))))},
           {"expect_app_version",
            WithSwitch(
-               "version",
+               "app_version",
                WithSwitch("app_id", WithSystemScope(Wrap(&ExpectAppVersion))))},
           {"expect_candidate_uninstalled",
            WithSystemScope(Wrap(&ExpectCandidateUninstalled))},
@@ -354,22 +358,26 @@ void AppTestHelper::FirstTaskRun() {
            WithSwitch("app_id", WithSystemScope(Wrap(&RunHandoff)))},
 #endif  // BUILDFLAG(IS_WIN)
           {"expect_version_active",
-           WithSwitch("version", WithSystemScope(Wrap(&ExpectVersionActive)))},
+           WithSwitch("updater_version",
+                      WithSystemScope(Wrap(&ExpectVersionActive)))},
           {"expect_version_not_active",
-           WithSwitch("version",
+           WithSwitch("updater_version",
                       WithSystemScope(Wrap(&ExpectVersionNotActive)))},
-          {"install", WithSystemScope(Wrap(&Install))},
+          {"install", WithSwitch("switches", WithSystemScope(Wrap(&Install)))},
           {"install_updater_and_app",
            WithSwitch(
-               "always_launch_cmd",
+               "verify_app_logo_loaded",
                WithSwitch(
-                   "child_window_text_to_find",
+                   "always_launch_cmd",
                    WithSwitch(
-                       "tag",
-                       WithSwitch("is_silent_install",
-                                  WithSwitch("app_id",
-                                             WithSystemScope(Wrap(
-                                                 &InstallUpdaterAndApp)))))))},
+                       "child_window_text_to_find",
+                       WithSwitch(
+                           "tag",
+                           WithSwitch(
+                               "is_silent_install",
+                               WithSwitch("app_id",
+                                          WithSystemScope(Wrap(
+                                              &InstallUpdaterAndApp))))))))},
           {"print_log", WithSystemScope(Wrap(&PrintLog))},
           {"run_wake",
            WithSwitch("exit_code", WithSystemScope(Wrap(&RunWake)))},
@@ -383,6 +391,9 @@ void AppTestHelper::FirstTaskRun() {
           {"update",
            WithSwitch("install_data_index",
                       (WithSwitch("app_id", WithSystemScope(Wrap(&Update)))))},
+          {"register_app",
+           WithSwitch("registration",
+                      WithSystemScope(Wrap(&RegisterAppByValue)))},
           {"check_for_update",
            (WithSwitch("app_id", WithSystemScope(Wrap(&CheckForUpdate))))},
           {"update_all", WithSystemScope(Wrap(&UpdateAll))},
@@ -395,8 +406,8 @@ void AppTestHelper::FirstTaskRun() {
           {"delete_file",
            (WithSwitch("path", WithSystemScope(Wrap(&DeleteFile))))},
           {"install_app",
-           WithSwitch("version", WithSwitch("app_id", WithSystemScope(
-                                                          Wrap(&InstallApp))))},
+           WithSwitch("app_version", WithSwitch("app_id", WithSystemScope(Wrap(
+                                                              &InstallApp))))},
           {"install_app_via_service",
            WithSwitch("expected_final_values",
                       WithSwitch("app_id", WithSystemScope(
@@ -441,7 +452,7 @@ void AppTestHelper::FirstTaskRun() {
           {"expect_legacy_updater_migrated",
            WithSystemScope(Wrap(&ExpectLegacyUpdaterMigrated))},
           {"run_recovery_component",
-           WithSwitch("version",
+           WithSwitch("browser_version",
                       WithSwitch("app_id", WithSystemScope(
                                                Wrap(&RunRecoveryComponent))))},
           {"set_last_checked",
@@ -554,8 +565,7 @@ TEST(TestHelperCommandRunner, Run) {
 }
 
 }  // namespace
-}  // namespace test
-}  // namespace updater
+}  // namespace updater::test
 
 // Wraps the execution of one integration test command in a unit test. The test
 // commands contain gtest assertions, therefore the invocation of test commands

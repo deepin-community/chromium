@@ -12,10 +12,10 @@
 #include "ash/public/cpp/wallpaper/sea_pen_image.h"
 #include "ash/webui/common/mojom/sea_pen.mojom-forward.h"
 #include "base/functional/callback_forward.h"
+#include "base/time/time.h"
 #include "components/manta/manta_status.h"
 #include "components/manta/proto/manta.pb.h"
-
-class Profile;
+#include "components/manta/snapper_provider.h"
 
 namespace wallpaper_handlers {
 
@@ -27,6 +27,13 @@ class SeaPenFetcher {
   using OnFetchWallpaperComplete =
       base::OnceCallback<void(std::optional<ash::SeaPenImage> image)>;
 
+  // The number of thumbnails requested per call.
+  constexpr static size_t kNumThumbnailsRequested = 8;
+
+  // Timeout value for fetching SeaPen thumbnails and wallpaper. Requests that
+  // take longer than this will return with an error instead of completing.
+  constexpr static base::TimeDelta kRequestTimeout = base::Seconds(20);
+
   SeaPenFetcher();
 
   SeaPenFetcher(const SeaPenFetcher&) = delete;
@@ -35,7 +42,7 @@ class SeaPenFetcher {
   virtual ~SeaPenFetcher();
 
   // Run `query` against the Manta API. `query` is required to be a valid UTF-8
-  // string no longer than `kMaximumSearchWallpaperTextBytes`.
+  // string no longer than `kMaximumGetSeaPenThumbnailsTextBytes`.
   virtual void FetchThumbnails(
       manta::proto::FeatureName feature_name,
       const ash::personalization_app::mojom::SeaPenQueryPtr& query,
@@ -51,10 +58,12 @@ class SeaPenFetcher {
  private:
   // Allow delegate to view the constructor function.
   friend class WallpaperFetcherDelegateImpl;
+  friend class SeaPenFetcherTest;
 
   // Private forces creation via `WallpaperFetcherDelegate` to set up mocking
-  // in test code.
-  static std::unique_ptr<SeaPenFetcher> MakeSeaPenFetcher(Profile* profile);
+  // in test code. `snapper_provider` may be null.
+  static std::unique_ptr<SeaPenFetcher> MakeSeaPenFetcher(
+      std::unique_ptr<manta::SnapperProvider> snapper_provider);
 };
 
 }  // namespace wallpaper_handlers

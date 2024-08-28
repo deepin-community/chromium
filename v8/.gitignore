@@ -71,6 +71,8 @@
 !/third_party/glibc
 !/third_party/googletest
 /third_party/googletest/src
+!/third_party/highway
+/third_party/highway/src
 !/third_party/inspector_protocol
 !/third_party/jsoncpp
 /third_party/jsoncpp/source
@@ -80,6 +82,7 @@
 !/third_party/v8
 !/third_party/wasm-api
 /tools/builtins-pgo/profiles/*.profile
+/tools/builtins-pgo/profiles/profiles_version
 /tools/clang
 /tools/gcmole/bootstrap
 /tools/gcmole/gcmole-tools
@@ -89,6 +92,7 @@
 /tools/luci-go
 /tools/oom_dump/oom_dump
 /tools/oom_dump/oom_dump.o
+/tools/protoc_wrapper
 /tools/turbolizer/build
 /tools/turbolizer/.rpt2_cache
 /tools/turbolizer/deploy

@@ -9,9 +9,16 @@ class Profile;
 
 namespace signin {
 
-// Returns true if the sign in promo should be visible.
-// |profile| is the profile of the tab the promo would be shown on.
-bool ShouldShowPromo(Profile* profile);
+// Enumeration of sign in promo types for the autofill bubble.
+enum class SignInAutofillBubblePromoType { Passwords, Addresses, Payments };
+
+// Whether we should show the sync promo.
+bool ShouldShowSyncPromo(Profile& profile);
+
+// Whether we should show the sign in promo after data of the type
+// |signin_promo_type| was saved.
+bool ShouldShowSignInPromo(Profile& profile,
+                           SignInAutofillBubblePromoType signin_promo_type);
 
 }  // namespace signin
 

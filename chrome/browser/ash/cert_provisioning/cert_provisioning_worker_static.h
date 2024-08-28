@@ -35,6 +35,7 @@ namespace ash::cert_provisioning {
 class CertProvisioningWorkerStatic : public CertProvisioningWorker {
  public:
   CertProvisioningWorkerStatic(
+      std::string cert_provisioning_process_id,
       CertScope cert_scope,
       Profile* profile,
       PrefService* pref_service,
@@ -94,6 +95,8 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
   void OnRegisterKeyDone(const attestation::TpmChallengeKeyResult& result);
 
   void MarkKey();
+  void MarkKeyAsCorporate();
+  void OnAllowKeyForUsageDone(chromeos::platform_keys::Status status);
   void OnMarkKeyDone(chromeos::platform_keys::Status status);
 
   void SignCsr();
@@ -158,6 +161,9 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
 
   CertProvisioningClient::ProvisioningProcess GetProvisioningProcessForClient();
 
+  base::TimeDelta GetTryLaterDelay(
+      DeviceManagementServerRequestType request_type);
+
   // Returns true if there are no errors and the flow can be continued.
   // |request_type| is the type of the request to which the DM server has
   // responded with the given |status|.
@@ -167,6 +173,11 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
       std::optional<CertProvisioningResponseErrorType> error,
       std::optional<int64_t> try_later);
 
+  // A convenience method to generate a string that contains some additional
+  // info and should be included in all logs.
+  std::string GetLogInfoBlock();
+
+  std::string process_id_;
   CertScope cert_scope_ = CertScope::kUser;
   raw_ptr<Profile> profile_ = nullptr;
   raw_ptr<PrefService> pref_service_ = nullptr;
@@ -198,6 +209,8 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
   bool is_continued_without_invalidation_for_uma_ = false;
   // Calculates retry timeout for network related failures.
   net::BackoffEntry request_backoff_;
+  // Calculates retry timeout for DownloadCert "try later" cases.
+  net::BackoffEntry download_cert_request_backoff_;
 
   // Public key - represented as DER-encoded X.509 SubjectPublicKeyInfo
   // (binary).
@@ -228,7 +241,7 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
   // Increment this when you add/change any member in
   // CertProvisioningWorkerStatic that affects serialization (and update all
   // functions that fail to compile because of it).
-  static constexpr int kVersion = 1;
+  static constexpr int kVersion = 2;
 
   // Unowned PlatformKeysService. Note that the CertProvisioningWorker does not
   // observe the PlatformKeysService for shutdown events. Instead, it relies on

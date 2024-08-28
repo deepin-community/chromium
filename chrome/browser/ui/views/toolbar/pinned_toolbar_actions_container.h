@@ -42,10 +42,10 @@ class PinnedToolbarActionsContainer
   ~PinnedToolbarActionsContainer() override;
 
   void UpdateActionState(actions::ActionId id, bool is_active);
-  void UpdateDividerFlexSpecification();
+  // Updates whether the button is shown ephemerally in the toolbar (in the
+  // popped out region unless also pinned) regardless of whether it is active.
+  void ShowActionEphemerallyInToolbar(actions::ActionId id, bool show);
   void MovePinnedActionBy(actions::ActionId action_id, int delta);
-  gfx::Size CustomFlexRule(const views::View* view,
-                           const views::SizeBounds& size_bounds);
 
   // ToolbarIconContainerView:
   void UpdateAllIcons() override;
@@ -86,7 +86,9 @@ class PinnedToolbarActionsContainer
   bool ShouldAnyButtonsOverflow(gfx::Size available_size) const override;
 
   bool IsActionPinned(const actions::ActionId& id);
-  bool IsActionPoppedOutForTesting(const actions::ActionId& id);
+  bool IsActionPoppedOut(const actions::ActionId& id);
+  bool IsActionPinnedOrPoppedOut(const actions::ActionId& id);
+  PinnedActionToolbarButton* GetButtonFor(const actions::ActionId& id);
 
  private:
   friend class PinnedSidePanelInteractiveTest;
@@ -95,12 +97,14 @@ class PinnedToolbarActionsContainer
   // A struct representing the position and action being dragged.
   struct DropInfo;
 
-  PinnedActionToolbarButton* AddPopOutButtonFor(const actions::ActionId& id);
-  void RemovePoppedOutButtonFor(const actions::ActionId& id);
+  PinnedActionToolbarButton* AddPoppedOutButtonFor(const actions::ActionId& id);
+  // Removes the popped out button if it should no longer remain in the toolbar.
+  void MaybeRemovePoppedOutButtonFor(const actions::ActionId& id);
   void AddPinnedActionButtonFor(const actions::ActionId& id);
   void RemovePinnedActionButtonFor(const actions::ActionId& id);
   PinnedActionToolbarButton* GetPinnedButtonFor(const actions::ActionId& id);
   PinnedActionToolbarButton* GetPoppedOutButtonFor(const actions::ActionId& id);
+  bool ShouldRemainPoppedOutInToolbar(PinnedActionToolbarButton* button);
   // Returns the size based on the layout manager's default flex specification.
   gfx::Size DefaultFlexRule(const views::SizeBounds& size_bounds);
   // Returns the total width of the `popped_out_buttons_` including margins

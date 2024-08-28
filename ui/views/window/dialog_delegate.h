@@ -5,7 +5,9 @@
 #ifndef UI_VIEWS_WINDOW_DIALOG_DELEGATE_H_
 #define UI_VIEWS_WINDOW_DIALOG_DELEGATE_H_
 
+#include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -67,10 +69,11 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
     // here will get the default text for its type from GetDialogButtonLabel.
     // Prefer to use this field (via SetButtonLabel) rather than override
     // GetDialogButtonLabel - see https://crbug.com/1011446
-    std::u16string button_labels[ui::DIALOG_BUTTON_LAST + 1];
+    std::array<std::u16string, ui::DIALOG_BUTTON_LAST + 1> button_labels;
 
     // Styles of each button on this dialog. If empty a style will be derived.
-    std::optional<ui::ButtonStyle> button_styles[ui::DIALOG_BUTTON_LAST + 1];
+    std::array<std::optional<ui::ButtonStyle>, ui::DIALOG_BUTTON_LAST + 1>
+        button_styles;
 
     // A bitmask of buttons (from ui::DialogButton) that are enabled in this
     // dialog. It's legal for a button to be marked enabled that isn't present
@@ -114,8 +117,7 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
 
   // Returns a mask specifying which of the available DialogButtons are visible
   // for the dialog.
-  // TODO(https://crbug.com/1011446): Rename this to buttons().
-  int GetDialogButtons() const { return params_.buttons; }
+  int buttons() const { return params_.buttons; }
 
   // Returns the default dialog button. This should not be a mask as only
   // one button should ever be the default button.  Return
@@ -173,7 +175,7 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   void set_fixed_width(int fixed_width) { fixed_width_ = fixed_width; }
   int fixed_width() const { return fixed_width_; }
 
-  template <typename T>
+  template <typename T = View>
   T* SetExtraView(std::unique_ptr<T> extra_view) {
     T* view = extra_view.get();
     extra_view_ = std::move(extra_view);
@@ -216,7 +218,7 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   // functions above has changed, which causes it to rebuild its layout. It is
   // not necessary to call this unless you are overriding
   // IsDialogButtonEnabled() or manually manipulating the dialog buttons.
-  // TODO(https://crbug.com/1011446): Make this private.
+  // TODO(crbug.com/40101916): Make this private.
   void DialogModelChanged();
 
   // Input protection is triggered upon prompt creation and updated on
@@ -279,9 +281,8 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   // use is if the dialog's parent widget is closed.
   void SetCloseCallback(base::OnceClosure callback);
 
-  // By default the NativeWidget owns the Widget. Calling this method will
-  // instead cause the reverse. Must be called before creating the Widget.
-  void SetWidgetOwnsNativeWidget();
+  // Sets the ownership of the views::Widget created by CreateDialogWidget().
+  void SetOwnershipOfNewWidget(Widget::InitParams::Ownership ownership);
 
   // Returns ownership of the extra view for this dialog, if one was provided
   // via SetExtraView(). This is only for use by DialogClientView; don't call
@@ -314,7 +315,7 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   //    bounds, by not trying to deliver mouse events to it somehow, or
   // 3) DCV::SetupLayout could always force an explicit Layout, ignoring the
   //    lazy layout system in View::InvalidateLayout
-  std::unique_ptr<View> DisownExtraView();
+  std::optional<std::unique_ptr<View>> DisownExtraView();
 
   // Accept or cancel the dialog, as though the user had pressed the
   // Accept/Cancel buttons. These methods:
@@ -328,7 +329,7 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   // This method invokes the behavior that *would* happen if this dialog's
   // containing widget were closed. It is present only as a compatibility shim
   // for unit tests; do not add new calls to it.
-  // TODO(https://crbug.com/1011446): Delete this.
+  // TODO(crbug.com/40101916): Delete this.
   bool Close();
 
   // Reset the dialog's shown timestamp, for tests that are subject to the
@@ -369,7 +370,7 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
           callback);
 
   // The margins between the content and the inside of the border.
-  // TODO(crbug.com/733040): Most subclasses assume they must set their own
+  // TODO(crbug.com/41325252): Most subclasses assume they must set their own
   // margins explicitly, so we set them to 0 here for now to avoid doubled
   // margins.
   gfx::Insets margins_{0};
@@ -381,13 +382,14 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   Params params_;
 
   // The extra view for this dialog, if there is one.
-  std::unique_ptr<View> extra_view_;
+  std::optional<std::unique_ptr<View>> extra_view_;
 
   // The footnote view for this dialog, if there is one.
   std::unique_ptr<View> footnote_view_;
 
   // Observers for DialogModel changes.
-  base::ObserverList<DialogObserver>::Unchecked observer_list_;
+  base::ObserverList<DialogObserver>::UncheckedAndDanglingUntriaged
+      observer_list_;
 
   // Callbacks for the dialog's actions:
   absl::variant<base::OnceClosure, base::RepeatingCallback<bool()>>
@@ -401,7 +403,9 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   // returned true.
   bool already_started_close_ = false;
 
-  bool widget_owns_native_widget_ = false;
+  // Ownership of the views::Widget created by CreateDialogWidget().
+  Widget::InitParams::Ownership ownership_of_new_widget_ =
+      Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET;
 };
 
 // A DialogDelegate implementation that is-a View. Used to override GetWidget()

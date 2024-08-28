@@ -6,17 +6,27 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
-#include "base/containers/contains.h"
+#include "base/containers/extend.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/json/json_reader.h"
 #include "chrome/browser/ash/file_manager/app_id.h"
 #include "chrome/browser/ash/input_method/editor_consent_enums.h"
 #include "chrome/browser/ash/input_method/editor_identity_utils.h"
+#include "chrome/browser/ash/input_method/input_methods_by_language.h"
 #include "chrome/browser/ash/input_method/url_utils.h"
+#include "chrome/browser/ash/login/demo_mode/demo_session.h"
+#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/manta/manta_service_factory.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/web_applications/web_app_id_constants.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chromeos/components/kiosk/kiosk_utils.h"
 #include "chromeos/constants/chromeos_features.h"
+#include "chromeos/ui/base/window_properties.h"
+#include "components/language/core/common/locale_util.h"
+#include "components/manta/manta_service.h"
 #include "extensions/common/constants.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "net/base/network_change_notifier.h"
@@ -25,47 +35,10 @@
 namespace ash::input_method {
 namespace {
 
-constexpr std::string_view kCountryAllowlist[] = {
-    "au", "be", "ch", "cz", "de", "dk", "es", "fi", "fr",
-    "gb", "ie", "in", "it", "jp", "kr", "lu", "mx", "no",
-    "nz", "nl", "pl", "pt", "se", "us", "za",
-};
-
-constexpr ui::TextInputType kTextInputTypeAllowlist[] = {
-    ui::TEXT_INPUT_TYPE_CONTENT_EDITABLE, ui::TEXT_INPUT_TYPE_TEXT,
-    ui::TEXT_INPUT_TYPE_TEXT_AREA};
-
-constexpr AppType kAppTypeDenylist[] = {
-    AppType::ARC_APP,
-    AppType::CROSTINI_APP,
-};
-
 const char* kWorkspaceDomainsWithPathDenylist[][2] = {
-    {"calendar.google", ""},
-    {"docs.google", "/document"},
-    {"docs.google", "/presentation"},
-    {"docs.google", "/spreadsheets"},
-    {"drive.google", ""},
-    {"keep.google", ""},
-    {"mail.google", "/chat"},
-    {"mail.google", "/mail"},
-    {"meet.google", ""},
-};
-
-const char* kWorkspaceAppIdDenylist[] = {
-    extension_misc::kGmailAppId,        extension_misc::kCalendarAppId,
-    extension_misc::kGoogleDocsAppId,   extension_misc::kGoogleSlidesAppId,
-    extension_misc::kGoogleSheetsAppId, extension_misc::kGoogleDriveAppId,
-    extension_misc::kGoogleKeepAppId,   web_app::kGmailAppId,
-    web_app::kGoogleChatAppId,          web_app::kGoogleMeetAppId,
-    web_app::kGoogleDocsAppId,          web_app::kGoogleSlidesAppId,
-    web_app::kGoogleSheetsAppId,        web_app::kGoogleDriveAppId,
-    web_app::kGoogleKeepAppId,          web_app::kGoogleCalendarAppId,
-};
-
-const char* kNonWorkspaceAppIdDenylist[] = {
-    extension_misc::kFilesManagerAppId,
-    file_manager::kFileManagerSwaAppId,
+    {"calendar.google", ""}, {"docs.google", ""},      {"drive.google", ""},
+    {"keep.google", ""},     {"mail.google", "/chat"}, {"mail.google", "/mail"},
+    {"meet.google", ""},     {"script.google", ""},    {"sites.google", ""},
 };
 
 constexpr int kTextLengthMaxLimit = 10000;
@@ -74,28 +47,81 @@ constexpr char kExperimentName[] = "OrcaEnabled";
 
 constexpr char kImeAllowlistLabel[] = "ime_allowlist";
 
-bool IsDeviceManaged(Profile* profile_) {
+std::vector<std::string> AllowedInputMethods() {
+  std::vector<std::string> input_methods = EnglishInputMethods();
+
+  if (base::FeatureList::IsEnabled(features::kOrcaDanish)) {
+    base::Extend(input_methods, DanishInputMethods());
+  }
+  if (base::FeatureList::IsEnabled(features::kOrcaDutch)) {
+    base::Extend(input_methods, DutchInputMethods());
+  }
+  if (base::FeatureList::IsEnabled(features::kOrcaFinnish)) {
+    base::Extend(input_methods, FinnishInputMethods());
+  }
+  if (base::FeatureList::IsEnabled(features::kOrcaFrench)) {
+    base::Extend(input_methods, FrenchInputMethods());
+  }
+  if (base::FeatureList::IsEnabled(features::kOrcaGerman)) {
+    base::Extend(input_methods, GermanInputMethods());
+  }
+  if (base::FeatureList::IsEnabled(features::kOrcaItalian)) {
+    base::Extend(input_methods, ItalianInputMethods());
+  }
+  if (base::FeatureList::IsEnabled(features::kOrcaJapanese)) {
+    base::Extend(input_methods, JapaneseInputMethods());
+  }
+  if (base::FeatureList::IsEnabled(features::kOrcaNorwegian)) {
+    base::Extend(input_methods, NorwegianInputMethods());
+  }
+  if (base::FeatureList::IsEnabled(features::kOrcaPortugese)) {
+    base::Extend(input_methods, PortugeseInputMethods());
+  }
+  if (base::FeatureList::IsEnabled(features::kOrcaSpanish)) {
+    base::Extend(input_methods, SpanishInputMethods());
+  }
+  if (base::FeatureList::IsEnabled(features::kOrcaSwedish)) {
+    base::Extend(input_methods, SwedishInputMethods());
+  }
+
+  return input_methods;
+}
+
+manta::FeatureSupportStatus FetchOrcaAccountCapabilityFromMantaService(
+    Profile* profile) {
+  if (manta::MantaService* service =
+          manta::MantaServiceFactory::GetForProfile(profile)) {
+    return service->SupportsOrca();
+  }
+
+  return manta::FeatureSupportStatus::kUnknown;
+}
+
+bool IsProfileManaged(Profile* profile) {
   policy::ProfilePolicyConnector* profile_policy_connector =
-      profile_->GetProfilePolicyConnector();
+      profile->GetProfilePolicyConnector();
 
   return (profile_policy_connector != nullptr &&
           profile_policy_connector->IsManaged());
 }
 
-bool IsGoogleInternalAccountEmailFromProfile(Profile* profile) {
-  std::optional<std::string> user_email =
-      GetSignedInUserEmailFromProfile(profile);
-
-  return user_email.has_value() &&
-         gaia::IsGoogleInternalAccountEmail(*user_email);
-}
-
 bool IsCountryAllowed(std::string_view country_code) {
-  return base::Contains(kCountryAllowlist, country_code);
+  constexpr auto kCountryAllowlist = base::MakeFixedFlatSet<std::string_view>({
+      "au", "be", "ca", "ch", "cz", "de", "dk", "es", "fi",
+      "fr", "gb", "ie", "in", "it", "jp", "lu", "mx", "no",
+      "nz", "nl", "pl", "pt", "se", "us", "za",
+  });
+
+  return kCountryAllowlist.contains(country_code);
 }
 
 bool IsInputTypeAllowed(ui::TextInputType type) {
-  return base::Contains(kTextInputTypeAllowlist, type);
+  constexpr auto kTextInputTypeAllowlist =
+      base::MakeFixedFlatSet<ui::TextInputType>(
+          {ui::TEXT_INPUT_TYPE_CONTENT_EDITABLE, ui::TEXT_INPUT_TYPE_TEXT,
+           ui::TEXT_INPUT_TYPE_TEXT_AREA});
+
+  return kTextInputTypeAllowlist.contains(type);
 }
 
 bool IsInputMethodEngineAllowed(const std::vector<std::string>& allowlist,
@@ -108,8 +134,18 @@ bool IsInputMethodEngineAllowed(const std::vector<std::string>& allowlist,
   return false;
 }
 
-bool IsAppTypeAllowed(AppType app_type) {
-  return !base::Contains(kAppTypeDenylist, app_type);
+bool IsAppTypeAllowed(chromeos::AppType app_type) {
+  if (base::FeatureList::IsEnabled(features::kOrcaArc) &&
+      app_type == chromeos::AppType::ARC_APP) {
+    return true;
+  }
+
+  constexpr auto kAppTypeDenylist = base::MakeFixedFlatSet<chromeos::AppType>({
+      chromeos::AppType::ARC_APP,
+      chromeos::AppType::CROSTINI_APP,
+  });
+
+  return !kAppTypeDenylist.contains(app_type);
 }
 
 bool IsTriggerableFromConsentStatus(ConsentStatus consent_status) {
@@ -118,9 +154,8 @@ bool IsTriggerableFromConsentStatus(ConsentStatus consent_status) {
          consent_status == ConsentStatus::kUnset;
 }
 
-bool IsUrlAllowed(Profile* profile, GURL url) {
-  if (IsGoogleInternalAccountEmailFromProfile(profile) &&
-      base::FeatureList::IsEnabled(features::kOrcaOnWorkspace)) {
+bool IsUrlAllowed(GURL url) {
+  if (base::FeatureList::IsEnabled(features::kOrcaOnWorkspace)) {
     return true;
   }
 
@@ -130,17 +165,51 @@ bool IsUrlAllowed(Profile* profile, GURL url) {
       return false;
     }
   }
+
   return true;
 }
 
-bool IsAppAllowed(Profile* profile, std::string_view app_id) {
-  if (base::Contains(kNonWorkspaceAppIdDenylist, app_id)) {
+bool IsAppAllowed(std::string_view app_id) {
+  constexpr auto kNonWorkspaceAppIdDenylist =
+      base::MakeFixedFlatSet<std::string_view>({
+          extension_misc::kFilesManagerAppId,
+          file_manager::kFileManagerSwaAppId,
+      });
+
+  if (kNonWorkspaceAppIdDenylist.contains(app_id)) {
     return false;
   }
 
-  return (IsGoogleInternalAccountEmailFromProfile(profile) &&
-          base::FeatureList::IsEnabled(features::kOrcaOnWorkspace)) ||
-         !base::Contains(kWorkspaceAppIdDenylist, app_id);
+  constexpr auto kWorkspaceAppIdDenylist =
+      base::MakeFixedFlatSet<std::string_view>({
+          extension_misc::kGmailAppId,
+          extension_misc::kCalendarAppId,
+          extension_misc::kGoogleDocsAppId,
+          extension_misc::kGoogleSlidesAppId,
+          extension_misc::kGoogleSheetsAppId,
+          extension_misc::kGoogleDriveAppId,
+          extension_misc::kGoogleKeepAppId,
+          extension_misc::kGoogleMeetPwaAppId,
+          extension_misc::kGoogleDocsPwaAppId,
+          extension_misc::kGoogleSheetsPwaAppId,
+          // App ids in demo mode
+          extension_misc::kCalendarDemoAppId,
+          extension_misc::kGoogleDocsDemoAppId,
+          extension_misc::kGoogleSheetsDemoAppId,
+          extension_misc::kGoogleSlidesDemoAppId,
+          web_app::kGmailAppId,
+          web_app::kGoogleChatAppId,
+          web_app::kGoogleMeetAppId,
+          web_app::kGoogleDocsAppId,
+          web_app::kGoogleSlidesAppId,
+          web_app::kGoogleSheetsAppId,
+          web_app::kGoogleDriveAppId,
+          web_app::kGoogleKeepAppId,
+          web_app::kGoogleCalendarAppId,
+      });
+
+  return base::FeatureList::IsEnabled(features::kOrcaOnWorkspace) ||
+         !kWorkspaceAppIdDenylist.contains(app_id);
 }
 
 bool IsTriggerableFromTextLength(int text_length) {
@@ -148,21 +217,7 @@ bool IsTriggerableFromTextLength(int text_length) {
 }
 
 std::vector<std::string> GetAllowedInputMethodEngines() {
-  // Default English IMEs.
-  std::vector<std::string> allowed_imes = {
-      "xkb:gb::eng",
-      "xkb:gb:extd:eng",          // UK
-      "xkb:gb:dvorak:eng",        // UK Extended
-      "xkb:us:altgr-intl:eng",    // US Extended
-      "xkb:us:colemak:eng",       // US Colemak
-      "xkb:us:dvorak:eng",        // US Dvorak
-      "xkb:us:dvp:eng",           // US Programmer Dvorak
-      "xkb:us:intl_pc:eng",       // US Intl (PC)
-      "xkb:us:intl:eng",          // US Intl
-      "xkb:us:workman-intl:eng",  // US Workman Intl
-      "xkb:us:workman:eng",       // US Workman
-      "xkb:us::eng",              // US
-  };
+  std::vector<std::string> allowed_imes = AllowedInputMethods();
 
   // Loads allowed imes from field trials
   if (auto parsed = base::JSONReader::Read(
@@ -180,10 +235,58 @@ std::vector<std::string> GetAllowedInputMethodEngines() {
 
 }  // namespace
 
-EditorSwitch::EditorSwitch(Profile* profile, std::string_view country_code)
-    : profile_(profile),
-      country_code_(country_code),
-      ime_allowlist_(GetAllowedInputMethodEngines()) {}
+bool IsAllowedForUseInDemoMode(std::string_view country_code) {
+  return base::FeatureList::IsEnabled(chromeos::features::kOrca) &&
+         base::FeatureList::IsEnabled(
+             chromeos::features::kFeatureManagementOrca) &&
+         IsCountryAllowed(country_code);
+}
+
+bool IsAllowedForUseInNonDemoMode(Profile* profile,
+                                  std::string_view country_code) {
+  if (!base::FeatureList::IsEnabled(chromeos::features::kOrca) ||
+      !base::FeatureList::IsEnabled(
+          chromeos::features::kFeatureManagementOrca) ||
+      !IsCountryAllowed(country_code) ||
+      (base::FeatureList::IsEnabled(
+           ash::features::kOrcaUseAccountCapabilities) &&
+       FetchOrcaAccountCapabilityFromMantaService(profile) !=
+           manta::FeatureSupportStatus::kSupported)) {
+    return false;
+  }
+
+  // Always allow the feature on unmanaged users.
+  if (!IsProfileManaged(profile)) {
+    return true;
+  }
+
+  // For managed users, if the feature flag `OrcaControlledByPolicy `is set, let
+  // the feature enablement be driven by the policy.
+  if (base::FeatureList::IsEnabled(features::kOrcaControlledByPolicy)) {
+    return profile->GetPrefs()->IsManagedPreference(prefs::kManagedOrcaEnabled)
+               ? profile->GetPrefs()->GetBoolean(prefs::kManagedOrcaEnabled)
+               : false;
+  }
+
+  // If the Orca policy is not ready to launch on managed users, disallow the
+  // feature.
+  return false;
+}
+
+bool IsSystemInEnglishLanguage() {
+  return g_browser_process != nullptr &&
+         language::ExtractBaseLanguage(
+             g_browser_process->GetApplicationLocale()) == "en";
+}
+
+EditorSwitch::EditorSwitch(Observer* observer,
+                           Profile* profile,
+                           EditorContext* context)
+    : observer_(observer),
+      profile_(profile),
+      context_(context),
+      ime_allowlist_(GetAllowedInputMethodEngines()),
+      last_known_editor_mode_(GetEditorMode()) {}
 
 EditorSwitch::~EditorSwitch() = default;
 
@@ -200,32 +303,54 @@ bool EditorSwitch::IsAllowedForUse() const {
     return false;
   }
 
-  return (base::FeatureList::IsEnabled(chromeos::features::kOrca) &&
-          base::FeatureList::IsEnabled(
-              chromeos::features::kFeatureManagementOrca) &&
-          IsCountryAllowed(country_code_)) &&
-         !IsDeviceManaged(profile_);
+  return base::FeatureList::IsEnabled(ash::features::kOrcaSupportDemoMode) &&
+                 ash::DemoSession::IsDeviceInDemoMode()
+             ? IsAllowedForUseInDemoMode(context_->active_country_code())
+             : IsAllowedForUseInNonDemoMode(profile_,
+                                            context_->active_country_code());
 }
 
 EditorOpportunityMode EditorSwitch::GetEditorOpportunityMode() const {
-  if (IsAllowedForUse() && IsInputTypeAllowed(input_type_)) {
-    return text_length_ > 0 ? EditorOpportunityMode::kRewrite
-                            : EditorOpportunityMode::kWrite;
+  if (!IsAllowedForUse()) {
+    return EditorOpportunityMode::kNotAllowedForUse;
   }
-  return EditorOpportunityMode::kNone;
+
+  if (IsInputTypeAllowed(context_->input_type())) {
+    return context_->selected_text_length() > 0
+               ? EditorOpportunityMode::kRewrite
+               : EditorOpportunityMode::kWrite;
+  }
+
+  return EditorOpportunityMode::kInvalidInput;
 }
 
 std::vector<EditorBlockedReason> EditorSwitch::GetBlockedReasons() const {
   std::vector<EditorBlockedReason> blocked_reasons;
 
   if (base::FeatureList::IsEnabled(chromeos::features::kOrca)) {
-    if (!IsCountryAllowed(country_code_)) {
+    if (!IsCountryAllowed(context_->active_country_code())) {
       blocked_reasons.push_back(
           EditorBlockedReason::kBlockedByUnsupportedRegion);
     }
 
-    if (IsDeviceManaged(profile_)) {
+    if (IsProfileManaged(profile_)) {
       blocked_reasons.push_back(EditorBlockedReason::kBlockedByManagedStatus);
+    }
+
+    if (base::FeatureList::IsEnabled(
+            ash::features::kOrcaUseAccountCapabilities)) {
+      switch (FetchOrcaAccountCapabilityFromMantaService(profile_)) {
+        case manta::FeatureSupportStatus::kUnsupported:
+          blocked_reasons.push_back(
+              EditorBlockedReason::kBlockedByUnsupportedCapability);
+          break;
+        case manta::FeatureSupportStatus::kUnknown:
+          blocked_reasons.push_back(
+              EditorBlockedReason::kBlockedByUnknownCapability);
+          break;
+        case manta::FeatureSupportStatus::kSupported:
+          break;
+      }
     }
   }
 
@@ -238,31 +363,32 @@ std::vector<EditorBlockedReason> EditorSwitch::GetBlockedReasons() const {
     blocked_reasons.push_back(EditorBlockedReason::kBlockedBySetting);
   }
 
-  if (!IsTriggerableFromTextLength(text_length_)) {
+  if (!IsTriggerableFromTextLength(context_->selected_text_length())) {
     blocked_reasons.push_back(EditorBlockedReason::kBlockedByTextLength);
   }
 
-  if (!IsUrlAllowed(profile_, url_)) {
+  if (!IsUrlAllowed(context_->active_url())) {
     blocked_reasons.push_back(EditorBlockedReason::kBlockedByUrl);
   }
 
-  if (!IsAppAllowed(profile_, app_id_)) {
+  if (!IsAppAllowed(context_->app_id())) {
     blocked_reasons.push_back(EditorBlockedReason::kBlockedByApp);
   }
 
-  if (!IsAppTypeAllowed(app_type_)) {
+  if (!IsAppTypeAllowed(context_->app_type())) {
     blocked_reasons.push_back(EditorBlockedReason::kBlockedByAppType);
   }
 
-  if (!IsInputMethodEngineAllowed(ime_allowlist_, active_engine_id_)) {
+  if (!IsInputMethodEngineAllowed(ime_allowlist_,
+                                  context_->active_engine_id())) {
     blocked_reasons.push_back(EditorBlockedReason::kBlockedByInputMethod);
   }
 
-  if (!IsInputTypeAllowed(input_type_)) {
+  if (!IsInputTypeAllowed(context_->input_type())) {
     blocked_reasons.push_back(EditorBlockedReason::kBlockedByInputType);
   }
 
-  if (tablet_mode_enabled_) {
+  if (context_->InTabletMode()) {
     blocked_reasons.push_back(EditorBlockedReason::kBlockedByInvalidFormFactor);
   }
 
@@ -282,19 +408,29 @@ bool EditorSwitch::CanBeTriggered() const {
       profile_->GetPrefs()->GetInteger(prefs::kOrcaConsentStatus));
 
   return IsAllowedForUse() &&
-         IsInputMethodEngineAllowed(ime_allowlist_, active_engine_id_) &&
-         IsInputTypeAllowed(input_type_) && IsAppTypeAllowed(app_type_) &&
+         IsInputMethodEngineAllowed(ime_allowlist_,
+                                    context_->active_engine_id()) &&
+         IsInputTypeAllowed(context_->input_type()) &&
+         IsAppTypeAllowed(context_->app_type()) &&
          IsTriggerableFromConsentStatus(current_consent_status) &&
-         IsUrlAllowed(profile_, url_) && IsAppAllowed(profile_, app_id_) &&
-         !net::NetworkChangeNotifier::IsOffline() && !tablet_mode_enabled_ &&
+         IsUrlAllowed(context_->active_url()) &&
+         IsAppAllowed(context_->app_id()) &&
+         !net::NetworkChangeNotifier::IsOffline() &&
+         !context_->InTabletMode() &&
          // user pref value
          profile_->GetPrefs()->GetBoolean(prefs::kOrcaEnabled) &&
-         text_length_ <= kTextLengthMaxLimit;
+         context_->selected_text_length() <= kTextLengthMaxLimit &&
+         (!base::FeatureList::IsEnabled(features::kOrcaOnlyInEnglishLocales) ||
+          IsSystemInEnglishLanguage());
 }
 
 EditorMode EditorSwitch::GetEditorMode() const {
+  if (!IsAllowedForUse()) {
+    return EditorMode::kHardBlocked;
+  }
+
   if (!CanBeTriggered()) {
-    return EditorMode::kBlocked;
+    return EditorMode::kSoftBlocked;
   }
 
   ConsentStatus current_consent_status = GetConsentStatusFromInteger(
@@ -303,36 +439,19 @@ EditorMode EditorSwitch::GetEditorMode() const {
   if (current_consent_status == ConsentStatus::kPending ||
       current_consent_status == ConsentStatus::kUnset) {
     return EditorMode::kConsentNeeded;
-  } else if (text_length_ > 0) {
+  } else if (context_->selected_text_length() > 0) {
     return EditorMode::kRewrite;
   } else {
     return EditorMode::kWrite;
   }
 }
 
-void EditorSwitch::OnInputContextUpdated(
-    const TextInputMethod::InputContext& input_context,
-    const TextFieldContextualInfo& text_field_contextual_info) {
-  input_type_ = input_context.type;
-  app_type_ = text_field_contextual_info.app_type;
-  url_ = text_field_contextual_info.tab_url;
-  app_id_ = text_field_contextual_info.app_key;
-}
-
-void EditorSwitch::OnActivateIme(std::string_view engine_id) {
-  active_engine_id_ = engine_id;
-}
-
-void EditorSwitch::OnTabletModeUpdated(bool is_enabled) {
-  tablet_mode_enabled_ = is_enabled;
-}
-
-void EditorSwitch::OnTextSelectionLengthChanged(size_t text_length) {
-  text_length_ = text_length;
-}
-
-void EditorSwitch::SetProfile(Profile* profile) {
-  profile_ = profile;
+void EditorSwitch::OnContextUpdated() {
+  EditorMode current_mode = GetEditorMode();
+  if (current_mode != last_known_editor_mode_) {
+    observer_->OnEditorModeChanged(current_mode);
+  }
+  last_known_editor_mode_ = current_mode;
 }
 
 }  // namespace ash::input_method

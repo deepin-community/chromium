@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/heap_array.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -235,10 +236,10 @@ EGLConfig ChooseConfig(EGLDisplay display,
       continue;
     }
 
-    std::unique_ptr<EGLConfig[]> matching_configs(new EGLConfig[num_configs]);
+    auto matching_configs = base::HeapArray<EGLConfig>::Uninit(num_configs);
     if (want_rgb565 || visual_id >= 0) {
       config_size = num_configs;
-      config_data = matching_configs.get();
+      config_data = matching_configs.data();
     }
 
     if (!eglChooseConfig(display, choose_attributes, config_data, config_size,
@@ -1064,7 +1065,8 @@ bool PbufferGLSurfaceEGL::IsOffscreen() {
 
 gfx::SwapResult PbufferGLSurfaceEGL::SwapBuffers(PresentationCallback callback,
                                                  gfx::FrameData data) {
-  NOTREACHED() << "Attempted to call SwapBuffers on a PbufferGLSurfaceEGL.";
+  NOTREACHED_IN_MIGRATION()
+      << "Attempted to call SwapBuffers on a PbufferGLSurfaceEGL.";
   return gfx::SwapResult::SWAP_FAILED;
 }
 
@@ -1109,7 +1111,7 @@ EGLSurface PbufferGLSurfaceEGL::GetHandle() {
 
 void* PbufferGLSurfaceEGL::GetShareHandle() {
 #if BUILDFLAG(IS_ANDROID)
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return nullptr;
 #else
   if (!display_->ext->b_EGL_ANGLE_query_surface_pointer)

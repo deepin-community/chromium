@@ -5,6 +5,7 @@
 #include "extensions/browser/api/messaging/extension_message_port.h"
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <utility>
 
@@ -55,6 +56,9 @@ const char kReceivingEndDoesntExistError[] =
 const char kClosedWhileResponsePendingError[] =
     "A listener indicated an asynchronous response by returning true, but the "
     "message channel closed before a response was received";
+const char kClosedWhenPageEntersBFCache[] =
+    "The page keeping the extension port is moved into back/forward cache, so "
+    "the message channel is closed.";
 
 }  // namespace
 
@@ -95,7 +99,8 @@ class ExtensionMessagePort::FrameTracker : public content::WebContentsObserver,
       if (previous_rfh &&
           previous_rfh->GetLifecycleState() ==
               content::RenderFrameHost::LifecycleState::kInBackForwardCache) {
-        if (port_->UnregisterFramesUnderMainFrame(previous_rfh)) {
+        if (port_->UnregisterFramesUnderMainFrame(
+                previous_rfh, kClosedWhenPageEntersBFCache)) {
           // Since the channel and the port is already closed, we don't have to
           // run the following block to unregister the frames any more.
           return;
@@ -170,7 +175,7 @@ ExtensionMessagePort::ExtensionMessagePort(
   CHECK(tab);
   frame_tracker_->TrackTabFrames(tab);
   if (include_child_frames) {
-    // TODO(https://crbug.com/1227787) We don't yet support MParch for
+    // TODO(crbug.com/40189370) We don't yet support MParch for
     // prerender so make sure `include_child_frames` is only provided for
     // primary main frames.
     CHECK(render_frame_host->IsInPrimaryMainFrame());
@@ -486,7 +491,7 @@ void ExtensionMessagePort::IncrementLazyKeepaliveCount(
 
   // Increment keepalive count for service workers of the extension managed by
   // this port.
-  // TODO(https://crbug.com/1514471): Add a check to only increment count if
+  // TODO(crbug.com/41487026): Add a check to only increment count if
   // the port is in lazy context.
   for (const auto& worker_id :
        pm->GetServiceWorkersForExtension(extension_id_)) {
@@ -516,7 +521,7 @@ void ExtensionMessagePort::DecrementLazyKeepaliveCount(
 
   // Decrement keepalive count for service workers of the extension managed by
   // this port.
-  // TODO(https://crbug.com/1514471): Add a check to only decrement count if
+  // TODO(crbug.com/41487026): Add a check to only decrement count if
   // the port is in lazy context.
   for (const auto& worker_id :
        pm->GetServiceWorkersForExtension(extension_id_)) {
@@ -565,15 +570,20 @@ void ExtensionMessagePort::ClosePort(int process_id,
   }
 }
 
-void ExtensionMessagePort::CloseChannel() {
-  std::string error_message;
-  if (!port_was_created_)
-    error_message = kReceivingEndDoesntExistError;
-  else if (asynchronous_reply_pending_)
-    error_message = kClosedWhileResponsePendingError;
+void ExtensionMessagePort::CloseChannel(
+    std::optional<std::string> error_message) {
+  std::string error;
+  if (error_message.has_value()) {
+    error = std::move(error_message).value();
+  } else if (!port_was_created_) {
+    error = kReceivingEndDoesntExistError;
+  } else if (asynchronous_reply_pending_) {
+    error = kClosedWhileResponsePendingError;
+  }
 
-  if (weak_channel_delegate_)
-    weak_channel_delegate_->CloseChannel(port_id_, error_message);
+  if (weak_channel_delegate_) {
+    weak_channel_delegate_->CloseChannel(port_id_, error);
+  }
 }
 
 void ExtensionMessagePort::RegisterFrame(
@@ -604,7 +614,8 @@ bool ExtensionMessagePort::UnregisterFrame(
 }
 
 bool ExtensionMessagePort::UnregisterFramesUnderMainFrame(
-    content::RenderFrameHost* main_frame) {
+    content::RenderFrameHost* main_frame,
+    std::optional<std::string> error_message) {
   CHECK(pending_frames_.empty());
   if (std::erase_if(frames_,
                     [&main_frame](const auto& item) {
@@ -614,7 +625,7 @@ bool ExtensionMessagePort::UnregisterFramesUnderMainFrame(
                              frame->GetOutermostMainFrame() == main_frame;
                     }) != 0 &&
       !IsValidPort()) {
-    CloseChannel();
+    CloseChannel(error_message);
     return true;
   }
 
@@ -701,7 +712,7 @@ bool ExtensionMessagePort::IsServiceWorkerActivity(
       return is_for_onetime_channel() || should_have_strong_keepalive();
     default:
       // Extension message port should not check for other activity types.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return false;
   }
 }
@@ -734,7 +745,7 @@ bool ExtensionMessagePort::ShouldSkipFrameForBFCache(
     // enabled, so no message will be sent to the BFCached target. There could
     // be some messages that were created before the ExtensionMessagePort is
     // disconnected, and they should be discarded.
-    // TODO(crbug.com/1488379): clean up the flag.
+    // TODO(crbug.com/40283601): clean up the flag.
     if (!base::FeatureList::IsEnabled(
             features::kDisconnectExtensionMessagePortWhenPageEntersBFCache)) {
       content::BackForwardCache::DisableForRenderFrameHost(

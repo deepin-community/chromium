@@ -11,7 +11,7 @@
 #include <optional>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
@@ -516,9 +516,10 @@ api::tabs::Tab ExtensionTabUtil::CreateTabObject(
     tab_object.fav_icon_url = visible_entry->GetFavicon().url.spec();
   }
   if (tab_strip) {
-    WebContents* opener = tab_strip->GetOpenerOfWebContentsAt(tab_index);
+    tabs::TabModel* opener = tab_strip->GetOpenerOfTabAt(tab_index);
     if (opener) {
-      tab_object.opener_tab_id = GetTabIdForExtensions(opener);
+      CHECK(opener->contents());
+      tab_object.opener_tab_id = GetTabIdForExtensions(opener->contents());
     }
   }
 
@@ -799,7 +800,7 @@ bool ExtensionTabUtil::GetTabById(int tab_id,
           return;
         }
 
-        // TODO(https://crbug.com/1350676): tab_strip and tab_index are tied to
+        // TODO(crbug.com/40234240): tab_strip and tab_index are tied to
         // a specific window, and related APIs return WINDOW_ID_NONE for
         // prerendering-into-a-new-tab tabs as a tentaive solution. So these
         // values are set to be invalid here.
@@ -906,13 +907,16 @@ bool ExtensionTabUtil::IsKillURL(const GURL& url) {
   }
 
   // Also disallow a few more hosts which are not covered by the check above.
-  static const char* const kKillHosts[] = {
-      chrome::kChromeUIDelayedHangUIHost, chrome::kChromeUIHangUIHost,
-      chrome::kChromeUIQuitHost,          chrome::kChromeUIRestartHost,
-      content::kChromeUIBrowserCrashHost, content::kChromeUIMemoryExhaustHost,
-  };
+  constexpr auto kKillHosts = base::MakeFixedFlatSet<std::string_view>({
+      chrome::kChromeUIDelayedHangUIHost,
+      chrome::kChromeUIHangUIHost,
+      chrome::kChromeUIQuitHost,
+      chrome::kChromeUIRestartHost,
+      content::kChromeUIBrowserCrashHost,
+      content::kChromeUIMemoryExhaustHost,
+  });
 
-  return base::Contains(kKillHosts, url.host_piece());
+  return kKillHosts.contains(url.host_piece());
 }
 
 base::expected<GURL, std::string> ExtensionTabUtil::PrepareURLForNavigation(
@@ -1148,11 +1152,6 @@ TabStripModel* ExtensionTabUtil::GetEditableTabStripModel(Browser* browser) {
 // static
 bool ExtensionTabUtil::TabIsInSavedTabGroup(content::WebContents* contents,
                                             TabStripModel* tab_strip_model) {
-  // If the feature is turned off, then the tab is not in a saved group.
-  if (!base::FeatureList::IsEnabled(features::kTabGroupsSave)) {
-    return false;
-  }
-
   // If the tab_strip_model is empty, find the contents in one of the browsers.
   if (!tab_strip_model) {
     CHECK(contents);
@@ -1165,8 +1164,9 @@ bool ExtensionTabUtil::TabIsInSavedTabGroup(content::WebContents* contents,
     tab_strip_model = browser->tab_strip_model();
   }
 
-  SavedTabGroupKeyedService* saved_tab_group_service =
-      SavedTabGroupServiceFactory::GetForProfile(tab_strip_model->profile());
+  tab_groups::SavedTabGroupKeyedService* saved_tab_group_service =
+      tab_groups::SavedTabGroupServiceFactory::GetForProfile(
+          tab_strip_model->profile());
 
   // If the service failed to start, then there are no saved tab groups.
   if (!saved_tab_group_service) {

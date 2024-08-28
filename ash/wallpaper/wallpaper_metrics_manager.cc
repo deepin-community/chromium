@@ -16,10 +16,15 @@
 
 namespace ash {
 
-namespace {
+WallpaperMetricsManager::WallpaperMetricsManager() {
+  wallpaper_controller_observation_.Observe(WallpaperController::Get());
+}
 
+WallpaperMetricsManager::~WallpaperMetricsManager() = default;
+
+// static
 // NOTE: These strings are persisted to metric logs.
-std::string ToResultHistogram(WallpaperType type) {
+std::string WallpaperMetricsManager::ToResultHistogram(WallpaperType type) {
   switch (type) {
     case WallpaperType::kOnline:
       return "Ash.Wallpaper.Online.Result2";
@@ -45,18 +50,10 @@ std::string ToResultHistogram(WallpaperType type) {
       return "Ash.Wallpaper.SeaPen.Result2";
     case WallpaperType::kOneShot:
     case WallpaperType::kCount:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return "";
   }
 }
-
-}  // namespace
-
-WallpaperMetricsManager::WallpaperMetricsManager() {
-  wallpaper_controller_observation_.Observe(WallpaperController::Get());
-}
-
-WallpaperMetricsManager::~WallpaperMetricsManager() = default;
 
 void WallpaperMetricsManager::OnOnlineWallpaperSet(
     const OnlineWallpaperParams& params) {

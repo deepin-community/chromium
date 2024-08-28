@@ -28,8 +28,9 @@
 #ifndef SRC_DAWN_WIRE_CLIENT_SURFACE_H_
 #define SRC_DAWN_WIRE_CLIENT_SURFACE_H_
 
-#include "dawn/webgpu.h"
+#include <vector>
 
+#include "dawn/webgpu.h"
 #include "dawn/wire/client/ObjectBase.h"
 
 namespace dawn::wire::client {
@@ -38,12 +39,26 @@ class Device;
 
 class Surface final : public ObjectBase {
   public:
-    explicit Surface(const ObjectBaseParams& params);
+    explicit Surface(const ObjectBaseParams& params, const WGPUSurfaceCapabilities* capabilities);
     ~Surface() override;
 
     ObjectType GetObjectType() const override;
 
+    // WebGPU API
+    void Configure(const WGPUSurfaceConfiguration* config);
+    void Unconfigure();
     WGPUTextureFormat GetPreferredFormat(WGPUAdapter adapter) const;
+    WGPUStatus GetCapabilities(WGPUAdapter adapter, WGPUSurfaceCapabilities* capabilities) const;
+    void GetCurrentTexture(WGPUSurfaceTexture* surfaceTexture);
+
+  private:
+    WGPUTextureUsageFlags mSupportedUsages;
+    std::vector<WGPUTextureFormat> mSupportedFormats;
+    std::vector<WGPUPresentMode> mSupportedPresentModes;
+    std::vector<WGPUCompositeAlphaMode> mSupportedAlphaModes;
+
+    Ref<Device> mConfiguredDevice;
+    WGPUTextureDescriptor mTextureDescriptor;
 };
 
 }  // namespace dawn::wire::client

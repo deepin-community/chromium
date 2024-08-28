@@ -21,6 +21,7 @@
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
+#include "chrome/test/interaction/tracked_element_webcontents.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/test/browser_test.h"
 #include "ui/base/interaction/element_identifier.h"
@@ -32,6 +33,7 @@
 #include "ui/base/window_open_disposition.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/vector2d.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/views/event_monitor.h"
@@ -39,6 +41,7 @@
 #include "ui/views/interaction/interaction_sequence_views.h"
 #include "ui/views/interaction/widget_focus_observer.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/test/widget_activation_waiter.h"
 #include "url/gurl.h"
 
 namespace {
@@ -280,10 +283,19 @@ IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestUiTest,
       }));
 }
 
+// TODO(crbug.com/330095872): Flaky on linux-chromeos-rel and Linux ChromiumOS
+// MSan.
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_WatchForNonTabWebContentsActivation \
+  DISABLED_WatchForNonTabWebContentsActivation
+#else
+#define MAYBE_WatchForNonTabWebContentsActivation \
+  WatchForNonTabWebContentsActivation
+#endif
 // Tests whether ActivateSurface() results in kCurrentWidgetFocus updating
 // correctly when targeting a non-tab web contents.
 //
-// TODO(crbug.com/1471043): These tests can be kind of hairy and we're working
+// TODO(crbug.com/40069026): These tests can be kind of hairy and we're working
 // on making sure these primitives play nice together and do not flake. If you
 // see a flake, first, note that these are edge case tests for new test
 // infrastructure and do not directly affect Chrome stability. Next, please:
@@ -294,7 +306,7 @@ IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestUiTest,
 //
 // Thank you for working with us to make Chrome test infrastructure better!
 IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestUiTest,
-                       WatchForNonTabWebContentsActivation) {
+                       MAYBE_WatchForNonTabWebContentsActivation) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsElementId);
   constexpr char kWebViewName[] = "Web View";
   auto* const incognito = CreateIncognitoBrowser();
@@ -406,7 +418,8 @@ IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestUiTest,
 }
 
 IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestUiTest,
-                       InstrumentNonTabAsTestStep) {
+                       // TODO(crbug.com/330210402): Re-enable this test
+                       DISABLED_InstrumentNonTabAsTestStep) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsId);
   const char kTabSearchWebViewName[] = "Tab Search WebView";
 
@@ -492,6 +505,13 @@ class WebBubbleView : public views::BubbleDialogDelegateView {
     web_view_->LoadInitialURL(url);
   }
 
+  // views::BubbleDialogDelegateView:
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
+    // Need a large enough bubble that the WebView has size to render.
+    return gfx::Size(300, 400);
+  }
+
   const raw_ptr<Profile> profile_;
   raw_ptr<views::WebView> web_view_;
   std::unique_ptr<content::WebContents> owned_web_contents_;
@@ -519,4 +539,33 @@ IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestUiTest,
                   WaitForWebContentsNavigation(kWebContentsId, url2));
 
   bubble->GetWidget()->CloseNow();
+}
+
+IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestUiTest,
+                       WaitForWebContentsPainted) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsId);
+
+  const GURL url = embedded_test_server()->GetURL(kDocumentWithNamedElement);
+
+  auto* const bubble = WebBubbleView::CreateBubble(browser(), url);
+
+  RunTestSequence(
+      InstrumentNonTabWebView(kWebContentsId, bubble->web_view(), false),
+      // This should wait for the element to appear and then paint.
+      WaitForWebContentsPainted(kWebContentsId),
+      // This should be more or less a no-op.
+      WaitForWebContentsPainted(kWebContentsId));
+
+  bubble->GetWidget()->CloseNow();
+}
+
+// Ensure that the initial active window is detected by the focus observer.
+IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestUiTest, InitialWindowActive) {
+  auto* const widget =
+      BrowserView::GetBrowserViewForBrowser(browser())->GetWidget();
+  views::test::WaitForWidgetActive(widget, true);
+
+  RunTestSequence(ObserveState(views::test::kCurrentWidgetFocus),
+                  WaitForState(views::test::kCurrentWidgetFocus,
+                               [widget]() { return widget->GetNativeView(); }));
 }

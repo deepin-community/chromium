@@ -356,7 +356,7 @@ IN_PROC_BROWSER_TEST_F(EnableDisableSingleClientTest, RedownloadsAfterSignout) {
   // inspects the last-sync-cycle state. If low-prio types are active, they
   // cause another (uninteresting) cycle and mess up the stats we're interested
   // in.
-  // TODO(crbug.com/1298608): Rewrite this test to avoid disabling low priotiy
+  // TODO(crbug.com/40215602): Rewrite this test to avoid disabling low priotiy
   // types.
   ASSERT_TRUE(GetClient(0)->SetupSync(
       base::BindOnce([](syncer::SyncUserSettings* settings) {
@@ -402,7 +402,7 @@ IN_PROC_BROWSER_TEST_F(EnableDisableSingleClientTest,
   // inspects the last-sync-cycle state. If low-prio types are active, they
   // cause another (uninteresting) cycle and mess up the stats we're interested
   // in.
-  // TODO(crbug.com/1298608): Rewrite this test to avoid disabling low priotiy
+  // TODO(crbug.com/40215602): Rewrite this test to avoid disabling low priotiy
   // types.
   ASSERT_TRUE(GetClient(0)->SetupSync(
       base::BindOnce([](syncer::SyncUserSettings* settings) {
@@ -447,7 +447,9 @@ IN_PROC_BROWSER_TEST_F(EnableDisableSingleClientTest,
                        DoesNotClearPrefsWithKeepData) {
   SetupTest(/*all_types_enabled=*/true);
 
-  syncer::SyncTransportDataPrefs prefs(GetProfile(0)->GetPrefs());
+  syncer::SyncTransportDataPrefs prefs(
+      GetProfile(0)->GetPrefs(),
+      GetClient(0)->GetGaiaIdHashForPrimaryAccount());
   const std::string cache_guid = prefs.GetCacheGuid();
   ASSERT_NE("", cache_guid);
 
@@ -480,7 +482,9 @@ IN_PROC_BROWSER_TEST_F(EnableDisableSingleClientSelfNotifyTest,
 
   SetupTest(/*all_types_enabled=*/true);
 
-  syncer::SyncTransportDataPrefs prefs(GetProfile(0)->GetPrefs());
+  syncer::SyncTransportDataPrefs prefs(
+      GetProfile(0)->GetPrefs(),
+      GetClient(0)->GetGaiaIdHashForPrimaryAccount());
   EXPECT_EQ(bag_of_chips.SerializeAsString(), prefs.GetBagOfChips());
 
   sync_pb::ClientToServerMessage message = TriggerGetUpdatesCycleAndWait();
@@ -491,7 +495,9 @@ IN_PROC_BROWSER_TEST_F(EnableDisableSingleClientSelfNotifyTest,
 IN_PROC_BROWSER_TEST_F(EnableDisableSingleClientSelfNotifyTest,
                        ResendsBagOfChips) {
   ASSERT_TRUE(SetupClients());
-  syncer::SyncTransportDataPrefs prefs(GetProfile(0)->GetPrefs());
+  syncer::SyncTransportDataPrefs prefs(
+      GetProfile(0)->GetPrefs(),
+      GetClient(0)->GetGaiaIdHashForPrimaryAccount());
   ASSERT_NE("", prefs.GetBagOfChips());
   ASSERT_TRUE(GetClient(0)->AwaitSyncSetupCompletion());
 

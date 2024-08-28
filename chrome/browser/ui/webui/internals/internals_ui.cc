@@ -51,7 +51,7 @@ void HandleWebUIRequestCallback(
         profile, path, std::move(callback));
   }
 #endif
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 }  // namespace
@@ -75,7 +75,7 @@ InternalsUI::InternalsUI(content::WebUI* web_ui)
   source_->AddResourcePath("", IDR_INTERNALS_INTERNALS_HTML);
 
   // Add your sub-URL internals WebUI here.
-  // Keep this set of sub-URLs in sync with |kChromeInternalsPathURLs|.
+  // Keep this set of sub-URLs in sync with `ChromeInternalsURLPaths()`.
 #if BUILDFLAG(IS_ANDROID)
   // chrome://internals/lens
   AddLensInternals(web_ui);
@@ -92,7 +92,6 @@ InternalsUI::InternalsUI(content::WebUI* web_ui)
 #else
   source_->AddResourcePath("user-education",
                            IDR_USER_EDUCATION_INTERNALS_INDEX_HTML);
-  webui::SetupChromeRefresh2023(source_.get());
 #endif  // BUILDFLAG(IS_ANDROID)
 
   // chrome://internals/session-service

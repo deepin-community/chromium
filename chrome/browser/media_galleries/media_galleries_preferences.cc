@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/base_paths_posix.h"
@@ -144,7 +145,7 @@ const char* TypeToStringValue(MediaGalleryPrefInfo::Type type) {
       result = kMediaGalleriesTypeRemovedScanValue;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   return result;
@@ -189,7 +190,7 @@ const char* DefaultGalleryTypeToStringValue(
       result = kMediaGalleriesDefaultGalleryTypeVideosDefaultValue;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   return result;
@@ -199,7 +200,7 @@ const char* DefaultGalleryTypeToStringValue(
 // to `out` as a std::u16string. Returns false if no such string is found in
 // `dict`.
 bool FindU16StringInDict(const base::Value::Dict& dict,
-                         base::StringPiece key,
+                         std::string_view key,
                          std::u16string& out) {
   const std::string* string = dict.FindString(key);
   if (!string)
@@ -338,7 +339,7 @@ bool GetMediaGalleryPermissionFromDictionary(
     out_permission->has_permission = *has_permission;
     return true;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return false;
 }
 
@@ -1015,7 +1016,7 @@ bool MediaGalleriesPreferences::NonAutoGalleryHasPermission(
 
   for (const auto iter : extensions) {
     if (!crx_file::id_util::IdIsValid(iter.first)) {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       continue;
     }
     std::vector<MediaGalleryPermission> permissions =
@@ -1065,7 +1066,7 @@ MediaGalleryPrefIdSet MediaGalleriesPreferences::GalleriesForExtension(
       if (!gallery->second.IsBlockListedType()) {
         result.insert(it->pref_id);
       } else {
-        NOTREACHED() << gallery->second.device_id;
+        NOTREACHED_IN_MIGRATION() << gallery->second.device_id;
       }
     }
   }
@@ -1223,7 +1224,7 @@ void MediaGalleriesPreferences::RemoveGalleryPermissionsFromPrefs(
 
   for (const auto iter : extensions) {
     if (!crx_file::id_util::IdIsValid(iter.first)) {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       continue;
     }
     UnsetGalleryPermissionInPrefs(iter.first, gallery_id);

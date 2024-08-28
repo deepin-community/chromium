@@ -4,6 +4,7 @@
 
 module remote_cocoa.mojom;
 
+import "mojo/public/mojom/base/process_id.mojom";
 import "mojo/public/mojom/base/string16.mojom";
 import "ui/base/accelerators/mojom/accelerator.mojom";
 import "ui/base/mojom/ui_base_types.mojom";
@@ -104,8 +105,7 @@ interface NativeWidgetNSWindowHost {
   GetIsDraggableBackgroundAt(gfx.mojom.Point location_in_content) =>
       (bool is_draggable_background);
 
-  // Synchronously query the tooltip text for |location_in_content|.
-  [Sync]
+  // Asynchronously query the tooltip text for |location_in_content|.
   GetTooltipTextAt(gfx.mojom.Point location_in_content) =>
       (mojo_base.mojom.String16 new_tooltip_text);
 
@@ -233,7 +233,7 @@ interface NativeWidgetNSWindowHost {
   // view and in |host_pid| the pid for the host process.
   [Sync]
   GetRootViewAccessibilityToken() =>
-      (int64 host_pid, array<uint8> element_token);
+      (mojo_base.mojom.ProcessId host_pid, array<uint8> element_token);
 
   // Return the result for -[NSUserInterfaceValidations
   // validateUserInterfaceItem] for a given command, along with any state for

@@ -21,6 +21,7 @@
 #include "base/threading/scoped_blocking_call.h"
 #include "base/version.h"
 #include "printing/backend/cups_deleters.h"
+#include "printing/backend/cups_helper.h"
 #include "printing/backend/cups_ipp_helper.h"
 #include "printing/printer_status.h"
 
@@ -149,7 +150,7 @@ CupsJob::JobState ToJobState(ipp_attribute_t* attr) {
     case IPP_JOB_STOPPED:
       return CupsJob::STOPPED;
     default:
-      NOTREACHED() << "Unidentifed state " << state;
+      NOTREACHED_IN_MIGRATION() << "Unidentifed state " << state;
       break;
   }
 
@@ -199,7 +200,7 @@ PrinterStatus::PrinterReason::Reason ToReason(std::string_view reason) {
           {kCupsPkiExpired, PReason::kCupsPkiExpired},
       });
 
-  const auto* entry = kLabelToReasonMap.find(reason);
+  const auto entry = kLabelToReasonMap.find(reason);
   return entry != kLabelToReasonMap.end() ? entry->second
                                           : PReason::kUnknownReason;
 }
@@ -233,7 +234,7 @@ PrinterStatus::PrinterReason ToPrinterReason(std::string_view reason) {
 
   size_t last_dash = reason.rfind('-');
   auto severity = PSeverity::kUnknownSeverity;
-  if (last_dash != base::StringPiece::npos) {
+  if (last_dash != std::string_view::npos) {
     // try to parse the last part of the string as the severity.
     severity = ToSeverity(reason.substr(last_dash + 1));
   }
@@ -536,10 +537,10 @@ PrinterQueryResult GetPrinterInfo(const std::string& address,
     return PrinterQueryResult::kHostnameResolution;
   }
 
-  ScopedHttpPtr http = ScopedHttpPtr(httpConnect2(
+  ScopedHttpPtr http = HttpConnect2(
       address.c_str(), port, addr_list, AF_UNSPEC,
       encrypted ? HTTP_ENCRYPTION_ALWAYS : HTTP_ENCRYPTION_IF_REQUESTED, 0,
-      kHttpConnectTimeoutMs, nullptr));
+      kHttpConnectTimeoutMs, nullptr);
   if (!http) {
     LOG(WARNING) << "Could not connect to host";
     return PrinterQueryResult::kUnreachable;

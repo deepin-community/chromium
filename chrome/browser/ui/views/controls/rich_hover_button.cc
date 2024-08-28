@@ -13,6 +13,7 @@
 #include "ui/base/models/image_model.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/label.h"
@@ -114,11 +115,9 @@ RichHoverButton::RichHoverButton(
   secondary_label->SetHorizontalAlignment(gfx::ALIGN_RIGHT);
   secondary_label_ = AddChildView(std::move(secondary_label));
 
-  if (features::IsChromeRefresh2023()) {
-    title_->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
-    secondary_label_->SetTextStyle(views::style::STYLE_BODY_5);
-    secondary_label_->SetEnabledColorId(ui::kColorLabelForegroundSecondary);
-  }
+  title_->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
+  secondary_label_->SetTextStyle(views::style::STYLE_BODY_5);
+  secondary_label_->SetEnabledColorId(ui::kColorLabelForegroundSecondary);
 
   // State icon is optional and column is created only when it is set.
   if (state_icon.has_value()) {
@@ -144,14 +143,14 @@ RichHoverButton::RichHoverButton(
     subtitle_ = AddChildView(std::make_unique<views::Label>(
         subtitle_text, views::style::CONTEXT_LABEL,
         views::style::STYLE_SECONDARY));
-    if (features::IsChromeRefresh2023()) {
-      subtitle_->SetTextStyle(views::style::STYLE_BODY_5);
-      subtitle_->SetEnabledColorId(ui::kColorLabelForegroundSecondary);
-    }
+    subtitle_->SetTextStyle(views::style::STYLE_BODY_5);
+    subtitle_->SetEnabledColorId(ui::kColorLabelForegroundSecondary);
     subtitle_->SetMultiLine(true);
     subtitle_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     subtitle_->SetAutoColorReadabilityEnabled(false);
-    subtitle_->SizeToFit(title_->GetPreferredSize().width());
+    subtitle_->SizeToFit(
+        title_->GetPreferredSize(views::SizeBounds(title_->width(), {}))
+            .width());
     AddChildView(std::make_unique<views::View>());
     AddChildView(std::make_unique<views::View>());
   }
@@ -205,11 +204,12 @@ void RichHoverButton::UpdateAccessibleName() {
       subtitle_ == nullptr
           ? title_text
           : base::JoinString({title_text, subtitle_->GetText()}, u"\n");
-  HoverButton::SetAccessibleName(accessible_name);
+  HoverButton::GetViewAccessibility().SetName(accessible_name);
 }
 
-gfx::Size RichHoverButton::CalculatePreferredSize() const {
-  return Button::CalculatePreferredSize();
+gfx::Size RichHoverButton::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  return Button::CalculatePreferredSize(available_size);
 }
 
 int RichHoverButton::GetHeightForWidth(int w) const {

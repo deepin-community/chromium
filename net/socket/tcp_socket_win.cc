@@ -2,8 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "net/socket/tcp_socket.h"
-#include "net/socket/tcp_socket_win.h"
 
 #include <errno.h>
 #include <mstcpip.h>
@@ -12,12 +16,15 @@
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/win/windows_version.h"
 #include "net/base/address_list.h"
+#include "net/base/features.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
@@ -35,6 +42,7 @@
 #include "net/socket/socket_net_log_params.h"
 #include "net/socket/socket_options.h"
 #include "net/socket/socket_tag.h"
+#include "net/socket/tcp_socket_win.h"
 
 namespace net {
 
@@ -751,7 +759,7 @@ void TCPSocketWin::StartLoggingMultipleConnectAttempts(
     logging_multiple_connect_attempts_ = true;
     LogConnectBegin(addresses);
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 }
 
@@ -760,7 +768,7 @@ void TCPSocketWin::EndLoggingMultipleConnectAttempts(int net_error) {
     LogConnectEnd(net_error);
     logging_multiple_connect_attempts_ = false;
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 }
 
@@ -789,7 +797,7 @@ int TCPSocketWin::AcceptInternal(std::unique_ptr<TCPSocketWin>* socket,
 
   IPEndPoint ip_end_point;
   if (!ip_end_point.FromSockAddr(storage.addr, storage.addr_len)) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     if (closesocket(new_socket) < 0)
       PLOG(ERROR) << "closesocket";
     int net_error = ERR_ADDRESS_INVALID;
@@ -855,6 +863,16 @@ int TCPSocketWin::DoConnect() {
   if (!peer_address_->ToSockAddr(storage.addr, &storage.addr_len))
     return ERR_ADDRESS_INVALID;
 
+  // Set option to choose a random port, if the socket is not already bound.
+  // Ignore failures, which may happen if the socket was already bound.
+  if (base::win::GetVersion() >= base::win::Version::WIN10_20H1 &&
+      base::FeatureList::IsEnabled(features::kEnableTcpPortRandomization)) {
+    BOOL randomize_port = TRUE;
+    setsockopt(socket_, SOL_SOCKET, SO_RANDOMIZE_PORT,
+               reinterpret_cast<const char*>(&randomize_port),
+               sizeof(randomize_port));
+  }
+
   if (!connect(socket_, storage.addr, storage.addr_len)) {
     // Connected without waiting!
     //
@@ -866,7 +884,7 @@ int TCPSocketWin::DoConnect() {
     // It's not documented whether the event object will be signaled or not
     // if connect does return 0.  So the code below is essentially dead code
     // and we don't know if it's correct.
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
 
     if (ResetEventIfSignaled(core_->read_event_))
       return OK;

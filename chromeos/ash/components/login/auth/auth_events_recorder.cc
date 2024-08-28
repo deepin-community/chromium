@@ -129,7 +129,7 @@ std::string GetAuthenticationSurfaceName(AuthenticationSurface screen) {
     case AuthenticationSurface::kLogin:
       return "Login";
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return "";
 }
 
@@ -145,7 +145,7 @@ std::string GetAuthenticationOutcomeSuffix(AuthenticationOutcome exit_type) {
     case AuthenticationOutcome::kRecovery:
       return "UntilRecovery";
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return "";
 }
 
@@ -180,11 +180,13 @@ std::string GetConfiguredAuthFactorsHistogramSuffix(
     case cryptohome::AuthFactorType::kSmartCard:
       return "SmartCard";
     case cryptohome::AuthFactorType::kPassword:
-      NOTREACHED() << "For password factor use "
-                      "`GetConfiguredPasswordFactorsHistogramSuffix()`";
+      NOTREACHED_IN_MIGRATION()
+          << "For password factor use "
+             "`GetConfiguredPasswordFactorsHistogramSuffix()`";
       return "";
     case cryptohome::AuthFactorType::kUnknownLegacy:
     case cryptohome::AuthFactorType::kLegacyFingerprint:
+    case cryptohome::AuthFactorType::kFingerprint:
     case cryptohome::AuthFactorType::kKiosk:
       // These factors are not recorded.
       DCHECK(false);
@@ -272,7 +274,7 @@ std::string GetUserLoginTypeName(AuthEventsRecorder::UserLoginType type) {
     case UserLoginType::kEphemeral:
       return "ephemeral";
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return "";
 }
 
@@ -285,7 +287,7 @@ std::string GetAuthenticationOutcomeName(AuthenticationOutcome exit_type) {
     case AuthenticationOutcome::kRecovery:
       return "recovery";
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return "";
 }
 
@@ -300,7 +302,7 @@ std::string GetUserVaultTypeName(
     case UserVaultType::kGuest:
       return "guest";
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return "";
 }
 
@@ -478,6 +480,10 @@ void AuthEventsRecorder::OnUserVaultPrepared(UserVaultType user_vault_type,
   const std::string crash_key_prefix =
       GetUserVaultTypeName(user_vault_type) + "_vault_prepare";
   AddAuthEvent(GetCrashKeyStringWithStatus(crash_key_prefix, success));
+}
+
+void AuthEventsRecorder::OnAddUser() {
+  AddAuthEvent("add_user");
 }
 
 std::string AuthEventsRecorder::GetAuthEventsLog() {

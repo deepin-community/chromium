@@ -12,6 +12,9 @@
 #include "media/base/win/mf_helpers.h"
 #include "media/gpu/windows/d3d11_copying_texture_wrapper.h"
 #include "media/gpu/windows/d3d11_video_device_format_support.h"
+#include "media/gpu/windows/format_utils.h"
+#include "ui/gfx/color_space.h"
+#include "ui/gfx/color_space_win.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace media {
@@ -40,31 +43,6 @@ bool SupportsZeroCopy(const gpu::GpuPreferences& preferences,
   return true;
 }
 
-const char* DxgiFormatToString(DXGI_FORMAT format) {
-  switch (format) {
-    case DXGI_FORMAT_Y416:
-      return "Y416";
-    case DXGI_FORMAT_Y216:
-      return "Y216";
-    case DXGI_FORMAT_P016:
-      return "P016";
-    case DXGI_FORMAT_NV12:
-      return "NV12";
-    case DXGI_FORMAT_P010:
-      return "P010";
-    case DXGI_FORMAT_Y210:
-      return "Y210";
-    case DXGI_FORMAT_AYUV:
-      return "AYUV";
-    case DXGI_FORMAT_Y410:
-      return "Y410";
-    case DXGI_FORMAT_YUY2:
-      return "YUY2";
-    default:
-      return "UNKNOWN";
-  }
-}
-
 // static
 std::unique_ptr<TextureSelector> TextureSelector::Create(
     const gpu::GpuPreferences& gpu_preferences,
@@ -88,8 +66,41 @@ std::unique_ptr<TextureSelector> TextureSelector::Create(
   };
   // TODO(liberato): add other options here, like "copy to rgb" for NV12.
   switch (decoder_output_format) {
-    case DXGI_FORMAT_NV12:
     case DXGI_FORMAT_AYUV: {
+      MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder producing "
+                                 << DxgiFormatToString(decoder_output_format);
+      // AYUV output from decoder is always 8-bit 4:4:4 which we prefer to
+      // be rendered in ARGB formats to avoid chroma downsampling. For
+      // HDR contents, we should not let YUV to RGB conversion happens
+      // inside D3D11VideoDecoder, the only place for the conversion
+      // should be Gfx::ColorTransform or SwapChainPresenter. For color
+      // spaces that VP isn't able to handle the correct color conversion,
+      // the current workaround is to output a 4:2:0 YUV format and let
+      // viz handle the conversion at the expense of losing 4:4:4 chroma
+      // sampling. See https://crbug.com/343014700.
+      if (!input_color_space.IsHDR() &&
+          gfx::ColorSpaceWin::CanConvertToDXGIColorSpace(input_color_space) &&
+          supports_fmt(DXGI_FORMAT_B8G8R8A8_UNORM)) {
+        output_pixel_format = PIXEL_FORMAT_ARGB;
+        output_dxgi_format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        output_color_space.reset();
+        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected ARGB";
+      } else if (!needs_texture_copy || supports_fmt(DXGI_FORMAT_NV12)) {
+        output_pixel_format = PIXEL_FORMAT_NV12;
+        output_dxgi_format = DXGI_FORMAT_NV12;
+        // Leave |output_color_space| the same, since we'll bind either the
+        // original or the copy. Downstream will handle it, either in the
+        // shaders or in the overlay, if needed.
+        output_color_space.reset();
+        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected NV12";
+      } else {
+        MEDIA_LOG(INFO, media_log)
+            << DxgiFormatToString(decoder_output_format) << " not supported";
+        return nullptr;
+      }
+      break;
+    }
+    case DXGI_FORMAT_NV12: {
       MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder producing "
                                  << DxgiFormatToString(decoder_output_format);
       if (!needs_texture_copy || supports_fmt(DXGI_FORMAT_NV12)) {
@@ -112,23 +123,70 @@ std::unique_ptr<TextureSelector> TextureSelector::Create(
       }
       break;
     }
-    case DXGI_FORMAT_P010:
     case DXGI_FORMAT_Y416:
     case DXGI_FORMAT_Y216:
-    case DXGI_FORMAT_P016:
     case DXGI_FORMAT_Y410:
     case DXGI_FORMAT_Y210: {
+      MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder producing "
+                                 << DxgiFormatToString(decoder_output_format);
+      // Y416/Y216/Y410/Y210 output from decoder is always 10/12-bit 4:2:2/4:4:4
+      // which we prefer to be rendered in ARGB formats to avoid chroma
+      // downsampling. For HDR contents, we should not let YUV to RGB
+      // conversion happens inside D3D11VideoDecoder, the only place
+      // for the conversion should be Gfx::ColorTransform or
+      // SwapChainPresenter. For color spaces that VP isn't able to handle
+      // the correct color conversion, the current workaround is to output
+      // a 4:2:0 YUV format and let viz handle the conversion at the expense
+      // of losing 4:4:4 chroma sampling. See https://crbug.com/343014700.
+      if (!input_color_space.IsHDR() &&
+          gfx::ColorSpaceWin::CanConvertToDXGIColorSpace(input_color_space) &&
+          supports_fmt(DXGI_FORMAT_R10G10B10A2_UNORM)) {
+        output_dxgi_format = DXGI_FORMAT_R10G10B10A2_UNORM;
+        output_pixel_format = PIXEL_FORMAT_XB30;
+        output_color_space.reset();
+        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected XB30";
+      } else if (!needs_texture_copy || supports_fmt(DXGI_FORMAT_P010)) {
+        output_dxgi_format = DXGI_FORMAT_P010;
+        output_pixel_format = PIXEL_FORMAT_P010LE;
+        // Gfx::ColorTransform now can handle both PQ/HLG content well for
+        // all gpu vendors and also has a better performance when compared with
+        // video processor, reset colorspace to use gfx do tone mapping.
+        output_color_space.reset();
+        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected P010LE";
+      } else if (hdr_output_mode == HDRMode::kSDROnly &&
+                 supports_fmt(DXGI_FORMAT_B8G8R8A8_UNORM)) {
+        output_dxgi_format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        output_pixel_format = PIXEL_FORMAT_ARGB;
+        // Gfx::ColorTransform now can handle both PQ/HLG content well for
+        // all gpu vendors and also has a better performance when compared with
+        // video processor, reset colorspace to use gfx do tone mapping.
+        output_color_space.reset();
+        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected ARGB";
+      } else if (supports_fmt(DXGI_FORMAT_R16G16B16A16_FLOAT)) {
+        output_dxgi_format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        output_pixel_format = PIXEL_FORMAT_RGBAF16;
+        output_color_space = gfx::ColorSpace::CreateSCRGBLinear80Nits();
+        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected RGBAF16";
+      } else {
+        MEDIA_LOG(INFO, media_log)
+            << DxgiFormatToString(decoder_output_format) << " not supported";
+        return nullptr;
+      }
+      break;
+    }
+    case DXGI_FORMAT_P010:
+    case DXGI_FORMAT_P016: {
       MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder producing "
                                  << DxgiFormatToString(decoder_output_format);
       // If device support P010 zero copy, then try P010 firstly.
       if (!needs_texture_copy || supports_fmt(DXGI_FORMAT_P010)) {
         output_dxgi_format = DXGI_FORMAT_P010;
-        output_pixel_format = PIXEL_FORMAT_P016LE;
+        output_pixel_format = PIXEL_FORMAT_P010LE;
         // Gfx::ColorTransform now can handle both PQ/HLG content well for
         // all gpu vendors and also has a better performance when compared with
         // video processor, reset colorspace to use gfx do tone mapping.
         output_color_space.reset();
-        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected P016LE";
+        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected P010LE";
       } else if (hdr_output_mode == HDRMode::kSDROnly &&
                  supports_fmt(DXGI_FORMAT_B8G8R8A8_UNORM)) {
         output_dxgi_format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -149,7 +207,8 @@ std::unique_ptr<TextureSelector> TextureSelector::Create(
         output_color_space = gfx::ColorSpace::CreateHDR10();
         MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected XB30";
       } else {
-        MEDIA_LOG(INFO, media_log) << "P010 not supported";
+        MEDIA_LOG(INFO, media_log)
+            << DxgiFormatToString(decoder_output_format) << " not supported";
         return nullptr;
       }
       break;

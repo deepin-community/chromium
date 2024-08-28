@@ -28,10 +28,10 @@
 namespace safe_browsing {
 
 // static
-ChromeEnterpriseRealTimeUrlLookupService*
+RealTimeUrlLookupServiceBase*
 ChromeEnterpriseRealTimeUrlLookupServiceFactory::GetForProfile(
     Profile* profile) {
-  return static_cast<ChromeEnterpriseRealTimeUrlLookupService*>(
+  return static_cast<RealTimeUrlLookupServiceBase*>(
       GetInstance()->GetServiceForBrowserContext(profile, /* create= */ true));
 }
 
@@ -49,9 +49,12 @@ ChromeEnterpriseRealTimeUrlLookupServiceFactory::
           "ChromeEnterpriseRealTimeUrlLookupService",
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kOriginalOnly)
-              // TODO(crbug.com/1418376): Check if this service is needed in
+              // TODO(crbug.com/40257657): Check if this service is needed in
               // Guest mode.
               .WithGuest(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOriginalOnly)
               .Build()) {
   DependsOn(VerdictCacheManagerFactory::GetInstance());
   DependsOn(enterprise_connectors::ConnectorsServiceFactory::GetInstance());

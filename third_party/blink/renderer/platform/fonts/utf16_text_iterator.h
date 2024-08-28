@@ -18,6 +18,11 @@
  *
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_UTF16_TEXT_ITERATOR_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_UTF16_TEXT_ITERATOR_H_
 
@@ -31,7 +36,7 @@
 namespace blink {
 
 class PLATFORM_EXPORT UTF16TextIterator {
-  USING_FAST_MALLOC(UTF16TextIterator);
+  STACK_ALLOCATED();
 
  public:
   // The passed in UChar pointer starts at 'offset'. The iterator operates on

@@ -16,7 +16,6 @@
 #include "ui/views/view_targeter_delegate.h"
 #include "ui/views/widget/widget_observer.h"
 
-class SavedTabGroupKeyedService;
 class TabSlotController;
 class TabGroupStyle;
 struct TabSizeInfo;
@@ -27,6 +26,10 @@ class ImageView;
 class Label;
 class View;
 }  // namespace views
+
+namespace tab_groups {
+class SavedTabGroupKeyedService;
+}  // namespace tab_groups
 
 // View for tab group headers in the tab strip, which are markers of group
 // boundaries. There is one header for each group, which is included in the tab
@@ -85,6 +88,8 @@ class TabGroupHeader : public TabSlotView,
   // Determines if the sync icon should be shown in the header.
   bool ShouldShowSyncIcon() const;
 
+  void UpdateIsCollapsed();
+
   const raw_ref<TabSlotController> tab_slot_controller_;
 
   // The title chip for the tab group header which comprises of title text if
@@ -101,12 +106,14 @@ class TabGroupHeader : public TabSlotView,
   const raw_ptr<views::ImageView> sync_icon_;
 
   // Used to verify if this tab group is saved.
-  const raw_ptr<SavedTabGroupKeyedService> saved_tab_group_service_;
+  const raw_ptr<tab_groups::SavedTabGroupKeyedService> saved_tab_group_service_;
 
   const raw_ref<const TabGroupStyle> group_style_;
   const raw_ptr<const TabStyle> tab_style_;
 
-  // Saved collapsed state for usage with activation of element tracker system.
+  // Local saved collapsed state. When this differs from
+  // `TabSlotController::IsGroupCollapsed()`, then the collapsed state has
+  // changed in the model and we need to react to that.
   bool is_collapsed_;
 
   // Tracks whether our editor bubble is open. At most one can be open
@@ -121,7 +128,7 @@ class TabGroupHeader : public TabSlotView,
     views::Widget* widget() const { return widget_; }
 
     // views::WidgetObserver:
-    void OnWidgetDestroyed(views::Widget* widget) override;
+    void OnWidgetDestroying(views::Widget* widget) override;
 
    private:
     bool is_open_ = false;

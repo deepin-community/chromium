@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <list>
 #include <memory>
 #include <optional>
@@ -62,6 +63,7 @@
 #include "quiche/quic/platform/api/quic_socket_address.h"
 #include "quiche/quic/platform/api/quic_stack_trace.h"
 #include "quiche/common/platform/api/quiche_logging.h"
+#include "quiche/common/print_elements.h"
 #include "quiche/common/quiche_buffer_allocator.h"
 #include "quiche/common/quiche_callbacks.h"
 #include "quiche/common/quiche_text_utils.h"
@@ -108,77 +110,6 @@ class ClearStatelessResetAddressesAlarm
  private:
   // Not owned.
   QuicDispatcher* dispatcher_;
-};
-
-// Collects packets serialized by a QuicPacketCreator in order
-// to be handed off to the time wait list manager.
-class PacketCollector : public QuicPacketCreator::DelegateInterface,
-                        public QuicStreamFrameDataProducer {
- public:
-  explicit PacketCollector(quiche::QuicheBufferAllocator* allocator)
-      : send_buffer_(allocator) {}
-  ~PacketCollector() override = default;
-
-  // QuicPacketCreator::DelegateInterface methods:
-  void OnSerializedPacket(SerializedPacket serialized_packet) override {
-    // Make a copy of the serialized packet to send later.
-    packets_.emplace_back(
-        new QuicEncryptedPacket(CopyBuffer(serialized_packet),
-                                serialized_packet.encrypted_length, true));
-  }
-
-  QuicPacketBuffer GetPacketBuffer() override {
-    // Let QuicPacketCreator to serialize packets on stack buffer.
-    return {nullptr, nullptr};
-  }
-
-  void OnUnrecoverableError(QuicErrorCode /*error*/,
-                            const std::string& /*error_details*/) override {}
-
-  bool ShouldGeneratePacket(HasRetransmittableData /*retransmittable*/,
-                            IsHandshake /*handshake*/) override {
-    QUICHE_DCHECK(false);
-    return true;
-  }
-
-  void MaybeBundleOpportunistically() override { QUICHE_DCHECK(false); }
-
-  QuicByteCount GetFlowControlSendWindowSize(QuicStreamId /*id*/) override {
-    QUICHE_DCHECK(false);
-    return std::numeric_limits<QuicByteCount>::max();
-  }
-
-  SerializedPacketFate GetSerializedPacketFate(
-      bool /*is_mtu_discovery*/,
-      EncryptionLevel /*encryption_level*/) override {
-    return SEND_TO_WRITER;
-  }
-
-  // QuicStreamFrameDataProducer
-  WriteStreamDataResult WriteStreamData(QuicStreamId /*id*/,
-                                        QuicStreamOffset offset,
-                                        QuicByteCount data_length,
-                                        QuicDataWriter* writer) override {
-    if (send_buffer_.WriteStreamData(offset, data_length, writer)) {
-      return WRITE_SUCCESS;
-    }
-    return WRITE_FAILED;
-  }
-  bool WriteCryptoData(EncryptionLevel /*level*/, QuicStreamOffset offset,
-                       QuicByteCount data_length,
-                       QuicDataWriter* writer) override {
-    return send_buffer_.WriteStreamData(offset, data_length, writer);
-  }
-
-  std::vector<std::unique_ptr<QuicEncryptedPacket>>* packets() {
-    return &packets_;
-  }
-
- private:
-  std::vector<std::unique_ptr<QuicEncryptedPacket>> packets_;
-  // This is only needed until the packets are encrypted. Once packets are
-  // encrypted, the stream data is no longer required.
-  QuicStreamSendBuffer send_buffer_;
 };
 
 // Helper for statelessly closing connections by generating the
@@ -303,12 +234,10 @@ QuicDispatcher::QuicDispatcher(
       last_error_(QUIC_NO_ERROR),
       new_sessions_allowed_per_event_loop_(0u),
       accept_new_connections_(true),
-      allow_short_initial_server_connection_ids_(false),
       expected_server_connection_id_length_(
           expected_server_connection_id_length),
       clear_stateless_reset_addresses_alarm_(alarm_factory_->CreateAlarm(
           new ClearStatelessResetAddressesAlarm(this))),
-      should_update_expected_server_connection_id_length_(false),
       connection_id_generator_(connection_id_generator) {
   QUIC_BUG_IF(quic_bug_12724_1, GetSupportedVersions().empty())
       << "Trying to create dispatcher without any supported versions";
@@ -360,7 +289,6 @@ void QuicDispatcher::ProcessPacket(const QuicSocketAddress& self_address,
   }
   if (packet_info.destination_connection_id.length() !=
           expected_server_connection_id_length_ &&
-      !should_update_expected_server_connection_id_length_ &&
       packet_info.version.IsKnown() &&
       !packet_info.version.AllowsVariableLengthConnectionIds()) {
     SetLastError(QUIC_INVALID_PACKET_HEADER);
@@ -387,28 +315,19 @@ void QuicDispatcher::ProcessPacket(const QuicSocketAddress& self_address,
     }
   }
 
-  // Before introducing the flag, it was impossible for a short header to
-  // update |expected_server_connection_id_length_|.
-  if (should_update_expected_server_connection_id_length_ &&
-      packet_info.version_flag) {
-    expected_server_connection_id_length_ =
-        packet_info.destination_connection_id.length();
-  }
-
   if (MaybeDispatchPacket(packet_info)) {
     // Packet has been dropped or successfully dispatched, stop processing.
     return;
   }
   // The framer might have extracted the incorrect Connection ID length from a
   // short header. |packet| could be gQUIC; if Q043, the connection ID has been
-  // parsed correctly thanks to the fixed bit. If a Q046 or Q050 short header,
+  // parsed correctly thanks to the fixed bit. If a Q046 short header,
   // the dispatcher might have assumed it was a long connection ID when (because
   // it was gQUIC) it actually issued or kept an 8-byte ID. The other case is
   // where NEW_CONNECTION_IDs are not using the generator, and the dispatcher
   // is, due to flag misconfiguration.
   if (!packet_info.version_flag &&
-      (IsSupportedVersion(ParsedQuicVersion::Q046()) ||
-       IsSupportedVersion(ParsedQuicVersion::Q050()))) {
+      IsSupportedVersion(ParsedQuicVersion::Q046())) {
     ReceivedPacketInfo gquic_packet_info(self_address, peer_address, packet);
     // Try again without asking |connection_id_generator_| for the length.
     const QuicErrorCode gquic_error = QuicFramer::ParsePublicHeaderDispatcher(
@@ -435,7 +354,8 @@ namespace {
 constexpr bool IsSourceUdpPortBlocked(uint16_t port) {
   // These UDP source ports have been observed in large scale denial of service
   // attacks and are not expected to ever carry user traffic, they are therefore
-  // blocked as a safety measure. See draft-ietf-quic-applicability for details.
+  // blocked as a safety measure. See section 8.1 of RFC 9308 for details.
+  // https://www.rfc-editor.org/rfc/rfc9308.html#section-8.1
   constexpr uint16_t blocked_ports[] = {
       0,      // We cannot send to port 0 so drop that source port.
       17,     // Quote of the Day, can loop with QUIC.
@@ -681,6 +601,7 @@ QuicDispatcher::TryExtractChloOrBufferEarlyPacket(
     bool has_full_tls_chlo = false;
     std::string sni;
     std::vector<uint16_t> supported_groups;
+    std::vector<uint16_t> cert_compression_algos;
     std::vector<std::string> alpns;
     bool resumption_attempted = false, early_data_attempted = false;
     if (buffered_packets_.HasBufferedPackets(
@@ -689,8 +610,9 @@ QuicDispatcher::TryExtractChloOrBufferEarlyPacket(
       // use the associated TlsChloExtractor to parse this packet.
       has_full_tls_chlo = buffered_packets_.IngestPacketForTlsChloExtraction(
           packet_info.destination_connection_id, packet_info.version,
-          packet_info.packet, &supported_groups, &alpns, &sni,
-          &resumption_attempted, &early_data_attempted, &result.tls_alert);
+          packet_info.packet, &supported_groups, &cert_compression_algos,
+          &alpns, &sni, &resumption_attempted, &early_data_attempted,
+          &result.tls_alert);
     } else {
       // If we do not have a BufferedPacketList for this connection ID,
       // create a single-use one to check whether this packet contains a
@@ -701,6 +623,7 @@ QuicDispatcher::TryExtractChloOrBufferEarlyPacket(
         // This packet contains a full single-packet CHLO.
         has_full_tls_chlo = true;
         supported_groups = tls_chlo_extractor.supported_groups();
+        cert_compression_algos = tls_chlo_extractor.cert_compression_algos();
         alpns = tls_chlo_extractor.alpns();
         sni = tls_chlo_extractor.server_name();
         resumption_attempted = tls_chlo_extractor.resumption_attempted();
@@ -728,6 +651,7 @@ QuicDispatcher::TryExtractChloOrBufferEarlyPacket(
     ParsedClientHello& parsed_chlo = result.parsed_chlo.emplace();
     parsed_chlo.sni = std::move(sni);
     parsed_chlo.supported_groups = std::move(supported_groups);
+    parsed_chlo.cert_compression_algos = std::move(cert_compression_algos);
     parsed_chlo.alpns = std::move(alpns);
     if (packet_info.retry_token.has_value()) {
       parsed_chlo.retry_token = std::string(*packet_info.retry_token);
@@ -791,7 +715,7 @@ void QuicDispatcher::CleanUpSession(QuicConnectionId server_connection_id,
                                     QuicErrorCode /*error*/,
                                     const std::string& /*error_details*/,
                                     ConnectionCloseSource /*source*/) {
-  write_blocked_list_.erase(connection);
+  write_blocked_list_.Remove(*connection);
   QuicTimeWaitListManager::TimeWaitAction action =
       QuicTimeWaitListManager::SEND_STATELESS_RESET;
   if (connection->termination_packets() != nullptr &&
@@ -869,9 +793,9 @@ std::unique_ptr<QuicPerPacketContext> QuicDispatcher::GetPerPacketContext()
 }
 
 void QuicDispatcher::DeleteSessions() {
-  if (!write_blocked_list_.empty()) {
+  if (!write_blocked_list_.Empty()) {
     for (const auto& session : closed_session_list_) {
-      if (write_blocked_list_.erase(session->connection()) != 0) {
+      if (write_blocked_list_.Remove(*session->connection())) {
         QUIC_BUG(quic_bug_12724_2)
             << "QuicConnection was in WriteBlockedList before destruction "
             << session->connection()->connection_id();
@@ -889,32 +813,11 @@ void QuicDispatcher::OnCanWrite() {
   // The socket is now writable.
   writer_->SetWritable();
 
-  // Move every blocked writer in |write_blocked_list_| to a temporary list.
-  const size_t num_blocked_writers_before = write_blocked_list_.size();
-  WriteBlockedList temp_list;
-  temp_list.swap(write_blocked_list_);
-  QUICHE_DCHECK(write_blocked_list_.empty());
-
-  // Give each blocked writer a chance to write what they intended to write.
-  // If they are blocked again, they will call |OnWriteBlocked| to add
-  // themselves back into |write_blocked_list_|.
-  while (!temp_list.empty()) {
-    QuicBlockedWriterInterface* blocked_writer = temp_list.begin()->first;
-    temp_list.erase(temp_list.begin());
-    blocked_writer->OnBlockedWriterCanWrite();
-  }
-  const size_t num_blocked_writers_after = write_blocked_list_.size();
-  if (num_blocked_writers_after != 0) {
-    if (num_blocked_writers_before == num_blocked_writers_after) {
-      QUIC_CODE_COUNT(quic_zero_progress_on_can_write);
-    } else {
-      QUIC_CODE_COUNT(quic_blocked_again_on_can_write);
-    }
-  }
+  write_blocked_list_.OnWriterUnblocked();
 }
 
 bool QuicDispatcher::HasPendingWrites() const {
-  return !write_blocked_list_.empty();
+  return !write_blocked_list_.Empty();
 }
 
 void QuicDispatcher::Shutdown() {
@@ -996,17 +899,7 @@ void QuicDispatcher::OnConnectionClosed(QuicConnectionId server_connection_id,
 
 void QuicDispatcher::OnWriteBlocked(
     QuicBlockedWriterInterface* blocked_writer) {
-  if (!blocked_writer->IsWriterBlocked()) {
-    // It is a programming error if this ever happens. When we are sure it is
-    // not happening, replace it with a QUICHE_DCHECK.
-    QUIC_BUG(quic_bug_12724_4)
-        << "Tried to add writer into blocked list when it shouldn't be added";
-    // Return without adding the connection to the blocked list, to avoid
-    // infinite loops in OnCanWrite.
-    return;
-  }
-
-  write_blocked_list_.insert(std::make_pair(blocked_writer, true));
+  write_blocked_list_.Add(*blocked_writer);
 }
 
 void QuicDispatcher::OnRstStreamReceived(const QuicRstStreamFrame& /*frame*/) {}
@@ -1189,9 +1082,7 @@ void QuicDispatcher::BufferEarlyPacket(const ReceivedPacketInfo& packet_info) {
   // The connection ID generator will only be set for CHLOs, not for early
   // packets.
   EnqueuePacketResult rs = buffered_packets_.EnqueuePacket(
-      packet_info.destination_connection_id,
-      packet_info.form != GOOGLE_QUIC_PACKET, packet_info.packet,
-      packet_info.self_address, packet_info.peer_address, packet_info.version,
+      packet_info,
       /*parsed_chlo=*/std::nullopt, /*connection_id_generator=*/nullptr);
   if (rs != EnqueuePacketResult::SUCCESS) {
     OnBufferPacketFailure(rs, packet_info.destination_connection_id);
@@ -1206,10 +1097,7 @@ void QuicDispatcher::ProcessChlo(ParsedClientHello parsed_chlo,
     QUIC_BUG_IF(quic_bug_12724_7, buffered_packets_.HasChloForConnection(
                                       packet_info->destination_connection_id));
     EnqueuePacketResult rs = buffered_packets_.EnqueuePacket(
-        packet_info->destination_connection_id,
-        packet_info->form != GOOGLE_QUIC_PACKET, packet_info->packet,
-        packet_info->self_address, packet_info->peer_address,
-        packet_info->version, std::move(parsed_chlo), &ConnectionIdGenerator());
+        *packet_info, std::move(parsed_chlo), &ConnectionIdGenerator());
     if (rs != EnqueuePacketResult::SUCCESS) {
       OnBufferPacketFailure(rs, packet_info->destination_connection_id);
     }
@@ -1276,8 +1164,7 @@ bool QuicDispatcher::IsSupportedVersion(const ParsedQuicVersion version) {
 bool QuicDispatcher::IsServerConnectionIdTooShort(
     QuicConnectionId connection_id) const {
   if (connection_id.length() >= kQuicMinimumInitialConnectionIdLength ||
-      connection_id.length() >= expected_server_connection_id_length_ ||
-      allow_short_initial_server_connection_ids_) {
+      connection_id.length() >= expected_server_connection_id_length_) {
     return false;
   }
   uint8_t generator_output =
@@ -1318,7 +1205,11 @@ std::shared_ptr<QuicSession> QuicDispatcher::CreateSessionFromChlo(
           << ", version:" << version << ", self_address:" << self_address
           << ", peer_address:" << peer_address
           << ", parsed_chlo:" << parsed_chlo
-          << ", other peer address: " << other_connection->peer_address();
+          << ", other peer address: " << other_connection->peer_address()
+          << ", other CIDs: "
+          << quiche::PrintElements(
+                 other_connection->GetActiveServerConnectionIds())
+          << ", other stats: " << other_connection->GetStats();
     }
     if (replaced_connection_id) {
       QUIC_CODE_COUNT(quic_replaced_connection_id_collision);

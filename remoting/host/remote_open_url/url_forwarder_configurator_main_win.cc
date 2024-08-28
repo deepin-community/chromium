@@ -3,8 +3,10 @@
 // found in the LICENSE file.
 
 #include <objbase.h>
-#include <shlobj.h>
+
 #include <shobjidl.h>
+
+#include <shlobj.h>
 #include <wrl/client.h>
 
 #include <cwchar>
@@ -117,7 +119,7 @@ bool ShowSetUpUrlForwarderDialog() {
     case IDCANCEL:
       return false;
     default:
-      NOTREACHED() << "Unknown button: " << *button_result;
+      NOTREACHED_IN_MIGRATION() << "Unknown button: " << *button_result;
       return false;
   }
 }

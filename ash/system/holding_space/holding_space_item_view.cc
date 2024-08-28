@@ -105,8 +105,10 @@ class MinimumSizableView : public views::View {
 
  private:
   // views::View:
-  gfx::Size CalculatePreferredSize() const override {
-    gfx::Size preferred_size(views::View::CalculatePreferredSize());
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
+    gfx::Size preferred_size(
+        views::View::CalculatePreferredSize(available_size));
     preferred_size.SetToMax(min_size_);
     return preferred_size;
   }
@@ -144,8 +146,9 @@ HoldingSpaceItemView::HoldingSpaceItemView(HoldingSpaceViewDelegate* delegate,
   SetNotifyEnterExitOnChild(true);
 
   // Accessibility.
-  GetViewAccessibility().OverrideRole(ax::mojom::Role::kListItem);
-  GetViewAccessibility().OverrideName(item->GetAccessibleName());
+  GetViewAccessibility().SetRole(ax::mojom::Role::kListItem);
+  GetViewAccessibility().SetName(item->GetAccessibleName(),
+                                 ax::mojom::NameFrom::kAttribute);
 
   // When the description is not specified, tooltip text will be used.
   // That text is redundant to the name, but different enough that it is
@@ -258,8 +261,8 @@ bool HoldingSpaceItemView::OnKeyPressed(const ui::KeyEvent& event) {
 
 void HoldingSpaceItemView::OnMouseEvent(ui::MouseEvent* event) {
   switch (event->type()) {
-    case ui::ET_MOUSE_ENTERED:
-    case ui::ET_MOUSE_EXITED:
+    case ui::EventType::kMouseEntered:
+    case ui::EventType::kMouseExited:
       UpdatePrimaryAction();
       break;
     default:
@@ -294,7 +297,8 @@ void HoldingSpaceItemView::OnHoldingSpaceItemUpdated(
 
   // Accessibility.
   if (updated_fields.previous_accessible_name) {
-    GetViewAccessibility().OverrideName(item_->GetAccessibleName());
+    GetViewAccessibility().SetName(item_->GetAccessibleName(),
+                                   ax::mojom::NameFrom::kAttribute);
     NotifyAccessibilityEvent(ax::mojom::Event::kTextChanged, true);
   }
 
@@ -477,7 +481,7 @@ void HoldingSpaceItemView::OnPrimaryActionPressed() {
     if (!holding_space_util::ExecuteInProgressCommand(
             item(), HoldingSpaceCommandId::kCancelItem,
             holding_space_metrics::EventSource::kHoldingSpaceItem)) {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
     }
     return;
   }

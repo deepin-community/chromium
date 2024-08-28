@@ -109,7 +109,8 @@ HandlerSigninReason GetHandlerSigninReason(const GURL& url) {
     case signin_metrics::Reason::kFetchLstOnly:
       return HandlerSigninReason::kFetchLstOnly;
     default:
-      NOTREACHED() << "Unexpected signin reason: " << static_cast<int>(reason);
+      NOTREACHED_IN_MIGRATION()
+          << "Unexpected signin reason: " << static_cast<int>(reason);
       return HandlerSigninReason::kForcedSigninPrimaryAccount;
   }
 }
@@ -120,7 +121,7 @@ class ForcedSigninTurnSyncOnHelperDelegate
     : public TurnSyncOnHelperDelegateImpl {
  public:
   explicit ForcedSigninTurnSyncOnHelperDelegate(Browser* browser)
-      : TurnSyncOnHelperDelegateImpl(browser) {}
+      : TurnSyncOnHelperDelegateImpl(browser, /*is_sync_promo=*/false) {}
 
  protected:
   void ShouldEnterpriseConfirmationPromptForNewProfile(
@@ -134,7 +135,7 @@ class ForcedSigninTurnSyncOnHelperDelegate
       const std::string& previous_email,
       const std::string& new_email,
       signin::SigninChoiceCallback callback) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 };
 
@@ -252,7 +253,7 @@ void OnSigninComplete(Profile* profile,
             .GetProfileAttributesWithPath(profile->GetPath());
     if (entry) {
       entry->SetLocalProfileName(profile_name, /*is_default_name=*/false);
-      // TODO(https://crbug.com/1186969): move the following code into a new
+      // TODO(crbug.com/40172714): move the following code into a new
       // `Profile::SetIsHidden()` method.
       entry->SetIsOmitted(false);
       if (!profile->GetPrefs()->GetBoolean(prefs::kForceEphemeralProfiles)) {
@@ -325,7 +326,7 @@ void InlineSigninHelper::OnClientOAuthSuccess(const ClientOAuthResult& result) {
     // If user sign in in UserManager with force sign in enabled, the browser
     // window won't be opened until now.
     UnlockProfileAndHideLoginUI(profile_->GetPath(), handler_.get());
-    // TODO(https://crbug.com/1205147): In case of reauth, wait until cookies
+    // TODO(crbug.com/40764426): In case of reauth, wait until cookies
     // are set before opening a browser window.
     profiles::OpenBrowserWindowForProfile(
         base::IgnoreArgs<Browser*>(base::BindOnce(
@@ -356,7 +357,8 @@ void InlineSigninHelper::OnClientOAuthSuccessAndBrowserOpened(
 
     handler_->SendLSTFetchResultsMessage(base::Value(std::move(args)));
 #else
-    NOTREACHED() << "Google Credential Provider is only available on Windows";
+    NOTREACHED_IN_MIGRATION()
+        << "Google Credential Provider is only available on Windows";
 #endif  // BUILDFLAG(IS_WIN)
     base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
                                                                   this);
@@ -795,5 +797,5 @@ void InlineLoginHandlerImpl::SyncSetupFailed() {
   content::OpenURLParams params(url, content::Referrer(),
                                 WindowOpenDisposition::CURRENT_TAB,
                                 ui::PAGE_TRANSITION_AUTO_TOPLEVEL, false);
-  contents->OpenURL(params);
+  contents->OpenURL(params, /*navigation_handle_callback=*/{});
 }

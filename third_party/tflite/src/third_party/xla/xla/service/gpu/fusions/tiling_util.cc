@@ -20,6 +20,7 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "absl/strings/str_cat.h"
 #include "absl/types/span.h"
@@ -38,6 +39,7 @@ limitations under the License.
 #include "xla/service/llvm_ir/llvm_util.h"
 #include "xla/shape_util.h"
 #include "xla/util.h"
+#include "xla/xla_data.pb.h"
 #include "tsl/platform/statusor.h"
 
 namespace xla {
@@ -131,7 +133,8 @@ llvm::Value* EmitBlockId(llvm::IRBuilder<>* builder, int32_t num_blocks,
       EmitCallToTargetIntrinsic(TargetIntrinsicID::kBlockIdx, {}, {}, builder);
   if (num_blocks != 0) {
     llvm_ir::AddRangeMetadata(0, num_blocks,
-                              llvm::cast<llvm::Instruction>(block_id));
+                              llvm::cast<llvm::Instruction>(block_id),
+                              builder->GetInsertBlock()->getModule());
   }
   auto ret = builder->CreateIntCast(block_id, index_ty, /*isSigned=*/true);
   ret->setName("block.id.x");
@@ -147,7 +150,8 @@ llvm::Value* EmitThreadId(llvm::IRBuilder<>* builder, int64_t threads_per_block,
   // defined by (num_thread_y, num_thread_x) from thread_id.
   llvm::CallInst* thread_id =
       EmitCallToTargetIntrinsic(TargetIntrinsicID::kThreadIdx, {}, {}, builder);
-  llvm_ir::AddRangeMetadata(0, threads_per_block, thread_id);
+  llvm_ir::AddRangeMetadata(0, threads_per_block, thread_id,
+                            builder->GetInsertBlock()->getModule());
   auto ret = builder->CreateIntCast(thread_id, index_ty, /*isSigned=*/true);
   ret->setName("thread.id.x");
   return ret;
@@ -199,7 +203,7 @@ absl::StatusOr<TilingThreadIdInfo> EmitThreadIdInfo(llvm::IRBuilder<>* builder,
 
 absl::StatusOr<TilingKernelInfo> EmitTilingKernel(
     llvm::IRBuilder<>* builder, const Tiling& tiling, llvm::Type* index_ty,
-    const TileGenerator& tile_generator) {
+    const TileGenerator& tile_element_generator) {
   absl::Span<const int64_t> dims_in_elems = tiling.GetShape();
   const auto& block_counts = tiling.GetBlockCounts();
   auto constant = [&](uint64_t c) -> llvm::Constant* {
@@ -247,7 +251,7 @@ absl::StatusOr<TilingKernelInfo> EmitTilingKernel(
                                    index_ty);
   }();
 
-  tile_generator(thread_id_info, tile_offset, tile_dimensions);
+  tile_element_generator(thread_id_info, tile_offset, tile_dimensions);
   return {{tile_dimensions, tile_offset, thread_id_info}};
 }
 

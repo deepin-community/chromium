@@ -7,12 +7,12 @@
 #include <set>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "components/sync/base/client_tag_hash.h"
+#include "components/sync/base/deletion_origin.h"
 #include "components/sync/model/conflict_resolution.h"
 #include "components/sync/model/in_memory_metadata_change_list.h"
 #include "components/sync/model/metadata_batch.h"
@@ -170,7 +170,8 @@ void FakeModelTypeSyncBridge::DeleteItem(const std::string& key) {
   if (change_processor()->IsTrackingMetadata()) {
     std::unique_ptr<MetadataChangeList> change_list =
         CreateMetadataChangeList();
-    change_processor()->Delete(key, change_list.get());
+    change_processor()->Delete(key, syncer::DeletionOrigin::Unspecified(),
+                               change_list.get());
     ApplyMetadataChangeList(std::move(change_list));
   }
 }
@@ -202,8 +203,8 @@ std::optional<ModelError> FakeModelTypeSyncBridge::MergeFullSyncData(
     EXPECT_NE(SupportsGetStorageKey(), storage_key.empty());
     if (storage_key.empty()) {
       if (type_ == PREFERENCES &&
-          base::Contains(values_to_ignore_,
-                         change->data().specifics.preference().value())) {
+          values_to_ignore_.contains(
+              change->data().specifics.preference().value())) {
         change_processor()->UntrackEntityForClientTagHash(
             change->data().client_tag_hash);
         continue;
@@ -261,6 +262,10 @@ std::optional<ModelError> FakeModelTypeSyncBridge::ApplyIncrementalSyncChanges(
       case EntityChange::ACTION_DELETE:
         EXPECT_TRUE(db_->HasData(change->storage_key()));
         db_->RemoveData(change->storage_key());
+        if (change->is_deleted_collaboration_membership()) {
+          deleted_collaboration_membership_storage_keys_.insert(
+              change->storage_key());
+        }
         break;
     }
   }
@@ -277,12 +282,12 @@ void FakeModelTypeSyncBridge::ApplyMetadataChangeList(
   in_memory_mcl->TransferChangesTo(&db_mcl);
 }
 
-void FakeModelTypeSyncBridge::GetData(StorageKeyList keys,
-                                      DataCallback callback) {
+std::unique_ptr<DataBatch> FakeModelTypeSyncBridge::GetDataForCommit(
+    StorageKeyList keys) {
   if (error_next_) {
     error_next_ = false;
     change_processor()->ReportError({FROM_HERE, "boom"});
-    return;
+    return nullptr;
   }
 
   auto batch = std::make_unique<MutableDataBatch>();
@@ -293,21 +298,21 @@ void FakeModelTypeSyncBridge::GetData(StorageKeyList keys,
       DLOG(WARNING) << "No data for " << key;
     }
   }
-  std::move(callback).Run(std::move(batch));
+  return batch;
 }
 
-void FakeModelTypeSyncBridge::GetAllDataForDebugging(DataCallback callback) {
+std::unique_ptr<DataBatch> FakeModelTypeSyncBridge::GetAllDataForDebugging() {
   if (error_next_) {
     error_next_ = false;
     change_processor()->ReportError({FROM_HERE, "boom"});
-    return;
+    return nullptr;
   }
 
   auto batch = std::make_unique<MutableDataBatch>();
   for (const auto& [storage_key, entity_data] : db_->all_data()) {
     batch->Put(storage_key, CopyEntityData(*entity_data));
   }
-  std::move(callback).Run(std::move(batch));
+  return batch;
 }
 
 std::string FakeModelTypeSyncBridge::GetClientTag(
@@ -330,9 +335,11 @@ std::string FakeModelTypeSyncBridge::GetStorageKeyInternal(
     case USER_EVENTS:
       return base::NumberToString(
           entity_data.specifics.user_event().event_time_usec());
+    case SHARED_TAB_GROUP_DATA:
+      return entity_data.specifics.shared_tab_group_data().guid();
     default:
       // If you need support for more types, add them here.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   return std::string();
 }

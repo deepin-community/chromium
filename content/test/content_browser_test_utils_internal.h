@@ -31,9 +31,11 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/test_support/test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/mojom/choosers/file_chooser.mojom-forward.h"
 #include "third_party/blink/public/mojom/choosers/popup_menu.mojom.h"
+#include "third_party/blink/public/mojom/frame/frame.mojom-test-utils.h"
 #include "third_party/blink/public/mojom/page/widget.mojom-test-utils.h"
 #include "url/gurl.h"
 
@@ -45,6 +47,7 @@ class RenderFrameHostImpl;
 class RenderWidgetHostImpl;
 class Shell;
 class SiteInstance;
+class SiteInstanceGroup;
 class ToRenderFrameHost;
 
 // Navigates the frame represented by |node| to |url|, blocking until the
@@ -112,24 +115,37 @@ Shell* OpenWindow(WebContentsImpl* web_contents, const GURL& url);
 // is appropriate for use in assertions.
 //
 // The diagrams show frame tree structure, the SiteInstance of current frames,
-// presence of pending frames, and the SiteInstances of any and all proxies.
-// They look like this:
+// presence of pending frames, and the SiteInstanceGroups of any and all
+// proxies. They look like this:
 //
-//        Site A (D pending) -- proxies for B C
-//          |--Site B --------- proxies for A C
+//        Site A (D pending) -- proxies for B {C,E}
+//          |--Site B --------- proxies for A {C,E}
 //          +--Site C --------- proxies for B A
-//               |--Site A ---- proxies for B
-//               +--Site A ---- proxies for B
-//                    +--Site A -- proxies for B
+//               |--Site A ---- proxies for B {C,E}
+//               +--Site A ---- proxies for B {C,E}
+//                    +--Site E -- proxies for A B
 //       Where A = http://127.0.0.1/
 //             B = http://foo.com/ (no process)
 //             C = http://bar.com/
 //             D = http://next.com/
+//             E = data:nonce_E
 //
 // SiteInstances are assigned single-letter names (A, B, C) which are remembered
 // across invocations of the pretty-printer. Port numbers are excluded from the
 // descriptions by default for DepictFrameTree. Isolated sandboxed SiteInstances
 // are denoted with "(sandboxed)".
+//
+// SiteInstanceGroups with more than once SiteInstance are denoted as a set of
+// the SiteInstances in the group. See comment for `GetGroupName`. In this case,
+// E is in C's SiteInstanceGroup, denoted {C,E}. Note that SiteInstanceGroups
+// may show SiteInstances that are no longer in the FrameTree. For example, if a
+// subframe B does a same-SiteInstanceGroup navigation to data:nonce_C, B's
+// SiteInstance is kept alive by a FrameNavigationEntry, and it retains its
+// group and process because the active frame count is tracked on the
+// SiteInstanceGroup (shared with data:nonce_C) and not the B SiteInstance
+// itself. (This is not necessary but has no impact outside of DepictFrameTree
+// output). That means it still exists from the perspective
+// of DepictFrameTree.
 class FrameTreeVisualizer {
  public:
   FrameTreeVisualizer();
@@ -145,6 +161,18 @@ class FrameTreeVisualizer {
  private:
   // Assign or retrive the abbreviated short name (A, B, C) for a site instance.
   std::string GetName(SiteInstance* site_instance);
+
+  // Assign the name for a SiteInstanceGroup. A group's name is denoted as a set
+  // containing all the SiteInstances in the group, using their abbreviated
+  // names. For example, if a group contains foo.com and bar.com, which are
+  // assigned A and B respectively, the group name will be {A,B}. If there is
+  // only one SiteInstance in the group, it is directly depicted as the short
+  // name without set notation to minimize changes to existing tests. E.g.
+  // SiteInstanceGroup that contains only SiteInstance A is depicted as A rather
+  // than {A}.
+  // TODO(crbug.com/40176090): Always use set notation, to indicate that proxies
+  // are associated with SiteInstanceGroups rather than SiteInstances.
+  std::string GetGroupName(SiteInstanceGroup* group);
 
   // Returns an identical URL except the port, if any, has been removed.
   GURL GetUrlWithoutPort(const GURL& url);
@@ -286,6 +314,34 @@ class RenderProcessHostBadIpcMessageWaiter {
   RenderProcessHostKillWaiter internal_waiter_;
 };
 
+// One-shot helper that listens for creation of a new popup widget.
+class CreateNewPopupWidgetInterceptor
+    : public blink::mojom::LocalFrameHostInterceptorForTesting {
+ public:
+  explicit CreateNewPopupWidgetInterceptor(
+      RenderFrameHostImpl* rfh,
+      base::OnceCallback<void(RenderWidgetHostImpl*)> did_create_callback);
+
+  ~CreateNewPopupWidgetInterceptor() override;
+
+  // LocalFrameHost overrides:
+  void CreateNewPopupWidget(
+      mojo::PendingAssociatedReceiver<blink::mojom::PopupWidgetHost>
+          blink_popup_widget_host,
+      mojo::PendingAssociatedReceiver<blink::mojom::WidgetHost>
+          blink_widget_host,
+      mojo::PendingAssociatedRemote<blink::mojom::Widget> blink_widget)
+      override;
+
+  // LocalFrameHostInterceptorForTesting overrides:
+  blink::mojom::LocalFrameHost* GetForwardingInterface() override;
+
+ private:
+  mojo::test::ScopedSwapImplForTesting<blink::mojom::LocalFrameHost>
+      swapped_impl_;
+  base::OnceCallback<void(RenderWidgetHostImpl*)> did_create_callback_;
+};
+
 class ShowPopupWidgetWaiter
     : public blink::mojom::PopupWidgetHostInterceptorForTesting {
  public:
@@ -304,12 +360,40 @@ class ShowPopupWidgetWaiter
   // Waits until a popup request is received.
   void Wait();
 
-  // Stops observing new messages.
-  void Stop();
-
  private:
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
-  void ShowPopupMenu(const gfx::Rect& bounds);
+  // Helper that waits for a `ShowPopupMenu()` call and then invokes the
+  // observer callback with the requested bounds.  The actual call to show the
+  // popup menu is treated as if it were cancelled.
+  class ShowPopupMenuInterceptor
+      : public blink::mojom::LocalFrameHostInterceptorForTesting {
+   public:
+    explicit ShowPopupMenuInterceptor(RenderFrameHostImpl* rfh,
+                                      base::OnceCallback<void(const gfx::Rect&)>
+                                          did_show_popup_menu_callback);
+    ~ShowPopupMenuInterceptor() override;
+
+    // LocalFrameHost overrides:
+    void ShowPopupMenu(
+        mojo::PendingRemote<blink::mojom::PopupMenuClient> popup_client,
+        const gfx::Rect& bounds,
+        int32_t item_height,
+        double font_size,
+        int32_t selected_item,
+        std::vector<blink::mojom::MenuItemPtr> menu_items,
+        bool right_aligned,
+        bool allow_multiple_selection) override;
+
+    // LocalFrameHostInterceptorForTesting overrides:
+    blink::mojom::LocalFrameHost* GetForwardingInterface() override;
+
+   private:
+    mojo::test::ScopedSwapImplForTesting<blink::mojom::LocalFrameHost>
+        swapped_impl_;
+    base::OnceCallback<void(const gfx::Rect&)> did_show_popup_menu_callback_;
+  };
+
+  void DidShowPopupMenu(const gfx::Rect& bounds);
 #endif
 
   // Callback bound for creating a popup widget.
@@ -321,14 +405,15 @@ class ShowPopupWidgetWaiter
                  const gfx::Rect& initial_anchor_rect,
                  ShowPopupCallback callback) override;
 
+  CreateNewPopupWidgetInterceptor create_new_popup_widget_interceptor_;
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
+  ShowPopupMenuInterceptor show_popup_menu_interceptor_;
+#endif
   base::RunLoop run_loop_;
   gfx::Rect initial_rect_;
   int32_t routing_id_ = MSG_ROUTING_NONE;
   int32_t process_id_ = 0;
-  raw_ptr<RenderFrameHostImpl> frame_host_;
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
-  raw_ptr<WebContentsImpl> web_contents_;
-#endif
+  const raw_ptr<RenderFrameHostImpl> frame_host_;
 };
 
 // This observer waits until WebContentsObserver::OnRendererUnresponsive
@@ -372,7 +457,7 @@ class BeforeUnloadBlockingDelegate : public JavaScriptDialogManager,
   JavaScriptDialogManager* GetJavaScriptDialogManager(
       WebContents* source) override;
 
-  bool IsBackForwardCacheSupported() override;
+  bool IsBackForwardCacheSupported(WebContents& web_contents) override;
 
   // JavaScriptDialogManager
 
@@ -719,10 +804,15 @@ class CommitNavigationPauser
   mojom::DidCommitProvisionalLoadInterfaceParamsPtr paused_interface_params_;
 };
 
-// Blocks the current execution until the renderer main thread is in a steady
-// state, so the caller can issue an `viz::CopyOutputRequest` against the
-// current `WebContents`.
+// Blocks the current execution until the renderer main thread in the main frame
+// is in a steady state, so the caller can issue an `viz::CopyOutputRequest`
+// against the current `WebContents`.
 void WaitForCopyableViewInWebContents(WebContents* web_contents);
+
+// Blocks the current execution until the renderer main thread in the subframe
+// is in a steady state, so the caller can issue an `viz::CopyOutputRequest`
+// against its view.
+void WaitForCopyableViewInFrame(RenderFrameHost* render_frame_host);
 
 // Blocks the current execution until the frame submitted via the browser's
 // compositor is presented on the screen.

@@ -43,11 +43,11 @@ updates into any local data changes that occur.
 The bridge owns a [`ModelTypeChangeProcessor`][MTCP] object, which it uses to
 communicate local changes to sync using the `Put` and `Delete` methods.
 The processor will communicate remote changes from sync to the bridge using the
-`MergeSyncData` and `ApplySyncChanges` methods, respectively for the initial
-merge of remote and local data, and for incremental changes coming from sync.
-[`MetadataChangeList`][MCL] is the way sync communicates metadata changes to the
-storage mechanism. Note that it is typically implemented on a per-storage basis,
-not a per-type basis.
+`MergeFullSyncData` and `ApplyIncrementalSyncChanges` methods, respectively for
+the initial merge of remote and local data, and for incremental changes coming
+from sync. [`MetadataChangeList`][MCL] is the way sync communicates metadata
+changes to the storage mechanism. Note that it is typically implemented on a
+per-storage basis, not a per-type basis.
 
 [Bridge]: https://cs.chromium.org/chromium/src/components/sync/model/model_type_sync_bridge.h
 [KeyedService]: https://cs.chromium.org/chromium/src/components/keyed_service/core/keyed_service.h
@@ -59,13 +59,13 @@ not a per-type basis.
 ### Specifics
 
 Model types will define a proto that contains the necessary fields of the
-corresponding native type (e.g. [`TypedUrlSpecifics`][TypedUrlSpecifics]
-contains a URL and a list of visit timestamps) and include it as a field in the
-generic [`EntitySpecifics`][EntitySpecifics] proto. This is the form that all
-communications with sync will use. This proto form of the model data is referred
-to as the specifics.
+corresponding native type (e.g. [`ReadingListSpecifics`][ReadingListSpecifics]
+contains a URL, the "read" status, and a few other things) and include it as a
+field in the generic [`EntitySpecifics`][EntitySpecifics] proto. This is the
+form that all communications with sync will use. This proto form of the model
+data is referred to as the specifics.
 
-[TypedUrlSpecifics]: https://cs.chromium.org/chromium/src/components/sync/protocol/typed_url_specifics.proto
+[ReadingListSpecifics]: https://cs.chromium.org/chromium/src/components/sync/protocol/reading_list_specifics.proto
 [EntitySpecifics]: https://cs.chromium.org/search/?q="message+EntitySpecifics"+file:sync.proto
 
 ### Identifiers
@@ -136,9 +136,10 @@ runner. Sync provides a backend that can be shared by all types via the
 ## Implementing ModelTypeSyncBridge
 
 The responsibility of the bridge is to accept incoming changes from Sync and
-apply them to the local model (via `MergeSyncData` and `ApplySyncChanges`), as
-well as watch for local changes and send them to Sync (via the passed-in
-`ModelTypeChangeProcessor`'s `Put` and `Delete` methods).
+apply them to the local model (via `MergeFullSyncData` and
+`ApplyIncrementalSyncChanges`), as well as watch for local changes and send them
+to Sync (via the passed-in `ModelTypeChangeProcessor`'s `Put` and `Delete`
+methods).
 
 ### Threading
 
@@ -164,7 +165,7 @@ changes can be made.
 
 [ModelReadyToSync]: https://cs.chromium.org/search/?q=ModelReadyToSync+file:/model_type_change_processor.h
 
-### MergeSyncData
+### MergeFullSyncData
 
 This method is called only once, when a type is first enabled. Sync downloads
 all the data it has for the type from the server and provides it to the bridge
@@ -197,7 +198,7 @@ the meantime.
 
 [Put]: https://cs.chromium.org/search/?q=Put+file:/model_type_change_processor.h
 
-### ApplySyncChanges
+### ApplyIncrementalSyncChanges
 
 This method is called whenever new changes have been downloaded from the server.
 These changes must be applied to the local model.
@@ -205,16 +206,20 @@ These changes must be applied to the local model.
 Here’s an example implementation of a type using `ModelTypeStore`:
 
 ```cpp
-absl::optional<ModelError> DeviceInfoSyncBridge::ApplySyncChanges(
+std::optional<ModelError> DeviceInfoSyncBridge::ApplyIncrementalSyncChanges(
     std::unique_ptr<MetadataChangeList> metadata_change_list,
     EntityChangeList entity_changes) {
   std::unique_ptr<WriteBatch> batch = store_->CreateWriteBatch();
-  for (const EntityChange& change : entity_changes) {
-    if (change.type() == EntityChange::ACTION_DELETE) {
-      batch->DeleteData(change.storage_key());
-    } else {
-      batch->WriteData(change.storage_key(),
-                       change.data().specifics.your_type().SerializeAsString());
+  for (const std::unique_ptr<syncer::EntityChange>& change : entity_changes) {
+    switch (change->type()) {
+      case syncer::EntityChange::ACTION_ADD:
+      case syncer::EntityChange::ACTION_UPDATE:
+        batch->WriteData(change->storage_key(),
+                         change->data().specifics.your_type().SerializeAsString());
+        break;
+      case syncer::EntityChange::ACTION_DELETE:
+        batch->DeleteData(change->storage_key());
+        break;
     }
   }
 
@@ -228,9 +233,9 @@ absl::optional<ModelError> DeviceInfoSyncBridge::ApplySyncChanges(
 A conflict can occur when an entity has a pending local commit when an update
 for the same entity comes from another client. In this case, the bridge’s
 [`ResolveConflict`][ResolveConflict] method will have been called prior to the
-`ApplySyncChanges` call in order to determine what should happen. This method
-defaults to having the remote version overwrite the local version unless the
-remote version is a tombstone, in which case the local version wins.
+`ApplyIncrementalSyncChanges` call in order to determine what should happen.
+This method defaults to having the remote version overwrite the local version
+unless the remote version is a tombstone, in which case the local version wins.
 
 [EntityChange]: https://cs.chromium.org/chromium/src/components/sync/model/entity_change.h
 [ResolveConflict]: https://cs.chromium.org/search/?q=ResolveConflict+file:/model_type_sync_bridge.h
@@ -239,7 +244,7 @@ remote version is a tombstone, in which case the local version wins.
 
 The [`ModelTypeChangeProcessor`][MTCP] must be informed of any local changes via
 its `Put` and `Delete` methods. Since the processor cannot do any useful
-metadata tracking until `MergeSyncData` is called, the `IsTrackingMetadata`
+metadata tracking until `MergeFullSyncData` is called, the `IsTrackingMetadata`
 method is provided. It can be checked as an optimization to prevent unnecessary
 processing preparing the parameters to a `Put` or `Delete` call.
 
@@ -262,8 +267,8 @@ void WriteLocalChange(std::string key, ModelData data) {
 If any errors occur during store operations that could compromise the
 consistency of the data and metadata, the processor’s
 [`ReportError`][ReportError] method should be called. The only exception to this
-is errors during `MergeSyncData` or `ApplySyncChanges`, which should just return
-a [`ModelError`][ModelError].
+is errors during `MergeFullSyncData` or `ApplyIncrementalSyncChanges`, which
+should just return a [`ModelError`][ModelError].
 
 This will inform sync of the error, which will stop all communications with the
 server so bad data doesn’t get synced. Since the metadata might no longer be
@@ -277,56 +282,7 @@ the next client restart.
 
 ## Sync Integration Checklist
 
-*   Before starting any integration work, please reach out to us at
-    chrome-sync-dev@google.com and share your plans / design doc! The Chrome
-    Sync team will assign you a "champion" (primary contact person) to review
-    your designs and code.
-*   If you're a Googler, please also file a bug via
-    go/create-new-sync-data-type-bug.
-*   Define your specifics proto in [`//components/sync/protocol/`][protocol].
-*   Add it to the [proto value conversions][conversions] files.
-*   Add a field for it to [`EntitySpecifics`][EntitySpecifics].
-*   At this point, there are also some server-side integration steps to be done.
-    They should be discussed in the thread or bug created above.
-*   Add it to the [`ModelType`][ModelType] enum and
-    [`kModelTypeInfoMap`][info_map].
-*   Add to the `SyncModelTypes` enum in [`enums.xml`][enums] and to the
-    `SyncModelType` suffix in [`histograms.xml`][histograms].
-*   If your type should have its own toggle in sync settings, add an entry to
-    the [`UserSelectableType`][UserSelectableType] enum, add a
-    [preference][pref_names] for tracking whether your type is enabled, and
-    map your type to the pref in [`GetPrefNameForType`][GetPrefName].
-*   Otherwise, if your type should be included in an existing toggle in sync
-    settings, add it in
-    [`GetUserSelectableTypeInfo`][GetUserSelectableTypeInfo].
-*   Register a [`ModelTypeController`][ModelTypeController] for your type in
-    [`SyncApiComponentFactoryImpl::CreateCommonDataTypeControllers`][CreateCommonDataTypeControllers]
-    or platform-specific equivalent in
-    [`ChromeSyncClient::CreateDataTypeControllers`][CreateDataTypeControllers].
-*   Add your KeyedService dependency to
-    [`SyncServiceFactory`][SyncServiceFactory].
-*   Implement the actual data type logic. This will mostly be an implementation
-    of the [`ModelTypeSyncBridge`][Bridge] interface.
-*   Write some `sync_integration_tests` (see next section).
-*   Finally: While rolling out your new data type, keep the Sync team in the
-    loop! E.g. CC your assigned champion on all Finch CLs.
-
-[protocol]: https://cs.chromium.org/chromium/src/components/sync/protocol/
-[ModelType]: https://cs.chromium.org/chromium/src/components/sync/base/model_type.h
-[info_map]: https://cs.chromium.org/search/?q="kModelTypeInfoMap%5B%5D"+file:model_type.cc
-[conversions]: https://cs.chromium.org/chromium/src/components/sync/protocol/proto_value_conversions.h
-[ModelTypeController]: https://cs.chromium.org/chromium/src/components/sync/service/model_type_controller.h
-[CreateCommonDataTypeControllers]: https://cs.chromium.org/search/?q="SyncApiComponentFactoryImpl::CreateCommonDataTypeControllers"
-[CreateDataTypeControllers]: https://cs.chromium.org/search/?q="ChromeSyncClient::CreateDataTypeControllers"
-[SyncServiceFactory]: https://cs.chromium.org/search/?q=:SyncServiceFactory%5C(%5C)
-[NigoriSpecifics]: https://cs.chromium.org/chromium/src/components/sync/protocol/nigori_specifics.proto
-[UserSelectableType]: https://cs.chromium.org/chromium/src/components/sync/base/user_selectable_type.h?type=cs&q="enum+class+UserSelectableType"
-[pref_names]: https://cs.chromium.org/chromium/src/components/sync/base/pref_names.h
-[GetPrefName]: https://cs.chromium.org/search/?q=GetPrefNameForType+file:sync_prefs.cc
-[GetUserSelectableTypeInfo]: https://cs.chromium.org/chromium/src/components/sync/base/user_selectable_type.cc?type=cs&q="UserSelectableTypeInfo+GetUserSelectableTypeInfo"+f:components/sync/base/user_selectable_type.cc
-[enums]: https://source.chromium.org/chromium/chromium/src/+/main:tools/metrics/histograms/metadata/sync/enums.xml
-[histograms]: https://source.chromium.org/chromium/chromium/src/+/main:tools/metrics/histograms/metadata/sync/histograms.xml
-[DataTypeHistogram]: https://cs.chromium.org/chromium/src/components/sync/base/data_type_histogram.h
+This content was moved [here](../integration-checklist).
 
 ## Testing
 

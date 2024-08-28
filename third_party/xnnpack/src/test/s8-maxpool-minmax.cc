@@ -12,11 +12,10 @@
 
 
 #include <gtest/gtest.h>
-
-#include <xnnpack/common.h>
-#include <xnnpack/isa-checks.h>
-
-#include <xnnpack/maxpool.h>
+#include "xnnpack/common.h"
+#include "xnnpack/isa-checks.h"
+#include "xnnpack/maxpool.h"
+#include "xnnpack/microparams-init.h"
 #include "maxpool-microkernel-tester.h"
 
 

@@ -31,7 +31,7 @@
 #include "chrome/browser/ash/plugin_vm/plugin_vm_manager_factory.h"
 #include "chrome/browser/ash/policy/reporting/app_install_event_log_manager_wrapper.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
+#include "chrome/browser/ash/sparky/sparky_manager_service_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part_ash.h"
 #include "chrome/browser/component_updater/crl_set_component_installer.h"
@@ -49,10 +49,14 @@
 #include "chrome/browser/ui/webui/ash/settings/pages/privacy/peripheral_data_access_handler.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
+#include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/pciguard/pciguard_client.h"
+#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/network/network_cert_loader.h"
 #include "chromeos/ash/components/peripheral_notification/peripheral_notification_manager.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "components/live_caption/caption_util.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user_manager.h"
@@ -108,7 +112,7 @@ void GetCertDBOnIOThread(
 // Note: This unsafely grabs a persistent pointer to the `NssService`'s
 // `NSSCertDatabase` outside of the IO thread, and the `NSSCertDatabase`
 // will be invalidated once the associated profile is shut down.
-// TODO(https://crbug.com/1186373): Provide better lifetime guarantees and
+// TODO(crbug.com/40753707): Provide better lifetime guarantees and
 // pass the Getter to the NetworkCertLoader.
 void OnGotNSSCertDatabaseForUser(net::NSSCertDatabase* database) {
   if (!NetworkCertLoader::IsInitialized())
@@ -142,7 +146,7 @@ void UserSessionInitializer::OnUserProfileLoaded(const AccountId& account_id) {
     // TODO(https://crbug.com/1208416): Investigate why OnUserProfileLoaded
     // is called more than once.
     if (primary_profile_ != nullptr) {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       CHECK_EQ(primary_profile_, profile);
       return;
     }
@@ -154,6 +158,9 @@ void UserSessionInitializer::OnUserProfileLoaded(const AccountId& account_id) {
     InitializePrimaryProfileServices(profile, user);
 
     FamilyUserMetricsServiceFactory::GetForBrowserContext(profile);
+    if (chromeos::features::IsSparkyEnabled()) {
+      ash::SparkyManagerServiceFactory::GetForProfile(profile);
+    }
   }
 
   if (user->GetType() == user_manager::UserType::kChild) {
@@ -200,7 +207,7 @@ void UserSessionInitializer::InitializeCerts(Profile* profile) {
       base::SysInfo::IsRunningOnChromeOS()) {
     // Note: This unsafely grabs a persistent reference to the `NssService`'s
     // `NSSCertDatabase`, which may be invalidated once `profile` is shut down.
-    // TODO(https://crbug.com/1186373): Provide better lifetime guarantees and
+    // TODO(crbug.com/40753707): Provide better lifetime guarantees and
     // pass the `NssCertDatabaseGetter` to the `NetworkCertLoader`.
     content::GetIOThreadTaskRunner({})->PostTask(
         FROM_HERE,
@@ -268,10 +275,6 @@ void UserSessionInitializer::OnUserSessionStarted(bool is_primary_user) {
   // Ensure that the `HoldingSpaceKeyedService` for `profile` is created.
   HoldingSpaceKeyedServiceFactory::GetInstance()->GetService(profile);
 
-  // Ensure that the `BirchKeyedService` for `profile` is created. It is created
-  // one per user in a multiprofile session.
-  BirchKeyedServiceFactory::GetInstance()->GetService(profile);
-
   // Ensure that the `CalendarKeyedService` for `profile` is created. It is
   // created one per user in a multiprofile session.
   CalendarKeyedServiceFactory::GetInstance()->GetService(profile);
@@ -285,6 +288,9 @@ void UserSessionInitializer::OnUserSessionStarted(bool is_primary_user) {
 
   if (is_primary_user) {
     DCHECK_EQ(primary_profile_, profile);
+
+    // Ensure that one `BirchKeyedService` is created for the primary profile.
+    BirchKeyedServiceFactory::GetInstance()->GetService(profile);
 
     // Ensure that PhoneHubManager and EcheAppManager are created for the
     // primary profile.
@@ -319,7 +325,20 @@ void UserSessionInitializer::OnUserSessionStarted(bool is_primary_user) {
     if (base::FeatureList::IsEnabled(media::kShowForceRespectUiGainsToggle)) {
       CrasAudioHandler::Get()->RefreshForceRespectUiGainsState();
     }
+
+    if (features::IsAudioHFPMicSRToggleEnabled()) {
+      CrasAudioHandler::Get()->RefreshHfpMicSrState();
+    }
+
+    CrasAudioHandler::Get()->RefreshStyleTransferState();
   }
+}
+
+void UserSessionInitializer::OnUserSessionStartUpTaskCompleted() {
+  const AccountId& account_id =
+      user_manager::UserManager::Get()->GetPrimaryUser()->GetAccountId();
+  SessionManagerClient::Get()->EmitStartedUserSession(
+      cryptohome::CreateAccountIdentifierFromAccountId(account_id));
 }
 
 void UserSessionInitializer::PreStartSession(bool is_primary_session) {

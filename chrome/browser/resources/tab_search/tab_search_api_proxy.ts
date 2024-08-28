@@ -34,6 +34,8 @@ export interface TabSearchApiProxy {
 
   requestTabOrganization(): void;
 
+  rejectSession(sessionId: number): void;
+
   restartSession(): void;
 
   switchToTab(info: SwitchToTabInfo): void;
@@ -51,18 +53,16 @@ export interface TabSearchApiProxy {
 
   triggerFeedback(sessionId: number): void;
 
-  triggerSync(): void;
-
   triggerSignIn(): void;
 
   openHelpPage(): void;
 
-  openSyncSettings(): void;
-
   setUserFeedback(
       sessionId: number, organizationId: number, feedback: UserFeedback): void;
 
-  showUi(): void;
+  notifyOrganizationUiReadyToShow(): void;
+
+  notifySearchUiReadyToShow(): void;
 }
 
 export class TabSearchApiProxyImpl implements TabSearchApiProxy {
@@ -118,6 +118,10 @@ export class TabSearchApiProxyImpl implements TabSearchApiProxy {
     this.handler.requestTabOrganization();
   }
 
+  rejectSession(sessionId: number) {
+    this.handler.rejectSession(sessionId);
+  }
+
   restartSession() {
     this.handler.restartSession();
   }
@@ -151,10 +155,6 @@ export class TabSearchApiProxyImpl implements TabSearchApiProxy {
     this.handler.triggerFeedback(sessionId);
   }
 
-  triggerSync() {
-    this.handler.triggerSync();
-  }
-
   triggerSignIn() {
     this.handler.triggerSignIn();
   }
@@ -163,17 +163,17 @@ export class TabSearchApiProxyImpl implements TabSearchApiProxy {
     this.handler.openHelpPage();
   }
 
-  openSyncSettings() {
-    this.handler.openSyncSettings();
-  }
-
   setUserFeedback(
       sessionId: number, organizationId: number, feedback: UserFeedback) {
     this.handler.setUserFeedback(sessionId, organizationId, feedback);
   }
 
-  showUi() {
-    this.handler.showUI();
+  notifyOrganizationUiReadyToShow() {
+    this.handler.notifyOrganizationUIReadyToShow();
+  }
+
+  notifySearchUiReadyToShow() {
+    this.handler.notifySearchUIReadyToShow();
   }
 
   static getInstance(): TabSearchApiProxy {

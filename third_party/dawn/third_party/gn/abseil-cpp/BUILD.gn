@@ -213,6 +213,15 @@ absl_source_set("malloc_internal") {
   ]
 }
 
+absl_source_set("nullability") {
+  sources = [ "${dawn_abseil_dir}/absl/base/internal/nullability_impl.h" ]
+  public = [ "${dawn_abseil_dir}/absl/base/nullability.h" ]
+  deps = [
+    ":core_headers",
+    ":type_traits",
+  ]
+}
+
 absl_source_set("prefetch") {
   public = [
     "${dawn_abseil_dir}/absl/base/internal/prefetch.h",
@@ -372,6 +381,30 @@ absl_source_set("hashtablez_sampler") {
   ]
 }
 
+absl_source_set("inlined_vector") {
+  public = [ "${dawn_abseil_dir}/absl/container/inlined_vector.h" ]
+  deps = [
+    ":algorithm",
+    ":core_headers",
+    ":inlined_vector_internal",
+    ":memory",
+    ":throw_delegate",
+    ":type_traits",
+  ]
+}
+
+absl_source_set("inlined_vector_internal") {
+  public = [ "${dawn_abseil_dir}/absl/container/internal/inlined_vector.h" ]
+  deps = [
+    ":compressed_tuple",
+    ":config",
+    ":core_headers",
+    ":memory",
+    ":span",
+    ":type_traits",
+  ]
+}
+
 absl_source_set("raw_hash_map") {
   public = [ "${dawn_abseil_dir}/absl/container/internal/raw_hash_map.h" ]
   deps = [
@@ -430,8 +463,14 @@ absl_source_set("debugging_internal") {
 }
 
 absl_source_set("demangle_internal") {
-  sources = [ "${dawn_abseil_dir}/absl/debugging/internal/demangle.cc" ]
-  public = [ "${dawn_abseil_dir}/absl/debugging/internal/demangle.h" ]
+  sources = [
+    "${dawn_abseil_dir}/absl/debugging/internal/demangle.cc",
+    "${dawn_abseil_dir}/absl/debugging/internal/demangle_rust.cc",
+  ]
+  public = [
+    "${dawn_abseil_dir}/absl/debugging/internal/demangle.h",
+    "${dawn_abseil_dir}/absl/debugging/internal/demangle_rust.h",
+  ]
   deps = [
     ":base",
     ":config",
@@ -958,6 +997,18 @@ absl_source_set("optional") {
     ":memory",
     ":type_traits",
     ":utility",
+  ]
+}
+
+absl_source_set("span") {
+  public = [ "${dawn_abseil_dir}/absl/types/span.h" ]
+  sources = [ "${dawn_abseil_dir}/absl/types/internal/span.h" ]
+  public_deps = [
+    ":algorithm",
+    ":core_headers",
+    ":nullability",
+    ":throw_delegate",
+    ":type_traits",
   ]
 }
 

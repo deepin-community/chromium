@@ -138,10 +138,12 @@ wl_output_transform ToWaylandTransform(gfx::OverlayTransform transform) {
       return WL_OUTPUT_TRANSFORM_180;
     case gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_270:
       return WL_OUTPUT_TRANSFORM_90;
+    case gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL_CLOCKWISE_90:
+    case gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL_CLOCKWISE_270:
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return WL_OUTPUT_TRANSFORM_NORMAL;
 }
 
@@ -187,7 +189,7 @@ gfx::RectF ApplyWaylandTransform(const gfx::RectF& rect,
       result.set_height(rect.width());
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   return result;
@@ -235,7 +237,7 @@ gfx::Rect ApplyWaylandTransform(const gfx::Rect& rect,
       result.set_height(rect.width());
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   return result;
@@ -258,7 +260,7 @@ gfx::SizeF ApplyWaylandTransform(const gfx::SizeF& size,
       result.set_height(size.width());
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   return result;
@@ -280,7 +282,6 @@ gfx::Rect TranslateWindowBoundsToParentDIP(ui::WaylandWindow* window,
   DCHECK(parent_window);
   DCHECK_EQ(window->applied_state().window_scale,
             parent_window->applied_state().window_scale);
-  DCHECK_EQ(window->ui_scale(), parent_window->ui_scale());
   return wl::TranslateBoundsToParentCoordinates(
       window->GetBoundsInDIP(), parent_window->GetBoundsInDIP());
 }
@@ -336,13 +337,44 @@ void TransformToWlArray(
 
 base::TimeTicks EventMillisecondsToTimeTicks(uint32_t milliseconds) {
 #if BUILDFLAG(IS_LINUX)
-  // TODO(crbug.com/1499638): `milliseconds` comes from Weston that
+  // TODO(crbug.com/40287874): `milliseconds` comes from Weston that
   // uses timestamp from libinput, which is different from TimeTicks.
   // Use EventTimeForNow(), for now.
   return ui::EventTimeForNow();
 #else
   return base::TimeTicks() + base::Milliseconds(milliseconds);
 #endif
+}
+
+float ClampScale(float scale) {
+  return std::max(1.f, scale);
+}
+
+bool MaybeHandlePlatformEventForDrag(const ui::PlatformEvent& event,
+                                     bool start_drag_ack_received,
+                                     base::OnceClosure cancel_drag_cb) {
+  // Two distinct problematic edge cases are handled here, where mouse button or
+  // touch release events come in after start_drag has already been requested:
+  //
+  // 1. If it's received before the drag session effectively starts at
+  //    compositor side, which is possible given the asynchronous nature of the
+  //    Wayland protocol. In this case, to preventing UI from getting stuck on
+  //    the drag nested loop, we just abort the drag session.
+  //
+  // 2. Otherwise, button release events may be received from buggy compositors
+  //    in addition to the actual dnd drop events, in which case the event is
+  //    suppressed, otherwise it leads to broken UI state, as observed for
+  //    example in https://crbug.com/329703410.
+  if (!event->IsSynthesized() &&
+      (event->type() == ui::EventType::kMouseReleased ||
+       event->type() == ui::EventType::kTouchReleased)) {
+    if (!start_drag_ack_received) {
+      std::move(cancel_drag_cb).Run();
+    } else {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace wl

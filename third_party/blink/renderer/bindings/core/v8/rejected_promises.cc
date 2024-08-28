@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/bindings/core/v8/rejected_promises.h"
 
 #include <memory>
@@ -61,19 +66,21 @@ class RejectedPromises::Message final {
       return;
 
     ScriptState::Scope scope(script_state_);
-    v8::Local<v8::Value> value = promise_.NewLocal(script_state_->GetIsolate());
+    v8::Local<v8::Promise> promise =
+        promise_.NewLocal(script_state_->GetIsolate());
     v8::Local<v8::Value> reason =
         exception_.NewLocal(script_state_->GetIsolate());
-    // Either collected or https://crbug.com/450330
-    if (value.IsEmpty() || !value->IsPromise())
+    if (promise.IsEmpty()) {
       return;
+    }
     DCHECK(!HasHandler());
 
     EventTarget* target = execution_context->ErrorEventTarget();
     if (target &&
         sanitize_script_errors_ == SanitizeScriptErrors::kDoNotSanitize) {
       PromiseRejectionEventInit* init = PromiseRejectionEventInit::Create();
-      init->setPromise(ScriptPromise(script_state_, value));
+      init->setPromise(
+          ScriptPromiseUntyped(script_state_->GetIsolate(), promise));
       init->setReason(ScriptValue(script_state_->GetIsolate(), reason));
       init->setCancelable(true);
       PromiseRejectionEvent* event = PromiseRejectionEvent::Create(
@@ -107,18 +114,20 @@ class RejectedPromises::Message final {
       return;
 
     ScriptState::Scope scope(script_state_);
-    v8::Local<v8::Value> value = promise_.NewLocal(script_state_->GetIsolate());
+    v8::Local<v8::Promise> promise =
+        promise_.NewLocal(script_state_->GetIsolate());
     v8::Local<v8::Value> reason =
         exception_.NewLocal(script_state_->GetIsolate());
-    // Either collected or https://crbug.com/450330
-    if (value.IsEmpty() || !value->IsPromise())
+    if (promise.IsEmpty()) {
       return;
+    }
 
     EventTarget* target = execution_context->ErrorEventTarget();
     if (target &&
         sanitize_script_errors_ == SanitizeScriptErrors::kDoNotSanitize) {
       PromiseRejectionEventInit* init = PromiseRejectionEventInit::Create();
-      init->setPromise(ScriptPromise(script_state_, value));
+      init->setPromise(
+          ScriptPromiseUntyped(script_state_->GetIsolate(), promise));
       init->setReason(ScriptValue(script_state_->GetIsolate(), reason));
       PromiseRejectionEvent* event = PromiseRejectionEvent::Create(
           script_state_, event_type_names::kRejectionhandled, init);
@@ -136,15 +145,15 @@ class RejectedPromises::Message final {
   }
 
   void MakePromiseWeak() {
-    DCHECK(!promise_.IsEmpty());
-    DCHECK(!promise_.IsWeak());
+    CHECK(!promise_.IsEmpty());
+    CHECK(!promise_.IsWeak());
     promise_.SetWeak(this, &Message::DidCollectPromise);
     exception_.SetWeak(this, &Message::DidCollectException);
   }
 
   void MakePromiseStrong() {
-    DCHECK(!promise_.IsEmpty());
-    DCHECK(promise_.IsWeak());
+    CHECK(!promise_.IsEmpty());
+    CHECK(promise_.IsWeak());
     promise_.ClearWeak();
     exception_.ClearWeak();
   }

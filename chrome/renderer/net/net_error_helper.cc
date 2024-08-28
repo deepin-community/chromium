@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/command_line.h"
@@ -39,7 +40,6 @@
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_thread.h"
 #include "net/base/net_errors.h"
-#include "base/feature_list.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -52,7 +52,6 @@
 #include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/platform/web_url_request.h"
-#include "chrome/common/chrome_features.h"
 #include "third_party/blink/public/platform/web_url_response.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_frame.h"
@@ -259,8 +258,8 @@ LocalizedError::PageState NetErrorHelper::GenerateLocalizedErrorPage(
   std::string extracted_string =
       ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
           resource_id);
-  base::StringPiece template_html(extracted_string.data(),
-                                  extracted_string.size());
+  std::string_view template_html(extracted_string.data(),
+                                 extracted_string.size());
   DCHECK(!template_html.empty()) << "unable to load template.";
   *error_html = webui::GetLocalizedHtml(template_html, page_state.strings);
   return page_state;
@@ -296,7 +295,7 @@ LocalizedError::PageState NetErrorHelper::UpdateErrorPage(
   if (base::UTF8ToUTF16(js.c_str(), js.length(), &js16)) {
     render_frame()->ExecuteJavaScript(js16);
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
   return page_state;
 }
@@ -308,7 +307,7 @@ void NetErrorHelper::InitializeErrorPageEasterEggHighScore(int high_score) {
       high_score);
   std::u16string js16;
   if (!base::UTF8ToUTF16(js.c_str(), js.length(), &js16)) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return;
   }
 

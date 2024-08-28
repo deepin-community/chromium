@@ -20,11 +20,9 @@ import android.widget.FrameLayout;
 import android.widget.RemoteViews;
 
 import androidx.annotation.LayoutRes;
-import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.SmallTest;
 import androidx.test.platform.app.InstrumentationRegistry;
 
-import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -41,13 +39,14 @@ import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.searchwidget.SearchActivity;
+import org.chromium.chrome.browser.searchwidget.SearchActivityClientImpl;
 import org.chromium.chrome.browser.ui.quickactionsearchwidget.QuickActionSearchWidgetProviderDelegate.WidgetButtonSettings;
 import org.chromium.chrome.browser.ui.quickactionsearchwidget.QuickActionSearchWidgetProviderDelegate.WidgetVariant;
+import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityClient;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferencesManager.SearchActivityPreferences;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.util.ChromeApplicationTestUtils;
 import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.url.GURL;
 
 import java.util.Locale;
 
@@ -68,24 +67,23 @@ public class QuickActionSearchWidgetProviderDelegateTest {
     private int mSmallWidgetMinHeightDp;
     private int mMediumWidgetMinHeightDp;
     private int mDinoWidgetEdgeSizeDp;
+    private SearchActivityClient mClient;
 
     @Mock RemoteViews mMockRemoteViews;
 
     @Before
     public void setUp() {
         MockitoAnnotations.initMocks(this);
-        ChromeApplicationTestUtils.setUp(ApplicationProvider.getApplicationContext());
         mContext =
                 InstrumentationRegistry.getInstrumentation()
                         .getTargetContext()
                         .getApplicationContext();
 
-        ComponentName searchActivityComponent = new ComponentName(mContext, SearchActivity.class);
+        mClient = new SearchActivityClientImpl();
 
         mDelegate =
                 new QuickActionSearchWidgetProviderDelegate(
                         mContext,
-                        searchActivityComponent,
                         IntentHandler.createTrustedOpenNewTabIntent(
                                 mContext, /* incognito= */ true),
                         createDinoIntent(mContext));
@@ -111,11 +109,6 @@ public class QuickActionSearchWidgetProviderDelegateTest {
                 (int) (res.getDimension(R.dimen.quick_action_search_widget_dino_size) / density);
 
         setUpViews();
-    }
-
-    @After
-    public void tearDown() {
-        ChromeApplicationTestUtils.tearDown(ApplicationProvider.getApplicationContext());
     }
 
     @Test
@@ -185,7 +178,8 @@ public class QuickActionSearchWidgetProviderDelegateTest {
 
         AppWidgetManager widgetManager = AppWidgetManager.getInstance(mContext);
         SearchActivityPreferences prefs =
-                new SearchActivityPreferences("EngineName", "http://engine", true, true, true);
+                new SearchActivityPreferences(
+                        "EngineName", new GURL("http://engine"), true, true, true);
 
         Resources res = mContext.getResources();
         float density = res.getDisplayMetrics().density;
@@ -193,12 +187,20 @@ public class QuickActionSearchWidgetProviderDelegateTest {
         mWidgetView =
                 mDelegate
                         .createSearchWidgetRemoteViews(
-                                mContext, prefs, mDefaultWidgetWidthDp, mMediumWidgetMinHeightDp)
+                                mContext,
+                                mClient,
+                                prefs,
+                                mDefaultWidgetWidthDp,
+                                mMediumWidgetMinHeightDp)
                         .apply(mContext, null);
         mDinoWidgetView =
                 mDelegate
                         .createDinoWidgetRemoteViews(
-                                mContext, prefs, mDinoWidgetEdgeSizeDp, mDinoWidgetEdgeSizeDp)
+                                mContext,
+                                mClient,
+                                prefs,
+                                mDinoWidgetEdgeSizeDp,
+                                mDinoWidgetEdgeSizeDp)
                         .apply(mContext, null);
     }
 

@@ -124,6 +124,7 @@ chrome.accessibilityPrivate.SwitchAccessMenuAction = {
   CUT: 'cut',
   DECREMENT: 'decrement',
   DICTATION: 'dictation',
+  DRILL_DOWN: 'drillDown',
   END_TEXT_SELECTION: 'endTextSelection',
   INCREMENT: 'increment',
   ITEM_SCAN: 'itemScan',
@@ -274,7 +275,6 @@ chrome.accessibilityPrivate.AcceleratorAction = {
  * @enum {string}
  */
 chrome.accessibilityPrivate.AccessibilityFeature = {
-  GOOGLE_TTS_LANGUAGE_PACKS: 'googleTtsLanguagePacks',
   DICTATION_CONTEXT_CHECKING: 'dictationContextChecking',
   FACE_GAZE: 'faceGaze',
   GOOGLE_TTS_HIGH_QUALITY_VOICES: 'googleTtsHighQualityVoices',
@@ -486,9 +486,20 @@ chrome.accessibilityPrivate.setFocusRings = function(focusRings, atType) {};
 chrome.accessibilityPrivate.setHighlights = function(rects, color) {};
 
 /**
+ * Informs the system where Chrome Vox's focus is in screen coordinates when
+ * Magnifier is enabled. No-op when Magnifier is not enabled. Causes
+ * chrome.accessibilityPrivate.onChromeVoxFocusChanged to be fired within the
+ * AccessibilityCommon component extension.
+ * @param {!chrome.accessibilityPrivate.ScreenRect} bounds Bounds of current
+ *     ChromeVox focus ring.
+ */
+chrome.accessibilityPrivate.setChromeVoxFocus = function(bounds) {};
+
+/**
  * Informs the system where Select to Speak's reading focus is in screen
- * coordinates. Causes chrome.accessibilityPrivate.onSelectToSpeakFocusChanged
- * to be fired within the AccessibilityCommon component extension.
+ * coordinates when Magnifier is enabled. No-op when Magnifier is not enabled.
+ * Causes chrome.accessibilityPrivate.onSelectToSpeakFocusChanged to be fired
+ * within the AccessibilityCommon component extension.
  * @param {!chrome.accessibilityPrivate.ScreenRect} bounds Bounds of currently
  *     spoken word (if available) or node (if the spoken node is not a text
  *     node).
@@ -746,25 +757,17 @@ chrome.accessibilityPrivate.showToast = function(type) {};
 chrome.accessibilityPrivate.onIntroduceChromeVox;
 
 /**
+ * Fired when the ChromeVox focus changes and Magnifier is enabled.
+ * @type {!ChromeEvent}
+ */
+chrome.accessibilityPrivate.onChromeVoxFocusChanged;
+
+/**
  * Fired when an accessibility gesture is detected by the touch exploration
  * controller.
  * @type {!ChromeEvent}
  */
 chrome.accessibilityPrivate.onAccessibilityGesture;
-
-/**
- * Fired when we first detect two fingers are held down, which can be used to
- * toggle spoken feedback on some touch-only devices.
- * @type {!ChromeEvent}
- */
-chrome.accessibilityPrivate.onTwoFingerTouchStart;
-
-/**
- * Fired when the user is no longer holding down two fingers (including
- * releasing one, holding down three, or moving them).
- * @type {!ChromeEvent}
- */
-chrome.accessibilityPrivate.onTwoFingerTouchStop;
 
 /**
  * Fired when the Select to Speak context menu is clicked from outside the
@@ -774,7 +777,8 @@ chrome.accessibilityPrivate.onTwoFingerTouchStop;
 chrome.accessibilityPrivate.onSelectToSpeakContextMenuClicked;
 
 /**
- * Fired when the Select to Speak reading focus changes.
+ * Fired when the Select to Speak reading focus changes and Magnifier is
+ * enabled.
  * @type {!ChromeEvent}
  */
 chrome.accessibilityPrivate.onSelectToSpeakFocusChanged;

@@ -5,6 +5,7 @@
 #include "components/metrics/net/net_metrics_log_uploader.h"
 
 #include <memory>
+#include <string_view>
 
 #include "base/base64.h"
 #include "base/functional/bind.h"
@@ -76,7 +77,8 @@ class NetMetricsLogUploaderTest : public testing::Test {
     std::string compressed_message;
     // Compress the data since the encryption code expects a compressed log,
     // and tries to decompress it before encrypting it.
-    compression::GzipCompress("dummy_data", &compressed_message);
+    compression::GzipCompress(base::span_from_cstring("dummy_data"),
+                              &compressed_message);
     uploader_->UploadLog(compressed_message, LogMetadata(), "dummy_hash",
                          "dummy_signature", dummy_reporting_info);
   }
@@ -85,7 +87,7 @@ class NetMetricsLogUploaderTest : public testing::Test {
                              int error_code,
                              bool was_https,
                              bool force_discard,
-                             base::StringPiece force_discard_reason) {
+                             std::string_view force_discard_reason) {
     log_was_force_discarded_ = force_discard;
   }
 
@@ -93,7 +95,7 @@ class NetMetricsLogUploaderTest : public testing::Test {
                                      int error_code,
                                      bool was_https,
                                      bool force_discard,
-                                     base::StringPiece force_discard_reason) {
+                                     std::string_view force_discard_reason) {
     ++on_upload_complete_count_;
     if (on_upload_complete_count_ == 1) {
       ReportingInfo reporting_info;

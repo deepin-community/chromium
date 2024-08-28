@@ -78,6 +78,8 @@ class WaylandScreen : public PlatformScreen {
   void RemoveObserver(display::DisplayObserver* observer) override;
   base::Value::List GetGpuExtraInfo(
       const gfx::GpuExtraInfo& gpu_extra_info) override;
+  std::optional<float> GetPreferredScaleFactorForAcceleratedWidget(
+      gfx::AcceleratedWidget widget) const override;
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
   void OnTabletStateChanged(display::TabletState tablet_state) override;
   display::TabletState GetTabletState() const override;
@@ -117,7 +119,8 @@ class WaylandScreen : public PlatformScreen {
   };
 
   void AddOrUpdateDisplay(const WaylandOutput::Metrics& metrics);
-  raw_ptr<WaylandConnection> connection_ = nullptr;
+  // Dangling on DemoIntegrationTest.NewTab on lacros-amd64-generic-rel-gtest
+  raw_ptr<WaylandConnection, DanglingUntriaged> connection_ = nullptr;
 
   base::flat_map<WaylandOutput::Id, int64_t> display_id_map_;
   display::DisplayList display_list_;

@@ -12,13 +12,13 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/to_vector.h"
 #include "base/memory/raw_ptr.h"
 #include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "base/test/to_vector.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/test/test_bookmark_client.h"
 #include "components/history/core/browser/history_backend.h"
@@ -32,6 +32,7 @@
 #include "components/omnibox/browser/history_url_provider.h"
 #include "components/omnibox/browser/omnibox_triggered_feature_service.h"
 #include "components/omnibox/common/omnibox_features.h"
+#include "components/search_engines/search_engines_test_environment.h"
 #include "components/search_engines/template_url_starter_pack_data.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
@@ -52,8 +53,8 @@ class WaitForURLsDeletedObserver : public history::HistoryServiceObserver {
 
  private:
   // history::HistoryServiceObserver:
-  void OnURLsDeleted(history::HistoryService* service,
-                     const history::DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(history::HistoryService* service,
+                          const history::DeletionInfo& deletion_info) override;
 
   // Weak. Owned by our owner.
   raw_ptr<base::RunLoop> runner_;
@@ -64,7 +65,7 @@ WaitForURLsDeletedObserver::WaitForURLsDeletedObserver(base::RunLoop* runner)
 
 WaitForURLsDeletedObserver::~WaitForURLsDeletedObserver() = default;
 
-void WaitForURLsDeletedObserver::OnURLsDeleted(
+void WaitForURLsDeletedObserver::OnHistoryDeletions(
     history::HistoryService* service,
     const history::DeletionInfo& deletion_info) {
   runner_->Quit();
@@ -193,6 +194,7 @@ class HistoryQuickProviderTest : public testing::Test {
 
   base::test::TaskEnvironment task_environment_;
   base::ScopedTempDir history_dir_;
+  search_engines::SearchEnginesTestEnvironment search_engines_test_environment_;
   std::unique_ptr<FakeAutocompleteProviderClient> client_;
 
   ACMatches ac_matches_;  // The resulting matches after running RunTest.
@@ -212,11 +214,11 @@ void HistoryQuickProviderTest::SetUp() {
 
   client_->set_bookmark_model(bookmarks::TestBookmarkClient::CreateModel());
   client_->set_template_url_service(
-      std::make_unique<TemplateURLService>(nullptr, 0));
+      search_engines_test_environment_.ReleaseTemplateURLService());
 
   client_->set_in_memory_url_index(std::make_unique<InMemoryURLIndex>(
-      client_->GetLocalOrSyncableBookmarkModel(), client_->GetHistoryService(),
-      nullptr, history_dir_.GetPath(), SchemeSet()));
+      client_->GetBookmarkModel(), client_->GetHistoryService(), nullptr,
+      history_dir_.GetPath(), SchemeSet()));
   client_->GetInMemoryURLIndex()->Init();
 
   // Block until History has processed InMemoryURLIndex initialization.
@@ -501,7 +503,7 @@ TEST_F(HistoryQuickProviderTest,
                     false, u"https://suffix.com/prefixsuffix1",
                     std::u16string());
   std::vector<int> unbroken_scores =
-      base::test::ToVector(ac_matches(), &AutocompleteMatch::relevance);
+      base::ToVector(ac_matches(), &AutocompleteMatch::relevance);
   EXPECT_EQ(unbroken_scores.size(), 3U);
 
   // Get scores for 'prefix suffix'
@@ -509,7 +511,7 @@ TEST_F(HistoryQuickProviderTest,
                     false, u"https://suffix.com/prefixsuffix1",
                     std::u16string());
   std::vector<int> broken_scores =
-      base::test::ToVector(ac_matches(), &AutocompleteMatch::relevance);
+      base::ToVector(ac_matches(), &AutocompleteMatch::relevance);
   EXPECT_EQ(broken_scores.size(), 3U);
   // Ensure the latter scores are higher than the former.
   for (size_t i = 0; i < 3; ++i)

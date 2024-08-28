@@ -116,19 +116,12 @@ class TestSearchProvider : public app_list::SearchProvider {
 
 class AutotestPrivateApiTest : public ExtensionApiTest {
  public:
-  AutotestPrivateApiTest() {
-    // App pin syncing code makes an untitled Play Store icon appear in the
-    // shelf. Sync isn't relevant to this test, so skip pinned app sync.
-    // https://crbug.com/1085597
-    ChromeShelfPrefs::SetSkipPinnedAppsFromSyncForTest(true);
-  }
+  AutotestPrivateApiTest() = default;
 
   AutotestPrivateApiTest(const AutotestPrivateApiTest&) = delete;
   AutotestPrivateApiTest& operator=(const AutotestPrivateApiTest&) = delete;
 
-  ~AutotestPrivateApiTest() override {
-    ChromeShelfPrefs::SetSkipPinnedAppsFromSyncForTest(false);
-  }
+  ~AutotestPrivateApiTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     ExtensionApiTest::SetUpCommandLine(command_line);
@@ -174,7 +167,7 @@ IN_PROC_BROWSER_TEST_F(AutotestPrivateApiTest, AutotestPrivate) {
 }
 
 // Set of tests where ARC is enabled and test apps and packages are registered.
-// TODO(https://crbug.com/1514431): re-enable the following test.
+// TODO(crbug.com/41486987): re-enable the following test.
 #if defined(ADDRESS_SANITIZER) || defined(LEAK_SANITIZER)
 #define MAYBE_AutotestPrivateArcEnabled DISABLED_AutotestPrivateArcEnabled
 #else
@@ -235,7 +228,14 @@ IN_PROC_BROWSER_TEST_F(AutotestPrivateApiTest,
   arc::SetArcPlayStoreEnabledForProfile(profile(), false);
 }
 
-IN_PROC_BROWSER_TEST_F(AutotestPrivateApiTest, AutotestPrivateArcProcess) {
+// TODO(crbug.com/331532893): Flaky on ASan/LSan.
+#if defined(ADDRESS_SANITIZER) || defined(LEAK_SANITIZER)
+#define MAYBE_AutotestPrivateArcProcess DISABLED_AutotestPrivateArcProcess
+#else
+#define MAYBE_AutotestPrivateArcProcess AutotestPrivateArcProcess
+#endif
+IN_PROC_BROWSER_TEST_F(AutotestPrivateApiTest,
+                       MAYBE_AutotestPrivateArcProcess) {
   arc::FakeProcessInstance fake_process_instance;
   arc::ArcServiceManager::Get()->arc_bridge_service()->process()->SetInstance(
       &fake_process_instance);
@@ -371,7 +371,7 @@ IN_PROC_BROWSER_TEST_F(AutotestPrivateApiOverviewTest, Drag) {
 
   ui::GestureEvent long_press(
       start_point.x(), start_point.y(), 0, ui::EventTimeForNow(),
-      ui::GestureEventDetails(ui::ET_GESTURE_LONG_PRESS));
+      ui::GestureEventDetails(ui::EventType::kGestureLongPress));
   generator.Dispatch(&long_press);
 
   // 50 is arbitrary number of dip to move a bit to ensure the item is being
@@ -398,7 +398,7 @@ IN_PROC_BROWSER_TEST_F(AutotestPrivateApiOverviewTest, PrimarySnapped) {
 
   ui::GestureEvent long_press(
       start_point.x(), start_point.y(), 0, ui::EventTimeForNow(),
-      ui::GestureEventDetails(ui::ET_GESTURE_LONG_PRESS));
+      ui::GestureEventDetails(ui::EventType::kGestureLongPress));
   generator.Dispatch(&long_press);
 
   generator.MoveTouch(end_point);

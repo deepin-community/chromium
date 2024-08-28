@@ -47,7 +47,8 @@ class StyleImageSet final : public StyleImage {
 
   CSSValue* CssValue() const override;
   CSSValue* ComputedCSSValue(const ComputedStyle&,
-                             bool allow_visited_style) const override;
+                             bool allow_visited_style,
+                             CSSValuePhase value_phase) const override;
 
   WrappedImagePtr Data() const override;
 
@@ -101,4 +102,4 @@ struct DowncastTraits<StyleImageSet> {
 
 }  // namespace blink
 
-#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_STYLE_FETCHED_IMAGE_SET_H_
+#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_STYLE_IMAGE_SET_H_

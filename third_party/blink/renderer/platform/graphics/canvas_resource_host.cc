@@ -153,9 +153,6 @@ void CanvasResourceHost::SetNeedsPushProperties() {
 
 void CanvasResourceHost::SetHdrMetadata(const gfx::HDRMetadata& hdr_metadata) {
   hdr_metadata_ = hdr_metadata;
-  if (cc_layer_) {
-    cc_layer_->SetHdrMetadata(hdr_metadata_);
-  }
 }
 
 cc::TextureLayer* CanvasResourceHost::GetOrCreateCcLayerIfNeeded() {
@@ -170,7 +167,6 @@ cc::TextureLayer* CanvasResourceHost::GetOrCreateCcLayerIfNeeded() {
     cc_layer_->SetBlendBackgroundColor(opacity_mode_ != kOpaque);
     cc_layer_->SetNearestNeighbor(FilterQuality() ==
                                   cc::PaintFlags::FilterQuality::kNone);
-    cc_layer_->SetHdrMetadata(hdr_metadata_);
     cc_layer_->SetFlipped(!resource_provider_->IsOriginTopLeft());
   }
   return cc_layer_.get();
@@ -235,7 +231,7 @@ bool CanvasResourceHost::PrepareTransferableResource(
 
   CanvasResource::ReleaseCallback release_callback;
   if (!frame->PrepareTransferableResource(out_resource, &release_callback,
-                                          kUnverifiedSyncToken) ||
+                                          /*needs_verified_synctoken=*/false) ||
       *out_resource == cc_layer_->current_transferable_resource()) {
     // If the resource did not change, the release will be handled correctly
     // when the callback from the previous frame is dispatched. But run the
@@ -244,6 +240,11 @@ bool CanvasResourceHost::PrepareTransferableResource(
         .Run(std::move(frame), gpu::SyncToken(), false /* is_lost */);
     return false;
   }
+  // TODO(https://crbug.com/1475955): HDR metadata should be propagated to
+  // `frame`, and should be populated by the above call to
+  // CanvasResource::PrepareTransferableResource, rather than be inserted
+  // here.
+  out_resource->hdr_metadata = hdr_metadata_;
   // Note: frame is kept alive via a reference kept in out_release_callback.
   *out_release_callback = base::BindOnce(
       ReleaseCanvasResource, std::move(release_callback), std::move(frame));
@@ -268,8 +269,6 @@ void CanvasResourceHost::SetOpacityMode(OpacityMode opacity_mode) {
 void CanvasResourceHost::FlushRecording(FlushReason reason) {
   if (resource_provider_) {
     resource_provider_->FlushCanvas(reason);
-    // Flushing consumed locked images.
-    resource_provider_->ReleaseLockedImages();
   }
 }
 

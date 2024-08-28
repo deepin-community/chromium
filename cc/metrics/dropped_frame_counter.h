@@ -6,12 +6,13 @@
 #define CC_METRICS_DROPPED_FRAME_COUNTER_H_
 
 #include <stddef.h>
+
 #include <map>
+#include <optional>
 #include <queue>
 #include <utility>
 #include <vector>
 
-#include <optional>
 #include "base/containers/ring_buffer.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
@@ -177,7 +178,6 @@ class CC_EXPORT DroppedFrameCounter {
   // Adds count to dropped_frame_count_in_window_ of each strategy.
   void UpdateDroppedFrameCountInWindow(const FrameInfo& frame_info, int count);
 
-  base::TimeDelta sliding_window_interval_;
   std::queue<std::pair<const viz::BeginFrameArgs, FrameInfo>> sliding_window_;
   uint32_t dropped_frame_count_in_window_[SmoothnessStrategy::kStrategyCount] =
       {0};

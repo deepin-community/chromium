@@ -205,7 +205,7 @@ targets.compile_target(
 
 targets.compile_target(
     name = "cronet_package_ci",
-    label = "//components/cronet:cronet_package_ci",
+    label = "//components/cronet/android:cronet_package_ci",
 )
 
 targets.compile_target(
@@ -299,7 +299,7 @@ targets.compile_target(
 
 targets.compile_target(
     name = "pdfium_test",
-    label = "//third_party/pdfium/samples:pdfium_test",
+    label = "//third_party/pdfium/testing:pdfium_test",
 )
 
 targets.compile_target(
@@ -400,4 +400,9 @@ targets.compile_target(
 targets.compile_target(
     name = "web_engine_shell_pkg",
     label = "//fuchsia_web/shell:web_engine_shell_pkg",
+)
+
+targets.compile_target(
+    name = "chrome/enterprise_companion:all",
+    label = "//chrome/enterprise_companion:all",
 )

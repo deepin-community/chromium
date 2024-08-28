@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <vector>
 
 #include "base/at_exit.h"
@@ -19,6 +20,7 @@
 #include "media/base/media.h"
 #include "media/base/media_switches.h"
 #include "media/base/pipeline_status.h"
+#include "media/base/test_data_util.h"
 #include "media/media_buildflags.h"
 #include "media/test/pipeline_integration_test_base.h"
 #include "media/test/test_media_source.h"
@@ -105,7 +107,7 @@ std::string MseFuzzerVariantEnumToMimeTypeString(FuzzerVariant variant) {
 #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
 
     case SRC:
-      NOTREACHED() << "SRC is an invalid MSE fuzzer variant";
+      NOTREACHED_IN_MIGRATION() << "SRC is an invalid MSE fuzzer variant";
       break;
   }
 
@@ -189,8 +191,11 @@ class MediaSourcePipelineIntegrationFuzzerTest
     if (size == 0)
       return;
 
-    scoped_refptr<media::DecoderBuffer> buffer(
-        DecoderBuffer::CopyFrom(data, size));
+    auto external_memory =
+        std::make_unique<media::ExternalMemoryAdapterForTesting>(
+            base::make_span(data, size));
+    scoped_refptr<media::DecoderBuffer> buffer =
+        media::DecoderBuffer::FromExternalMemory(std::move(external_memory));
 
     TestMediaSource source(buffer, mimetype, kAppendWholeFile);
 
@@ -251,7 +256,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // These tests use GoogleTest assertions without using the GoogleTest
   // framework. While this is the case, tell GoogleTest's stack trace getter
   // that GoogleTest is being left now so that there is a basis for traces
-  // collected upon assertion failure. TODO(https://crbug.com/1039559): use
+  // collected upon assertion failure. TODO(crbug.com/40113640): use
   // RUN_ALL_TESTS() and remove this code.
   ::testing::internal::GetUnitTestImpl()
       ->os_stack_trace_getter()

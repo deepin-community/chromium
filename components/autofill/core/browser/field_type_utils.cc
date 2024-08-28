@@ -27,6 +27,7 @@ const FieldTypeSet& GetDatabaseStoredTypesOfAutofillProfile() {
       ADDRESS_HOME_STREET_NAME,
       ADDRESS_HOME_STREET_LOCATION,
       ADDRESS_HOME_HOUSE_NUMBER,
+      ADDRESS_HOME_HOUSE_NUMBER_AND_APT,
       ADDRESS_HOME_SUBPREMISE,
       ADDRESS_HOME_DEPENDENT_LOCALITY,
       ADDRESS_HOME_CITY,
@@ -91,6 +92,7 @@ bool IsAddressType(FieldType type) {
     case FieldTypeGroup::kPasswordField:
     case FieldTypeGroup::kTransaction:
     case FieldTypeGroup::kIban:
+    case FieldTypeGroup::kStandaloneCvcField:
       return false;
   }
   NOTREACHED_NORETURN();

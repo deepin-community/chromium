@@ -39,8 +39,9 @@ export enum PrivacyElementInteractions {
   THIRD_PARTY_COOKIES_BLOCK = 22,
   BLOCK_ALL_THIRD_PARTY_COOKIES = 23,
   IP_PROTECTION = 24,
+  FINGERPRINTING_PROTECTION = 25,
   // Max value should be updated whenever new entries are added.
-  MAX_VALUE = 25,
+  MAX_VALUE = 26,
 }
 
 /**
@@ -219,8 +220,9 @@ export enum PrivacyGuideInteractions {
   SWAA_COMPLETION_LINK = 8,
   PRIVACY_SANDBOX_COMPLETION_LINK = 9,
   SEARCH_SUGGESTIONS_NEXT_BUTTON = 10,
+  TRACKING_PROTECTION_COMPLETION_LINK = 11,
   // Max value should be updated whenever new entries are added.
-  MAX_VALUE = 11,
+  MAX_VALUE = 12,
 }
 
 /**
@@ -327,6 +329,14 @@ export enum CvcDeletionUserAction {
   HYPERLINK_CLICKED = 'BulkCvcDeletionHyperlinkClicked',
   DIALOG_ACCEPTED = 'BulkCvcDeletionConfirmationDialogAccepted',
   DIALOG_CANCELLED = 'BulkCvcDeletionConfirmationDialogCancelled',
+}
+
+/**
+ * This enum contains relevant UserAction log names for card benefits-related
+ * functionality on the payment methods settings page.
+ */
+export enum CardBenefitsUserAction {
+  CARD_BENEFITS_TERMS_LINK_CLICKED = 'CardBenefits_TermsLinkClicked',
 }
 
 export interface MetricsBrowserProxy {
@@ -436,6 +446,14 @@ export interface MetricsBrowserProxy {
       interaction: SafetyCheckUnusedSitePermissionsModuleInteractions): void;
 
   /**
+   * Helper function that calls recordHistogram for the
+   * Settings.SafetyHub.AbusiveNotificationPermissionRevocation.Interactions
+   * histogram
+   */
+  recordSafetyHubAbusiveNotificationPermissionRevocationInteractionsHistogram(
+      interaction: SafetyCheckUnusedSitePermissionsModuleInteractions): void;
+
+  /**
    * Helper function that calls recordHistogram for
    * Settings.SafetyHub.UnusedSitePermissionsModule.ListCount histogram
    */
@@ -506,6 +524,17 @@ export interface MetricsBrowserProxy {
    * Hub surface.
    */
   recordSafetyHubInteraction(surface: SafetyHubSurfaces): void;
+
+  // <if expr="_google_chrome and is_win">
+  /**
+   * Notifies Chrome that the `feature_notifications.enabled` Local State pref
+   * was changed via the System settings page.
+   *
+   * @param enabled True if the toggle was changed to on (enabled), false if it
+   * was changed to off (disabled).
+   */
+  recordFeatureNotificationsChange(enabled: boolean): void;
+  // </if>
 }
 
 export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
@@ -636,6 +665,15 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     ]);
   }
 
+  recordSafetyHubAbusiveNotificationPermissionRevocationInteractionsHistogram(
+      interaction: SafetyCheckUnusedSitePermissionsModuleInteractions) {
+    chrome.send('metricsHandler:recordInHistogram', [
+      'Settings.SafetyHub.AbusiveNotificationPermissionRevocation.Interactions',
+      interaction,
+      SafetyCheckUnusedSitePermissionsModuleInteractions.MAX_VALUE,
+    ]);
+  }
+
   recordSafetyHubUnusedSitePermissionsModuleListCountHistogram(suggestions:
                                                                    number) {
     chrome.send('metricsHandler:recordInHistogram', [
@@ -655,7 +693,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
 
   recordSafeBrowsingInteractionHistogram(interaction:
                                              SafeBrowsingInteractions) {
-    // TODO(crbug.com/1124491): Set the correct suffix for
+    // TODO(crbug.com/40717279): Set the correct suffix for
     // SafeBrowsing.Settings.UserAction. Use the .Default suffix for now.
     chrome.send('metricsHandler:recordInHistogram', [
       'SafeBrowsing.Settings.UserAction.Default',
@@ -728,6 +766,13 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
       SafetyHubSurfaces.MAX_VALUE,
     ]);
   }
+
+  // <if expr="_google_chrome and is_win">
+  recordFeatureNotificationsChange(enabled: boolean): void {
+    chrome.metricsPrivate.recordBoolean(
+        'Windows.FeatureNotificationsSettingChange', enabled);
+  }
+  // </if>
 
   static getInstance(): MetricsBrowserProxy {
     return instance || (instance = new MetricsBrowserProxyImpl());

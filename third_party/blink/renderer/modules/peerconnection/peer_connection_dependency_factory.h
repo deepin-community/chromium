@@ -188,7 +188,8 @@ class MODULES_EXPORT PeerConnectionDependencyFactory
       base::WeakPtr<media::DecoderFactory> media_decoder_factory,
       scoped_refptr<media::MojoVideoEncoderMetricsProviderFactory>
           video_encoder_metrics_provider_factory,
-      base::WaitableEvent* event);
+      base::WaitableEvent* event,
+      bool rtp_transport_feature_enabled);
 
   void CreateIpcNetworkManagerOnNetworkThread(
       base::WaitableEvent* event,
@@ -217,8 +218,7 @@ class MODULES_EXPORT PeerConnectionDependencyFactory
 
   scoped_refptr<blink::WebRtcAudioDeviceImpl> audio_device_;
 
-  raw_ptr<media::GpuVideoAcceleratorFactories, ExperimentalRenderer>
-      gpu_factories_;
+  raw_ptr<media::GpuVideoAcceleratorFactories> gpu_factories_;
 
   THREAD_CHECKER(thread_checker_);
 };

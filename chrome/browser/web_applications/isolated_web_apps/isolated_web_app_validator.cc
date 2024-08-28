@@ -9,6 +9,8 @@
 #include <utility>
 
 #include "base/functional/callback.h"
+#include "base/strings/stringprintf.h"
+#include "base/types/expected.h"
 #include "base/types/expected_macros.h"
 #include "chrome/browser/web_applications/isolated_web_apps/error/unusable_swbn_file_error.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_trust_checker.h"
@@ -21,31 +23,44 @@
 
 namespace web_app {
 
-IsolatedWebAppValidator::IsolatedWebAppValidator(
-    std::unique_ptr<const IsolatedWebAppTrustChecker>
-        isolated_web_app_trust_checker)
-    : isolated_web_app_trust_checker_(
-          std::move(isolated_web_app_trust_checker)) {}
+IsolatedWebAppValidator::IsolatedWebAppValidator() = default;
 
 IsolatedWebAppValidator::~IsolatedWebAppValidator() = default;
 
-void IsolatedWebAppValidator::ValidateIntegrityBlock(
+base::expected<void, std::string>
+IsolatedWebAppValidator::ValidateIntegrityBlock(
     const web_package::SignedWebBundleId& expected_web_bundle_id,
     const web_package::SignedWebBundleIntegrityBlock& integrity_block,
-    base::OnceCallback<void(std::optional<std::string>)> callback) {
-  // In here, we would also validate other properties of the Integrity Block,
-  // such as whether its version is supported (once we support multiple
-  // Integrity Block versions).
-
-  IsolatedWebAppTrustChecker::Result result =
-      isolated_web_app_trust_checker_->IsTrusted(expected_web_bundle_id,
-                                                 integrity_block);
-  if (result.status != IsolatedWebAppTrustChecker::Result::Status::kTrusted) {
-    std::move(callback).Run(result.message);
-    return;
+    bool dev_mode,
+    const IsolatedWebAppTrustChecker& trust_checker) {
+  if (expected_web_bundle_id.is_for_proxy_mode()) {
+    return base::unexpected(
+        "Web Bundle IDs of type ProxyMode are not supported.");
   }
 
-  std::move(callback).Run(std::nullopt);
+  if (integrity_block.signature_stack().size() > 1 &&
+      !integrity_block.is_v2()) {
+    return base::unexpected(base::StringPrintf(
+        "Expected exactly 1 signature for the v1 integrity block, but got %zu.",
+        integrity_block.signature_stack().size()));
+  }
+
+  auto derived_web_bundle_id = integrity_block.web_bundle_id();
+  if (derived_web_bundle_id != expected_web_bundle_id) {
+    return base::unexpected(base::StringPrintf(
+        "The Web Bundle ID (%s) derived from the integrity block does not "
+        "match the expected Web Bundle ID (%s).",
+        derived_web_bundle_id.id().c_str(),
+        expected_web_bundle_id.id().c_str()));
+  }
+
+  IsolatedWebAppTrustChecker::Result result =
+      trust_checker.IsTrusted(expected_web_bundle_id, dev_mode);
+  if (result.status != IsolatedWebAppTrustChecker::Result::Status::kTrusted) {
+    return base::unexpected(result.message);
+  }
+
+  return base::ok();
 }
 
 base::expected<void, UnusableSwbnFileError>

@@ -40,7 +40,6 @@
 #include "src/tint/lang/core/type/type.h"
 #include "src/tint/lang/core/type/unique_node.h"
 #include "src/tint/utils/containers/unique_allocator.h"
-#include "src/tint/utils/math/hash.h"
 #include "src/tint/utils/symbol/symbol.h"
 
 // Forward declarations
@@ -52,8 +51,10 @@ class Bool;
 class F16;
 class F32;
 class I32;
+class Invalid;
 class Matrix;
 class Pointer;
+class Reference;
 class U32;
 class Vector;
 class Void;
@@ -109,8 +110,8 @@ class Manager final {
     /// of an existing immutable Manager.
     /// @warning As the copied types are owned by `inner`, `inner` must not be destructed or
     /// assigned while using the returned Manager.
-    /// TODO(bclayton) - Evaluate whether there are safer alternatives to this
-    /// function. See crbug.com/tint/460.
+    /// TODO(crbug.com/tint/460) - Evaluate whether there are safer alternatives to this
+    /// function.
     /// @param inner the immutable Manager to extend
     /// @return the Manager that wraps `inner`
     static Manager Wrap(const Manager& inner) {
@@ -175,6 +176,9 @@ class Manager final {
         return types_.Find<TYPE>(std::forward<ARGS>(args)...);
     }
 
+    /// @returns an invalid type
+    const core::type::Invalid* invalid();
+
     /// @returns a void type
     const core::type::Void* void_();
 
@@ -231,6 +235,14 @@ class Manager final {
     /// @param inner the inner type
     /// @returns a vec4 type with the element type @p inner
     const core::type::Vector* vec4(const core::type::Type* inner);
+
+    /// Return a type with element type `type` that has the same number of vector components as
+    /// `match`. If `match` is scalar just return `type`.
+    /// @param el_ty the type to extend
+    /// @param match the type to match the component count of
+    /// @returns a type with the same number of vector components as `match`
+    const core::type::Type* match_width(const core::type::Type* el_ty,
+                                        const core::type::Type* match);
 
     /// @tparam T the element type
     /// @tparam N the vector width
@@ -452,6 +464,32 @@ class Manager final {
         return ptr(SPACE, subtype, ACCESS);
     }
 
+    /// @param address_space the address space
+    /// @param subtype the reference subtype
+    /// @param access the access settings
+    /// @returns the reference type
+    const core::type::Reference* ref(core::AddressSpace address_space,
+                                     const core::type::Type* subtype,
+                                     core::Access access = core::Access::kReadWrite);
+
+    /// @tparam SPACE the address space
+    /// @tparam T the storage type
+    /// @tparam ACCESS the access mode
+    /// @returns the reference type with the templated address space, storage type and access.
+    template <core::AddressSpace SPACE, typename T, core::Access ACCESS = core::Access::kReadWrite>
+    const core::type::Reference* ref() {
+        return ref(SPACE, Get<T>(), ACCESS);
+    }
+
+    /// @param subtype the reference subtype
+    /// @tparam SPACE the address space
+    /// @tparam ACCESS the access mode
+    /// @returns the reference type with the templated address space, storage type and access.
+    template <core::AddressSpace SPACE, core::Access ACCESS = core::Access::kReadWrite>
+    const core::type::Reference* ref(const core::type::Type* subtype) {
+        return ref(SPACE, subtype, ACCESS);
+    }
+
     /// @returns the sampler type
     const core::type::Sampler* sampler() {
         return Get<core::type::Sampler>(core::type::SamplerKind::kSampler);
@@ -469,7 +507,7 @@ class Manager final {
         /// The type of the struct member.
         const core::type::Type* type = nullptr;
         /// The optional struct member attributes.
-        core::type::StructMemberAttributes attributes = {};
+        core::IOAttributes attributes = {};
     };
 
     /// Create a new structure declaration.

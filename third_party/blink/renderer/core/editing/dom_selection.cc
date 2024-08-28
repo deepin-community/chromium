@@ -101,41 +101,45 @@ bool DOMSelection::IsAnchorFirstInSelection() const {
 }
 
 Node* DOMSelection::anchorNode() const {
-  if (Range* range = PrimaryRangeOrNull()) {
+  TemporaryRange temp_range(this, PrimaryRangeOrNull());
+  if (temp_range.GetRange()) {
     if (!DomWindow() || IsAnchorFirstInSelection()) {
-      return range->startContainer();
+      return temp_range.GetRange()->startContainer();
     }
-    return range->endContainer();
+    return temp_range.GetRange()->endContainer();
   }
   return nullptr;
 }
 
 unsigned DOMSelection::anchorOffset() const {
-  if (Range* range = PrimaryRangeOrNull()) {
+  TemporaryRange temp_range(this, PrimaryRangeOrNull());
+  if (temp_range.GetRange()) {
     if (!DomWindow() || IsAnchorFirstInSelection()) {
-      return range->startOffset();
+      return temp_range.GetRange()->startOffset();
     }
-    return range->endOffset();
+    return temp_range.GetRange()->endOffset();
   }
   return 0;
 }
 
 Node* DOMSelection::focusNode() const {
-  if (Range* range = PrimaryRangeOrNull()) {
+  TemporaryRange temp_range(this, PrimaryRangeOrNull());
+  if (temp_range.GetRange()) {
     if (!DomWindow() || IsAnchorFirstInSelection()) {
-      return range->endContainer();
+      return temp_range.GetRange()->endContainer();
     }
-    return range->startContainer();
+    return temp_range.GetRange()->startContainer();
   }
   return nullptr;
 }
 
 unsigned DOMSelection::focusOffset() const {
-  if (Range* range = PrimaryRangeOrNull()) {
+  TemporaryRange temp_range(this, PrimaryRangeOrNull());
+  if (temp_range.GetRange()) {
     if (!DomWindow() || IsAnchorFirstInSelection()) {
-      return range->endOffset();
+      return temp_range.GetRange()->endOffset();
     }
-    return range->startOffset();
+    return temp_range.GetRange()->startOffset();
   }
   return 0;
 }
@@ -168,8 +172,10 @@ bool DOMSelection::isCollapsed() const {
     return true;
   }
 
-  if (Range* range = PrimaryRangeOrNull())
-    return range->collapsed();
+  TemporaryRange temp_range(this, PrimaryRangeOrNull());
+  if (temp_range.GetRange()) {
+    return temp_range.GetRange()->collapsed();
+  }
   return true;
 }
 
@@ -186,6 +192,20 @@ String DOMSelection::type() const {
   if (Selection().GetSelectionInDOMTree().IsCaret())
     return "Caret";
   return "Range";
+}
+
+String DOMSelection::direction() const {
+  if (!IsAvailable()) {
+    return "none";
+  }
+  if (!Selection().IsDirectional() ||
+      Selection().ComputeVisibleSelectionInDOMTreeDeprecated().IsNone()) {
+    return "none";
+  }
+  if (IsAnchorFirstInSelection()) {
+    return "forward";
+  }
+  return "backward";
 }
 
 unsigned DOMSelection::rangeCount() const {
@@ -225,8 +245,8 @@ void DOMSelection::collapse(Node* node,
   if (exception_state.HadException())
     return;
 
-  // 3. If node's root is not the document associated with the context object,
-  // abort these steps.
+  // 3. If document associated with this is not a shadow-including inclusive
+  // ancestor of node, abort these steps.
   if (!IsValidForPosition(node))
     return;
 
@@ -324,6 +344,7 @@ void DOMSelection::empty() {
     Selection().Clear();
 }
 
+// https://www.w3.org/TR/selection-api/#dom-selection-setbaseandextent
 void DOMSelection::setBaseAndExtent(Node* base_node,
                                     unsigned base_offset,
                                     Node* extent_node,
@@ -344,6 +365,9 @@ void DOMSelection::setBaseAndExtent(Node* base_node,
     extent_offset = 0;
   }
 
+  // 1. If anchorOffset is longer than anchorNode's length or if focusOffset is
+  // longer than focusNode's length, throw an IndexSizeError exception and abort
+  // these steps.
   Range::CheckNodeWOffset(base_node, base_offset, exception_state);
   if (exception_state.HadException())
     return;
@@ -353,14 +377,22 @@ void DOMSelection::setBaseAndExtent(Node* base_node,
       return;
   }
 
+  // 2. If document associated with this is not a shadow-including inclusive
+  // ancestor of anchorNode or focusNode, abort these steps.
   if (!IsValidForPosition(base_node) || !IsValidForPosition(extent_node))
     return;
 
   ClearCachedRangeIfSelectionOfDocument();
 
+  // 3. Let anchor be the boundary point (anchorNode, anchorOffset) and let
+  // focus be the boundary point (focusNode, focusOffset).
   Position base_position(base_node, base_offset);
   Position extent_position(extent_node, extent_offset);
+  // 4. Let newRange be a new range.
   Range* new_range = Range::Create(base_node->GetDocument());
+  // 5. If anchor is before focus, set the start the newRange's start to anchor
+  // and its end to focus. Otherwise, set the start them to focus and anchor
+  // respectively.
   if (extent_position.IsNull()) {
     new_range->setStart(base_node, base_offset);
     new_range->setEnd(base_node, base_offset);
@@ -371,6 +403,7 @@ void DOMSelection::setBaseAndExtent(Node* base_node,
     new_range->setStart(extent_node, extent_offset);
     new_range->setEnd(base_node, base_offset);
   }
+  // 6. Set this's range to newRange.
   UpdateFrameSelection(
       SelectionInDOMTree::Builder()
           .SetBaseAndExtentDeprecated(base_position, extent_position)
@@ -447,8 +480,8 @@ void DOMSelection::extend(Node* node,
   if (!IsAvailable())
     return;
 
-  // 1. If node's root is not the document associated with the context object,
-  // abort these steps.
+  // 1. If the document associated with this is not a shadow-including
+  // inclusive ancestor of node, abort these steps.
   if (!IsValidForPosition(node))
     return;
 
@@ -580,8 +613,10 @@ void DOMSelection::ClearCachedRangeIfSelectionOfDocument() {
 
 void DOMSelection::removeRange(Range* range) {
   DCHECK(range);
-  if (IsAvailable() && range == PrimaryRangeOrNull())
+  TemporaryRange temp_range(this, PrimaryRangeOrNull());
+  if (IsAvailable() && range == temp_range.GetRange()) {
     Selection().Clear();
+  }
 }
 
 void DOMSelection::removeAllRanges() {
@@ -614,14 +649,6 @@ void DOMSelection::addRange(Range* new_range) {
                              .Extend(new_range->EndPosition())
                              .Build(),
                          new_range, SetSelectionOptions());
-    return;
-  }
-
-  Range* original_range = PrimaryRangeOrNull();
-  DCHECK(original_range);
-
-  if (original_range->startContainer()->GetTreeScope() !=
-      new_range->startContainer()->GetTreeScope()) {
     return;
   }
 }
@@ -804,6 +831,22 @@ void DOMSelection::Trace(Visitor* visitor) const {
   visitor->Trace(tree_scope_);
   ScriptWrappable::Trace(visitor);
   ExecutionContextClient::Trace(visitor);
+}
+
+DOMSelection::TemporaryRange::TemporaryRange(const DOMSelection* selection,
+                                             Range* range) {
+  owner_dom_selection_ = selection;
+  range_ = range;
+}
+
+DOMSelection::TemporaryRange::~TemporaryRange() {
+  if (range_ && range_ != owner_dom_selection_->DocumentCachedRange()) {
+    range_->Dispose();
+  }
+}
+
+Range* DOMSelection::TemporaryRange::GetRange() {
+  return range_;
 }
 
 }  // namespace blink

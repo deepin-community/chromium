@@ -25,6 +25,7 @@
 #include "base/logging.h"
 #include "base/memory/memory_pressure_listener.h"
 #include "base/memory/ptr_util.h"
+#include "base/message_loop/message_pump.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/power_monitor/power_monitor.h"
@@ -51,7 +52,9 @@
 #include "content/common/in_process_child_thread_params.h"
 #include "content/common/mojo_core_library_support.h"
 #include "content/common/pseudonymization_salt.h"
+#include "content/public/child/child_thread.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "ipc/ipc_channel_mojo.h"
 #include "ipc/ipc_logging.h"
@@ -239,8 +242,17 @@ mojo::IncomingInvitation InitializeMojoIPCChannel() {
   endpoint =
       mojo::PlatformChannelEndpoint(mojo::PlatformHandle(std::move(receive)));
 #elif BUILDFLAG(IS_POSIX)
-  endpoint = mojo::PlatformChannelEndpoint(mojo::PlatformHandle(base::ScopedFD(
-      base::GlobalDescriptors::GetInstance()->Get(kMojoIPCChannel))));
+#if BUILDFLAG(IS_ANDROID)
+  // If the endpoint is backed by a BinderRef it will be recovered here.
+  // Otherwise we'll assume a socket FD below.
+  endpoint = mojo::PlatformChannel::RecoverPassedEndpointFromCommandLine(
+      *base::CommandLine::ForCurrentProcess());
+#endif
+  if (!endpoint.is_valid()) {
+    endpoint =
+        mojo::PlatformChannelEndpoint(mojo::PlatformHandle(base::ScopedFD(
+            base::GlobalDescriptors::GetInstance()->Get(kMojoIPCChannel))));
+  }
 #endif
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kDisableMojoBroker)) {
@@ -351,15 +363,6 @@ class ChildThreadImpl::IOThreadState
     LOG(FATAL) << "Crashing because hung";
   }
 
-  void RunServiceDeprecated(
-      const std::string& service_name,
-      mojo::ScopedMessagePipeHandle service_pipe) override {
-    main_thread_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&ChildThreadImpl::RunServiceDeprecated,
-                                  weak_main_thread_, service_name,
-                                  std::move(service_pipe)));
-  }
-
   void BindServiceInterface(mojo::GenericPendingReceiver receiver) override {
     if (service_binder_)
       service_binder_.Run(&receiver);
@@ -450,6 +453,21 @@ class ChildThreadImpl::IOThreadState
                        weak_main_thread_, level));
   }
 #endif
+
+  void SetBatterySaverMode(bool battery_saver_mode_enabled) override {
+    if (base::FeatureList::IsEnabled(features::kBatterySaverModeAlignWakeUps)) {
+      if (battery_saver_mode_enabled) {
+        base::MessagePump::OverrideAlignWakeUpsState(true,
+                                                     base::Milliseconds(32));
+      } else {
+        base::MessagePump::ResetAlignWakeUpsState();
+      }
+    }
+    main_thread_task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(&ChildThreadImpl::SetBatterySaverMode, weak_main_thread_,
+                       battery_saver_mode_enabled));
+  }
 
   const scoped_refptr<base::SequencedTaskRunner> main_thread_task_runner_;
   const base::WeakPtr<ChildThreadImpl> weak_main_thread_;
@@ -857,11 +875,11 @@ const mojo::Remote<mojom::FontCacheWin>& ChildThreadImpl::GetFontCacheWin() {
 #endif
 
 void ChildThreadImpl::RecordAction(const base::UserMetricsAction& action) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void ChildThreadImpl::RecordComputedAction(const std::string& action) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void ChildThreadImpl::BindHostReceiver(mojo::GenericPendingReceiver receiver) {
@@ -893,7 +911,7 @@ void ChildThreadImpl::OnAssociatedInterfaceRequest(
   // All associated interfaces are requested through RenderThreadImpl.
   LOG(ERROR) << "Receiver for unknown Channel-associated interface: "
              << interface_name;
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void ChildThreadImpl::ExposeInterfacesToBrowser(mojo::BinderMap binders) {
@@ -928,12 +946,6 @@ void ChildThreadImpl::DisconnectChildProcessHost() {
   child_process_host_.reset();
 }
 
-void ChildThreadImpl::RunServiceDeprecated(
-    const std::string& service_name,
-    mojo::ScopedMessagePipeHandle service_pipe) {
-  DLOG(ERROR) << "Ignoring unhandled request to run service: " << service_name;
-}
-
 void ChildThreadImpl::BindServiceInterface(
     mojo::GenericPendingReceiver receiver) {
   DLOG(ERROR) << "Ignoring unhandled request to bind service interface: "
@@ -952,6 +964,8 @@ void ChildThreadImpl::OnProcessFinalRelease() {
 
   quit_closure_.Run();
 }
+
+void ChildThreadImpl::SetBatterySaverMode(bool battery_saver_mode_enabled) {}
 
 void ChildThreadImpl::EnsureConnected() {
   VLOG(0) << "ChildThreadImpl::EnsureConnected()";

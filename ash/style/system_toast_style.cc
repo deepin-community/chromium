@@ -35,7 +35,7 @@
 #include "ui/views/highlight_border.h"
 #include "ui/views/layout/box_layout.h"
 
-namespace ash {
+namespace ash::deprecated {
 
 namespace {
 
@@ -163,7 +163,7 @@ SystemToastStyle::SystemToastStyle(base::RepeatingClosure dismiss_callback,
 
   // Requesting size forces layout. Otherwise, we don't know how many lines
   // are needed.
-  label_->GetPreferredSize();
+  label_->GetPreferredSize(views::SizeBounds(label_->width(), {}));
 
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>());
   layout->set_cross_axis_alignment(
@@ -247,4 +247,4 @@ void SystemToastStyle::UpdateInsideBorderInsets() {
 BEGIN_METADATA(SystemToastStyle)
 END_METADATA
 
-}  // namespace ash
+}  // namespace ash::deprecated

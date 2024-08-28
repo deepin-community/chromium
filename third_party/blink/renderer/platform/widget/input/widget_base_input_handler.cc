@@ -27,7 +27,6 @@
 #include "third_party/blink/public/common/input/web_pointer_event.h"
 #include "third_party/blink/public/common/input/web_touch_event.h"
 #include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
-#include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
 #include "third_party/blink/renderer/platform/widget/input/ime_event_guard.h"
 #include "third_party/blink/renderer/platform/widget/widget_base.h"
@@ -80,7 +79,7 @@ void LogPassiveEventListenersUma(WebInputEventResult result,
         enum_value = PASSIVE_LISTENER_UMA_ENUM_CANCELABLE;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return;
   }
 
@@ -145,13 +144,11 @@ WebCoalescedInputEvent GetCoalescedWebPointerEventForTouch(
                                 std::move(predicted_pointer_events), latency);
 }
 
-mojom::InputEventResultState GetAckResult(WebInputEventResult processed) {
-  if (processed == WebInputEventResult::kNotHandled) {
-    return base::FeatureList::IsEnabled(features::kFixGestureScrollQueuingBug)
-               ? mojom::InputEventResultState::kNotConsumedBlocking
-               : mojom::InputEventResultState::kNotConsumed;
-  }
-  return mojom::InputEventResultState::kConsumed;
+mojom::blink::InputEventResultState GetAckResult(
+    WebInputEventResult processed) {
+  return processed == WebInputEventResult::kNotHandled
+             ? mojom::blink::InputEventResultState::kNotConsumed
+             : mojom::blink::InputEventResultState::kConsumed;
 }
 
 bool IsGestureScroll(WebInputEvent::Type type) {
@@ -249,7 +246,7 @@ class WidgetBaseInputHandler::HandlingState {
   // Whether the event we are handling is a touch start or move.
   bool touch_start_or_move_;
 
-  raw_ptr<HandlingState, ExperimentalRenderer> previous_state_;
+  raw_ptr<HandlingState> previous_state_;
   bool previous_was_handling_input_;
   base::WeakPtr<WidgetBaseInputHandler> input_handler_;
 };
@@ -605,8 +602,6 @@ void WidgetBaseInputHandler::HandleInjectedScrollGestures(
     // allows end to end latency to be logged for the injected scroll, annotated
     // with the correct type.
     ui::LatencyInfo scrollbar_latency_info(original_latency_info);
-    scrollbar_latency_info.set_source_event_type(
-        ui::SourceEventType::SCROLLBAR);
     scrollbar_latency_info.AddLatencyNumber(
         ui::LatencyComponentType::INPUT_EVENT_LATENCY_RENDERER_MAIN_COMPONENT);
 

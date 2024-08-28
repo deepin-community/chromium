@@ -89,6 +89,14 @@ class PasswordsModelDelegate {
   // Returns true iff the current bubble is the manual fallback for saving.
   virtual bool BubbleIsManualFallbackForSaving() const = 0;
 
+  // Returns true if GPM pin was created during the most recent passkey creation
+  // flow, applicable for PASSKEY_SAVED_CONFIRMATION_STATE only.
+  virtual bool GpmPinCreatedDuringRecentPasskeyCreation() const = 0;
+
+  // Returns username of a passkey that has just been saved, applicable for
+  // PASSKEY_SAVED_CONFIRMATION_STATE only.
+  virtual std::u16string GetRecentlySavedPasskeyUsername() const = 0;
+
   // Called from the model when the bubble is displayed.
   virtual void OnBubbleShown() = 0;
 
@@ -146,6 +154,12 @@ class PasswordsModelDelegate {
   virtual void NavigateToPasswordManagerSettingsPage(
       password_manager::ManagePasswordsReferrer referrer) = 0;
 
+  // Open a new tab, pointing to the password manager subpage with the
+  // credential details for the `password_domain_name`.
+  virtual void NavigateToPasswordDetailsPageInPasswordManager(
+      const std::string& password_domain_name,
+      password_manager::ManagePasswordsReferrer referrer) = 0;
+
   // Opens password manager settings page and focuses account store toggle.
   virtual void NavigateToPasswordManagerSettingsAccountStoreToggle(
       password_manager::ManagePasswordsReferrer referrer) = 0;
@@ -155,7 +169,9 @@ class PasswordsModelDelegate {
       password_manager::PasswordCheckReferrer referrer) = 0;
   // Called by the view when the "Sign in to Chrome" button or the "Sync to"
   // button in the promo bubble are clicked.
-  virtual void SignIn(const AccountInfo& account) = 0;
+  virtual void SignIn(
+      const AccountInfo& account,
+      const password_manager::PasswordForm& password_to_move) = 0;
 
   // Called from the dialog controller when the dialog is hidden.
   virtual void OnDialogHidden() = 0;
@@ -198,7 +214,9 @@ class PasswordsModelDelegate {
   virtual void OnBiometricAuthBeforeFillingDeclined() = 0;
 
   // Called when user clicked "Add username" button in AddUsername bubble.
-  virtual void OnAddUsernameSaveClicked(const std::u16string& username) = 0;
+  virtual void OnAddUsernameSaveClicked(
+      const std::u16string& username,
+      const password_manager::PasswordForm& password_to_change) = 0;
 
   // Called from the Save/Update bubble controller to decide whether or not we
   // should show the user the Chrome for iOS promo.

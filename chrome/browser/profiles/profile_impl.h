@@ -115,12 +115,9 @@ class ProfileImpl : public Profile {
   std::string GetProfileUserName() const override;
   base::FilePath GetPath() override;
   base::Time GetCreationTime() const override;
-  bool IsOffTheRecord() override;
-  bool IsOffTheRecord() const override;
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
   bool IsMainProfile() const override;
 #endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-  const OTRProfileID& GetOTRProfileID() const override;
   base::FilePath GetPath() const override;
   Profile* GetOffTheRecordProfile(const OTRProfileID& otr_profile_id,
                                   bool create_if_needed) override;
@@ -144,6 +141,7 @@ class ProfileImpl : public Profile {
   policy::UserCloudPolicyManager* GetUserCloudPolicyManager() override;
   policy::ProfileCloudPolicyManager* GetProfileCloudPolicyManager() override;
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+  policy::CloudPolicyManager* GetCloudPolicyManager() override;
   policy::ProfilePolicyConnector* GetProfilePolicyConnector() override;
   const policy::ProfilePolicyConnector* GetProfilePolicyConnector()
       const override;
@@ -223,6 +221,10 @@ class ProfileImpl : public Profile {
 
   // Called to initialize Data Reduction Proxy.
   void InitializeDataReductionProxy();
+
+  // Called after a profile is initialized, to record 'one per profile creation'
+  // metrics relating to user prefs.
+  void RecordPrefValuesAfterProfileInitialization();
 
   policy::ConfigurationPolicyProvider* configuration_policy_provider();
 

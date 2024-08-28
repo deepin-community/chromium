@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "ash/ash_element_identifiers.h"
 #include "ash/bubble/bubble_utils.h"
 #include "ash/public/cpp/system_tray_client.h"
 #include "ash/resources/vector_icons/vector_icons.h"
@@ -110,7 +111,7 @@ void BluetoothDetailedViewImpl::UpdateBluetoothEnabledState(
       IDS_ASH_STATUS_TRAY_BLUETOOTH_TOGGLE_TOOLTIP, tooltip_template);
   toggle_row_->SetTooltipText(tooltip_text);
   toggle_button_->SetTooltipText(tooltip_text);
-  toggle_button_->SetAccessibleName(
+  toggle_button_->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_BLUETOOTH));
 
   // Ensure the toggle button is in sync with the current Bluetooth state.
@@ -210,8 +211,9 @@ void BluetoothDetailedViewImpl::CreateTopContainer() {
 
   auto toggle = std::make_unique<Switch>(base::BindRepeating(
       &BluetoothDetailedViewImpl::OnToggleClicked, weak_factory_.GetWeakPtr()));
-  SetAccessibleName(l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_BLUETOOTH));
   toggle_button_ = toggle.get();
+  toggle_button_->SetProperty(views::kElementIdentifierKey,
+                              kBluetoothDetailedViewToggleElementId);
   toggle_row_->AddRightView(toggle.release());
 
   // Allow the row to be taller than a typical tray menu item.
@@ -219,8 +221,8 @@ void BluetoothDetailedViewImpl::CreateTopContainer() {
   toggle_row_->tri_view()->SetInsets(kToggleRowTriViewInsets);
 
   // ChromeVox users will just use the `toggle_button_` to toggle.
-  toggle_icon_->GetViewAccessibility().OverrideIsIgnored(true);
-  toggle_row_->text_label()->GetViewAccessibility().OverrideIsIgnored(true);
+  toggle_icon_->GetViewAccessibility().SetIsIgnored(true);
+  toggle_row_->text_label()->GetViewAccessibility().SetIsIgnored(true);
 }
 
 void BluetoothDetailedViewImpl::CreateMainContainer() {
@@ -235,6 +237,9 @@ void BluetoothDetailedViewImpl::CreateMainContainer() {
   // Add a row for "pair new device".
   pair_new_device_view_ = main_container_->AddChildView(
       std::make_unique<HoverHighlightView>(/*listener=*/this));
+  pair_new_device_view_->SetProperty(
+      views::kElementIdentifierKey,
+      kBluetoothDetailedViewPairNewDeviceElementId);
 
   // Create the "+" icon.
   auto icon = std::make_unique<views::ImageView>();

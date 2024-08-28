@@ -550,26 +550,6 @@ bool OmniboxFieldTrial::HUPSearchDatabase() {
   return value.empty() || (value == "true");
 }
 
-bool OmniboxFieldTrial::IsActionsUISimplificationEnabled() {
-  return base::FeatureList::IsEnabled(omnibox::kOmniboxActionsUISimplification);
-}
-
-bool OmniboxFieldTrial::IsKeywordModeRefreshEnabled() {
-  return base::FeatureList::IsEnabled(omnibox::kOmniboxKeywordModeRefresh);
-}
-
-const base::FeatureParam<bool>
-    OmniboxFieldTrial::kActionsUISimplificationIncludeRealbox(
-        &omnibox::kOmniboxActionsUISimplification,
-        "ActionsUISimplificationIncludeRealbox",
-        true);
-
-const base::FeatureParam<bool>
-    OmniboxFieldTrial::kActionsUISimplificationTrimExtra(
-        &omnibox::kOmniboxActionsUISimplification,
-        "ActionsUISimplificationTrimExtra",
-        true);
-
 bool OmniboxFieldTrial::IsOnDeviceHeadSuggestEnabledForIncognito() {
   return base::FeatureList::IsEnabled(omnibox::kOnDeviceHeadProviderIncognito);
 }
@@ -661,32 +641,6 @@ const base::FeatureParam<int> OmniboxFieldTrial::kRichSuggestionVerticalMargin(
     "OmniboxRichSuggestionVerticalMargin",
     6);
 
-bool OmniboxFieldTrial::IsChromeRefreshIconsEnabled() {
-  static bool enabled = omnibox::IsOmniboxCr23CustomizeGuardedFeatureEnabled(
-      omnibox::kOmniboxCR23SteadyStateIcons);
-  return enabled;
-}
-
-bool OmniboxFieldTrial::IsChromeRefreshSuggestIconsEnabled() {
-  return omnibox::IsOmniboxCr23CustomizeGuardedFeatureEnabled(
-      omnibox::kExpandedStateSuggestIcons);
-}
-
-bool OmniboxFieldTrial::IsChromeRefreshActionChipIconsEnabled() {
-  return omnibox::IsOmniboxCr23CustomizeGuardedFeatureEnabled(
-      omnibox::kCr2023ActionChipsIcons);
-}
-
-bool OmniboxFieldTrial::IsChromeRefreshActionChipShapeEnabled() {
-  return omnibox::IsOmniboxCr23CustomizeGuardedFeatureEnabled(
-      omnibox::kCr2023ActionChips);
-}
-
-bool OmniboxFieldTrial::IsChromeRefreshSuggestHoverFillShapeEnabled() {
-  return omnibox::IsOmniboxCr23CustomizeGuardedFeatureEnabled(
-      omnibox::kSuggestionHoverFillShape);
-}
-
 bool OmniboxFieldTrial::IsGM3TextStyleEnabled() {
   return base::FeatureList::IsEnabled(omnibox::kOmniboxSteadyStateTextStyle);
 }
@@ -718,16 +672,6 @@ const base::FeatureParam<int> OmniboxFieldTrial::kFontSizeNonTouchUI(
     &omnibox::kOmniboxSteadyStateTextStyle,
     "OmniboxFontSizeNonTouchUI",
     13);
-
-bool OmniboxFieldTrial::IsCr23LayoutEnabled() {
-  return omnibox::IsOmniboxCr23CustomizeGuardedFeatureEnabled(
-      omnibox::kExpandedLayout);
-}
-
-bool OmniboxFieldTrial::IsChromeRefreshSteadyStateBackgroundColorEnabled() {
-  return omnibox::IsOmniboxCr23CustomizeGuardedFeatureEnabled(
-      omnibox::kOmniboxSteadyStateBackgroundColor);
-}
 
 const char OmniboxFieldTrial::kBundledExperimentFieldTrialName[] =
     "OmniboxBundledExperimentV1";
@@ -803,6 +747,20 @@ int OmniboxFieldTrial::kDefaultMinimumTimeBetweenSuggestQueriesMs = 100;
 namespace OmniboxFieldTrial {
 
 // Local history zero-prefix (aka zero-suggest) and prefix suggestions:
+
+// The debouncing delay (in milliseconds) to use when throttling ZPS prefetch
+// requests.
+const base::FeatureParam<int> kZeroSuggestPrefetchDebounceDelay(
+    &omnibox::kZeroSuggestPrefetchDebouncing,
+    "ZeroSuggestPrefetchDebounceDelay",
+    300);
+
+// Whether to calculate debouncing delay relative to the latest successful run
+// (instead of the latest run request).
+const base::FeatureParam<bool> kZeroSuggestPrefetchDebounceFromLastRun(
+    &omnibox::kZeroSuggestPrefetchDebouncing,
+    "ZeroSuggestPrefetchDebounceFromLastRun",
+    true);
 
 // The maximum number of entries stored by the in-memory zero-suggest cache at
 // at any given time (LRU eviction policy is used to enforce this limit).
@@ -965,27 +923,6 @@ const base::FeatureParam<bool> kDomainSuggestionsAlternativeScoring(
     "DomainSuggestionsAlternativeScoring",
     false);
 
-const base::FeatureParam<omnibox::CompanyEntityIconAdjustmentGroup>::Option
-    kCompanyEntityIconAdjustmentGroupOptions[] = {
-        {omnibox::CompanyEntityIconAdjustmentGroup::kLeastAggressive,
-         "least-aggressive"},
-        {omnibox::CompanyEntityIconAdjustmentGroup::kModerate, "moderate"},
-        {omnibox::CompanyEntityIconAdjustmentGroup::kMostAggressive,
-         "most-aggressive"},
-};
-
-const base::FeatureParam<omnibox::CompanyEntityIconAdjustmentGroup>
-    kCompanyEntityIconAdjustmentGroup{
-        &omnibox::kCompanyEntityIconAdjustment,
-        "OmniboxCompanyEntityAdjustmentGroup",
-        omnibox::CompanyEntityIconAdjustmentGroup::kModerate,
-        &kCompanyEntityIconAdjustmentGroupOptions};
-
-const base::FeatureParam<bool> kCompanyEntityIconAdjustmentCounterfactual(
-    &omnibox::kCompanyEntityIconAdjustment,
-    "CompanyEntityIconAdjustmentCounterfactual",
-    false);
-
 // ---------------------------------------------------------
 // ML Relevance Scoring ->
 
@@ -1043,11 +980,6 @@ MLConfig::MLConfig() {
       kMlUrlScoringMaxMatchesByProvider.Get();
 
   // `kMlUrlSearchBlending` parameters.
-  stable_search_blending =
-      base::FeatureParam<bool>(&omnibox::kMlUrlSearchBlending,
-                               "MlUrlSearchBlending_StableSearchBlending",
-                               stable_search_blending)
-          .Get();
   mapped_search_blending =
       base::FeatureParam<bool>(&omnibox::kMlUrlSearchBlending,
                                "MlUrlSearchBlending_MappedSearchBlending",
@@ -1070,7 +1002,39 @@ MLConfig::MLConfig() {
           mapped_search_blending_grouping_threshold)
           .Get();
 
+  // `kMlUrlPiecewiseMappedSearchBlending` parameters.
+  piecewise_mapped_search_blending =
+      base::FeatureParam<bool>(&omnibox::kMlUrlPiecewiseMappedSearchBlending,
+                               "MlUrlPiecewiseMappedSearchBlending",
+                               piecewise_mapped_search_blending)
+          .Get();
+  piecewise_mapped_search_blending_grouping_threshold =
+      base::FeatureParam<int>(
+          &omnibox::kMlUrlPiecewiseMappedSearchBlending,
+          "MlUrlPiecewiseMappedSearchBlending_GroupingThreshold",
+          piecewise_mapped_search_blending_grouping_threshold)
+          .Get();
+  piecewise_mapped_search_blending_break_points =
+      base::FeatureParam<std::string>(
+          &omnibox::kMlUrlPiecewiseMappedSearchBlending,
+          "MlUrlPiecewiseMappedSearchBlending_BreakPoints", "")
+          .Get();
+  piecewise_mapped_search_blending_relevance_bias =
+      base::FeatureParam<int>(
+          &omnibox::kMlUrlPiecewiseMappedSearchBlending,
+          "MlUrlPiecewiseMappedSearchBlending_RelevanceBias",
+          piecewise_mapped_search_blending_relevance_bias)
+          .Get();
+
   url_scoring_model = base::FeatureList::IsEnabled(omnibox::kUrlScoringModel);
+
+  ml_url_score_caching =
+      base::FeatureList::IsEnabled(omnibox::kMlUrlScoreCaching);
+  max_ml_score_cache_size =
+      base::FeatureParam<int>(&omnibox::kMlUrlScoreCaching,
+                              "MlUrlScoreCaching_MaxMlScoreCacheSize",
+                              max_ml_score_cache_size)
+          .Get();
 }
 
 MLConfig::MLConfig(const MLConfig&) = default;
@@ -1122,15 +1086,31 @@ bool IsMlUrlScoringUnlimitedNumCandidatesEnabled() {
 bool IsUrlScoringModelEnabled() {
   return GetMLConfig().url_scoring_model;
 }
+bool IsMlUrlScoreCachingEnabled() {
+  return GetMLConfig().ml_url_score_caching;
+}
+
+std::vector<std::pair<double, int>> GetPiecewiseMappingBreakPoints() {
+  std::vector<std::pair<double, int>> break_points;
+
+  std::string param_value = OmniboxFieldTrial::GetMLConfig()
+                                .piecewise_mapped_search_blending_break_points;
+  base::StringPairs pairs;
+  if (base::SplitStringIntoKeyValuePairs(param_value, ',', ';', &pairs)) {
+    for (const auto& p : pairs) {
+      double ml_score;
+      base::StringToDouble(p.first, &ml_score);
+      int relevance;
+      base::StringToInt(p.second, &relevance);
+
+      break_points.push_back(std::make_pair(ml_score, relevance));
+    }
+  }
+
+  return break_points;
+}
 
 // <- ML Relevance Scoring
-// ---------------------------------------------------------
-// Android UI Revamp ->
-const base::FeatureParam<bool> kOmniboxModernizeVisualUpdateMergeClipboardOnNTP(
-    &omnibox::kOmniboxModernizeVisualUpdate,
-    "modernize_visual_update_merge_clipboard_on_ntp",
-    true);
-// <- Android UI Revamp
 // ---------------------------------------------------------
 // Touch Down Trigger For Prefetch ->
 const base::FeatureParam<int>
@@ -1149,8 +1129,22 @@ const base::FeatureParam<std::string> kGeminiUrlOverride(
 bool IsStarterPackExpansionEnabled() {
   return base::FeatureList::IsEnabled(omnibox::kStarterPackExpansion);
 }
+
+const base::FeatureParam<int> kStarterPackIPHPerSessionLimit(
+    &omnibox::kStarterPackIPH,
+    "StarterPackIPHPerSessionLimit",
+    3);
+
+bool IsStarterPackIPHEnabled() {
+  return base::FeatureList::IsEnabled(omnibox::kStarterPackIPH);
+}
 // <- Site Search Starter Pack
 // ---------------------------------------------------------
+// Featured Enterprise Site Search ->
+bool IsFeaturedEnterpriseSearchIPHEnabled() {
+  return base::FeatureList::IsEnabled(
+      omnibox::kShowFeaturedEnterpriseSiteSearchIPH);
+}
 
 }  // namespace OmniboxFieldTrial
 

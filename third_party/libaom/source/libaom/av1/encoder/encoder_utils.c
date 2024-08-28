@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2020, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -9,8 +9,11 @@
  * PATENTS file, you can obtain it at www.aomedia.org/license/patent.
  */
 
+#include <string.h>
+
 #include "aom/aomcx.h"
 
+#include "av1/common/av1_common_int.h"
 #include "av1/encoder/bitstream.h"
 #include "av1/encoder/encodeframe.h"
 #include "av1/encoder/encoder.h"
@@ -421,11 +424,13 @@ void av1_apply_active_map(AV1_COMP *cpi) {
   struct segmentation *const seg = &cpi->common.seg;
   unsigned char *const seg_map = cpi->enc_seg.map;
   const unsigned char *const active_map = cpi->active_map.map;
-  int i;
 
   assert(AM_SEGMENT_ID_ACTIVE == CR_SEGMENT_ID_BASE);
 
-  if (frame_is_intra_only(&cpi->common)) {
+  // Disable the active_maps on intra_only frames or if the
+  // input map for the current frame has no inactive blocks.
+  if (frame_is_intra_only(&cpi->common) ||
+      cpi->rc.percent_blocks_inactive == 0) {
     cpi->active_map.enabled = 0;
     cpi->active_map.update = 1;
   }
@@ -434,8 +439,7 @@ void av1_apply_active_map(AV1_COMP *cpi) {
     if (cpi->active_map.enabled) {
       const int num_mis =
           cpi->common.mi_params.mi_rows * cpi->common.mi_params.mi_cols;
-      for (i = 0; i < num_mis; ++i)
-        if (seg_map[i] == AM_SEGMENT_ID_ACTIVE) seg_map[i] = active_map[i];
+      memcpy(seg_map, active_map, sizeof(active_map[0]) * num_mis);
       av1_enable_segmentation(seg);
       av1_enable_segfeature(seg, AM_SEGMENT_ID_INACTIVE, SEG_LVL_SKIP);
       av1_enable_segfeature(seg, AM_SEGMENT_ID_INACTIVE, SEG_LVL_ALT_LF_Y_H);
@@ -556,6 +560,11 @@ void av1_set_size_dependent_vars(AV1_COMP *cpi, int *q, int *bottom_index,
   // Decide q and q bounds.
   *q = av1_rc_pick_q_and_bounds(cpi, cm->width, cm->height, cpi->gf_frame_index,
                                 bottom_index, top_index);
+
+  if (cpi->oxcf.rc_cfg.mode == AOM_CBR && cpi->rc.force_max_q) {
+    *q = cpi->rc.worst_quality;
+    cpi->rc.force_max_q = 0;
+  }
 
 #if !CONFIG_REALTIME_ONLY
   if (cpi->oxcf.rc_cfg.mode == AOM_Q &&
@@ -840,8 +849,8 @@ BLOCK_SIZE av1_select_sb_size(const AV1EncoderConfig *const oxcf, int width,
       // For multi-thread encode: if the number of (128x128) superblocks
       // per tile is low use 64X64 superblock.
       if (oxcf->row_mt == 1 && oxcf->max_threads >= 4 &&
-          oxcf->max_threads >= num_tiles && AOMMIN(width, height) > 720 &&
-          (width * height) / (128 * 128 * num_tiles) <= 38)
+          oxcf->max_threads >= num_tiles && AOMMIN(width, height) >= 720 &&
+          (width * height) / (128 * 128 * num_tiles) < 40)
         return BLOCK_64X64;
       else
         return AOMMIN(width, height) >= 720 ? BLOCK_128X128 : BLOCK_64X64;

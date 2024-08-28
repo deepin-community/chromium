@@ -4,8 +4,10 @@
 
 #include "media/formats/mp4/h264_annex_b_to_avc_bitstream_converter.h"
 
-#include "base/big_endian.h"
 #include "base/containers/flat_set.h"
+#include "base/containers/span.h"
+#include "base/containers/span_writer.h"
+#include "base/numerics/safe_conversions.h"
 
 namespace media {
 
@@ -66,8 +68,10 @@ MP4Status H264AnnexBToAvcBitstreamConverter::ConvertChunk(
         if (result != H264Parser::kOk)
           return MP4Status::Codes::kInvalidSPS;
 
-        id2sps_.insert_or_assign(sps_id,
-                                 blob(nalu.data, nalu.data + nalu.size));
+        id2sps_.insert_or_assign(
+            sps_id,
+            blob(nalu.data.get(),
+                 (nalu.data + base::checked_cast<size_t>(nalu.size)).get()));
         id2sps_ext_.erase(sps_id);
         sps_to_include.insert(sps_id);
         config_changed = true;
@@ -81,8 +85,10 @@ MP4Status H264AnnexBToAvcBitstreamConverter::ConvertChunk(
           return MP4Status::Codes::kFailedToParse;
         }
 
-        id2sps_ext_.insert_or_assign(sps_id,
-                                     blob(nalu.data, nalu.data + nalu.size));
+        id2sps_ext_.insert_or_assign(
+            sps_id,
+            blob(nalu.data.get(),
+                 (nalu.data + base::checked_cast<size_t>(nalu.size)).get()));
         config_changed = true;
         break;
       }
@@ -93,8 +99,10 @@ MP4Status H264AnnexBToAvcBitstreamConverter::ConvertChunk(
         if (result != H264Parser::kOk)
           return MP4Status::Codes::kInvalidPPS;
 
-        id2pps_.insert_or_assign(pps_id,
-                                 blob(nalu.data, nalu.data + nalu.size));
+        id2pps_.insert_or_assign(
+            pps_id,
+            blob(nalu.data.get(),
+                 (nalu.data + base::checked_cast<size_t>(nalu.size)).get()));
         pps_to_include.insert(pps_id);
         if (auto* pps = parser_.GetPPS(pps_id))
           sps_to_include.insert(pps->seq_parameter_set_id);
@@ -152,19 +160,24 @@ MP4Status H264AnnexBToAvcBitstreamConverter::ConvertChunk(
 
   // Write slice NALUs from the input buffer to the output buffer
   // prefixing them with size.
-  base::BigEndianWriter writer(reinterpret_cast<char*>(output.data()),
-                               output.size());
+  base::SpanWriter writer(output);
   for (auto& unit : slice_units) {
     bool written_ok =
-        writer.WriteU32(unit.size) && writer.WriteBytes(unit.data, unit.size);
+        writer.WriteU32BigEndian(unit.size) &&
+        writer.Write(
+            // SAFETY: `unit` is constructed with a size that is the number of
+            // elements at the data pointer.
+            //
+            // TODO(crbug.com/40284755): The `unit` should hold a span instead
+            // of a pointer.
+            UNSAFE_BUFFERS(base::span(unit.data.get(),
+                                      base::checked_cast<size_t>(unit.size))));
     if (!written_ok) {
       return MP4Status::Codes::kBufferTooSmall;
     }
   }
 
-  DCHECK_LE(writer.remaining(), output.size());
-  size_t bytes_written = output.size() - writer.remaining();
-  DCHECK_EQ(bytes_written, data_size);
+  DCHECK_EQ(writer.num_written(), data_size);
 
   // Now when we are sure that everything is written and fits nicely,
   // we can update parts of the |config_| that were changed by this data chunk.

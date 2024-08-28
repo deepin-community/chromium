@@ -34,8 +34,9 @@ void SystemShadowOnNinePatchLayer::SetRoundedCorners(
     const gfx::RoundedCornersF& rounded_corners) {
   // TODO(http://b/307326019): use corresponding interface of `ui::Shadow` when
   // available.
-  NOTREACHED() << "Setting uneven rounded corners to the shadow on nine patch "
-                  "layer is not ready.";
+  NOTREACHED_IN_MIGRATION()
+      << "Setting uneven rounded corners to the shadow on nine patch "
+         "layer is not ready.";
 }
 
 const gfx::Rect& SystemShadowOnNinePatchLayer::GetContentBounds() {
@@ -64,12 +65,22 @@ void SystemShadowOnNinePatchLayer::UpdateShadowColors(
 // -----------------------------------------------------------------------------
 // SystemShadowOnNinePatchLayerImpl:
 SystemShadowOnNinePatchLayerImpl::SystemShadowOnNinePatchLayerImpl(
-    SystemShadow::Type type) {
+    SystemShadow::Type type,
+    const LayerRecreatedCallback& layer_recreated_callback)
+    : layer_recreated_callback_(layer_recreated_callback) {
   shadow_.Init(SystemShadow::GetElevationFromType(type));
   shadow_.SetShadowStyle(gfx::ShadowStyle::kChromeOSSystemUI);
+
+  if (layer_recreated_callback) {
+    shadow_observation_.Observe(&shadow_);
+  }
 }
 
 SystemShadowOnNinePatchLayerImpl::~SystemShadowOnNinePatchLayerImpl() = default;
+
+void SystemShadowOnNinePatchLayerImpl::OnLayerRecreated(ui::Layer* old_layer) {
+  layer_recreated_callback_.Run(old_layer, shadow_.layer());
+}
 
 ui::Shadow* SystemShadowOnNinePatchLayerImpl::shadow() {
   return &shadow_;
@@ -125,7 +136,7 @@ const ui::Shadow* SystemViewShadowOnNinePatchLayer::shadow() const {
 SystemWindowShadowOnNinePatchLayer::SystemWindowShadowOnNinePatchLayer(
     aura::Window* window,
     SystemShadow::Type type)
-    : SystemShadowOnNinePatchLayerImpl(type) {
+    : SystemShadowOnNinePatchLayerImpl(type, LayerRecreatedCallback()) {
   auto* window_layer = window->layer();
   auto* shadow_layer = GetLayer();
   window_layer->Add(shadow_layer);

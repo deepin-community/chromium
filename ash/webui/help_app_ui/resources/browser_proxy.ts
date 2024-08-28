@@ -81,6 +81,10 @@ guestMessagePipe.registerHandler(Message.OPEN_FEEDBACK_DIALOG, () => {
   return helpApp.handler.openFeedbackDialog();
 });
 
+guestMessagePipe.registerHandler(
+    Message.SHOW_ON_DEVICE_APP_CONTROLS,
+    () => void helpApp.handler.showOnDeviceAppControls());
+
 guestMessagePipe.registerHandler(Message.SHOW_PARENTAL_CONTROLS, () => void
   helpApp.handler.showParentalControls());
 
@@ -271,10 +275,6 @@ guestMessagePipe.registerHandler(
 
 guestMessagePipe.registerHandler(Message.LAUNCH_MICROSOFT_365_SETUP, () => void
   helpApp.handler.launchMicrosoft365Setup());
-
-guestMessagePipe.registerHandler(
-    Message.MAYBE_SHOW_DISCOVER_NOTIFICATION, () => void
-      helpApp.handler.maybeShowDiscoverNotification());
 
 guestMessagePipe.registerHandler(
     Message.MAYBE_SHOW_RELEASE_NOTES_NOTIFICATION, () => void

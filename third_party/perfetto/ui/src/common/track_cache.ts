@@ -12,25 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {PanelSize} from '../frontend/panel';
-import {Store} from '../frontend/store';
-import {
-  Migrate,
-  Track,
-  TrackContext,
-  TrackDescriptor,
-  TrackRef,
-} from '../public';
+import {Optional, exists} from '../base/utils';
+import {Registry} from '../base/registry';
+import {Store} from '../base/store';
+import {Track, TrackContext, TrackDescriptor, TrackRef} from '../public';
 
-import {State} from './state';
+import {ObjectByKey, State, TrackState} from './state';
+import {AsyncLimiter} from '../base/async_limiter';
+import {assertFalse} from '../base/logging';
+import {TrackRenderContext} from '../public/tracks';
 
-export interface TrackCacheEntry {
-  track: Track;
+export interface TrackCacheEntry extends Disposable {
+  readonly trackKey: string;
+  readonly track: Track;
   desc: TrackDescriptor;
-  update(): void;
-  render(ctx: CanvasRenderingContext2D, size: PanelSize): void;
-  destroy(): void;
-  getError(): Error | undefined;
+  render(ctx: TrackRenderContext): void;
+  getError(): Optional<Error>;
 }
 
 // This class is responsible for managing the lifecycle of tracks over render
@@ -55,30 +52,33 @@ export interface TrackCacheEntry {
 // Third cycle
 //   flushTracks() <-- 'foo' is destroyed.
 export class TrackManager {
-  private safeCache = new Map<string, TrackCacheEntry>();
-  private recycleBin = new Map<string, TrackCacheEntry>();
-  private trackRegistry = new Map<string, TrackDescriptor>();
+  private _trackKeyByTrackId = new Map<number, string>();
+  private newTracks = new Map<string, TrackCacheEntry>();
+  private currentTracks = new Map<string, TrackCacheEntry>();
+  private trackRegistry = new Registry<TrackDescriptor>(({uri}) => uri);
   private defaultTracks = new Set<TrackRef>();
+
   private store: Store<State>;
+  private trackState?: ObjectByKey<TrackState>;
 
   constructor(store: Store<State>) {
     this.store = store;
   }
 
-  registerTrack(trackDesc: TrackDescriptor): void {
-    this.trackRegistry.set(trackDesc.uri, trackDesc);
+  get trackKeyByTrackId() {
+    this.updateTrackKeyByTrackIdMap();
+    return this._trackKeyByTrackId;
   }
 
-  unregisterTrack(uri: string): void {
-    this.trackRegistry.delete(uri);
+  registerTrack(trackDesc: TrackDescriptor): Disposable {
+    return this.trackRegistry.register(trackDesc);
   }
 
-  addDefaultTrack(track: TrackRef): void {
+  addPotentialTrack(track: TrackRef): Disposable {
     this.defaultTracks.add(track);
-  }
-
-  removeDefaultTrack(track: TrackRef): void {
-    this.defaultTracks.delete(track);
+    return {
+      [Symbol.dispose]: () => this.defaultTracks.delete(track),
+    };
   }
 
   findPotentialTracks(): TrackRef[] {
@@ -91,16 +91,15 @@ export class TrackManager {
 
   // Look up track into for a given track's URI.
   // Returns |undefined| if no track can be found.
-  resolveTrackInfo(uri: string): TrackDescriptor|undefined {
-    return this.trackRegistry.get(uri);
+  resolveTrackInfo(uri: string): TrackDescriptor | undefined {
+    return this.trackRegistry.tryGet(uri);
   }
 
   // Creates a new track using |uri| and |params| or retrieves a cached track if
   // |key| exists in the cache.
-  resolveTrack(key: string, trackDesc: TrackDescriptor, params?: unknown):
-      TrackCacheEntry {
-    // Search for a cached version of this track in either of the caches.
-    const cached = this.recycleBin.get(key) ?? this.safeCache.get(key);
+  resolveTrack(key: string, trackDesc: TrackDescriptor): TrackCacheEntry {
+    // Search for a cached version of this track,
+    const cached = this.currentTracks.get(key);
 
     // Ensure the cached track has the same factory type as the resolved track.
     // If this has changed, the track should be re-created.
@@ -110,49 +109,91 @@ export class TrackManager {
 
       // Move this track from the recycle bin to the safe cache, which means
       // it's safe from disposal for this cycle.
-      this.safeCache.set(key, cached);
-      this.recycleBin.delete(key);
+      this.newTracks.set(key, cached);
 
       return cached;
     } else {
       // Cached track doesn't exist or is out of date, create a new one.
       const trackContext: TrackContext = {
         trackKey: key,
-        mountStore: <T>(migrate: Migrate<T>) => {
-          const path = ['tracks', key, 'state'];
-          return this.store.createSubStore(path, migrate);
-        },
-        params,
       };
       const track = trackDesc.trackFactory(trackContext);
-      const entry = new TrackFSM(track, trackDesc, trackContext);
+      const entry = new TrackFSM(key, track, trackDesc, trackContext);
 
       // Push track into the safe cache.
-      this.safeCache.set(key, entry);
+      this.newTracks.set(key, entry);
       return entry;
     }
   }
 
-  // Destroys all tracks in the recycle bin and moves all safe tracks into
-  // the recycle bin.
+  // Destroys all current tracks not present in the new cache.
   flushOldTracks() {
-    for (const entry of this.recycleBin.values()) {
-      entry.destroy();
+    for (const [key, entry] of this.currentTracks.entries()) {
+      if (!this.newTracks.has(key)) {
+        entry[Symbol.dispose]();
+      }
     }
 
-    this.recycleBin = this.safeCache;
-    this.safeCache = new Map<string, TrackCacheEntry>();
+    this.currentTracks = this.newTracks;
+    this.newTracks = new Map<string, TrackCacheEntry>();
+  }
+
+  private updateTrackKeyByTrackIdMap() {
+    if (this.trackState === this.store.state.tracks) {
+      return;
+    }
+
+    const trackKeyByTrackId = new Map<number, string>();
+
+    const trackList = Object.entries(this.store.state.tracks);
+    trackList.forEach(([key, {uri}]) => {
+      const desc = this.trackRegistry.get(uri);
+      for (const trackId of desc?.tags?.trackIds ?? []) {
+        const existingKey = trackKeyByTrackId.get(trackId);
+        if (exists(existingKey)) {
+          throw new Error(
+            `Trying to map track id ${trackId} to UI track ${key}, already mapped to ${existingKey}`,
+          );
+        }
+        trackKeyByTrackId.set(trackId, key);
+      }
+    });
+
+    this._trackKeyByTrackId = trackKeyByTrackId;
+    this.trackState = this.store.state.tracks;
   }
 }
 
-enum TrackState {
-  Creating = 'creating',
-  Ready = 'ready',
-  UpdatePending = 'update_pending',
-  Updating = 'updating',
-  DestroyPending = 'destroy_pending',
-  Destroyed = 'destroyed',  // <- Final state, cannot escape.
-  Error = 'error',
+/**
+ * This function describes the asynchronous lifecycle of a track using an async
+ * generator. This saves us having to build out the state machine explicitly,
+ * using conventional serial programming techniques to describe the lifecycle
+ * instead, which is more natural and easier to understand.
+ *
+ * We expect the params to onUpdate to be passed into the generator via the
+ * yield function.
+ *
+ * @param track The track to run the lifecycle for.
+ * @param ctx The trace context, passed to various lifecycle methods.
+ */
+async function* trackLifecycle(
+  track: Track,
+  ctx: TrackContext,
+): AsyncGenerator<void, void, TrackRenderContext> {
+  try {
+    // Wait for parameters to be passed in before initializing the track
+    const trackRenderCtx = yield;
+    await Promise.resolve(track.onCreate?.(ctx));
+    await Promise.resolve(track.onUpdate?.(trackRenderCtx));
+
+    // Wait for parameters to be passed in before subsequent calls to onUpdate()
+    while (true) {
+      await Promise.resolve(track.onUpdate?.(yield));
+    }
+  } finally {
+    // Ensure we always clean up, even on throw or early return
+    await Promise.resolve(track.onDestroy?.());
+  }
 }
 
 /**
@@ -160,137 +201,70 @@ enum TrackState {
  * hooks are called synchronously and in the correct order.
  */
 class TrackFSM implements TrackCacheEntry {
-  private state: TrackState;
+  public readonly trackKey: string;
+  public readonly track: Track;
+  public readonly desc: TrackDescriptor;
+
+  private readonly limiter = new AsyncLimiter();
+  private readonly ctx: TrackContext;
+  private readonly generator: ReturnType<typeof trackLifecycle>;
+
   private error?: Error;
+  private isDisposed = false;
 
   constructor(
-      public track: Track, public desc: TrackDescriptor, ctx: TrackContext) {
-    this.state = TrackState.Creating;
-    const result = this.track.onCreate?.(ctx);
-    Promise.resolve(result)
-      .then(() => this.onTrackCreated())
+    trackKey: string,
+    track: Track,
+    desc: TrackDescriptor,
+    ctx: TrackContext,
+  ) {
+    this.trackKey = trackKey;
+    this.track = track;
+    this.desc = desc;
+    this.ctx = ctx;
+
+    this.generator = trackLifecycle(this.track, this.ctx);
+
+    // This just starts the generator, which will pause at the first yield
+    // without doing anything - note that the parameter to the first next() call
+    // is ignored in generators
+    this.generator.next();
+  }
+
+  render(ctx: TrackRenderContext): void {
+    assertFalse(this.isDisposed);
+
+    // The generator will ensure that track lifecycle calls don't overlap, but
+    // it'll also enqueue every single call to next() which can create a large
+    // backlog of updates assuming render is called faster than updates can
+    // complete (this is usually the case), so we use an AsyncLimiter here to
+    // avoid enqueueing more than one next().
+    this.limiter
+      .schedule(async () => {
+        // Pass in the parameters to onUpdate() here (i.e. the track size)
+        await this.generator.next(ctx);
+      })
       .catch((e) => {
+        // Errors thrown inside lifecycle hooks will bubble up through the
+        // generator and AsyncLimiter to here, where we can swallow and capture
+        // the error
         this.error = e;
-        this.state = TrackState.Error;
       });
+
+    // Always call render synchronously
+    this.track.render(ctx);
   }
 
-  update(): void {
-    switch (this.state) {
-    case TrackState.Creating:
-    case TrackState.Updating:
-      this.state = TrackState.UpdatePending;
-      break;
-    case TrackState.Ready:
-      const result = this.track.onUpdate?.();
-      Promise.resolve(result)
-        .then(() => this.onTrackUpdated())
-        .catch((e) => {
-          this.error = e;
-          this.state = TrackState.Error;
-        });
-      this.state = TrackState.Updating;
-      break;
-    case TrackState.UpdatePending:
-      // Update already pending... do nothing!
-      break;
-    case TrackState.Error:
-      break;
-    default:
-      throw new Error('Invalid state transition');
-    }
+  [Symbol.dispose](): void {
+    assertFalse(this.isDisposed);
+    this.isDisposed = true;
+
+    // Ask the generator to stop, it'll handle any cleanup and return at the
+    // next yield
+    this.generator.return();
   }
 
-  destroy(): void {
-    switch (this.state) {
-    case TrackState.Ready:
-      // Don't bother awaiting this as the track can no longer be used.
-      Promise.resolve(this.track.onDestroy?.())
-        .catch(() => {
-          // Track crashed while being destroyed
-          // There's not a lot we can do here - just swallow the error
-        });
-      this.state = TrackState.Destroyed;
-      break;
-    case TrackState.Creating:
-    case TrackState.Updating:
-    case TrackState.UpdatePending:
-      this.state = TrackState.DestroyPending;
-      break;
-    case TrackState.Error:
-      break;
-    default:
-      throw new Error('Invalid state transition');
-    }
-  }
-
-  private onTrackCreated() {
-    switch (this.state) {
-    case TrackState.DestroyPending:
-      // Don't bother awaiting this as the track can no longer be used.
-      this.track.onDestroy?.();
-      this.state = TrackState.Destroyed;
-      break;
-    case TrackState.UpdatePending:
-      const result = this.track.onUpdate?.();
-      Promise.resolve(result)
-        .then(() => this.onTrackUpdated())
-        .catch((e) => {
-          this.error = e;
-          this.state = TrackState.Error;
-        });
-      this.state = TrackState.Updating;
-      break;
-    case TrackState.Creating:
-      this.state = TrackState.Ready;
-      break;
-    case TrackState.Error:
-      break;
-    default:
-      throw new Error('Invalid state transition');
-    }
-  }
-
-  private onTrackUpdated() {
-    switch (this.state) {
-    case TrackState.DestroyPending:
-      // Don't bother awaiting this as the track can no longer be used.
-      this.track.onDestroy?.();
-      this.state = TrackState.Destroyed;
-      break;
-    case TrackState.UpdatePending:
-      const result = this.track.onUpdate?.();
-      Promise.resolve(result)
-        .then(() => this.onTrackUpdated())
-        .catch((e) => {
-          this.error = e;
-          this.state = TrackState.Error;
-        });
-      this.state = TrackState.Updating;
-      break;
-    case TrackState.Updating:
-      this.state = TrackState.Ready;
-      break;
-    case TrackState.Error:
-      break;
-    default:
-      throw new Error('Invalid state transition');
-    }
-  }
-
-  render(ctx: CanvasRenderingContext2D, size: PanelSize): void {
-    try {
-      this.track.render(ctx, size);
-    } catch {
-      this.state = TrackState.Error;
-    }
-  }
-
-  getError(): Error | undefined {
-    if (this.state === TrackState.Error) {
-      return this.error;
-    } else {
-      return undefined;
-    }
+  getError(): Optional<Error> {
+    return this.error;
   }
 }

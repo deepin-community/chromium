@@ -24,6 +24,7 @@
 #include "chrome/browser/ash/input_method/field_trial.h"
 #include "chrome/browser/ash/input_method/suggestion_enums.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
@@ -437,7 +438,8 @@ void AutocorrectManager::ProcessSetAutocorrectRangeDone(
   LogAssistiveAutocorrectAction(AutocorrectActions::kUnderlined);
   RecordAssistiveCoverage(AssistiveType::kAutocorrectUnderlined);
 
-  if (base::FeatureList::IsEnabled(features::kAutocorrectFederatedPhh)) {
+  if (ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled() &&
+      base::FeatureList::IsEnabled(features::kAutocorrectFederatedPhh)) {
     // Report `original_text` to the Federated Service.
     federated_manager_.ReportSingleString(
         /*table_id*/ chromeos::federated::mojom::FederatedExampleTableId::
@@ -727,7 +729,8 @@ void AutocorrectManager::OnActivate(const std::string& engine_id) {
 bool AutocorrectManager::OnKeyEvent(const ui::KeyEvent& event) {
   RecordPendingMetricsAwaitingKeyPress();
 
-  if (!pending_autocorrect_.has_value() || event.type() != ui::ET_KEY_PRESSED) {
+  if (!pending_autocorrect_.has_value() ||
+      event.type() != ui::EventType::kKeyPressed) {
     return false;
   }
   // TODO(b:253549747): call pending_autocorrect_->last_key_event.reset() if

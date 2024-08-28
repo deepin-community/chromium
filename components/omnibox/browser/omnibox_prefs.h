@@ -71,16 +71,15 @@ inline constexpr char kIntranetRedirectBehavior[] =
 inline constexpr char kKeywordSpaceTriggeringEnabled[] =
     "omnibox.keyword_space_triggering_enabled";
 
-// Boolean that specifies whether user has successfully used the instant
-// keyword mode feature.
-inline constexpr char kOmniboxInstantKeywordUsed[] =
-    "omnibox.instant_keyword_used";
-
 // A dictionary of visibility preferences for suggestion groups. The key is the
 // suggestion group ID serialized as a string, and the value is
 // SuggestionGroupVisibility serialized as an integer.
 inline constexpr char kSuggestionGroupVisibility[] =
     "omnibox.suggestionGroupVisibility";
+
+// Boolean that specifies whether to show the LensOverlay entry point.
+inline constexpr char kShowGoogleLensShortcut[] =
+    "omnibox.show_google_lens_shortcut";
 
 // Boolean that specifies whether to always show full URLs in the omnibox.
 inline constexpr char kPreventUrlElisionsInOmnibox[] =
@@ -94,6 +93,19 @@ inline constexpr char kZeroSuggestCachedResults[] = "zerosuggest.cachedresults";
 // into a string keyed off the page URL.
 inline constexpr char kZeroSuggestCachedResultsWithURL[] =
     "zerosuggest.cachedresults_with_url";
+
+// Booleans that specify whether to show the various IPH suggestion at the
+// bottom of the Omnibox. These is true until a user deletes (presses the X
+// button on) the suggestion.
+inline constexpr char kShowGeminiIPH[] = "omnibox.show_gemini_iph";
+inline constexpr char kShowFeaturedEnterpriseSiteSearchIPHPrefName[] =
+    "omnibox.show_featured_enterprise_search_iph";
+inline constexpr char kShowHistoryEmbeddingsSettingsPromo[] =
+    "omnibox.show_history_embeddings_settings_promo";
+inline constexpr char kShowHistoryScopePromo[] =
+    "omnibox.show_history_scope_promo";
+inline constexpr char kShowHistoryEmbeddingsScopePromo[] =
+    "omnibox.show_history_embeddings_scope_promo";
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry);
 

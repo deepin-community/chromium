@@ -41,7 +41,7 @@ TEST_F(FocusControllerTest, DoNotCrash1) {
       "tabindex='0'></p>");
   // <div> with shadow root
   auto* host = To<Element>(GetDocument().body()->firstChild());
-  host->AttachShadowRootForTesting(ShadowRootType::kOpen);
+  host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
   // "This test is for crbug.com/609012"
   Node* text = host->nextSibling();
   // <p>
@@ -65,7 +65,7 @@ TEST_F(FocusControllerTest, DoNotCrash2) {
   Node* text = target->nextSibling();
   // <div> with shadow root
   auto* host = To<Element>(text->nextSibling());
-  host->AttachShadowRootForTesting(ShadowRootType::kOpen);
+  host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
 
   // Set sequential focus navigation point at text node.
   GetDocument().SetSequentialFocusNavigationStartingPoint(text);
@@ -293,8 +293,8 @@ TEST_F(FocusControllerTest,
                          recover_username, mojom::blink::FocusType::kForward));
 }
 
-// Test for FocusController::FindScopeOwnerSlot().
-TEST_F(FocusControllerTest, FindScopeOwnerSlot) {
+// Test for FocusController::FindScopeOwnerSlotOrReadingFlowContainer().
+TEST_F(FocusControllerTest, FindScopeOwnerSlotOrReadingFlowContainer) {
   const char* main_html =
       "<div id='host'>"
       "<div id='inner1'></div>"
@@ -304,7 +304,7 @@ TEST_F(FocusControllerTest, FindScopeOwnerSlot) {
   GetDocument().body()->setInnerHTML(String::FromUTF8(main_html));
   auto* host = To<Element>(GetDocument().body()->firstChild());
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
   shadow_root.setInnerHTML(String::FromUTF8("<slot></slot>"));
 
   Element* inner1 = GetDocument().QuerySelector(AtomicString("#inner1"));
@@ -312,10 +312,14 @@ TEST_F(FocusControllerTest, FindScopeOwnerSlot) {
   auto* slot =
       To<HTMLSlotElement>(shadow_root.QuerySelector(AtomicString("slot")));
 
-  EXPECT_EQ(nullptr, FocusController::FindScopeOwnerSlot(*host));
-  EXPECT_EQ(nullptr, FocusController::FindScopeOwnerSlot(*slot));
-  EXPECT_EQ(slot, FocusController::FindScopeOwnerSlot(*inner1));
-  EXPECT_EQ(slot, FocusController::FindScopeOwnerSlot(*inner2));
+  EXPECT_EQ(nullptr,
+            FocusController::FindScopeOwnerSlotOrReadingFlowContainer(*host));
+  EXPECT_EQ(nullptr,
+            FocusController::FindScopeOwnerSlotOrReadingFlowContainer(*slot));
+  EXPECT_EQ(slot,
+            FocusController::FindScopeOwnerSlotOrReadingFlowContainer(*inner1));
+  EXPECT_EQ(slot,
+            FocusController::FindScopeOwnerSlotOrReadingFlowContainer(*inner2));
 }
 
 // crbug.com/1508258
@@ -328,7 +332,7 @@ TEST_F(FocusControllerTest, FocusHasChangedShouldInvalidateFocusStyle) {
 
   auto* host = GetElementById("host");
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
   shadow_root.setInnerHTML("<div tabindex=0></div>");
   To<Element>(shadow_root.firstChild())->Focus();
 
@@ -378,6 +382,55 @@ TEST_F(FocusControllerTestWithIframes,
   EXPECT_EQ(checkbox,
             GetFocusController().NextFocusableElementForImeAndAutofill(
                 password, mojom::blink::FocusType::kForward));
+}
+
+TEST_F(FocusControllerTest, ScrollMarkersAreFocusable) {
+  GetDocument().body()->setInnerHTML(
+      "<style>"
+      "#scroller { overflow: scroll; scroll-marker-group: after; }"
+      "#scroller::scroll-marker-group { display: block; }"
+      "#scroller div::scroll-marker { content: ''; }"
+      "#scroller div::scroll-marker:focus { opacity: 0.5; }"
+      "</style>"
+      "<div id='scroller'>"
+      "  <div></div>"
+      "  <div></div>"
+      "</div>");
+  UpdateAllLifecyclePhasesForTest();
+  Element* scroller = GetElementById("scroller");
+  Element* first_scroll_marker =
+      scroller->firstElementChild()->GetPseudoElement(kPseudoIdScrollMarker);
+  ASSERT_TRUE(first_scroll_marker);
+  ASSERT_TRUE(first_scroll_marker->IsScrollMarkerPseudoElement());
+
+  Element* second_scroll_marker =
+      scroller->lastElementChild()->GetPseudoElement(kPseudoIdScrollMarker);
+  ASSERT_TRUE(second_scroll_marker);
+  ASSERT_TRUE(second_scroll_marker->IsScrollMarkerPseudoElement());
+
+  EXPECT_EQ(first_scroll_marker,
+            GetFocusController().FindFocusableElementAfter(
+                *scroller, mojom::blink::FocusType::kForward));
+  EXPECT_EQ(second_scroll_marker,
+            GetFocusController().FindFocusableElementAfter(
+                *first_scroll_marker, mojom::blink::FocusType::kForward));
+  EXPECT_EQ(nullptr,
+            GetFocusController().FindFocusableElementAfter(
+                *second_scroll_marker, mojom::blink::FocusType::kForward));
+
+  EXPECT_EQ(nullptr,
+            GetFocusController().FindFocusableElementAfter(
+                *first_scroll_marker, mojom::blink::FocusType::kBackward));
+  EXPECT_EQ(first_scroll_marker,
+            GetFocusController().FindFocusableElementAfter(
+                *second_scroll_marker, mojom::blink::FocusType::kBackward));
+
+  first_scroll_marker->Focus();
+  GetFocusController().SetActive(true);
+  GetFocusController().SetFocused(true);
+  const auto* style = first_scroll_marker->GetComputedStyle();
+  EXPECT_TRUE(first_scroll_marker->IsFocused());
+  EXPECT_EQ(0.5, style->Opacity());
 }
 
 }  // namespace blink

@@ -31,6 +31,7 @@
 #include "connections/v3/connections_device.h"
 #include "connections/v3/listening_result.h"
 #include "internal/flags/nearby_flags.h"
+#include "internal/platform/feature_flags.h"
 #include "internal/platform/logging.h"
 
 // TODO(b/285657711): Add tests for uncovered logic, even if trivial.
@@ -97,6 +98,11 @@ ServiceControllerRouter::ServiceControllerRouter(bool enable_ble_v2)
     NearbyFlags::GetInstance().OverrideBoolFlagValue(
         config_package_nearby::nearby_connections_feature::kEnableBleV2,
         enable_ble_v2);
+    // CrOS uses the async signature for Scanning and has no support for the
+    // sync version.
+    // TODO(b/333408829): Enable async advertising flag once supported.
+    const_cast<FeatureFlags&>(FeatureFlags::GetInstance())
+        .SetFlags({.enable_ble_v2_async_scanning = true});
   }
 }
 
@@ -446,6 +452,8 @@ void ServiceControllerRouter::RequestConnectionV3(
                           response_info.raw_authentication_token.string_data(),
                       .is_incoming_connection =
                           response_info.is_incoming_connection,
+                      .authentication_status =
+                          response_info.authentication_status,
                   };
                   v3_info.listener.initiated_cb(remote_device, new_info);
                 },

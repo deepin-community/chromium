@@ -190,8 +190,10 @@ export class InspectorView extends VBox implements ViewLocationResolver {
     this.drawerSplitWidget.installResizer(this.drawerTabbedPane.headerElement());
     this.drawerSplitWidget.setSidebarWidget(this.drawerTabbedPane);
     this.drawerTabbedPane.rightToolbar().appendToolbarItem(closeDrawerButton);
-    this.drawerTabbedPane.headerElement().setAttribute(
-        'jslog', `${VisualLogging.toolbar('drawer').track({drag: true})}`);
+    this.drawerTabbedPane.headerElement().setAttribute('jslog', `${VisualLogging.toolbar('drawer').track({
+                                                         drag: true,
+                                                         keydown: 'ArrowUp|ArrowLeft|ArrowDown|ArrowRight|Enter|Space',
+                                                       })}`);
 
     // Create main area tabbed pane.
     this.tabbedLocation = ViewManager.instance().createTabbedLocation(
@@ -222,7 +224,10 @@ export class InspectorView extends VBox implements ViewLocationResolver {
     const mainHeaderElement = this.tabbedPane.headerElement();
     ARIAUtils.markAsNavigation(mainHeaderElement);
     ARIAUtils.setLabel(mainHeaderElement, i18nString(UIStrings.mainToolbar));
-    mainHeaderElement.setAttribute('jslog', `${VisualLogging.toolbar('main').track({drag: true})}`);
+    mainHeaderElement.setAttribute('jslog', `${VisualLogging.toolbar('main').track({
+                                     drag: true,
+                                     keydown: 'ArrowUp|ArrowLeft|ArrowDown|ArrowRight|Enter|Space',
+                                   })}`);
 
     // Store the initial selected panel for use in launch histograms
     Host.userMetrics.setLaunchPanel(this.tabbedPane.selectedTabId);
@@ -402,7 +407,6 @@ export class InspectorView extends VBox implements ViewLocationResolver {
 
   closeDrawerTab(id: string, userGesture?: boolean): void {
     this.drawerTabbedPane.closeTab(id, userGesture);
-    Host.userMetrics.panelClosed(id);
   }
 
   private keyDown(event: Event): void {
@@ -427,6 +431,7 @@ export class InspectorView extends VBox implements ViewLocationResolver {
         if (panelName) {
           if (!Dialog.hasInstance() && !this.currentPanelLocked) {
             void this.showPanel(panelName);
+            void VisualLogging.logKeyDown(null, event, `panel-by-index-${panelName}`);
           }
           event.consume(true);
         }
@@ -473,14 +478,18 @@ export class InspectorView extends VBox implements ViewLocationResolver {
 
   displayReloadRequiredWarning(message: string): void {
     if (!this.reloadRequiredInfobar) {
-      const infobar = new Infobar(InfobarType.Info, message, [
-        {
-          text: i18nString(UIStrings.reloadDevtools),
-          highlight: true,
-          delegate: () => reloadDevTools(),
-          dismiss: false,
-        },
-      ]);
+      const infobar = new Infobar(
+          InfobarType.Info, message,
+          [
+            {
+              text: i18nString(UIStrings.reloadDevtools),
+              highlight: true,
+              delegate: () => reloadDevTools(),
+              dismiss: false,
+              jslogContext: 'main.debug-reload',
+            },
+          ],
+          undefined, undefined, 'reload-required');
       infobar.setParentView(this);
       this.attachInfobar(infobar);
       this.reloadRequiredInfobar = infobar;
@@ -492,14 +501,18 @@ export class InspectorView extends VBox implements ViewLocationResolver {
 
   displaySelectOverrideFolderInfobar(callback: () => void): void {
     if (!this.#selectOverrideFolderInfobar) {
-      const infobar = new Infobar(InfobarType.Info, i18nString(UIStrings.selectOverrideFolder), [
-        {
-          text: i18nString(UIStrings.selectFolder),
-          highlight: true,
-          delegate: () => callback(),
-          dismiss: true,
-        },
-      ]);
+      const infobar = new Infobar(
+          InfobarType.Info, i18nString(UIStrings.selectOverrideFolder),
+          [
+            {
+              text: i18nString(UIStrings.selectFolder),
+              highlight: true,
+              delegate: () => callback(),
+              dismiss: true,
+              jslogContext: 'select-folder',
+            },
+          ],
+          undefined, undefined, 'select-override-folder');
       infobar.setParentView(this);
       this.attachInfobar(infobar);
       this.#selectOverrideFolderInfobar = infobar;
@@ -565,6 +578,7 @@ function createLocaleInfobar(): Infobar {
             reloadDevTools();
           },
           dismiss: true,
+          jslogContext: 'set-to-browser-language',
         },
         {
           text: i18nString(UIStrings.setToSpecificLanguage, {PH1: closestSupportedLanguageInCurrentLocale}),
@@ -575,9 +589,10 @@ function createLocaleInfobar(): Infobar {
             reloadDevTools();
           },
           dismiss: true,
+          jslogContext: 'set-to-specific-language',
         },
       ],
-      getDisableLocaleInfoBarSetting());
+      getDisableLocaleInfoBarSetting(), undefined, 'language-mismatch');
 }
 
 function reloadDevTools(): void {
@@ -616,10 +631,6 @@ export class ActionDelegate implements ActionDelegateInterface {
 export class InspectorViewTabDelegate implements TabbedPaneTabDelegate {
   closeTabs(tabbedPane: TabbedPane, ids: string[]): void {
     tabbedPane.closeTabs(ids, true);
-    // Log telemetry about the closure
-    ids.forEach(id => {
-      Host.userMetrics.panelClosed(id);
-    });
   }
 
   moveToDrawer(tabId: string): void {
@@ -640,9 +651,11 @@ export class InspectorViewTabDelegate implements TabbedPaneTabDelegate {
 
     const locationName = ViewManager.instance().locationNameForViewId(tabId);
     if (locationName === 'drawer-view') {
-      contextMenu.defaultSection().appendItem(i18nString(UIStrings.moveToTop), this.moveToMainPanel.bind(this, tabId));
+      contextMenu.defaultSection().appendItem(
+          i18nString(UIStrings.moveToTop), this.moveToMainPanel.bind(this, tabId), {jslogContext: 'move-to-top'});
     } else {
-      contextMenu.defaultSection().appendItem(i18nString(UIStrings.moveToBottom), this.moveToDrawer.bind(this, tabId));
+      contextMenu.defaultSection().appendItem(
+          i18nString(UIStrings.moveToBottom), this.moveToDrawer.bind(this, tabId), {jslogContext: 'move-to-bottom'});
     }
   }
 }

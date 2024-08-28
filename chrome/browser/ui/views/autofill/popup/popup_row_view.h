@@ -11,10 +11,9 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/autofill/autofill_popup_controller.h"
-#include "chrome/browser/ui/user_education/scoped_new_badge_tracker.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_view_utils.h"
-#include "content/public/common/input/native_web_keyboard_event.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/events/event_handler.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -24,8 +23,6 @@
 namespace content {
 struct NativeWebKeyboardEvent;
 }  // namespace content
-
-class ScopedNewBadgeTracker;
 
 namespace autofill {
 
@@ -74,29 +71,10 @@ class PopupRowView : public views::View, public views::ViewObserver {
                                  PopupCellSelectionSource source) = 0;
   };
 
-  // The tracker for a "new" badge that a row might have.
-  class ScopedNewBadgeTrackerWithAcceptAction {
-   public:
-    ScopedNewBadgeTrackerWithAcceptAction(
-        std::unique_ptr<ScopedNewBadgeTracker> tracker,
-        const char* action_name);
-    ~ScopedNewBadgeTrackerWithAcceptAction();
-
-    ScopedNewBadgeTrackerWithAcceptAction(
-        ScopedNewBadgeTrackerWithAcceptAction&&);
-    ScopedNewBadgeTrackerWithAcceptAction& operator=(
-        ScopedNewBadgeTrackerWithAcceptAction&&);
-
-    // Notifies the tracker that the accept action was performed, i.e. the
-    // feature was opened.
-    void OnSuggestionAccepted();
-
-   private:
-    // The actual badge tracker.
-    std::unique_ptr<ScopedNewBadgeTracker> tracker_;
-    // The name of the action that is triggered on accepting the suggestion.
-    const char* action_name_;
-  };
+  // Returns the margin on the left and right of the row. When hovering in the
+  // content cell, this is the distance one sees between the updated
+  // background and the edge of the row.
+  static int GetHorizontalMargin();
 
   PopupRowView(AccessibilitySelectionDelegate& a11y_selection_delegate,
                SelectionDelegate& selection_delegate,
@@ -106,11 +84,6 @@ class PopupRowView : public views::View, public views::ViewObserver {
   PopupRowView(const PopupRowView&) = delete;
   PopupRowView& operator=(const PopupRowView&) = delete;
   ~PopupRowView() override;
-
-  void set_new_badge_tracker(
-      std::optional<ScopedNewBadgeTrackerWithAcceptAction> new_badge_tracker) {
-    new_badge_tracker_ = std::move(new_badge_tracker);
-  }
 
   // views::View:
   bool OnMouseDragged(const ui::MouseEvent& event) override;
@@ -138,8 +111,7 @@ class PopupRowView : public views::View, public views::ViewObserver {
 
   // Attempts to process a key press `event`. Returns true if it did (and the
   // parent no longer needs to handle it).
-  virtual bool HandleKeyPressEvent(
-      const content::NativeWebKeyboardEvent& event);
+  virtual bool HandleKeyPressEvent(const input::NativeWebKeyboardEvent& event);
 
   // Returns the view representing the content area of the row.
   PopupRowContentView& GetContentView() { return *content_view_; }
@@ -149,20 +121,35 @@ class PopupRowView : public views::View, public views::ViewObserver {
     return expand_child_suggestions_view_.get();
   }
 
+  views::View* GetExpandChildSuggestionsIconViewForTesting() {
+    return expand_child_suggestions_view_icon_.get();
+  }
+
  protected:
   base::WeakPtr<AutofillPopupController> controller() { return controller_; }
 
   int line_number() const { return line_number_; }
 
  private:
-  void RunOnAcceptedForEvent(const ui::Event& event);
-
   AccessibilitySelectionDelegate& GetA11ySelectionDelegate() {
     return a11y_selection_delegate_.get();
   }
 
+  // Updates all UI parts that may have changed based on the current state,
+  // for now they are the background and expand control visibility.
+  void UpdateUI();
+
   // Updates the background according to the control cell highlighting state.
   void UpdateBackground();
+
+  // Updates the expand subpopup icon visibility. By default the icon is
+  // always visible in the case children suggestion exist. The exception is when
+  // `CanUpdateOpenSubPopupIconVisibilityOnHover()` returns true. In this case
+  // the icon is visible only when a cell is selected (e.g. when the row is
+  // hovered) or the sub-popup is open.
+  // TODO(crbug.com/40274514): Maybe remove this method once experiment is
+  // complete.
+  void UpdateOpenSubPopupIconVisibility();
 
   // The delegate used for accessibility announcements (implemented by the
   // parent view).
@@ -173,17 +160,19 @@ class PopupRowView : public views::View, public views::ViewObserver {
   const base::WeakPtr<AutofillPopupController> controller_;
   // The position of the row in the vertical list of suggestions.
   const int line_number_;
-  // A tracker for "new" badges inside a cell. If set, it logs a performed
-  // action on accepting the suggestion.
-  std::optional<ScopedNewBadgeTrackerWithAcceptAction> new_badge_tracker_;
 
   // Which (if any) cell of this row is currently selected.
   std::optional<CellType> selected_cell_;
 
   // The view wrapping the content area of the row.
   raw_ptr<PopupRowContentView> content_view_ = nullptr;
+  base::ScopedObservation<PopupRowContentView, views::ViewObserver>
+      content_view_observer_{this};
   // The view wrapping the control area of the row.
   raw_ptr<views::View> expand_child_suggestions_view_ = nullptr;
+  raw_ptr<views::View> expand_child_suggestions_view_icon_ = nullptr;
+  base::ScopedObservation<views::View, views::ViewObserver>
+      expand_child_suggestions_view_observer_{this};
 
   // Overriding event handles for the content and control views.
   std::unique_ptr<ui::EventHandler> content_event_handler_;

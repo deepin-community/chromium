@@ -62,9 +62,9 @@ std::vector<SelectOption> Get4DigitYears() {
 std::vector<SelectOption> Get2DigitYears() {
   std::vector<SelectOption> years = Get4DigitYears();
   for (SelectOption& option : years) {
-    DCHECK_EQ(option.content.size(), 4u);
+    DCHECK_EQ(option.text.size(), 4u);
     DCHECK_EQ(option.value.size(), 4u);
-    option.content = option.content.substr(2);
+    option.text = option.text.substr(2);
     option.value = option.value.substr(2);
   }
   return years;
@@ -73,8 +73,8 @@ std::vector<SelectOption> Get2DigitYears() {
 // Adds prefixes and postfixes to options and labels.
 std::vector<SelectOption> WithNoise(std::vector<SelectOption> options) {
   for (SelectOption& option : options) {
-    option.content = base::StrCat({u"bla", option.content, u"123"});
-    option.value = base::StrCat({u"bla", option.content, u"123"});
+    option.text = base::StrCat({u"bla", option.text, u"123"});
+    option.value = base::StrCat({u"bla", option.text, u"123"});
   }
   return options;
 }
@@ -150,7 +150,7 @@ TEST_P(CreditCardFieldParserTest, ParseMiniumCreditCardWith2DigitYearHint) {
   AddTextFormFieldData("card_number", "Card Number", CREDIT_CARD_NUMBER);
   AddTextFormFieldData("ccmonth", "Exp Month", CREDIT_CARD_EXP_MONTH);
   AddTextFormFieldData("ccyear", "Exp Year", CREDIT_CARD_EXP_2_DIGIT_YEAR);
-  fields_.back()->placeholder = u"YY";
+  fields_.back()->set_placeholder(u"YY");
   ClassifyAndVerify(ParseResult::kParsed);
 }
 
@@ -163,8 +163,8 @@ TEST_P(CreditCardFieldParserTest, ParseMiniumCreditCardWithMaxLength) {
   AddTextFormFieldData("ccyear", "Exp Year", CREDIT_CARD_EXP_2_DIGIT_YEAR);
   // Even though the placehodler indicates YYYY, the max-length only enables
   // a YY expiration format.
-  fields_.back()->max_length = 2u;
-  fields_.back()->placeholder = u"YYYY";
+  fields_.back()->set_max_length(2u);
+  fields_.back()->set_placeholder(u"YYYY");
   ClassifyAndVerify(ParseResult::kParsed);
 }
 
@@ -578,7 +578,7 @@ TEST_P(CreditCardFieldParserTest, ParseCreditCardContextualNameNotCard) {
 
 TEST_P(CreditCardFieldParserTest,
        ParseCreditCardContextualNameNotCardAcctMatch) {
-  // TODO(crbug.com/1167977): This should be not parseable, but waiting before
+  // TODO(crbug.com/40743092): This should be not parseable, but waiting before
   // changing kNameOnCardRe to use word boundaries.
   AddTextFormFieldData("acctNum", "Account ID", CREDIT_CARD_NUMBER);
   AddTextFormFieldData("acctName", "Account Name", CREDIT_CARD_NAME_FULL);
@@ -734,8 +734,8 @@ TEST_P(DetermineExpirationDateFormat, TestDetermineFormat) {
   SCOPED_TRACE(test_case().is_server_override);
 
   AutofillField field;
-  field.max_length = test_case().max_length;
-  field.label = base::UTF8ToUTF16(test_case().label);
+  field.set_max_length(test_case().max_length);
+  field.set_label(base::UTF8ToUTF16(test_case().label));
 
   FieldType fallback_type = CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR;
 

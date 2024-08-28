@@ -137,9 +137,6 @@ struct ProcessManager::BackgroundPageData {
   // if the IDs ever differ due to new activity.
   uint64_t close_sequence_id = 0ull;
 
-  // Keeps track of when this page was last suspended. Used for perf metrics.
-  std::unique_ptr<base::ElapsedTimer> since_suspended;
-
   ActivitiesMultiset activities;
 };
 
@@ -168,7 +165,7 @@ struct ProcessManager::ExtensionRenderFrameData {
       case extensions::mojom::ViewType::kExtensionSidePanel:
         return false;
     }
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return false;
   }
 };
@@ -351,6 +348,11 @@ bool ProcessManager::CreateBackgroundHost(const Extension* extension,
   // Don't create multiple background hosts for an extension.
   if (GetBackgroundHostForExtension(extension->id()))
     return true;  // TODO(kalman): return false here? It might break things...
+
+  // Don't create a background host when the BrowserContext is shutting down.
+  if (browser_context_->ShutdownStarted()) {
+    return false;
+  }
 
   DVLOG(1) << "CreateBackgroundHost " << extension->id();
   ExtensionHost* host =
@@ -667,14 +669,6 @@ void ProcessManager::OnBackgroundHostCreated(ExtensionHost* host) {
   background_hosts_.insert(host);
   host->AddObserver(this);
 
-  if (BackgroundInfo::HasLazyBackgroundPage(host->extension())) {
-    std::unique_ptr<base::ElapsedTimer> since_suspended = std::move(
-        background_page_data_[host->extension()->id()].since_suspended);
-    if (since_suspended.get()) {
-      UMA_HISTOGRAM_LONG_TIMES("Extensions.EventPageIdleTime",
-                               since_suspended->Elapsed());
-    }
-  }
   for (auto& observer : observer_list_)
     observer.OnBackgroundHostCreated(host);
 }
@@ -979,7 +973,7 @@ void ProcessManager::UnregisterExtension(const ExtensionId& extension_id) {
 }
 
 void ProcessManager::RegisterServiceWorker(const WorkerId& worker_id) {
-  all_extension_workers_.Add(worker_id);
+  all_extension_workers_.Add(worker_id, browser_context_);
   worker_context_ids_[worker_id] = base::Uuid::GenerateRandomV4();
 
   // Observe the RenderProcessHost for cleaning up on process shutdown.
@@ -1042,8 +1036,6 @@ void ProcessManager::OnExtensionHostDestroyed(ExtensionHost* host) {
   background_hosts_.erase(host);
   // Note: |host->extension()| may be null at this point.
   ClearBackgroundPageData(host->extension_id());
-  background_page_data_[host->extension_id()].since_suspended =
-      std::make_unique<base::ElapsedTimer>();
 }
 
 void ProcessManager::HandleCloseExtensionHost(ExtensionHost* host) {
@@ -1055,11 +1047,51 @@ void ProcessManager::HandleCloseExtensionHost(ExtensionHost* host) {
 }
 
 void ProcessManager::UnregisterServiceWorker(const WorkerId& worker_id) {
-  // TODO(lazyboy): DCHECK that |worker_id| exists in |all_extension_workers_|.
+  // TODO(crbug.com/40936639): Remove the ability for multiple workers to be
+  // stored for an extension and then remove all these similar checks and loops
+  // that are assuming there can be more than one.
+  if (!all_extension_workers_.Contains(worker_id)) {
+    // Multiple notifications can try to remove a worker when the worker
+    // stops (DidStopServiceWorkerContext(),
+    // ProcessManager::RenderProcessExit(), or extension uninstall/disable).
+    return;
+  }
+
   all_extension_workers_.Remove(worker_id);
   worker_context_ids_.erase(worker_id);
   for (auto& observer : observer_list_)
     observer.OnServiceWorkerUnregistered(worker_id);
+}
+
+// TODO(crbug.com/40936639): Deduplicate this method with it's other overload
+// once multi workers per extension is fixed.
+void ProcessManager::UnregisterServiceWorker(const ExtensionId& extension_id,
+                                             int64_t worker_version_id) {
+  // We need the specific version because an extension could be
+  // re-activated before UnregisterServiceWorker() is called. In that case we
+  // might try to unregister the new version of the running worker if we don't
+  // check the version id.
+  std::vector<WorkerId> worker_ids_for_extension =
+      all_extension_workers_.GetAllForExtension(extension_id,
+                                                worker_version_id);
+
+  if (worker_ids_for_extension.empty()) {
+    // Multiple notifications can try to remove a worker when the worker
+    // stops (DidStopServiceWorkerContext(),
+    // ProcessManager::RenderProcessExit(), or extension uninstall/disable).
+    return;
+  }
+
+  // TODO(crbug.com/40936639): After the fix releases there should only be one
+  // worker registered for each extension at any time. If there is still more
+  // than one then do not delete it so we will count it and know about it.
+  // Confirm more thoroughly with DUMP_WILL_BE_CHECK() if metrics look
+  // promising.
+  if (worker_ids_for_extension.size() > 1u) {
+    return;
+  }
+
+  UnregisterServiceWorker(worker_ids_for_extension[0]);
 }
 
 bool ProcessManager::HasServiceWorker(const WorkerId& worker_id) const {

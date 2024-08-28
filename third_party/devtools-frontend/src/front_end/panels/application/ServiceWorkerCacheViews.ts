@@ -34,7 +34,7 @@ const UIStrings = {
   /**
    *@description Text in Service Worker Cache Views of the Application panel
    */
-  filterByPath: 'Filter by Path',
+  filterByPath: 'Filter by path',
   /**
    *@description Text in Service Worker Cache Views of the Application panel
    */
@@ -142,7 +142,7 @@ export class ServiceWorkerCacheView extends UI.View.SimpleView {
     });
     editorToolbar.appendToolbarItem(this.deleteSelectedButton);
 
-    const entryPathFilterBox = new UI.Toolbar.ToolbarInput(i18nString(UIStrings.filterByPath), '', 1);
+    const entryPathFilterBox = new UI.Toolbar.ToolbarFilter(i18nString(UIStrings.filterByPath), 1);
     editorToolbar.appendToolbarItem(entryPathFilterBox);
     const entryPathFilterThrottler = new Common.Throttler.Throttler(300);
     this.entryPathFilter = '';
@@ -382,7 +382,8 @@ export class ServiceWorkerCacheView extends UI.View.SimpleView {
     if ((!this.cache.inBucket(storageBucket) || this.cache.cacheName !== cacheName)) {
       return;
     }
-    void this.refreshThrottler.schedule(() => Promise.resolve(this.updateData(true)), true);
+    void this.refreshThrottler.schedule(
+        () => Promise.resolve(this.updateData(true)), Common.Throttler.Scheduling.AsSoonAsPossible);
   }
 
   private async previewCachedResponse(request: SDK.NetworkRequest.NetworkRequest): Promise<void> {
@@ -446,10 +447,6 @@ export class ServiceWorkerCacheView extends UI.View.SimpleView {
 
   private updatedForTest(): void {
   }
-
-  // TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration)
-  // eslint-disable-next-line @typescript-eslint/naming-convention
-  private static readonly previewSymbol = Symbol('preview');
 }
 
 const networkRequestToPreview = new WeakMap<SDK.NetworkRequest.NetworkRequest, RequestView>();

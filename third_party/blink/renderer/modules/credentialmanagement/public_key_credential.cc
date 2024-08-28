@@ -13,14 +13,14 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_authentication_response_js_on.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_public_key_credential_creation_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_registration_response_js_on.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_union_authenticationresponsejson_registrationresponsejson.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/modules/credentialmanagement/credential_manager_proxy.h"
 #include "third_party/blink/renderer/modules/credentialmanagement/json.h"
-#include "third_party/blink/renderer/modules/credentialmanagement/scoped_promise_resolver.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "v8/include/v8-local-handle.h"
+#include "v8/include/v8-value.h"
 
 namespace blink {
 
@@ -28,10 +28,9 @@ namespace {
 // https://www.w3.org/TR/webauthn/#dom-publickeycredential-type-slot:
 constexpr char kPublicKeyCredentialType[] = "public-key";
 
-void OnIsUserVerifyingComplete(
-    std::unique_ptr<ScopedPromiseResolver> scoped_resolver,
-    bool available) {
-  scoped_resolver->Release()->Resolve(available);
+void OnIsUserVerifyingComplete(ScriptPromiseResolver<IDLBoolean>* resolver,
+                               bool available) {
+  resolver->Resolve(available);
 }
 
 std::optional<std::string> AuthenticatorAttachmentToString(
@@ -62,19 +61,21 @@ PublicKeyCredential::PublicKeyCredential(
       extension_outputs_(extension_outputs) {}
 
 // static
-ScriptPromise
+ScriptPromise<IDLBoolean>
 PublicKeyCredential::isUserVerifyingPlatformAuthenticatorAvailable(
     ScriptState* script_state) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
-
   // Ignore calls if the current realm execution context is no longer valid,
   // e.g., because the responsible document was detached.
-  DCHECK(resolver->GetExecutionContext());
-  if (resolver->GetExecutionContext()->IsContextDestroyed()) {
-    resolver->Reject();
-    return promise;
+  if (!script_state->ContextIsValid()) {
+    return ScriptPromise<IDLBoolean>::RejectWithDOMException(
+        script_state,
+        MakeGarbageCollected<DOMException>(DOMExceptionCode::kInvalidStateError,
+                                           "Context is detached"));
   }
+
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(script_state);
+  auto promise = resolver->Promise();
 
   UseCounter::Count(
       resolver->GetExecutionContext(),
@@ -84,8 +85,7 @@ PublicKeyCredential::isUserVerifyingPlatformAuthenticatorAvailable(
   auto* authenticator =
       CredentialManagerProxy::From(script_state)->Authenticator();
   authenticator->IsUserVerifyingPlatformAuthenticatorAvailable(
-      WTF::BindOnce(&OnIsUserVerifyingComplete,
-                    std::make_unique<ScopedPromiseResolver>(resolver)));
+      WTF::BindOnce(&OnIsUserVerifyingComplete, WrapPersistent(resolver)));
   return promise;
 }
 
@@ -96,10 +96,11 @@ PublicKeyCredential::getClientExtensionResults() const {
 }
 
 // static
-ScriptPromise PublicKeyCredential::isConditionalMediationAvailable(
+ScriptPromise<IDLBoolean> PublicKeyCredential::isConditionalMediationAvailable(
     ScriptState* script_state) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(script_state);
+  auto promise = resolver->Promise();
 
   // Ignore calls if the current realm execution context is no longer valid,
   // e.g., because the responsible document was detached.
@@ -113,56 +114,60 @@ ScriptPromise PublicKeyCredential::isConditionalMediationAvailable(
       WebFeature::kCredentialManagerIsConditionalMediationAvailable);
   auto* authenticator =
       CredentialManagerProxy::From(script_state)->Authenticator();
-  authenticator->IsConditionalMediationAvailable(WTF::BindOnce(
-      [](std::unique_ptr<ScopedPromiseResolver> resolver, bool available) {
-        resolver->Release()->Resolve(available);
-      },
-      std::make_unique<ScopedPromiseResolver>(resolver)));
+  authenticator->IsConditionalMediationAvailable(
+      WTF::BindOnce([](ScriptPromiseResolver<IDLBoolean>* resolver,
+                       bool available) { resolver->Resolve(available); },
+                    WrapPersistent(resolver)));
   return promise;
 }
 
-const V8UnionAuthenticationResponseJSONOrRegistrationResponseJSON*
-PublicKeyCredential::toJSON(ScriptState* script_state) const {
+v8::Local<v8::Value> PublicKeyCredential::toJSON(
+    ScriptState* script_state) const {
   // PublicKeyCredential.response holds an AuthenticatorAttestationResponse, if
   // it was returned from a create call, or an AuthenticatorAssertionResponse
   // if returned from a get() call. In the former case, the spec wants us to
   // return a RegistrationResponseJSON, and in the latter an
   // AuthenticationResponseJSON.  We can't reflect the type of `response_`
-  // though, so we serialize it to JSON first and branch on the output.
+  // though, so we serialize it to JSON first and branch on the result type.
   absl::variant<AuthenticatorAssertionResponseJSON*,
                 AuthenticatorAttestationResponseJSON*>
       response_json = response_->toJSON();
 
-  // RegistrationResponseJSON and AuthenticationResponseJSON define the same
-  // fields, so we can conveniently use the same lambda for converting either.
-  auto init_fields = [this, script_state](auto* json, auto* response) {
-    json->setId(id());
-    json->setRawId(WebAuthnBase64UrlEncode(rawId()));
-    json->setResponse(response);
-    if (authenticator_attachment_.has_value()) {
-      json->setAuthenticatorAttachment(*authenticator_attachment_);
-    }
-    json->setClientExtensionResults(AuthenticationExtensionsClientOutputsToJSON(
-        script_state, *extension_outputs_));
-    json->setType(type());
-  };
-
-  V8UnionAuthenticationResponseJSONOrRegistrationResponseJSON* result;
+  // The return type of `toJSON()` is `PublicKeyCredentialJSON` which just
+  // aliases `object`, and thus this method just returns a `Value`.
+  v8::Local<v8::Value> result;
   absl::visit(
       base::Overloaded{
-          [&](AuthenticatorAttestationResponseJSON* json_response) {
-            auto* json = RegistrationResponseJSON::Create();
-            init_fields(json, json_response);
-            result = MakeGarbageCollected<
-                V8UnionAuthenticationResponseJSONOrRegistrationResponseJSON>(
-                json);
+          [&](AuthenticatorAttestationResponseJSON* attestation_response) {
+            auto* registration_response = RegistrationResponseJSON::Create();
+            registration_response->setId(id());
+            registration_response->setRawId(WebAuthnBase64UrlEncode(rawId()));
+            registration_response->setResponse(attestation_response);
+            if (authenticator_attachment_.has_value()) {
+              registration_response->setAuthenticatorAttachment(
+                  *authenticator_attachment_);
+            }
+            registration_response->setClientExtensionResults(
+                AuthenticationExtensionsClientOutputsToJSON(
+                    script_state, *extension_outputs_));
+            registration_response->setType(type());
+            result = registration_response->ToV8(script_state);
           },
-          [&](AuthenticatorAssertionResponseJSON* json_response) {
-            auto* json = AuthenticationResponseJSON::Create();
-            init_fields(json, json_response);
-            result = MakeGarbageCollected<
-                V8UnionAuthenticationResponseJSONOrRegistrationResponseJSON>(
-                json);
+          [&](AuthenticatorAssertionResponseJSON* assertion_response) {
+            auto* authentication_response =
+                AuthenticationResponseJSON::Create();
+            authentication_response->setId(id());
+            authentication_response->setRawId(WebAuthnBase64UrlEncode(rawId()));
+            authentication_response->setResponse(assertion_response);
+            if (authenticator_attachment_.has_value()) {
+              authentication_response->setAuthenticatorAttachment(
+                  *authenticator_attachment_);
+            }
+            authentication_response->setClientExtensionResults(
+                AuthenticationExtensionsClientOutputsToJSON(
+                    script_state, *extension_outputs_));
+            authentication_response->setType(type());
+            result = authentication_response->ToV8(script_state);
           }},
       response_json);
   return result;
@@ -174,8 +179,18 @@ PublicKeyCredential::parseCreationOptionsFromJSON(
     ScriptState* script_state,
     const PublicKeyCredentialCreationOptionsJSON* options,
     ExceptionState& exception_state) {
-  return PublicKeyCredentialOptionsFromJSON(script_state, options,
-                                            exception_state);
+  return PublicKeyCredentialCreationOptionsFromJSON(script_state, options,
+                                                    exception_state);
+}
+
+// static
+const PublicKeyCredentialRequestOptions*
+PublicKeyCredential::parseRequestOptionsFromJSON(
+    ScriptState* script_state,
+    const PublicKeyCredentialRequestOptionsJSON* options,
+    ExceptionState& exception_state) {
+  return PublicKeyCredentialRequestOptionsFromJSON(script_state, options,
+                                                   exception_state);
 }
 
 void PublicKeyCredential::Trace(Visitor* visitor) const {

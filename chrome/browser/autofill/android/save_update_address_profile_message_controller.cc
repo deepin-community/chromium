@@ -73,6 +73,7 @@ void SaveUpdateAddressProfileMessageController::DisplayMessage(
   message_->SetDescription(GetDescription());
   message_->SetDescriptionMaxLines(kDescriptionMaxLines);
   message_->SetPrimaryButtonText(GetPrimaryButtonText());
+  message_->SetPrimaryButtonTextMaxLines(1);
   message_->SetIconResourceId(ResourceMapper::MapToJavaDrawableId(
       is_migration_to_account ? IDR_ANDROID_AUTOFILL_UPLOAD_ADDRESS
                               : IDR_ANDROID_AUTOFILL_ADDRESS));
@@ -102,18 +103,17 @@ void SaveUpdateAddressProfileMessageController::OnMessageDismissed(
     case messages::DismissReason::GESTURE:
       // User explicitly dismissed the message.
       RunSaveAddressProfileCallback(
-          AutofillClient::SaveAddressProfileOfferUserDecision::
-              kMessageDeclined);
+          AutofillClient::AddressPromptUserDecision::kMessageDeclined);
       break;
     case messages::DismissReason::TIMER:
       // The message was auto-dismissed after a timeout.
       RunSaveAddressProfileCallback(
-          AutofillClient::SaveAddressProfileOfferUserDecision::kMessageTimeout);
+          AutofillClient::AddressPromptUserDecision::kMessageTimeout);
       break;
     default:
       // Dismissal for any other reason.
       RunSaveAddressProfileCallback(
-          AutofillClient::SaveAddressProfileOfferUserDecision::kIgnored);
+          AutofillClient::AddressPromptUserDecision::kIgnored);
       break;
   }
 
@@ -138,7 +138,7 @@ void SaveUpdateAddressProfileMessageController::DismissMessage() {
 }
 
 void SaveUpdateAddressProfileMessageController::RunSaveAddressProfileCallback(
-    AutofillClient::SaveAddressProfileOfferUserDecision decision) {
+    AutofillClient::AddressPromptUserDecision decision) {
   std::move(save_address_profile_callback_).Run(decision, std::nullopt);
   primary_action_callback_.Reset();
 }

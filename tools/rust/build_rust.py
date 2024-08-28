@@ -29,7 +29,7 @@ for building and shipping bindgen.
 Ideally our build would begin with our own trusted stage0 rustc. As it is
 simpler, for now we use an official build.
 
-TODO(https://crbug.com/1245714): Do a proper 3-stage build
+TODO(crbug.com/40196262): Do a proper 3-stage build
 
 '''
 
@@ -71,21 +71,14 @@ EXCLUDED_TESTS = [
     os.path.join('tests', 'codegen', 'issue-45222.rs'),
     # https://github.com/rust-lang/rust/issues/96497
     os.path.join('tests', 'codegen', 'issue-96497-slice-size-nowrap.rs'),
-    # TODO(https://crbug.com/1515111): remove after rolling rust with fix
-    os.path.join('tests', 'codegen', 'abi-main-signature-32bit-c-int.rs'),
-    # TODO(https://crbug.com/1513478): remove after rolling rust with fix
-    os.path.join('tests', 'ui', 'asm', 'inline-syntax.rs'),
-    # TODO(https://crbug.com/324853415): benign failure; remove when fixed.
-    os.path.join('tests', 'codegen', 'iter-repeat-n-trivial-drop.rs'),
+    # TODO(crbug.com/342026487): benign failure; remove when fixed.
+    os.path.join('tests', 'codegen', 'vec-in-place.rs'),
 ]
 EXCLUDED_TESTS_WINDOWS = [
     # https://github.com/rust-lang/rust/issues/96464
     os.path.join('tests', 'codegen', 'vec-shrink-panik.rs'),
 ]
 EXCLUDED_TESTS_MAC = [
-    # https://crbug.com/1479875 This fails on Mac. It relates to the large code
-    # model which we don't use, so suppress it for now.
-    os.path.join('tests', 'ui', 'thread-local', 'thread-local-issue-37508.rs'),
     # https://crbug.com/1521497 These fail on Mac.
     os.path.join('tests', 'ui', 'abi', 'stack-probes-lto.rs#x64'),
     os.path.join('tests', 'ui', 'abi', 'stack-probes.rs#x64'),
@@ -105,9 +98,10 @@ RUST_GIT_URL = ('https://chromium.googlesource.com/external/' +
                 'github.com/rust-lang/rust')
 
 RUST_SRC_DIR = os.path.join(THIRD_PARTY_DIR, 'rust-src')
+RUST_BUILD_DIR = os.path.join(RUST_SRC_DIR, 'build')
 RUST_BOOTSTRAP_DIST_RS = os.path.join(RUST_SRC_DIR, 'src', 'bootstrap',
                                       'dist.rs')
-STAGE0_JSON_PATH = os.path.join(RUST_SRC_DIR, 'src', 'stage0.json')
+STAGE0_JSON_PATH = os.path.join(RUST_SRC_DIR, 'src', 'stage0')
 # Download crates.io dependencies to rust-src subdir (rather than $HOME/.cargo)
 CARGO_HOME_DIR = os.path.join(RUST_SRC_DIR, 'cargo-home')
 RUST_SRC_VERSION_FILE_PATH = os.path.join(RUST_SRC_DIR, 'src', 'version')
@@ -147,7 +141,7 @@ OPENSSL_CIPD_MAC_AMD_PATH = 'infra/3pp/static_libs/openssl/mac-amd64'
 OPENSSL_CIPD_MAC_AMD_VERSION = '1.1.1j.chromium.2'
 OPENSSL_CIPD_MAC_ARM_PATH = 'infra/3pp/static_libs/openssl/mac-arm64'
 OPENSSL_CIPD_MAC_ARM_VERSION = '1.1.1j.chromium.2'
-# TODO(crbug.com/1271215): Pull Windows OpenSSL from 3pp when it exists.
+# TODO(crbug.com/40205621): Pull Windows OpenSSL from 3pp when it exists.
 
 if sys.platform == 'win32':
     LD_PATH_FLAG = '/LIBPATH:'
@@ -157,12 +151,6 @@ else:
 BUILD_TARGETS = [
     'library/proc_macro', 'library/std', 'src/tools/cargo', 'src/tools/clippy',
     'src/tools/rustfmt'
-]
-
-# Desired tools and libraries in our Rust toolchain.
-DISTRIBUTION_ARTIFACTS = [
-    'cargo', 'clippy', 'compiler/rustc', 'library/std', 'rust-analyzer',
-    'rustfmt', 'src'
 ]
 
 # Which test suites to run. Any failure will fail the build.
@@ -207,7 +195,7 @@ def VerifyStage0JsonHash():
     if actual_hash == STAGE0_JSON_SHA256:
         return
 
-    print('src/stage0.json hash is different than expected!')
+    print('src/stage0 hash is different than expected!')
     print('Expected hash: ' + STAGE0_JSON_SHA256)
     print('Actual hash:   ' + actual_hash)
     sys.exit(1)
@@ -224,21 +212,23 @@ def FetchBetaPackage(name, rust_git_hash, triple=None):
     triple = triple if triple else RustTargetTriple()
     filename = f'{name}-beta-{triple}'
 
-    # Pull the stage0 JSON to find the package intended to be used to
-    # build this version of the Rust compiler.
+    # Pull the stage0 to find the package intended to be used to build this
+    # version of the Rust compiler.
     STAGE0_JSON_URL = (
         'https://chromium.googlesource.com/external/github.com/'
-        'rust-lang/rust/+/{GIT_HASH}/src/stage0.json?format=TEXT')
+        'rust-lang/rust/+/{GIT_HASH}/src/stage0?format=TEXT')
     base64_text = urllib.request.urlopen(
         STAGE0_JSON_URL.format(GIT_HASH=rust_git_hash)).read().decode("utf-8")
-    stage0 = json.loads(base64.b64decode(base64_text))
+    stage0 = base64.b64decode(base64_text).decode("utf-8")
+    lines = stage0.splitlines()
 
-    # The stage0 JSON contains the path to all tarballs it uses binaries from.
-    for k in stage0['checksums_sha256'].keys():
-        if k.endswith(filename + '.tar.gz'):
-            package_tgz = k
+    # The stage0 file contains the path to all tarballs it uses binaries from.
+    for l in lines:
+        if l.startswith('dist_server='):
+            server = l.split('=')[1]
+        if (filename + '.tar.gz') in l:
+            package_tgz = l.split('=')[0]
 
-    server = stage0['config']['dist_server']
     DownloadAndUnpack(f'{server}/{package_tgz}', LLVM_BUILD_TOOLS_DIR)
     return os.path.join(LLVM_BUILD_TOOLS_DIR, filename)
 
@@ -291,6 +281,7 @@ class XPy:
     runs. '''
 
     def __init__(self, zlib_path, libxml2_dirs, debian_sysroot, verbose):
+        self._debian_sysroot = debian_sysroot
         self._env = collections.defaultdict(str, os.environ)
         self._verbose = verbose
         self._llvm_bins_path = os.path.join(RUST_HOST_LLVM_INSTALL_DIR, 'bin')
@@ -339,11 +330,9 @@ class XPy:
             self._env['CXXFLAGS'] += f' -isysroot {sdk_path}'
             self._env['LDFLAGS'] += f' -isysroot {sdk_path}'
             self._env['RUSTFLAGS_BOOTSTRAP'] += (
-                f' -Clink-arg=-isysroot -Clink-arg={sdk_path} -Clink-arg=-Wl,-no_fixup_chains'
-            )
+                f' -Clink-arg=-isysroot -Clink-arg={sdk_path}')
             self._env['RUSTFLAGS_NOT_BOOTSTRAP'] += (
-                f' -Clink-arg=-isysroot -Clink-arg={sdk_path} -Clink-arg=-Wl,-no_fixup_chains'
-            )
+                f' -Clink-arg=-isysroot -Clink-arg={sdk_path}')
             # Rust compiletests don't get any of the RUSTFLAGS that we set here
             # and then the clang linker can't find `-lSystem`, unless we set the
             # `SDKROOT`.
@@ -375,7 +364,9 @@ class XPy:
             self._env['CXXFLAGS'] += f' {sysroot_cflag}'
             self._env['LDFLAGS'] += f' {sysroot_cflag}'
 
-            self._env['RUSTFLAGS'] += f' -Clink-arg={sysroot_cflag}'
+            self._env['RUSTFLAGS_BOOTSTRAP'] += f' -Clink-arg={sysroot_cflag}'
+            self._env[
+                'RUSTFLAGS_NOT_BOOTSTRAP'] += f' -Clink-arg={sysroot_cflag}'
 
             # pkg-config will by default look for system-wide libs. This tells
             # it to look exclusively in the sysroot instead.
@@ -432,9 +423,31 @@ class XPy:
         subs['LLVM_BIN'] = quote_string(str(self._llvm_bins_path))
         subs['PACKAGE_VERSION'] = GetRustClangRevision()
 
+        # FIXME: Remove after next rust roll.
+        if RUST_REVISION == 'ab71ee7a9214c2793108a41efb065aa77aeb7326':
+            subs['CHANGELOG_SEEN'] = '''\
+# Suppress x.py warning about configuration changes
+changelog-seen = 2'''
+        else:
+            subs['CHANGELOG_SEEN'] = ''
+
         # ...and apply substitutions, writing to config.toml in Rust tree.
         with open(os.path.join(RUST_SRC_DIR, 'config.toml'), 'w') as output:
             output.write(template.substitute(subs))
+
+        if self._debian_sysroot:
+            # Similarly, generate a Cargo config.toml in CARGO_HOME_DIR.
+            with open(RUST_CARGO_CONFIG_TEMPLATE_PATH, 'r') as input:
+                template = string.Template(input.read())
+
+            subs = {}
+            subs['DEBIAN_SYSROOT'] = quote_string(str(self._debian_sysroot))
+
+            if not os.path.exists(CARGO_HOME_DIR):
+                os.makedirs(CARGO_HOME_DIR)
+            with open(os.path.join(CARGO_HOME_DIR, 'config.toml'),
+                      'w') as output:
+                output.write(template.substitute(subs))
 
     def run(self, sub, args):
         ''' Run x.py subcommand with specified args. '''
@@ -606,10 +619,6 @@ def GitApplyCherryPicks():
     GitCherryPick(RUST_SRC_DIR, 'https://github.com/rust-lang/rust.git',
                   '14947b410ad23a09251180af50486e247f70b465')
 
-    # TODO: Remove once https://github.com/rust-lang/rust/issues/120830 is resolved.
-    GitCherryPick(RUST_SRC_DIR, 'https://github.com/rust-lang/rust.git',
-                  '64fe2093da164e63a7e56fceaf9aa62e6731ad55')
-
     print('Finished applying cherry-picks.')
 
 
@@ -688,7 +697,7 @@ def main():
     else:
         libxml2_dirs = None
 
-    # TODO(crbug.com/1271215): OpenSSL is somehow already present on the Windows
+    # TODO(crbug.com/40205621): OpenSSL is somehow already present on the Windows
     # builder, but we should change to using a package from 3pp when it is
     # available.
     if (sys.platform != 'win32' and not args.sync_for_gnrt):
@@ -777,9 +786,11 @@ def main():
     building_on_host_triple = RustTargetTriple()
     xpy_args = ['--build', building_on_host_triple]
 
+    # Delete the build directory.
     if not args.skip_clean:
-        print('Cleaning build artifacts...')
-        xpy.run('clean', xpy_args)
+        print('Clearing build directory...')
+        if os.path.exists(RUST_BUILD_DIR):
+            RmTree(RUST_BUILD_DIR)
 
     if not args.skip_test:
         print(f'Building stage 2 artifacts and running tests...')
@@ -800,8 +811,7 @@ def main():
     if os.path.exists(RUST_TOOLCHAIN_OUT_DIR):
         RmTree(RUST_TOOLCHAIN_OUT_DIR)
 
-    artifacts = DISTRIBUTION_ARTIFACTS
-    xpy.run('install', xpy_args + artifacts)
+    xpy.run('install', [])
 
     # Copy additional vendored crates required for building stdlib.
     print(f'Copying vendored dependencies to {RUST_TOOLCHAIN_OUT_DIR} ...')

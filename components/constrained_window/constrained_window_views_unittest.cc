@@ -100,7 +100,8 @@ class ConstrainedWindowViewsTest : public views::ViewsTestBase {
 
     // Create a dialog host sufficiently large enough to accommodate dialog
     // size changes during testing.
-    dialog_host_widget_ = CreateTestWidget();
+    dialog_host_widget_ =
+        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
     dialog_host_widget_->SetBounds(GetPrimaryDisplayWorkArea());
     dialog_host_ = std::make_unique<web_modal::TestWebContentsModalDialogHost>(
         dialog_host_widget_->GetNativeView());
@@ -108,7 +109,7 @@ class ConstrainedWindowViewsTest : public views::ViewsTestBase {
 
     // Make sure the dialog size is dominated by the preferred size of the
     // contents.
-    gfx::Size preferred_size = dialog()->GetRootView()->GetPreferredSize();
+    gfx::Size preferred_size = dialog()->GetRootView()->GetPreferredSize({});
     preferred_size.Enlarge(300, 300);
     contents_->SetPreferredSize(preferred_size);
   }
@@ -153,7 +154,7 @@ class ConstrainedWindowViewsTest : public views::ViewsTestBase {
 TEST_F(ConstrainedWindowViewsTest, GrowModalDialogSize) {
   UpdateWidgetModalDialogPosition(dialog(), dialog_host());
   gfx::Size expected_size = GetDialogSize();
-  gfx::Size preferred_size = contents()->GetPreferredSize();
+  gfx::Size preferred_size = contents()->GetPreferredSize({});
   expected_size.Enlarge(50, 50);
   preferred_size.Enlarge(50, 50);
   contents()->SetPreferredSize(preferred_size);
@@ -166,7 +167,7 @@ TEST_F(ConstrainedWindowViewsTest, GrowModalDialogSize) {
 TEST_F(ConstrainedWindowViewsTest, ShrinkModalDialogSize) {
   UpdateWidgetModalDialogPosition(dialog(), dialog_host());
   gfx::Size expected_size = GetDialogSize();
-  gfx::Size preferred_size = contents()->GetPreferredSize();
+  gfx::Size preferred_size = contents()->GetPreferredSize({});
   expected_size.Enlarge(-50, -50);
   preferred_size.Enlarge(-50, -50);
   contents()->SetPreferredSize(preferred_size);

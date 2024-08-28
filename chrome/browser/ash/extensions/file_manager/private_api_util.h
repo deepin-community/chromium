@@ -10,6 +10,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/files/file_error_or.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
@@ -123,8 +124,8 @@ void VolumeToVolumeMetadata(
 // FilePath. |render_frame_host| and |profile| are needed to obtain the
 // FileSystemContext currently in use.
 //
-// Local paths will look like "/home/chronos/user/Downloads/foo/bar.txt" or
-// "/special/drive/foo/bar.txt".
+// Local paths will look like "/home/chronos/user/MyFiles/Downloads/foo/bar.txt"
+// or "/special/drive/foo/bar.txt".
 base::FilePath GetLocalPathFromURL(content::RenderFrameHost* render_frame_host,
                                    Profile* profile,
                                    const GURL& url);
@@ -170,6 +171,16 @@ bool ToRecentSourceFileType(
 // pinning to its file manager private equivalent.
 extensions::api::file_manager_private::BulkPinProgress BulkPinProgressToJs(
     const drivefs::pinning::Progress& progress);
+
+// Converts the given GURL into an EntryData struct that can be returned by
+// fileManagerPrivate.
+void GURLToEntryData(
+    Profile* profile,
+    scoped_refptr<storage::FileSystemContext> file_system_context,
+    const GURL& url,
+    base::OnceCallback<void(
+        base::FileErrorOr<extensions::api::file_manager_private::EntryData>)>
+        callback);
 
 }  // namespace util
 }  // namespace file_manager

@@ -9,6 +9,7 @@
 
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/unguessable_token.h"
 #include "cc/base/math_util.h"
 #include "cc/layers/layer_impl.h"
 #include "cc/layers/view_transition_content_layer_impl.h"
@@ -138,6 +139,9 @@ void SetCopyRequest(LayerImpl* root) {
 
 class DamageTrackerTest : public LayerTreeImplTestBase, public testing::Test {
  public:
+  DamageTrackerTest()
+      : LayerTreeImplTestBase(CommitToActiveTreeLayerListSettings()) {}
+
   LayerImpl* CreateTestTreeWithOneSurface(int number_of_children) {
     ClearLayersAndProperties();
 
@@ -149,7 +153,7 @@ class DamageTrackerTest : public LayerTreeImplTestBase, public testing::Test {
 
     child_layers_.resize(number_of_children);
     for (int i = 0; i < number_of_children; ++i) {
-      auto* child = AddLayer<TestLayerImpl>();
+      auto* child = AddLayerInActiveTree<TestLayerImpl>();
       child->SetBounds(gfx::Size(30, 30));
       child->SetDrawsContent(true);
       child_layers_[i] = child;
@@ -174,10 +178,10 @@ class DamageTrackerTest : public LayerTreeImplTestBase, public testing::Test {
     root->SetDrawsContent(true);
     SetupRootProperties(root);
 
-    child1_ = AddLayer<TestLayerImpl>();
-    grand_child1_ = AddLayer<TestLayerImpl>();
-    grand_child2_ = AddLayer<TestLayerImpl>();
-    child2_ = AddLayer<TestLayerImpl>();
+    child1_ = AddLayerInActiveTree<TestLayerImpl>();
+    grand_child1_ = AddLayerInActiveTree<TestLayerImpl>();
+    grand_child2_ = AddLayerInActiveTree<TestLayerImpl>();
+    child2_ = AddLayerInActiveTree<TestLayerImpl>();
     SetElementIdsForTesting();
 
     child1_->SetBounds(gfx::Size(30, 30));
@@ -228,12 +232,12 @@ class DamageTrackerTest : public LayerTreeImplTestBase, public testing::Test {
     root->SetDrawsContent(true);
     SetupRootProperties(root);
 
-    child1_ = AddLayer<TestLayerImpl>();
-    grand_child1_ = AddLayer<TestLayerImpl>();
-    grand_child2_ = AddLayer<TestLayerImpl>();
-    grand_child3_ = AddLayer<TestLayerImpl>();
-    grand_child4_ = AddLayer<TestLayerImpl>();
-    child2_ = AddLayer<TestLayerImpl>();
+    child1_ = AddLayerInActiveTree<TestLayerImpl>();
+    grand_child1_ = AddLayerInActiveTree<TestLayerImpl>();
+    grand_child2_ = AddLayerInActiveTree<TestLayerImpl>();
+    grand_child3_ = AddLayerInActiveTree<TestLayerImpl>();
+    grand_child4_ = AddLayerInActiveTree<TestLayerImpl>();
+    child2_ = AddLayerInActiveTree<TestLayerImpl>();
     SetElementIdsForTesting();
 
     child1_->SetBounds(gfx::Size(30, 30));
@@ -629,7 +633,7 @@ TEST_F(DamageTrackerTest, VerifyDamageForPropertyChanges) {
   EXPECT_TRUE(GetRenderSurface(root)
                   ->damage_tracker()
                   ->has_damage_from_contributing_content());
-  // TODO(crbug.com/1001882): Transform from browser animation should not be
+  // TODO(crbug.com/40646366): Transform from browser animation should not be
   // considered as damage from contributing layer since it is applied to the
   // whole layer which has a render surface.
   EXPECT_TRUE(GetRenderSurface(child)
@@ -924,7 +928,7 @@ TEST_F(DamageTrackerTest, VerifyDamageForBlurredSurface) {
   FilterOperations filters;
   filters.Append(FilterOperation::CreateBlurFilter(5.f));
 
-  // TODO(crbug.com/1001882): Setting the filter on an existing render surface
+  // TODO(crbug.com/40646366): Setting the filter on an existing render surface
   // should not damage the conrresponding render surface.
   ClearDamageForAllSurfaces(root);
   SetFilter(surface, filters);
@@ -1165,7 +1169,7 @@ TEST_F(DamageTrackerTest, VerifyDamageForAddingAndRemovingLayer) {
   //
   ClearDamageForAllSurfaces(root);
 
-  LayerImpl* child2 = AddLayer<LayerImpl>();
+  LayerImpl* child2 = AddLayerInActiveTree<LayerImpl>();
   child2->SetBounds(gfx::Size(6, 8));
   child2->SetDrawsContent(true);
   CopyProperties(root, child2);
@@ -1223,7 +1227,7 @@ TEST_F(DamageTrackerTest, VerifyDamageForNewUnchangedLayer) {
 
   ClearDamageForAllSurfaces(root);
 
-  LayerImpl* child2 = AddLayer<LayerImpl>();
+  LayerImpl* child2 = AddLayerInActiveTree<LayerImpl>();
   child2->SetBounds(gfx::Size(6, 8));
   child2->SetDrawsContent(true);
   CopyProperties(root, child2);
@@ -1257,7 +1261,7 @@ TEST_F(DamageTrackerTest, VerifyDamageForMultipleLayers) {
   // In this test we don't want the above tree manipulation to be considered
   // part of the same frame.
   ClearDamageForAllSurfaces(root);
-  LayerImpl* child2 = AddLayer<LayerImpl>();
+  LayerImpl* child2 = AddLayerInActiveTree<LayerImpl>();
   child2->SetBounds(gfx::Size(6, 8));
   child2->SetDrawsContent(true);
   CopyProperties(root, child2);
@@ -1455,16 +1459,18 @@ TEST_F(DamageTrackerTest, VerifyDamageForSurfaceChangeFromDescendantSurface) {
 TEST_F(DamageTrackerTest, VerifyDamageForSurfaceChangeFromViewTransitionLayer) {
   ClearLayersAndProperties();
 
+  blink::ViewTransitionToken transition_token;
+
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(500, 500));
   root->layer_tree_impl()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
   root->SetDrawsContent(true);
   SetupRootProperties(root);
 
-  LayerImpl* child1 = AddLayer<TestLayerImpl>();
-  LayerImpl* grand_child1 = AddLayer<TestLayerImpl>();
-  LayerImpl* child2 = AddLayer<TestViewTransitionContentLayerImpl>(
-      viz::ViewTransitionElementResourceId(3), false);
+  LayerImpl* child1 = AddLayerInActiveTree<TestLayerImpl>();
+  LayerImpl* grand_child1 = AddLayerInActiveTree<TestLayerImpl>();
+  LayerImpl* child2 = AddLayerInActiveTree<TestViewTransitionContentLayerImpl>(
+      viz::ViewTransitionElementResourceId(transition_token, 3), false);
 
   // child 1 of the root - live render surface.
   child1->SetBounds(gfx::Size(80, 80));
@@ -1700,16 +1706,15 @@ TEST_F(DamageTrackerTest, VerifyDamageForMask) {
 
   // Set up the mask layer.
   CreateEffectNode(child);
-  auto* mask_layer = AddLayer<FakePictureLayerImpl>();
+  auto* mask_layer = AddLayerInActiveTree<FakePictureLayerImpl>();
   SetupMaskProperties(child, mask_layer);
   Region empty_invalidation;
   mask_layer->UpdateRasterSource(
-      FakeRasterSource::CreateFilled(child->bounds()), &empty_invalidation,
-      nullptr, nullptr);
+      FakeRasterSource::CreateFilled(child->bounds()), &empty_invalidation);
 
   // Add opacity and a grand_child so that the render surface persists even
   // after we remove the mask.
-  LayerImpl* grand_child = AddLayer<LayerImpl>();
+  LayerImpl* grand_child = AddLayerInActiveTree<LayerImpl>();
   grand_child->SetBounds(gfx::Size(2, 2));
   grand_child->SetDrawsContent(true);
   CopyProperties(child, grand_child);
@@ -1845,7 +1850,7 @@ TEST_F(DamageTrackerTest, VerifyDamageWithNoContributingLayers) {
   LayerImpl* root = root_layer();
   ClearDamageForAllSurfaces(root);
 
-  LayerImpl* empty_surface = AddLayer<LayerImpl>();
+  LayerImpl* empty_surface = AddLayerInActiveTree<LayerImpl>();
   CopyProperties(root, empty_surface);
   CreateEffectNode(empty_surface).render_surface_reason =
       RenderSurfaceReason::kTest;

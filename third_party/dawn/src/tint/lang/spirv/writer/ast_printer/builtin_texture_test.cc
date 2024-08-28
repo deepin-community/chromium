@@ -26,7 +26,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "gmock/gmock.h"
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/spirv/writer/ast_printer/helper_test.h"
 #include "src/tint/lang/spirv/writer/common/spv_dump_test.h"
 #include "src/tint/lang/wgsl/ast/builtin_texture_helper_test.h"
@@ -3719,9 +3718,13 @@ OpImageWrite %10 %16 %22
 }  // NOLINT - Ignore the length of this function
 
 using BuiltinTextureTest = TestParamHelper<ast::test::TextureOverloadCase>;
+using BuiltinTextureDeathTest = BuiltinTextureTest;
 
 INSTANTIATE_TEST_SUITE_P(BuiltinTextureTest,
                          BuiltinTextureTest,
+                         testing::ValuesIn(ast::test::TextureOverloadCase::ValidCases()));
+INSTANTIATE_TEST_SUITE_P(BuiltinTextureTest,
+                         BuiltinTextureDeathTest,
                          testing::ValuesIn(ast::test::TextureOverloadCase::ValidCases()));
 
 TEST_P(BuiltinTextureTest, Call) {
@@ -3775,9 +3778,8 @@ TEST_P(BuiltinTextureTest, ValidateSPIRV) {
     Validate(b);
 }
 
-// TODO(dsinclair): This generates two fatal errors, but expect_fatal_failure can only handle 1
-TEST_P(BuiltinTextureTest, DISABLED_OutsideFunction_IsError) {
-    EXPECT_FATAL_FAILURE(
+TEST_P(BuiltinTextureDeathTest, OutsideFunction_IsError) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             auto param = GetParam();
 

@@ -25,30 +25,49 @@
 #include "chrome/browser/download/download_item_warning_data.h"
 #include "chrome/browser/download/download_status_updater.h"
 #include "chrome/browser/download/download_ui_model.h"
+#include "chrome/browser/download/download_ui_safe_browsing_util.h"
 #include "chrome/browser/download/offline_item_utils.h"
 #include "chrome/browser/image_decoder/image_decoder.h"
+#include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/download/download_bubble_info_utils.h"
+#include "chrome/browser/ui/download/download_bubble_row_view_info.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/grit/generated_resources.h"
 #include "chromeos/crosapi/mojom/download_controller.mojom.h"
 #include "chromeos/crosapi/mojom/download_status_updater.mojom.h"
 #include "chromeos/lacros/lacros_service.h"
+#include "chromeos/strings/grit/chromeos_strings.h"
 #include "components/download/content/public/all_download_item_notifier.h"
 #include "components/download/public/common/download_item_utils.h"
+#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/color/color_provider.h"
+#include "ui/color/color_provider_key.h"
+#include "ui/color/color_provider_manager.h"
 #include "ui/display/types/display_constants.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/paint_vector_icon.h"
+#include "ui/gfx/vector_icon_types.h"
+#include "ui/message_center/public/cpp/notification.h"
+#include "ui/native_theme/native_theme.h"
 
 namespace {
 
 // Constants -------------------------------------------------------------------
+
+// The DIP size of the rasterized icon. Ensures that the icon is large enough
+// for download status clients to resize with sufficient resolution.
+constexpr int kIconSize = 50;
 
 // The key referring to an image decoder task.
 constexpr char kImageDecoderTaskKey[] = "kImageDecoderTask";
@@ -57,6 +76,19 @@ constexpr char kImageDecoderTaskKey[] = "kImageDecoderTask";
 constexpr size_t kImageDecoderTaskMaxFileSize = 10 * 1024 * 1024;  // 10 MB
 
 // Helpers ---------------------------------------------------------------------
+
+// Returns the corresponding color of `id` under the specific `color_mode`.
+// WARNING: Sending UI icons directly has drawbacks (see http://b/328070365).
+// Prefer sending metadata to construct the UI instead.
+SkColor GetColor(ui::ColorId id, ui::ColorProviderKey::ColorMode color_mode) {
+  ui::ColorProviderKey provider_key =
+      ui::NativeTheme::GetInstanceForNativeUi()->GetColorProviderKey(
+          /*custom_theme=*/nullptr);
+  provider_key.color_mode = color_mode;
+  return ui::ColorProviderManager::Get()
+      .GetColorProviderFor(provider_key)
+      ->GetColor(id);
+}
 
 crosapi::mojom::DownloadStatusUpdater* GetRemote(
     std::optional<uint32_t> min_version = std::nullopt) {
@@ -162,6 +194,60 @@ class ImageDecoderTask : public base::SupportsUserData::Data,
   base::WeakPtrFactory<ImageDecoderTask> weak_ptr_factory_{this};
 };
 
+class DeepScanNoticeNotificationDelegate
+    : public message_center::NotificationDelegate {
+ public:
+  explicit DeepScanNoticeNotificationDelegate(base::WeakPtr<Browser> browser)
+      : browser_(std::move(browser)) {}
+
+  // message_center::NotificationDelegate
+  void Click(const std::optional<int>& button_index,
+             const std::optional<std::u16string>& reply) override {
+    if (!browser_) {
+      return;
+    }
+
+    if (browser_->window()->IsMinimized()) {
+      browser_->window()->Restore();
+    }
+    browser_->window()->Activate();
+
+    chrome::ShowSafeBrowsingEnhancedProtection(browser_.get());
+  }
+
+ protected:
+  ~DeepScanNoticeNotificationDelegate() override = default;
+
+ private:
+  base::WeakPtr<Browser> browser_;
+};
+
+void ShowDeepScanPromptNotification(Profile* profile) {
+  Browser* browser = chrome::FindTabbedBrowser(
+      profile,
+      /*match_original_profiles=*/false, display::kInvalidDisplayId,
+      /*ignore_closing_browsers=*/true);
+  message_center::RichNotificationData optional_fields;
+  optional_fields.small_image = gfx::Image(gfx::CreateVectorIcon(
+      vector_icons::kNotificationDownloadIcon, 20, gfx::kGoogleBlue800));
+  message_center::Notification notification(
+      message_center::NOTIFICATION_TYPE_SIMPLE, "download_deep_scan_notice",
+      /*title=*/u"",
+      l10n_util::GetStringUTF16(IDS_DEEP_SCANNING_PROMPT_REMOVAL_NOTIFICATION),
+      ui::ImageModel(),
+      l10n_util::GetStringUTF16(IDS_DOWNLOAD_NOTIFICATION_DISPLAY_SOURCE),
+      GURL(),
+      message_center::NotifierId(message_center::NotifierType::APPLICATION,
+                                 "download_manager"),
+      std::move(optional_fields),
+      base::MakeRefCounted<DeepScanNoticeNotificationDelegate>(
+          browser->AsWeakPtr()));
+  NotificationDisplayService::GetForProfile(profile)->Display(
+      NotificationHandler::Type::TRANSIENT, notification, nullptr);
+  profile->GetPrefs()->SetBoolean(
+      prefs::kSafeBrowsingAutomaticDeepScanningIPHSeen, true);
+}
+
 }  // namespace
 
 // DownloadStatusUpdater::Delegate ---------------------------------------------
@@ -212,9 +298,18 @@ class DownloadStatusUpdater::Delegate
     status->status_text = model.GetStatusText();
     status->target_file_path = download->GetTargetFilePath();
 
-    // TODO(http://b/306459683): Remove after the 2-version skew period passes.
-    status->received_bytes_deprecated = download->GetReceivedBytes();
-    status->total_bytes_deprecated = download->GetTotalBytes();
+    const IconAndColor icon_and_color = IconAndColorForDownload(model);
+    if (const gfx::VectorIcon* const icon = icon_and_color.icon) {
+      status->icons = crosapi::mojom::DownloadStatusIcons::New(
+          gfx::CreateVectorIcon(
+              *icon, kIconSize,
+              GetColor(icon_and_color.color,
+                       ui::ColorProviderKey::ColorMode::kDark)),
+          gfx::CreateVectorIcon(
+              *icon, kIconSize,
+              GetColor(icon_and_color.color,
+                       ui::ColorProviderKey::ColorMode::kLight)));
+    }
 
     DownloadBubbleProgressBar progress_bar = ProgressBarForDownload(model);
     auto progress = crosapi::mojom::DownloadProgress::New();
@@ -413,6 +508,13 @@ void DownloadStatusUpdater::UpdateAppIconDownloadProgress(
         download,
         DownloadItemWarningData::WarningSurface::DOWNLOAD_NOTIFICATION,
         DownloadItemWarningData::WarningAction::SHOWN);
+  }
+
+  Profile* profile = Profile::FromBrowserContext(
+      content::DownloadItemUtils::GetBrowserContext(download));
+  if (profile &&
+      ShouldShowDeepScanPromptNotice(profile, download->GetDangerType())) {
+    ShowDeepScanPromptNotification(profile);
   }
 }
 

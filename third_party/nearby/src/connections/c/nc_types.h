@@ -18,8 +18,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <cstddef>
-
 #ifdef __cplusplus
 extern "C" {
 #endif  // __cplusplus
@@ -30,7 +28,7 @@ typedef int64_t NC_PAYLOAD_ID;
 
 // NC_DATA is used to define a byte array. Its last byte is not zero.
 typedef struct NC_DATA {
-  size_t size;
+  int64_t size;
   char* data;
 } NC_DATA, *PNC_DATA;
 
@@ -113,6 +111,17 @@ typedef enum NC_PAYLOAD_DIRECTION {
   NC_PAYLOAD_DIRECTION_OUTGOING = 2,
 } NC_PAYLOAD_DIRECTION;
 
+typedef enum NC_IO_EXCEPTION {
+  NC_IO_EXCEPTION_FAILED = -1,
+  NC_IO_EXCEPTION_SUCCESS = 0,
+  NC_IO_EXCEPTION_IO = 1,
+  NC_IO_EXCEPTION_INTERRUPTED = 2,
+  NC_IO_EXCEPTION_INVALID_PROTOCOL_BUFFER = 3,
+  NC_IO_EXCEPTION_EXECUTION = 4,
+  NC_IO_EXCEPTION_TIMEOUT = 5,
+  NC_IO_EXCEPTION_ILLEGALCHARACTERS = 6,
+} NC_IO_EXCEPTION;
+
 // Defines struct types in Nearby connections.
 
 typedef struct NC_STRATEGY {
@@ -140,23 +149,23 @@ typedef struct NC_ADVERTISING_OPTIONS {
 
 typedef struct NC_CONNECTION_OPTIONS {
   NC_COMMON_OPTIONS common_options;
-  bool auto_upgrade_bandwidth = true;
+  bool auto_upgrade_bandwidth;
   bool enforce_topology_constraints;
   bool low_power;
-  bool is_out_of_band_connection = false;
+  bool is_out_of_band_connection;
   NC_DATA remote_bluetooth_mac_address;
   NC_DATA fast_advertisement_service_uuid;
-  int keep_alive_interval_millis = 0;
-  int keep_alive_timeout_millis = 0;
+  int keep_alive_interval_millis;
+  int keep_alive_timeout_millis;
 } NC_CONNECTION_OPTIONS, *PNC_CONNECTION_OPTIONS;
 
 typedef struct NC_DISCOVERY_OPTIONS {
   NC_COMMON_OPTIONS common_options;
-  bool auto_upgrade_bandwidth = true;
+  bool auto_upgrade_bandwidth;
   bool enforce_topology_constraints;
 
   // Whether this is intended to be used in conjunction with InjectEndpoint().
-  bool is_out_of_band_connection = false;
+  bool is_out_of_band_connection;
   NC_DATA fast_advertisement_service_uuid;
 } NC_DISCOVERY_OPTIONS, *PNC_DISCOVERY_OPTIONS;
 
@@ -164,8 +173,8 @@ typedef struct NC_CONNECTION_RESPONSE_INFO {
   NC_DATA remote_endpoint_info;
   NC_DATA authentication_token;
   NC_DATA raw_authentication_token;
-  bool is_incoming_connection = false;
-  bool is_connection_verified = false;
+  bool is_incoming_connection;
+  bool is_connection_verified;
 } NC_CONNECTION_RESPONSE_INFO, *PNC_CONNECTION_RESPONSE_INFO;
 
 // Defines callbacks in Nearby Connections.
@@ -173,12 +182,16 @@ typedef struct NC_CONNECTION_RESPONSE_INFO {
 typedef void (*NcCallbackResult)(NC_STATUS status);
 
 typedef void (*NcCallbackConnectionInitiated)(
-    const char* endpoint_id, const NC_CONNECTION_RESPONSE_INFO& info);
-typedef void (*NcCallbackConnectionAccepted)(const char* endpoint_id);
-typedef void (*NcCallbackConnectionRejected)(const char* endpoint_id,
-                                             NC_STATUS status);
-typedef void (*NcCallbackConnectionDisconnected)(const char* endpoint_id);
-typedef void (*NcCallbackConnectionBandwidthChanged)(const char* endpoint_id,
+    NC_INSTANCE instance, int endpoint_id,
+    const NC_CONNECTION_RESPONSE_INFO* info);
+typedef void (*NcCallbackConnectionAccepted)(NC_INSTANCE instance,
+                                             int endpoint_id);
+typedef void (*NcCallbackConnectionRejected)(NC_INSTANCE instance,
+                                             int endpoint_id, NC_STATUS status);
+typedef void (*NcCallbackConnectionDisconnected)(NC_INSTANCE instance,
+                                                 int endpoint_id);
+typedef void (*NcCallbackConnectionBandwidthChanged)(NC_INSTANCE instance,
+                                                     int endpoint_id,
                                                      NC_MEDIUM medium);
 
 typedef struct NC_CONNECTION_REQUEST_INFO {
@@ -190,12 +203,14 @@ typedef struct NC_CONNECTION_REQUEST_INFO {
   NcCallbackConnectionBandwidthChanged bandwidth_changed_callback;
 } NC_CONNECTION_REQUEST_INFO;
 
-typedef void (*NcCallbackDiscoveryEndpointFound)(const char* endpoint_id,
-                                                 const NC_DATA& endpoint_info,
-                                                 const char* service_id);
-typedef void (*NcCallbackDiscoveryEndpointLost)(const char* endpoint_id);
+typedef void (*NcCallbackDiscoveryEndpointFound)(NC_INSTANCE instance,
+                                                 int endpoint_id,
+                                                 const NC_DATA* endpoint_info,
+                                                 const NC_DATA* service_id);
+typedef void (*NcCallbackDiscoveryEndpointLost)(NC_INSTANCE instance,
+                                                int endpoint_id);
 typedef void (*NcCallbackDiscoveryEndpointDistanceChanged)(
-    const char* endpoint_id, NC_DISTANCE_INFO info);
+    NC_INSTANCE instance, int endpoint_id, NC_DISTANCE_INFO info);
 
 typedef struct NC_DISCOVERY_LISTENER {
   NcCallbackDiscoveryEndpointFound endpoint_found_callback;
@@ -207,8 +222,16 @@ typedef struct NC_BYTES_PAYLOAD {
   NC_DATA content;
 } NC_BYTES_PAYLOAD;
 
+typedef int (*NcCallbackStreamRead)(NC_INSTANCE stream, char* buffer,
+                                    int64_t size);
+typedef int (*NcCallbackStreamClose)(NC_INSTANCE stream);
+typedef int (*NcCallbackStreamSkip)(NC_INSTANCE stream, int64_t skip);
+
 typedef struct NC_STREAM_PAYLOAD {
-  NC_DATA data;
+  NC_INSTANCE stream;
+  NcCallbackStreamRead read_callback;
+  NcCallbackStreamSkip skip_callback;
+  NcCallbackStreamClose close_callback;
 } NC_STREAM_PAYLOAD;
 
 typedef struct NC_FILE_PAYLOAD {
@@ -244,10 +267,11 @@ typedef struct NC_PAYLOAD_PROGRESS_INFO {
   size_t bytes_transferred;
 } NC_PAYLOAD_PROGRESS_INFO;
 
-typedef void (*NcCallbackPayloadReceived)(const char* endpoint_id,
-                                          const NC_PAYLOAD& payload);
+typedef void (*NcCallbackPayloadReceived)(NC_INSTANCE instance, int endpoint_id,
+                                          const NC_PAYLOAD* payload);
 typedef void (*NcCallbackPayloadProgressUpdated)(
-    const char* endpoint_id, const NC_PAYLOAD_PROGRESS_INFO& info);
+    NC_INSTANCE instance, int endpoint_id,
+    const NC_PAYLOAD_PROGRESS_INFO* info);
 
 typedef struct NC_PAYLOAD_LISTENER {
   NcCallbackPayloadReceived received_callback;
@@ -261,7 +285,7 @@ typedef struct NC_OUT_OF_BAND_CONNECTION_METADATA {
   // Endpoint ID to use for the injected connection; will be included in the
   // endpoint_found_cb callback. Must be exactly 4 bytes and should be randomly-
   // generated such that no two IDs are identical.
-  char* endpoint_id;
+  int endpoint_id;
 
   // Endpoint info to use for the injected connection; will be included in the
   // endpoint_found_cb callback. Should uniquely identify the InjectEndpoint()

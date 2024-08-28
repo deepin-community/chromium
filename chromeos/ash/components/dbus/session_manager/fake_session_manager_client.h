@@ -99,6 +99,8 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
       const cryptohome::AccountIdentifier& cryptohome_id) override;
   void StartSessionEx(const cryptohome::AccountIdentifier& cryptohome_id,
                       bool chrome_side_key_generation) override;
+  void EmitStartedUserSession(
+      const cryptohome::AccountIdentifier& cryptohome_id) override;
   void StopSession(login_manager::SessionStopReason reason) override;
   void LoadShillProfile(
       const cryptohome::AccountIdentifier& cryptohome_id) override;
@@ -397,7 +399,7 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
   // Callback that will be run, if set, when StopSession() is called.
   base::OnceClosure stop_session_callback_;
 
-  base::ObserverList<Observer>::Unchecked observers_{
+  base::ObserverList<Observer>::UncheckedAndDanglingUntriaged observers_{
       SessionManagerClient::kObserverListPolicy};
   SessionManagerClient::ActiveSessionsMap user_sessions_;
   base::expected<std::vector<std::string>, StateKeyErrorType>

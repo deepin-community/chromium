@@ -10,9 +10,12 @@
 #include <vector>
 
 #include "base/strings/stringprintf.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+#include "net/base/network_change_notifier.h"
 #include "services/network/ip_protection/ip_protection_proxy_list_manager.h"
 #include "services/network/ip_protection/ip_protection_proxy_list_manager_impl.h"
 #include "services/network/public/mojom/network_context.mojom-shared.h"
@@ -53,6 +56,8 @@ class MockIpProtectionProxyListManager : public IpProtectionProxyListManager {
     return *proxy_list_;
   }
 
+  const std::string& GeoId() override { return geo_id_; }
+
   void RequestRefreshProxyList() override {
     if (on_force_refresh_proxy_list_) {
       std::move(on_force_refresh_proxy_list_).Run();
@@ -71,6 +76,7 @@ class MockIpProtectionProxyListManager : public IpProtectionProxyListManager {
 
  private:
   std::optional<std::vector<net::ProxyChain>> proxy_list_;
+  std::string geo_id_;
   base::OnceClosure on_force_refresh_proxy_list_;
 };
 
@@ -167,7 +173,7 @@ TEST_F(IpProtectionConfigCacheImplTest, GetProxyListFromManager) {
   std::string proxy = "a-proxy";
   auto ip_protection_proxy_chain =
       net::ProxyChain::ForIpProtection({net::ProxyServer::FromSchemeHostAndPort(
-          net::ProxyServer::SCHEME_HTTPS, proxy, absl::nullopt)});
+          net::ProxyServer::SCHEME_HTTPS, proxy, std::nullopt)});
   const std::vector<net::ProxyChain> proxy_chain_list = {
       std::move(ip_protection_proxy_chain)};
   auto ipp_proxy_list_manager_ =
@@ -178,6 +184,105 @@ TEST_F(IpProtectionConfigCacheImplTest, GetProxyListFromManager) {
 
   ASSERT_TRUE(ipp_config_cache_->IsProxyListAvailable());
   EXPECT_EQ(ipp_config_cache_->GetProxyChainList(), proxy_chain_list);
+}
+
+// When QUIC proxies are enabled, the proxy list has both QUIC and HTTPS
+// proxies, and falls back properly when a QUIC proxy fails.
+TEST_F(IpProtectionConfigCacheImplTest, GetProxyListFromManagerWithQuic) {
+  std::map<std::string, std::string> parameters;
+  parameters[net::features::kIpPrivacyUseQuicProxies.name] = "true";
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kEnableIpProtectionProxy, std::move(parameters));
+
+  std::unique_ptr<net::NetworkChangeNotifier> network_change_notifier =
+      net::NetworkChangeNotifier::CreateMockIfNeeded();
+
+  ipp_config_cache_ =
+      std::make_unique<IpProtectionConfigCacheImpl>(mojo::NullRemote());
+
+  auto ipp_proxy_list_manager_ =
+      std::make_unique<MockIpProtectionProxyListManager>();
+  ipp_proxy_list_manager_->SetProxyList({MakeChain({"a-proxy1", "b-proxy1"}),
+                                         MakeChain({"a-proxy2", "b-proxy2"})});
+  ipp_config_cache_->SetIpProtectionProxyListManagerForTesting(
+      std::move(ipp_proxy_list_manager_));
+
+  const std::vector<net::ProxyChain> proxy_chain_list_with_quic = {
+      net::ProxyChain::ForIpProtection({
+          net::ProxyServer::FromSchemeHostAndPort(net::ProxyServer::SCHEME_QUIC,
+                                                  "a-proxy1", std::nullopt),
+          net::ProxyServer::FromSchemeHostAndPort(net::ProxyServer::SCHEME_QUIC,
+                                                  "b-proxy1", std::nullopt),
+      }),
+      net::ProxyChain::ForIpProtection({
+          net::ProxyServer::FromSchemeHostAndPort(
+              net::ProxyServer::SCHEME_HTTPS, "a-proxy1", std::nullopt),
+          net::ProxyServer::FromSchemeHostAndPort(
+              net::ProxyServer::SCHEME_HTTPS, "b-proxy1", std::nullopt),
+      }),
+      net::ProxyChain::ForIpProtection({
+          net::ProxyServer::FromSchemeHostAndPort(net::ProxyServer::SCHEME_QUIC,
+                                                  "a-proxy2", std::nullopt),
+          net::ProxyServer::FromSchemeHostAndPort(net::ProxyServer::SCHEME_QUIC,
+                                                  "b-proxy2", std::nullopt),
+      })};
+
+  const std::vector<net::ProxyChain> proxy_chain_list_without_quic = {
+      net::ProxyChain::ForIpProtection({
+          net::ProxyServer::FromSchemeHostAndPort(
+              net::ProxyServer::SCHEME_HTTPS, "a-proxy1", std::nullopt),
+          net::ProxyServer::FromSchemeHostAndPort(
+              net::ProxyServer::SCHEME_HTTPS, "b-proxy1", std::nullopt),
+      }),
+      net::ProxyChain::ForIpProtection({
+          net::ProxyServer::FromSchemeHostAndPort(
+              net::ProxyServer::SCHEME_HTTPS, "a-proxy2", std::nullopt),
+          net::ProxyServer::FromSchemeHostAndPort(
+              net::ProxyServer::SCHEME_HTTPS, "b-proxy2", std::nullopt),
+      })};
+  ASSERT_TRUE(ipp_config_cache_->IsProxyListAvailable());
+  EXPECT_EQ(ipp_config_cache_->GetProxyChainList(), proxy_chain_list_with_quic);
+
+  ipp_config_cache_->QuicProxiesFailed();
+
+  EXPECT_EQ(ipp_config_cache_->GetProxyChainList(),
+            proxy_chain_list_without_quic);
+
+  net::NetworkChangeNotifier::NotifyObserversOfNetworkChangeForTests(
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_2G);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(ipp_config_cache_->GetProxyChainList(), proxy_chain_list_with_quic);
+}
+
+// When the network changes, a new proxy list is requested.
+TEST_F(IpProtectionConfigCacheImplTest, RefreshProxyListOnNetworkChange) {
+  std::map<std::string, std::string> parameters;
+  parameters[net::features::kIpPrivacyUseQuicProxies.name] = "true";
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kEnableIpProtectionProxy, std::move(parameters));
+
+  std::unique_ptr<net::NetworkChangeNotifier> network_change_notifier =
+      net::NetworkChangeNotifier::CreateMockIfNeeded();
+
+  ipp_config_cache_ =
+      std::make_unique<IpProtectionConfigCacheImpl>(mojo::NullRemote());
+
+  auto ipp_proxy_list_manager_ =
+      std::make_unique<MockIpProtectionProxyListManager>();
+  bool refresh_requested = false;
+  ipp_proxy_list_manager_->SetOnRequestRefreshProxyList(
+      base::BindLambdaForTesting([&]() { refresh_requested = true; }));
+  ipp_config_cache_->SetIpProtectionProxyListManagerForTesting(
+      std::move(ipp_proxy_list_manager_));
+
+  net::NetworkChangeNotifier::NotifyObserversOfNetworkChangeForTests(
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_2G);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(refresh_requested);
 }
 
 }  // namespace network

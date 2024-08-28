@@ -12,11 +12,13 @@
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/uuid.h"
-#include "components/sync/protocol/saved_tab_group_specifics.pb.h"
+#include "components/saved_tab_groups/types.h"
 #include "components/tab_groups/tab_group_color.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "ui/gfx/image/image.h"
 #include "url/gurl.h"
+
+namespace tab_groups {
 
 // A SavedTabGroupTab stores the url, title, and favicon of a tab.
 class SavedTabGroupTab {
@@ -27,20 +29,23 @@ class SavedTabGroupTab {
       const base::Uuid& group_guid,
       std::optional<size_t> position,
       std::optional<base::Uuid> saved_tab_guid = std::nullopt,
-      std::optional<base::Token> local_tab_id = std::nullopt,
+      std::optional<LocalTabID> local_tab_id = std::nullopt,
+      std::optional<std::string> creator_cache_guid = std::nullopt,
+      std::optional<std::string> last_updater_cache_guid = std::nullopt,
       std::optional<base::Time> creation_time_windows_epoch_micros =
           std::nullopt,
       std::optional<base::Time> update_time_windows_epoch_micros = std::nullopt,
       std::optional<gfx::Image> favicon = std::nullopt);
   SavedTabGroupTab(const SavedTabGroupTab& other);
+  SavedTabGroupTab& operator=(const SavedTabGroupTab& other);
+  SavedTabGroupTab(SavedTabGroupTab&& other);
+  SavedTabGroupTab& operator=(SavedTabGroupTab&& other);
   ~SavedTabGroupTab();
 
   // Accessors.
   const base::Uuid& saved_tab_guid() const { return saved_tab_guid_; }
   const base::Uuid& saved_group_guid() const { return saved_group_guid_; }
-  const std::optional<base::Token> local_tab_id() const {
-    return local_tab_id_;
-  }
+  const std::optional<LocalTabID> local_tab_id() const { return local_tab_id_; }
   std::optional<size_t> position() const { return position_; }
   const GURL& url() const { return url_; }
   const std::u16string& title() const { return title_; }
@@ -51,31 +56,46 @@ class SavedTabGroupTab {
   const base::Time& update_time_windows_epoch_micros() const {
     return update_time_windows_epoch_micros_;
   }
+  const std::optional<std::string>& creator_cache_guid() const {
+    return creator_cache_guid_;
+  }
+  const std::optional<std::string>& last_updater_cache_guid() const {
+    return last_updater_cache_guid_;
+  }
 
   // Mutators.
   SavedTabGroupTab& SetURL(GURL url) {
-    url_ = url;
+    url_ = std::move(url);
     SetUpdateTimeWindowsEpochMicros(base::Time::Now());
     return *this;
   }
   SavedTabGroupTab& SetTitle(std::u16string title) {
-    title_ = title;
+    title_ = std::move(title);
     SetUpdateTimeWindowsEpochMicros(base::Time::Now());
     return *this;
   }
   SavedTabGroupTab& SetFavicon(std::optional<gfx::Image> favicon) {
-    favicon_ = favicon;
+    favicon_ = std::move(favicon);
     SetUpdateTimeWindowsEpochMicros(base::Time::Now());
     return *this;
   }
-  SavedTabGroupTab& SetLocalTabID(std::optional<base::Token> local_tab_id) {
-    local_tab_id_ = local_tab_id;
-    SetUpdateTimeWindowsEpochMicros(base::Time::Now());
+  SavedTabGroupTab& SetLocalTabID(std::optional<LocalTabID> local_tab_id) {
+    local_tab_id_ = std::move(local_tab_id);
     return *this;
   }
   SavedTabGroupTab& SetPosition(size_t position) {
     position_ = position;
     SetUpdateTimeWindowsEpochMicros(base::Time::Now());
+    return *this;
+  }
+  SavedTabGroupTab& SetCreatorCacheGuid(
+      std::optional<std::string> new_cache_guid) {
+    creator_cache_guid_ = std::move(new_cache_guid);
+    return *this;
+  }
+  SavedTabGroupTab& SetLastUpdaterCacheGuid(
+      std::optional<std::string> cache_guid) {
+    last_updater_cache_guid_ = std::move(cache_guid);
     return *this;
   }
   SavedTabGroupTab& SetUpdateTimeWindowsEpochMicros(
@@ -86,22 +106,10 @@ class SavedTabGroupTab {
 
   // Merges this tabs data with a specific from sync and returns the newly
   // merged specific. Side effect: Updates the values in the tab.
-  std::unique_ptr<sync_pb::SavedTabGroupSpecifics> MergeTab(
-      const sync_pb::SavedTabGroupSpecifics& sync_specific);
+  void MergeRemoteTab(const SavedTabGroupTab& remote_tab);
 
-  // We should merge a tab if one of the following is true:
-  // 1. The data from `sync_specific` has the most recent (larger) update time.
-  // 2. The `sync_specific` has the oldest (smallest) creation time.
-  bool ShouldMergeTab(
-      const sync_pb::SavedTabGroupSpecifics& sync_specific) const;
-
-  // Converts a `SavedTabGroupSpecifics` retrieved from sync into a
-  // `SavedTabGroupTab`.
-  static SavedTabGroupTab FromSpecifics(
-      const sync_pb::SavedTabGroupSpecifics& specific);
-
-  // Converts this `SavedTabGroupTab` into a `SavedTabGroupSpecifics` for sync.
-  std::unique_ptr<sync_pb::SavedTabGroupSpecifics> ToSpecifics() const;
+  // Returns whether the `remote_tab` should be merged into the current one.
+  bool ShouldMergeTab(const SavedTabGroupTab& remote_tab) const;
 
   // Returns true iff syncable data fields in `this` and `other` are equivalent.
   bool IsSyncEquivalent(const SavedTabGroupTab& other) const;
@@ -114,7 +122,7 @@ class SavedTabGroupTab {
   base::Uuid saved_group_guid_;
 
   // The ID used to represent the tab in reference to the web_contents locally.
-  std::optional<base::Token> local_tab_id_;
+  std::optional<LocalTabID> local_tab_id_;
 
   // The current position of the tab in relation to all other tabs in the group.
   // A value of nullopt means that the group was not assigned a position and
@@ -130,6 +138,16 @@ class SavedTabGroupTab {
   // The favicon of the website this SavedTabGroupTab represents.
   std::optional<gfx::Image> favicon_;
 
+  // A guid which refers to the device which created the tab group. If metadata
+  // is not being tracked when the saved tab group is being created, this value
+  // will be null. The value could also be null if the group was created before
+  // M127. Used for metrics purposes only.
+  std::optional<std::string> creator_cache_guid_;
+
+  // The cache guid of the device that last modified this tab group. Can be null
+  // if the group was just created. Used for metrics purposes only.
+  std::optional<std::string> last_updater_cache_guid_;
+
   // Timestamp for when the tab was created using windows epoch microseconds.
   base::Time creation_time_windows_epoch_micros_;
 
@@ -137,5 +155,7 @@ class SavedTabGroupTab {
   // microseconds.
   base::Time update_time_windows_epoch_micros_;
 };
+
+}  // namespace tab_groups
 
 #endif  // COMPONENTS_SAVED_TAB_GROUPS_SAVED_TAB_GROUP_TAB_H_

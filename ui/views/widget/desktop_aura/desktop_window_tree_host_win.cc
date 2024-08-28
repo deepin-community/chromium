@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "base/containers/flat_set.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
@@ -26,7 +25,6 @@
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/cursor/platform_cursor.h"
 #include "ui/base/ime/input_method.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/base/win/event_creation_utils.h"
 #include "ui/base/win/win_cursor.h"
 #include "ui/compositor/compositor.h"
@@ -43,7 +41,6 @@
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/path_win.h"
 #include "ui/views/corewm/tooltip_aura.h"
-#include "ui/views/views_features.h"
 #include "ui/views/views_switches.h"
 #include "ui/views/widget/desktop_aura/desktop_drag_drop_client_win.h"
 #include "ui/views/widget/desktop_aura/desktop_native_cursor_manager.h"
@@ -134,6 +131,11 @@ DesktopWindowTreeHostWin::DesktopWindowTreeHostWin(
 
 DesktopWindowTreeHostWin::~DesktopWindowTreeHostWin() {
   desktop_native_widget_aura_->OnDesktopWindowTreeHostDestroyed(this);
+  // Normally HandleDestroying() destroys the compositor (which is called
+  // from WM_DESTROY) but it appears in some situations we can get
+  // WM_NCDESTROY (which calls this function) without a WM_DESTROY. As a result
+  // DestroyCompositor() is called from both places.
+  DestroyCompositor();
   DestroyDispatcher();
 }
 
@@ -197,15 +199,11 @@ void DesktopWindowTreeHostWin::Init(const Widget::InitParams& params) {
   InitHost();
   window()->Show();
 
-  if (base::FeatureList::IsEnabled(views::features::kWidgetLayering)) {
-    // Stack immedately above its parent so that it does not cover other
-    // root-level windows.
-    //
-    // With the exception of menus, to allow them to be displayed on
-    // top of other windows.
-    if (params.parent && params.type != views::Widget::InitParams::TYPE_MENU) {
-      StackAbove(params.parent);
-    }
+  // Stack immediately above its parent so that it does not cover other
+  // root-level windows, with the exception of menus, to allow them to be
+  // displayed on top of other windows.
+  if (params.parent && params.type != views::Widget::InitParams::TYPE_MENU) {
+    StackAbove(params.parent);
   }
 }
 
@@ -524,7 +522,11 @@ void DesktopWindowTreeHostWin::EndMoveLoop() {
 void DesktopWindowTreeHostWin::SetVisibilityChangedAnimationsEnabled(
     bool value) {
   message_handler_->SetVisibilityChangedAnimationsEnabled(value);
-  content_window()->SetProperty(aura::client::kAnimationsDisabledKey, !value);
+  if (desktop_native_widget_aura_->widget_type() !=
+          Widget::InitParams::TYPE_WINDOW ||
+      remove_standard_frame_) {
+    content_window()->SetProperty(aura::client::kAnimationsDisabledKey, !value);
+  }
 }
 
 std::unique_ptr<NonClientFrameView>
@@ -898,6 +900,10 @@ bool DesktopWindowTreeHostWin::GetDwmFrameInsetsInPixels(
 
 void DesktopWindowTreeHostWin::GetMinMaxSize(gfx::Size* min_size,
                                              gfx::Size* max_size) const {
+  if (!native_widget_delegate_) {
+    return;
+  }
+
   *min_size = native_widget_delegate_->GetMinimumSize();
   *max_size = native_widget_delegate_->GetMaximumSize();
 }
@@ -1064,7 +1070,7 @@ void DesktopWindowTreeHostWin::HandleKeyEvent(ui::KeyEvent* event) {
   // corresponding WM_SYSCHAR.  This allows HandleIMEMessage() to show the
   // system menu in this case.  If we instead showed the system menu here, the
   // WM_SYSCHAR would trigger a beep when processed by the native event handler.
-  if ((event->type() == ui::ET_KEY_PRESSED) &&
+  if ((event->type() == ui::EventType::kKeyPressed) &&
       (event->key_code() == ui::VKEY_SPACE) &&
       (event->flags() & ui::EF_ALT_DOWN) &&
       !(event->flags() & ui::EF_CONTROL_DOWN) &&
@@ -1089,18 +1095,18 @@ void DesktopWindowTreeHostWin::HandleTouchEvent(ui::TouchEvent* event) {
     gfx::Point screen_point(event_point);
     // Send equivalent mouse events, because Ole32 drag drop doesn't seem to
     // handle pointer events.
-    if (event->type() == ui::ET_TOUCH_MOVED) {
+    if (event->type() == ui::EventType::kTouchMoved) {
       ui::SendMouseEvent(screen_point, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE);
-    } else if (event->type() == ui::ET_TOUCH_RELEASED) {
+    } else if (event->type() == ui::EventType::kTouchReleased) {
       FinishTouchDrag(screen_point);
     }
   }
-  // TODO(crbug.com/229301) Calling ::SetCursorPos for ui::ET_TOUCH_PRESSED
-  // events here would fix web ui tab strip drags when the cursor is not over
-  // the Chrome window - The TODO is to figure out if that's reasonable, since
-  // it would change the cursor pos on every touch event. Or figure out if there
-  // is a less intrusive way of fixing the cursor position. If we can do that,
-  // we can remove the call to ::SetCursorPos in
+  // TODO(crbug.com/40312079) Calling ::SetCursorPos for
+  // ui::EventType::kTouchPressed events here would fix web ui tab strip drags
+  // when the cursor is not over the Chrome window - The TODO is to figure out
+  // if that's reasonable, since it would change the cursor pos on every touch
+  // event. Or figure out if there is a less intrusive way of fixing the cursor
+  // position. If we can do that, we can remove the call to ::SetCursorPos in
   // DesktopDragDropClientWin::StartDragAndDrop. Note that calling SetCursorPos
   // at the start of StartDragAndDrop breaks touch drag and drop, so it has to
   // be called some time before we get to StartDragAndDrop.
@@ -1234,8 +1240,28 @@ void DesktopWindowTreeHostWin::SetBoundsInDIP(const gfx::Rect& bounds) {
   // details.
   aura::Window* root = nullptr;
   const gfx::Rect bounds_in_pixels =
-      display::Screen::GetScreen()->DIPToScreenRectInWindow(root, bounds);
+      display::Screen::GetScreen()->DIPToScreenRectInWindow(
+          root, AdjustedContentBounds(bounds));
   AsWindowTreeHost()->SetBoundsInPixels(bounds_in_pixels);
+}
+
+void DesktopWindowTreeHostWin::SetAllowScreenshots(bool allow) {
+  // When screenshots are not allowed, set the affinity to WDA_MONITOR.
+  // This is used instead of WDA_EXCLUDEFROMCAPTURE because the latter
+  // renders the window with "no content", which appears as a black
+  // rectangle on the screen, whereas the latter completely removes the
+  // window from the screen.  The former is better indication to the user
+  // that the contents of the window are being explicitly not shown.
+  SetWindowDisplayAffinity(GetHWND(), allow ? WDA_NONE : WDA_MONITOR);
+}
+
+bool DesktopWindowTreeHostWin::AreScreenshotsAllowed() {
+  DWORD affinity;
+  if (GetWindowDisplayAffinity(GetHWND(), &affinity)) {
+    return affinity == WDA_NONE;
+  }
+
+  return true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1275,6 +1301,27 @@ void DesktopWindowTreeHostWin::CheckForMonitorChange() {
     return;
   last_monitor_from_window_ = monitor_from_window;
   OnHostDisplayChanged();
+}
+
+gfx::Rect DesktopWindowTreeHostWin::AdjustedContentBounds(
+    const gfx::Rect& bounds) {
+  gfx::Size minimum_size;
+  gfx::Size maximum_size;
+  GetMinMaxSize(&minimum_size, &maximum_size);
+
+  gfx::Size bounds_size = bounds.size();
+
+  if (!maximum_size.IsEmpty()) {
+    bounds_size.SetToMin(maximum_size);
+  }
+
+  if (!minimum_size.IsEmpty()) {
+    bounds_size.SetToMax(minimum_size);
+  }
+
+  gfx::Rect adjusted_bounds = bounds;
+  adjusted_bounds.set_size(bounds_size);
+  return adjusted_bounds;
 }
 
 aura::Window* DesktopWindowTreeHostWin::content_window() {

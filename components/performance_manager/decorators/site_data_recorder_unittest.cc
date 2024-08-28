@@ -126,7 +126,7 @@ void RunTaskOnPMSequence(base::OnceClosure task) {
 
 MockDataWriter* GetMockWriterForPageNode(const PageNode* page_node) {
   return static_cast<MockDataWriter*>(
-      SiteDataRecorder::Data::GetForTesting(page_node)->writer());
+      SiteDataRecorder::Data::GetForTesting(page_node).writer());
 }
 
 class SiteDataRecorderTest : public PerformanceManagerTestHarness {
@@ -148,8 +148,10 @@ class SiteDataRecorderTest : public PerformanceManagerTestHarness {
 
     auto browser_context_id = GetBrowserContext()->UniqueId();
     RunTaskOnPMSequence(base::BindLambdaForTesting([&]() {
-      SiteDataCacheFactory::GetInstance()->SetCacheForTesting(
-          browser_context_id, std::make_unique<MockDataCache>());
+      auto* factory = SiteDataCacheFactory::GetInstance();
+      ASSERT_TRUE(factory);
+      factory->SetCacheForTesting(browser_context_id,
+                                  std::make_unique<MockDataCache>());
     }));
 
     SetContents(CreateTestWebContents());
@@ -185,7 +187,7 @@ TEST_F(SiteDataRecorderTest, NavigationEventsBasicTests) {
   RunTaskOnPMSequence(base::BindLambdaForTesting([&]() {
     EXPECT_TRUE(page_node);
     EXPECT_FALSE(
-        SiteDataRecorder::Data::GetForTesting(page_node.get())->writer());
+        SiteDataRecorder::Data::GetForTesting(page_node.get()).writer());
   }));
 
   // Send a navigation event with the |committed| bit set and make sure that a
@@ -388,13 +390,11 @@ TEST_F(SiteDataRecorderTest, NodeDataAccessors) {
   // origin.
   base::WeakPtr<PageNode> page_node =
       PerformanceManager::GetPrimaryPageNodeForWebContents(web_contents());
-  const SiteDataRecorder::Data* data = nullptr;
   RunTaskOnPMSequence(base::BindLambdaForTesting([&]() {
     ASSERT_TRUE(page_node);
-    data = SiteDataRecorder::Data::FromPageNode(page_node.get());
-    ASSERT_TRUE(data);
-    EXPECT_FALSE(data->reader());
-    EXPECT_FALSE(data->writer());
+    auto& data = SiteDataRecorder::Data::FromPageNode(page_node.get());
+    EXPECT_FALSE(data.reader());
+    EXPECT_FALSE(data.writer());
     EXPECT_FALSE(SiteDataRecorder::Data::GetReaderForPageNode(page_node.get()));
   }));
 
@@ -402,11 +402,11 @@ TEST_F(SiteDataRecorderTest, NodeDataAccessors) {
 
   RunTaskOnPMSequence(base::BindLambdaForTesting([&]() {
     ASSERT_TRUE(page_node);
-    EXPECT_EQ(SiteDataRecorder::Data::FromPageNode(page_node.get()), data);
-    EXPECT_TRUE(data->reader());
-    EXPECT_TRUE(data->writer());
+    auto& data = SiteDataRecorder::Data::FromPageNode(page_node.get());
+    EXPECT_TRUE(data.reader());
+    EXPECT_TRUE(data.writer());
     EXPECT_EQ(SiteDataRecorder::Data::GetReaderForPageNode(page_node.get()),
-              data->reader());
+              data.reader());
   }));
 }
 

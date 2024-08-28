@@ -4,18 +4,21 @@
 
 #include "chrome/updater/app/server/win/com_classes_legacy.h"
 
+#include <windows.h>
+
 #include <oleauto.h>
 #include <shellapi.h>
-#include <windows.h>
 #include <wrl/client.h>
 
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
@@ -33,6 +36,7 @@
 #include "base/types/expected_macros.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_handle.h"
+#include "base/win/scoped_variant.h"
 #include "chrome/updater/activity.h"
 #include "chrome/updater/app/app_server_win.h"
 #include "chrome/updater/constants.h"
@@ -42,6 +46,7 @@
 #include "chrome/updater/prefs.h"
 #include "chrome/updater/registration_data.h"
 #include "chrome/updater/update_service.h"
+#include "chrome/updater/update_usage_stats_task.h"
 #include "chrome/updater/updater_scope.h"
 #include "chrome/updater/updater_version.h"
 #include "chrome/updater/util/progress_sampler.h"
@@ -420,6 +425,7 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
   // For backward-compatibility purposes, the `CheckForUpdate` call assumes
   // foreground priority and disallows same version updates.
   HRESULT CheckForUpdate() {
+    current_operation_ = CurrentOperation::kCheckingForUpdates;
     AppWebImplPtr obj(this);
     UpdateService::StateChangeCallback state_change_callback =
         base::BindRepeating(
@@ -456,7 +462,10 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
     return S_OK;
   }
 
-  HRESULT UpdateOrInstall() { return is_install_ ? Install() : Update(); }
+  HRESULT UpdateOrInstall() {
+    current_operation_ = CurrentOperation::kUpdatingOrInstalling;
+    return is_install_ ? Install() : Update();
+  }
 
   HRESULT Install() {
     AppWebImplPtr obj(this);
@@ -664,8 +673,12 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
           state_value = STATE_CHECKING_FOR_UPDATE;
           break;
         case UpdateService::UpdateState::State::kUpdateAvailable:
-          state_value = set_ready_to_install_ ? STATE_READY_TO_INSTALL
-                                              : STATE_UPDATE_AVAILABLE;
+          state_value =
+              set_ready_to_install_ ? STATE_READY_TO_INSTALL
+              : current_operation_ == CurrentOperation::kCheckingForUpdates
+                  ? (result_ ? STATE_UPDATE_AVAILABLE
+                             : STATE_CHECKING_FOR_UPDATE)
+                  : STATE_UPDATE_AVAILABLE;
           break;
         case UpdateService::UpdateState::State::kDownloading:
           state_value = STATE_DOWNLOADING;
@@ -674,10 +687,10 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
           state_value = STATE_INSTALLING;
           break;
         case UpdateService::UpdateState::State::kUpdated:
-          state_value = STATE_INSTALL_COMPLETE;
+          state_value = result_ ? STATE_INSTALL_COMPLETE : STATE_INSTALLING;
           break;
         case UpdateService::UpdateState::State::kNoUpdate:
-          state_value = STATE_NO_UPDATE;
+          state_value = result_ ? STATE_NO_UPDATE : STATE_CHECKING_FOR_UPDATE;
           break;
         case UpdateService::UpdateState::State::kUpdateError:
           state_value = STATE_ERROR;
@@ -749,6 +762,16 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
  private:
   using AppWebImplPtr = Microsoft::WRL::ComPtr<AppWebImpl>;
 
+  enum class CurrentOperation {
+    kUnknown = 0,
+
+    // The COM client has started an update check.
+    kCheckingForUpdates = 1,
+
+    // The COM client has started an update or install.
+    kUpdatingOrInstalling = 2,
+  };
+
   ~AppWebImpl() override {
     // If a new install has not happened, the app id registered in
     // `RuntimeClassInitialize` needs to be removed here. Otherwise
@@ -784,7 +807,7 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
               GetAppServerWinInstance()->config()->GetUpdaterPersistedData();
           const base::Version version =
               persisted_data->GetProductVersion(app_id);
-          if (!version.IsValid() || version != base::Version(kNullVersion)) {
+          if (version.IsValid() && version != base::Version(kNullVersion)) {
             return;
           }
           persisted_data->RemoveApp(app_id);
@@ -824,6 +847,7 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
   mutable base::Lock lock_;
   std::optional<UpdateService::UpdateState> state_update_;
   std::optional<UpdateService::Result> result_;
+  CurrentOperation current_operation_ = CurrentOperation::kUnknown;
 };
 
 // This class implements the legacy Omaha3 IAppBundleWeb interface as expected
@@ -977,7 +1001,8 @@ LegacyProcessLauncherImpl::LegacyProcessLauncherImpl() = default;
 LegacyProcessLauncherImpl::~LegacyProcessLauncherImpl() = default;
 
 STDMETHODIMP LegacyProcessLauncherImpl::LaunchCmdLine(const WCHAR* cmd_line) {
-  return LaunchCmdLineEx(cmd_line, nullptr, nullptr, nullptr);
+  LOG(ERROR) << "Reached unimplemented COM method: " << __func__;
+  return E_NOTIMPL;
 }
 
 STDMETHODIMP LegacyProcessLauncherImpl::LaunchBrowser(DWORD browser_type,
@@ -991,10 +1016,6 @@ STDMETHODIMP LegacyProcessLauncherImpl::LaunchCmdElevated(
     const WCHAR* command_id,
     DWORD caller_proc_id,
     ULONG_PTR* proc_handle) {
-  ASSIGN_OR_RETURN(auto app_command_runner,
-                   AppCommandRunner::LoadAppCommand(UpdaterScope::kSystem,
-                                                    app_id, command_id));
-
   base::win::ScopedHandle caller_proc_handle;
   if (HRESULT hr = OpenCallerProcessHandle(caller_proc_id, caller_proc_handle);
       FAILED(hr)) {
@@ -1002,14 +1023,31 @@ STDMETHODIMP LegacyProcessLauncherImpl::LaunchCmdElevated(
     return hr;
   }
 
-  base::Process process;
-  if (HRESULT hr = app_command_runner.Run({}, process); FAILED(hr)) {
+  Microsoft::WRL::ComPtr<LegacyAppCommandWebImpl> app_command_web;
+  if (HRESULT hr = MakeAndInitializeComObject<LegacyAppCommandWebImpl>(
+          app_command_web, UpdaterScope::kSystem, app_id, command_id);
+      FAILED(hr)) {
+    return hr;
+  }
+
+  if (HRESULT hr =
+          app_command_web->execute(base::win::ScopedVariant::kEmptyVariant,
+                                   base::win::ScopedVariant::kEmptyVariant,
+                                   base::win::ScopedVariant::kEmptyVariant,
+                                   base::win::ScopedVariant::kEmptyVariant,
+                                   base::win::ScopedVariant::kEmptyVariant,
+                                   base::win::ScopedVariant::kEmptyVariant,
+                                   base::win::ScopedVariant::kEmptyVariant,
+                                   base::win::ScopedVariant::kEmptyVariant,
+                                   base::win::ScopedVariant::kEmptyVariant);
+      FAILED(hr)) {
     return hr;
   }
 
   ScopedKernelHANDLE duplicate_proc_handle;
   if (!::DuplicateHandle(
-          ::GetCurrentProcess(), process.Handle(), caller_proc_handle.Get(),
+          ::GetCurrentProcess(), app_command_web->process().Handle(),
+          caller_proc_handle.Get(),
           ScopedKernelHANDLE::Receiver(duplicate_proc_handle).get(),
           PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0)) {
     HRESULT hr = HRESULTFromLastError();
@@ -1022,16 +1060,13 @@ STDMETHODIMP LegacyProcessLauncherImpl::LaunchCmdElevated(
   return S_OK;
 }
 
-// Launches a process at medium integrity.
-// TODO(crbug.com/1523813): the `server_proc_id`, `proc_handle`, and
-// `stdout_handle` provided by the caller are not populated on return, so the
-// caller will not be able to monitor the progress.
 STDMETHODIMP LegacyProcessLauncherImpl::LaunchCmdLineEx(
     const WCHAR* cmd_line,
     DWORD* /*server_proc_id*/,
     ULONG_PTR* /*proc_handle*/,
     ULONG_PTR* /*stdout_handle*/) {
-  return RunDeElevatedCmdLine(cmd_line);
+  LOG(ERROR) << "Reached unimplemented COM method: " << __func__;
+  return E_NOTIMPL;
 }
 
 LegacyAppCommandWebImpl::LegacyAppCommandWebImpl()
@@ -1042,11 +1077,13 @@ HRESULT LegacyAppCommandWebImpl::RuntimeClassInitialize(
     UpdaterScope scope,
     const std::wstring& app_id,
     const std::wstring& command_id,
-    bool send_pings) {
+    PingSender ping_sender) {
   app_command_runner_ =
       AppCommandRunner::LoadAppCommand(scope, app_id, command_id);
+  scope_ = scope;
   app_id_ = base::WideToUTF8(app_id);
-  send_pings_ = send_pings;
+  command_id_ = base::WideToUTF8(command_id);
+  ping_sender_ = std::move(ping_sender);
   return app_command_runner_.error_or(S_OK);
 }
 
@@ -1084,52 +1121,6 @@ STDMETHODIMP LegacyAppCommandWebImpl::get_output(BSTR* output) {
 
 namespace {
 
-void SendPing(const std::string& app_id, HRESULT hr, int event_type) {
-  struct SendPingResult : public base::RefCountedThreadSafe<SendPingResult> {
-    base::WaitableEvent completion_event;
-
-   private:
-    friend class base::RefCountedThreadSafe<SendPingResult>;
-    virtual ~SendPingResult() = default;
-  };
-
-  auto result = base::MakeRefCounted<SendPingResult>();
-  AppServerWin::PostRpcTask(base::BindOnce(
-      [](const std::string& app_id, const HRESULT hr, int event_type,
-         scoped_refptr<SendPingResult> result) {
-        const base::ScopedClosureRunner signal_event(base::BindOnce(
-            [](scoped_refptr<SendPingResult> result) {
-              result->completion_event.Signal();
-            },
-            result));
-
-        scoped_refptr<Configurator> config =
-            GetAppServerWinInstance()->config();
-        scoped_refptr<PersistedData> persisted_data =
-            config->GetUpdaterPersistedData();
-        if (!persisted_data->GetUsageStatsEnabled()) {
-          return;
-        }
-
-        update_client::CrxComponent app_command_data;
-        app_command_data.ap = persisted_data->GetAP(app_id);
-        app_command_data.app_id = app_id;
-        app_command_data.brand = persisted_data->GetBrandCode(app_id);
-        app_command_data.requires_network_encryption = false;
-        app_command_data.version = persisted_data->GetProductVersion(app_id);
-
-        update_client::UpdateClientFactory(config)->SendPing(
-            app_command_data,
-            {.event_type = event_type,
-             .result = SUCCEEDED(hr),
-             .error_code = hr,
-             .extra_code1 = 0},
-            base::DoNothing());
-      },
-      app_id, hr, event_type, result));
-
-  result->completion_event.TimedWait(base::Seconds(60));
-}
 
 }  // namespace
 
@@ -1143,6 +1134,9 @@ STDMETHODIMP LegacyAppCommandWebImpl::execute(VARIANT substitution1,
                                               VARIANT substitution8,
                                               VARIANT substitution9) {
   CHECK(app_command_runner_.has_value());
+  if (process_.IsValid()) {
+    return E_UNEXPECTED;
+  }
 
   std::vector<std::wstring> substitutions;
   for (const VARIANT& substitution :
@@ -1161,21 +1155,94 @@ STDMETHODIMP LegacyAppCommandWebImpl::execute(VARIANT substitution1,
   }
 
   const HRESULT hr = app_command_runner_->Run(substitutions, process_);
-  if (send_pings_) {
-    SendPing(app_id_, hr,
-             update_client::protocol_request::kEventAppCommandBegin);
+  if (FAILED(hr)) {
+    VLOG(2) << __func__ << ": AppCommand failed to launch: " << hr;
+    ping_sender_.Run(scope_, app_id_, command_id_,
+                     {
+                         .error_code = hr,
+                         .extra_code1 = kErrorAppCommandLaunchFailed,
+                     });
+    return hr;
   }
+
+  base::ThreadPool::CreateSequencedTaskRunner(
+      {base::MayBlock(), base::WithBaseSyncPrimitives()})
+      ->PostTask(FROM_HERE,
+                 base::BindOnce(
+                     [](base::Process process) -> ErrorParams {
+                       int exit_code = -1;
+                       if (process.WaitForExitWithTimeout(kWaitForAppInstaller,
+                                                          &exit_code)) {
+                         VLOG(2) << "AppCommand completed: " << exit_code;
+                         return {
+                             .error_code = exit_code,
+                             .extra_code1 = 0,
+                         };
+                       }
+                       VLOG(2) << "AppCommand timed out.";
+                       return {
+                           .error_code = HRESULT_FROM_WIN32(ERROR_TIMEOUT),
+                           .extra_code1 = kErrorAppCommandTimedOut,
+                       };
+                     },
+                     process_.Duplicate())
+                     .Then(base::BindOnce(ping_sender_, scope_, app_id_,
+                                          command_id_)));
   return hr;
 }
 
+void LegacyAppCommandWebImpl::SendPing(UpdaterScope scope,
+                                       const std::string& app_id,
+                                       const std::string& command_id,
+                                       ErrorParams error_params) {
+  AppServerWin::PostRpcTask(base::BindOnce(
+      [](UpdaterScope scope, const std::string& app_id,
+         const std::string& command_id, ErrorParams error_params) {
+        scoped_refptr<Configurator> config =
+            GetAppServerWinInstance()->config();
+        scoped_refptr<PersistedData> persisted_data =
+            config->GetUpdaterPersistedData();
+        if (!persisted_data->GetUsageStatsEnabled() &&
+            !AreRawUsageStatsEnabled(scope)) {
+          return;
+        }
+
+        update_client::CrxComponent app_command_data;
+        app_command_data.ap = persisted_data->GetAP(app_id);
+        app_command_data.app_id = app_id;
+        app_command_data.brand = persisted_data->GetBrandCode(app_id);
+        app_command_data.requires_network_encryption = false;
+        app_command_data.version = persisted_data->GetProductVersion(app_id);
+
+        update_client::UpdateClientFactory(config)->SendPing(
+            app_command_data,
+            {
+                .event_type =
+                    update_client::protocol_request::kEventAppCommandComplete,
+                .result = SUCCEEDED(error_params.error_code),
+                .error_code = error_params.error_code,
+                .extra_code1 = error_params.extra_code1,
+                .app_command_id = command_id,
+            },
+            base::BindOnce([](update_client::Error error) {
+              VLOG(1) << "App command ping completed: " << error;
+            }));
+      },
+      scope, app_id, command_id, error_params));
+}
+
 PolicyStatusImpl::PolicyStatusImpl()
-    : IDispatchImpl<IPolicyStatus3, IPolicyStatus2, IPolicyStatus>(
-          {IID_MAP_ENTRY_USER(IPolicyStatus3),
-           IID_MAP_ENTRY_USER(IPolicyStatus2),
-           IID_MAP_ENTRY_USER(IPolicyStatus)},
-          {IID_MAP_ENTRY_SYSTEM(IPolicyStatus3),
-           IID_MAP_ENTRY_SYSTEM(IPolicyStatus2),
-           IID_MAP_ENTRY_SYSTEM(IPolicyStatus)}),
+    : IDispatchImpl<IPolicyStatus4,
+                    IPolicyStatus3,
+                    IPolicyStatus2,
+                    IPolicyStatus>({IID_MAP_ENTRY_USER(IPolicyStatus4),
+                                    IID_MAP_ENTRY_USER(IPolicyStatus3),
+                                    IID_MAP_ENTRY_USER(IPolicyStatus2),
+                                    IID_MAP_ENTRY_USER(IPolicyStatus)},
+                                   {IID_MAP_ENTRY_SYSTEM(IPolicyStatus4),
+                                    IID_MAP_ENTRY_SYSTEM(IPolicyStatus3),
+                                    IID_MAP_ENTRY_SYSTEM(IPolicyStatus2),
+                                    IID_MAP_ENTRY_SYSTEM(IPolicyStatus)}),
       policy_service_(GetAppServerWinInstance()->config()->GetPolicyService()) {
 }
 PolicyStatusImpl::~PolicyStatusImpl() = default;
@@ -1599,6 +1666,16 @@ STDMETHODIMP PolicyStatusImpl::get_forceInstallApps(
   auto policy_status =
       PolicyStatusResult<std::vector<std::string>>::Get(base::BindRepeating(
           &PolicyService::GetForceInstallApps, policy_service_));
+  return policy_status.has_value()
+             ? PolicyStatusValueImpl::Create(*policy_status, value)
+             : E_FAIL;
+}
+
+STDMETHODIMP PolicyStatusImpl::get_cloudPolicyOverridesPlatformPolicy(
+    IPolicyStatusValue** value) {
+  CHECK(value);
+  auto policy_status = PolicyStatusResult<bool>::Get(base::BindRepeating(
+      &PolicyService::CloudPolicyOverridesPlatformPolicy, policy_service_));
   return policy_status.has_value()
              ? PolicyStatusValueImpl::Create(*policy_status, value)
              : E_FAIL;

@@ -26,6 +26,9 @@ class HelpAppUIDelegate {
   // if the dialog was determined to have opened successfully.
   virtual std::optional<std::string> OpenFeedbackDialog() = 0;
 
+  // Opens OS Settings at the on device app controls section.
+  virtual void ShowOnDeviceAppControls() = 0;
+
   // Opens OS Settings at the parental controls section.
   virtual void ShowParentalControls() = 0;
 
@@ -39,11 +42,6 @@ class HelpAppUIDelegate {
   // Launches the MS365 setup flow (or shows the final screen of the flow if it
   // was already completed).
   virtual void LaunchMicrosoft365Setup() = 0;
-
-  // Asks the help app notification controller to show the discover notification
-  // if the required heuristics are present and if a notification for the help
-  // app has not yet been shown in the current milestone.
-  virtual void MaybeShowDiscoverNotification() = 0;
 
   // Asks the help app notification controller to show the release notes
   // notification if a notification for the help app has not yet been shown in

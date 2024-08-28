@@ -29,6 +29,7 @@
 #define SRC_DAWN_TESTS_UNITTESTS_NATIVE_MOCKS_DEVICEMOCK_H_
 
 #include <memory>
+#include <vector>
 
 #include "dawn/native/Device.h"
 #include "dawn/native/Instance.h"
@@ -45,6 +46,7 @@ class DeviceMock : public DeviceBase {
   public:
     // Exposes some protected functions for testing purposes.
     using DeviceBase::DestroyObjects;
+    using DeviceBase::ForceEnableFeatureForTesting;
     using DeviceBase::ForceSetToggleForTesting;
 
     // TODO(lokokung): Use real DeviceBase constructor instead of mock specific one.
@@ -54,6 +56,8 @@ class DeviceMock : public DeviceBase {
     DeviceMock();
     ~DeviceMock() override;
     dawn::platform::Platform* GetPlatform() const override;
+
+    dawn::native::InstanceBase* GetInstance() const override;
 
     // Mock specific functionality.
     QueueMock* GetQueueMock();
@@ -116,12 +120,13 @@ class DeviceMock : public DeviceBase {
     MOCK_METHOD(ResultOrError<Ref<ShaderModuleBase>>,
                 CreateShaderModuleImpl,
                 (const UnpackedPtr<ShaderModuleDescriptor>&,
+                 const std::vector<tint::wgsl::Extension>&,
                  ShaderModuleParseResult*,
                  OwnedCompilationMessages*),
                 (override));
     MOCK_METHOD(ResultOrError<Ref<SwapChainBase>>,
                 CreateSwapChainImpl,
-                (Surface*, SwapChainBase*, const SwapChainDescriptor*),
+                (Surface*, SwapChainBase*, const SurfaceConfiguration*),
                 (override));
     MOCK_METHOD(ResultOrError<Ref<TextureBase>>,
                 CreateTextureImpl,
@@ -129,13 +134,8 @@ class DeviceMock : public DeviceBase {
                 (override));
     MOCK_METHOD(ResultOrError<Ref<TextureViewBase>>,
                 CreateTextureViewImpl,
-                (TextureBase*, const TextureViewDescriptor*),
+                (TextureBase*, const UnpackedPtr<TextureViewDescriptor>&),
                 (override));
-
-    MOCK_METHOD(ResultOrError<wgpu::TextureUsage>,
-                GetSupportedSurfaceUsageImpl,
-                (const Surface*),
-                (const, override));
 
     MOCK_METHOD(MaybeError, TickImpl, (), (override));
 

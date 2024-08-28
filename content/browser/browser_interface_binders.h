@@ -14,7 +14,6 @@
 
 namespace content {
 
-class AgentSchedulingGroupHost;
 class RenderFrameHost;
 class RenderFrameHostImpl;
 class DedicatedWorkerHost;
@@ -62,13 +61,6 @@ void PopulateBinderMapWithContext(
     mojo::BinderMapWithContext<const ServiceWorkerVersionBaseInfo&>* map);
 ServiceWorkerVersionInfo GetContextForHost(ServiceWorkerHost* host);
 
-// Registers the handlers for interfaces requested by `AgentSchedulingGroup`s.
-void PopulateBinderMap(AgentSchedulingGroupHost* host, mojo::BinderMap* map);
-void PopulateBinderMapWithContext(
-    AgentSchedulingGroupHost* host,
-    mojo::BinderMapWithContext<AgentSchedulingGroupHost*>* map);
-AgentSchedulingGroupHost* GetContextForHost(AgentSchedulingGroupHost* host);
-
 }  // namespace internal
 
 // Allows tests to override how frame hosts bind BatteryMonitor receivers.
@@ -79,7 +71,8 @@ CONTENT_EXPORT void OverrideBatteryMonitorBinderForTesting(
 
 // Allows tests to override how frame hosts bind VibrationManager receivers.
 using VibrationManagerBinder = base::RepeatingCallback<void(
-    mojo::PendingReceiver<device::mojom::VibrationManager>)>;
+    mojo::PendingReceiver<device::mojom::VibrationManager>,
+    mojo::PendingRemote<device::mojom::VibrationManagerListener>)>;
 CONTENT_EXPORT void OverrideVibrationManagerBinderForTesting(
     VibrationManagerBinder binder);
 

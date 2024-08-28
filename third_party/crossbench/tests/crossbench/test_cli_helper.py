@@ -8,17 +8,17 @@ import argparse
 import datetime as dt
 import json
 import pathlib
-from typing import Any
 import unittest
-
+from typing import Any
 
 from crossbench.cli_helper import (
-    Duration, parse_bool, parse_dir_path, parse_existing_file_path, parse_float,
-    parse_hjson_file_path, parse_httpx_url_str, parse_inline_hjson, parse_int,
-    parse_json_file, parse_json_file_path, parse_non_empty_dir_path,
-    parse_non_empty_file_path, parse_non_empty_str, parse_path, parse_port,
-    parse_positive_int, parse_positive_zero_float, parse_positive_zero_int,
-    parse_sh_cmd)
+    Duration, parse_bool, parse_dict, parse_dir_path, parse_existing_file_path,
+    parse_float, parse_hjson_file_path, parse_httpx_url_str, parse_inline_hjson,
+    parse_int, parse_json_file, parse_json_file_path, parse_non_empty_dict,
+    parse_non_empty_dir_path, parse_non_empty_file_path, parse_non_empty_str,
+    parse_path, parse_port, parse_positive_int, parse_positive_zero_float,
+    parse_positive_zero_int, parse_sh_cmd, parse_unique_sequence)
+from tests import test_helper
 from tests.crossbench.mock_helper import CrossbenchFakeFsTestCase
 
 
@@ -67,7 +67,7 @@ class DurationTestCase(unittest.TestCase):
   def test_invalid_suffix(self):
     with self.assertRaises(argparse.ArgumentTypeError) as cm:
       Duration.parse("100XXX")
-    self.assertIn("not supported", str(cm.exception))
+    self.assertIn("Unknown duration format", str(cm.exception))
     with self.assertRaises(argparse.ArgumentTypeError):
       Duration.parse("X0XX")
     with self.assertRaises(argparse.ArgumentTypeError):
@@ -362,3 +362,50 @@ class ArgParserHelperTestCase(CrossbenchFakeFsTestCase):
     for invalid in (1, "", None, [], "ls -al \"."):
       with self.assertRaises(argparse.ArgumentTypeError):
         parse_sh_cmd(invalid)
+
+  def test_parse_dict_invalid(self):
+    for invalid in (1, 0, "1", "0", "", None, [], tuple()):
+      with self.assertRaises(argparse.ArgumentTypeError):
+        parse_dict(invalid)
+
+  def test_parse_dict(self):
+    self.assertDictEqual(parse_dict({}), {})
+    self.assertDictEqual(parse_dict({"A": 2}), {"A": 2})
+
+  def test_parse_non_empty_dict_invalid(self):
+    for invalid in (1, 0, "1", "0", "", None, [], tuple(), dict()):
+      with self.assertRaises(argparse.ArgumentTypeError):
+        parse_non_empty_dict(invalid)
+
+  def test_parse_non_empty_dict(self):
+    result = parse_non_empty_dict({"a": 1})
+    self.assertDictEqual(result, {"a": 1})
+
+  def test_parse_unique_sequence(self):
+    self.assertListEqual(parse_unique_sequence([]), [])
+    self.assertTupleEqual(parse_unique_sequence(tuple()), tuple())
+    self.assertListEqual(parse_unique_sequence([1, 2, 3]), [1, 2, 3])
+    self.assertTupleEqual(parse_unique_sequence((1, 2, 3)), (1, 2, 3))
+
+  def test_parse_unique_sequence_invalid(self):
+    with self.assertRaises(argparse.ArgumentTypeError) as cm:
+      parse_unique_sequence([1, 1, 2, 2, 2, 3, 5, 5])
+    self.assertIn("duplicates", str(cm.exception))
+    self.assertIn("1, 2, 5", str(cm.exception))
+
+  def test_parse_unique_sequence_custom_exception(self):
+
+    class CustomException(Exception):
+      pass
+
+    with self.assertRaises(CustomException):
+      parse_unique_sequence([1, 1], error_cls=CustomException)
+
+  def test_parse_unique_sequence_custom_name(self):
+    with self.assertRaises(argparse.ArgumentTypeError) as cm:
+      parse_unique_sequence([1, 1], name="custom test name")
+    self.assertIn("custom test name", str(cm.exception))
+
+
+if __name__ == "__main__":
+  test_helper.run_pytest(__file__)

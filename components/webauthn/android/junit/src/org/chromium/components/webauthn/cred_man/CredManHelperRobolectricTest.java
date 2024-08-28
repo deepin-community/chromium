@@ -52,6 +52,7 @@ import org.chromium.blink.mojom.PublicKeyCredentialCreationOptions;
 import org.chromium.blink.mojom.PublicKeyCredentialDescriptor;
 import org.chromium.blink.mojom.PublicKeyCredentialRequestOptions;
 import org.chromium.blink.mojom.ResidentKeyRequirement;
+import org.chromium.components.webauthn.AuthenticationContextProvider;
 import org.chromium.components.webauthn.Barrier;
 import org.chromium.components.webauthn.Fido2ApiTestHelper;
 import org.chromium.components.webauthn.ShadowWebContentStatics;
@@ -104,7 +105,7 @@ public class CredManHelperRobolectricTest {
     @Mock private CreateCredentialRequest mCreateCredentialRequest;
     @Mock private CredManGetCredentialRequestHelper mCredManGetCredentialRequestHelper;
     @Mock private GetCredentialRequest mGetCredentialRequest;
-
+    @Mock private AuthenticationContextProvider mAuthenticationContextProviderMock;
     private WebauthnBrowserBridge.Provider mBridgeProvider =
             new WebauthnBrowserBridge.Provider() {
                 @Override
@@ -140,8 +141,15 @@ public class CredManHelperRobolectricTest {
         when(mCredManGetCredentialRequestHelper.getGetCredentialRequest(any()))
                 .thenReturn(mGetCredentialRequest);
         WebauthnModeProvider.setInstanceForTesting(mWebauthnModeProvider);
-        when(mWebauthnModeProvider.getCredManRequestDecorator()).thenReturn(mRequestDecorator);
-        mCredManHelper = new CredManHelper(mBridgeProvider, /* playServicesAvailable= */ true);
+        when(mWebauthnModeProvider.getCredManRequestDecorator(any())).thenReturn(mRequestDecorator);
+        when(mAuthenticationContextProviderMock.getIntentSender()).thenReturn(null);
+        when(mAuthenticationContextProviderMock.getContext()).thenReturn(mContext);
+        when(mAuthenticationContextProviderMock.getRenderFrameHost()).thenReturn(mFrameHost);
+        mCredManHelper =
+                new CredManHelper(
+                        mAuthenticationContextProviderMock,
+                        mBridgeProvider,
+                        /* playServicesAvailable= */ true);
         mCredManHelper.setMetricsHelperForTesting(mMetricsHelper);
         when(mContext.getSystemService(Context.CREDENTIAL_SERVICE)).thenReturn(mCredentialManager);
     }
@@ -156,8 +164,6 @@ public class CredManHelperRobolectricTest {
     public void testStartMakeRequest_default_success() {
         int result =
                 mCredManHelper.startMakeRequest(
-                        mContext,
-                        mFrameHost,
                         mCreationOptions,
                         mOriginString,
                         /* maybeClientDataHash= */ null,
@@ -187,8 +193,6 @@ public class CredManHelperRobolectricTest {
     public void testStartMakeRequest_withExplicitHash_success() {
         int result =
                 mCredManHelper.startMakeRequest(
-                        mContext,
-                        mFrameHost,
                         mCreationOptions,
                         mOriginString,
                         mMaybeClientDataHash,
@@ -215,8 +219,6 @@ public class CredManHelperRobolectricTest {
     public void testStartMakeRequest_userCancel_notAllowedError() {
         int result =
                 mCredManHelper.startMakeRequest(
-                        mContext,
-                        mFrameHost,
                         mCreationOptions,
                         mOriginString,
                         mMaybeClientDataHash,
@@ -241,8 +243,6 @@ public class CredManHelperRobolectricTest {
     public void testStartMakeRequest_invalidStateError_credentialExcluded() {
         int result =
                 mCredManHelper.startMakeRequest(
-                        mContext,
-                        mFrameHost,
                         mCreationOptions,
                         mOriginString,
                         mMaybeClientDataHash,
@@ -268,8 +268,6 @@ public class CredManHelperRobolectricTest {
     public void testStartMakeRequest_unknownError_unknownError() {
         int result =
                 mCredManHelper.startMakeRequest(
-                        mContext,
-                        mFrameHost,
                         mCreationOptions,
                         mOriginString,
                         mMaybeClientDataHash,
@@ -294,8 +292,6 @@ public class CredManHelperRobolectricTest {
     public void testStartGetRequest_default_success() {
         int result =
                 mCredManHelper.startGetRequest(
-                        mContext,
-                        mFrameHost,
                         mRequestOptions,
                         mOriginString,
                         /* isCrossOrigin= */ false,
@@ -327,8 +323,6 @@ public class CredManHelperRobolectricTest {
     public void testStartGetRequest_withExplicitHash_success() {
         int result =
                 mCredManHelper.startGetRequest(
-                        mContext,
-                        mFrameHost,
                         mRequestOptions,
                         mOriginString,
                         /* isCrossOrigin= */ false,
@@ -353,8 +347,6 @@ public class CredManHelperRobolectricTest {
 
         int result =
                 mCredManHelper.startGetRequest(
-                        mContext,
-                        mFrameHost,
                         mRequestOptions,
                         mOriginString,
                         /* isCrossOrigin= */ false,
@@ -382,8 +374,6 @@ public class CredManHelperRobolectricTest {
 
         int result =
                 mCredManHelper.startGetRequest(
-                        mContext,
-                        mFrameHost,
                         mRequestOptions,
                         mOriginString,
                         /* isCrossOrigin= */ false,
@@ -406,8 +396,6 @@ public class CredManHelperRobolectricTest {
     public void testStartGetRequest_userCancel_notAllowedError() {
         int result =
                 mCredManHelper.startGetRequest(
-                        mContext,
-                        mFrameHost,
                         mRequestOptions,
                         mOriginString,
                         /* isCrossOrigin= */ false,
@@ -434,8 +422,6 @@ public class CredManHelperRobolectricTest {
     public void testStartGetRequest_unknownError_unknownError() {
         int result =
                 mCredManHelper.startGetRequest(
-                        mContext,
-                        mFrameHost,
                         mRequestOptions,
                         mOriginString,
                         /* isCrossOrigin= */ false,
@@ -463,8 +449,6 @@ public class CredManHelperRobolectricTest {
         mRequestOptions.isConditional = true;
 
         mCredManHelper.startPrefetchRequest(
-                mContext,
-                mFrameHost,
                 mRequestOptions,
                 mOriginString,
                 /* isCrossOrigin= */ false,
@@ -508,8 +492,6 @@ public class CredManHelperRobolectricTest {
         mRequestOptions.isConditional = true;
 
         mCredManHelper.startPrefetchRequest(
-                mContext,
-                mFrameHost,
                 mRequestOptions,
                 mOriginString,
                 /* isCrossOrigin= */ false,
@@ -531,7 +513,8 @@ public class CredManHelperRobolectricTest {
                 .recordCredmanPrepareRequestHistogram(eq(CredManPrepareRequestEnum.SENT_REQUEST));
         verify(mMetricsHelper, times(1))
                 .recordCredmanPrepareRequestHistogram(eq(CredManPrepareRequestEnum.FAILURE));
-        verify(mMetricsHelper, times(0)).recordCredmanPrepareRequestDuration(anyLong());
+        verify(mMetricsHelper, times(0))
+                .recordCredmanPrepareRequestDuration(anyLong(), anyBoolean());
     }
 
     @Test
@@ -540,8 +523,6 @@ public class CredManHelperRobolectricTest {
         mRequestOptions.isConditional = true;
 
         mCredManHelper.startPrefetchRequest(
-                mContext,
-                mFrameHost,
                 mRequestOptions,
                 mOriginString,
                 /* isCrossOrigin= */ false,
@@ -563,7 +544,7 @@ public class CredManHelperRobolectricTest {
         verify(mBarrier).onCredManSuccessful(credManCallSuccessfulRunback.capture());
         credManCallSuccessfulRunback.getValue().run();
 
-        mCredManHelper.cancelConditionalGetAssertion(mFrameHost);
+        mCredManHelper.cancelConditionalGetAssertion();
 
         verify(mBarrier, times(1)).onCredManCancelled();
         verify(mBrowserBridge, times(1)).cleanupCredManRequest(any());
@@ -579,8 +560,6 @@ public class CredManHelperRobolectricTest {
         mRequestOptions.isConditional = true;
 
         mCredManHelper.startPrefetchRequest(
-                mContext,
-                mFrameHost,
                 mRequestOptions,
                 mOriginString,
                 /* isCrossOrigin= */ false,
@@ -603,7 +582,8 @@ public class CredManHelperRobolectricTest {
         verify(mBarrier).onCredManSuccessful(credManCallSuccessfulRunback.capture());
         credManCallSuccessfulRunback.getValue().run();
 
-        verify(mMetricsHelper, times(1)).recordCredmanPrepareRequestDuration(anyLong());
+        verify(mMetricsHelper, times(1))
+                .recordCredmanPrepareRequestDuration(anyLong(), anyBoolean());
 
         // Setup the test for startGetRequest:
         verify(mBrowserBridge, times(1))
@@ -633,8 +613,6 @@ public class CredManHelperRobolectricTest {
         mRequestOptions.isConditional = true;
 
         mCredManHelper.startPrefetchRequest(
-                mContext,
-                mFrameHost,
                 mRequestOptions,
                 mOriginString,
                 /* isCrossOrigin= */ false,
@@ -657,7 +635,8 @@ public class CredManHelperRobolectricTest {
         verify(mBarrier).onCredManSuccessful(credManCallSuccessfulRunback.capture());
         credManCallSuccessfulRunback.getValue().run();
 
-        verify(mMetricsHelper, times(1)).recordCredmanPrepareRequestDuration(anyLong());
+        verify(mMetricsHelper, times(1))
+                .recordCredmanPrepareRequestDuration(anyLong(), anyBoolean());
         verify(mBrowserBridge, times(1))
                 .onCredManConditionalRequestPending(any(), anyBoolean(), callbackCaptor.capture());
 
@@ -684,8 +663,6 @@ public class CredManHelperRobolectricTest {
     @SmallTest
     public void testStartGetRequest_ignoreGpm_DisablesBrandingAndHasBooleanInBundle() {
         mCredManHelper.startGetRequest(
-                mContext,
-                mFrameHost,
                 mRequestOptions,
                 mOriginString,
                 /* isCrossOrigin= */ false,

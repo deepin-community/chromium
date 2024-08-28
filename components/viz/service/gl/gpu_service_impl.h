@@ -89,6 +89,12 @@ namespace media {
 class MediaGpuChannelManager;
 }  // namespace media
 
+#if !BUILDFLAG(IS_CHROMEOS)
+namespace webnn {
+class WebNNContextProviderImpl;
+}  // namespace webnn
+#endif
+
 namespace viz {
 
 class VulkanContextProvider;
@@ -111,17 +117,29 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl
 #endif
       public mojom::GpuService {
  public:
-  GpuServiceImpl(const gpu::GPUInfo& gpu_info,
-                 std::unique_ptr<gpu::GpuWatchdogThread> watchdog,
-                 scoped_refptr<base::SingleThreadTaskRunner> io_runner,
+  struct VIZ_SERVICE_EXPORT InitParams {
+    InitParams();
+    InitParams(InitParams&& other);
+    InitParams& operator=(InitParams&& other);
+    ~InitParams();
+
+    std::unique_ptr<gpu::GpuWatchdogThread> watchdog_thread;
+    scoped_refptr<base::SingleThreadTaskRunner> io_runner;
+    raw_ptr<gpu::VulkanImplementation> vulkan_implementation = nullptr;
+#if BUILDFLAG(SKIA_USE_DAWN)
+    std::unique_ptr<gpu::DawnContextProvider> dawn_context_provider;
+#endif
+    base::OnceCallback<void(ExitCode)> exit_callback;
+  };
+
+  GpuServiceImpl(const gpu::GpuPreferences& gpu_preferences,
+                 const gpu::GPUInfo& gpu_info,
                  const gpu::GpuFeatureInfo& gpu_feature_info,
-                 const gpu::GpuPreferences& gpu_preferences,
                  const std::optional<gpu::GPUInfo>& gpu_info_for_hardware_gpu,
                  const std::optional<gpu::GpuFeatureInfo>&
                      gpu_feature_info_for_hardware_gpu,
                  const gfx::GpuExtraInfo& gpu_extra_info,
-                 gpu::VulkanImplementation* vulkan_implementation,
-                 base::OnceCallback<void(ExitCode)> exit_callback);
+                 InitParams init_params);
 
   GpuServiceImpl(const GpuServiceImpl&) = delete;
   GpuServiceImpl& operator=(const GpuServiceImpl&) = delete;
@@ -322,10 +340,6 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl
 
   gpu::GpuMemoryBufferFactory* gpu_memory_buffer_factory() {
     return gpu_memory_buffer_factory_.get();
-  }
-
-  gpu::MailboxManager* mailbox_manager() {
-    return gpu_channel_manager_->mailbox_manager();
   }
 
   gpu::SharedImageManager* shared_image_manager() {
@@ -531,7 +545,7 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl
   scoped_refptr<base::SingleThreadTaskRunner> io_runner_;
 
 #if BUILDFLAG(IS_FUCHSIA)
-  // TODO(crbug.com/1340041): Fuchsia does not support FIDL communication from
+  // TODO(crbug.com/40850116): Fuchsia does not support FIDL communication from
   // ThreadPool's worker threads.
   std::unique_ptr<base::Thread> vea_thread_;
 #endif
@@ -592,6 +606,10 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl
 #endif
 #if BUILDFLAG(SKIA_USE_DAWN)
   std::unique_ptr<gpu::DawnContextProvider> dawn_context_provider_;
+#endif
+
+#if !BUILDFLAG(IS_CHROMEOS)
+  std::unique_ptr<webnn::WebNNContextProviderImpl> webnn_context_provider_;
 #endif
 
   std::unique_ptr<gpu::GpuMemoryBufferFactory> gpu_memory_buffer_factory_;

@@ -121,8 +121,9 @@ DialogModel::Builder& DialogModel::Builder::AddButtonInternal(
   model_callback = std::move(callback);
   // NOTREACHED() is used below to make sure this callback isn't used.
   // DialogModelHost should be using OnDialogCanceled() instead.
-  model_button.emplace(base::BindRepeating([](const Event&) { NOTREACHED(); }),
-                       params);
+  model_button.emplace(
+      base::BindRepeating([](const Event&) { NOTREACHED_IN_MIGRATION(); }),
+      params);
 
   return *this;
 }
@@ -280,6 +281,15 @@ void DialogModel::SetButtonLabel(DialogModel::Button* button,
                                  const std::u16string& label) {
   CHECK(button);
   button->label_ = label;
+
+  if (host_) {
+    host_->OnDialogButtonChanged();
+  }
+}
+
+void DialogModel::SetButtonEnabled(DialogModel::Button* button, bool enabled) {
+  CHECK(button);
+  button->is_enabled_ = enabled;
 
   if (host_) {
     host_->OnDialogButtonChanged();

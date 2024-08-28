@@ -39,6 +39,7 @@ void TabHandleLayer::SetProperties(
     ui::NinePatchResource* tab_handle_resource,
     ui::NinePatchResource* tab_handle_outline_resource,
     bool foreground,
+    bool shouldShowTabOutline,
     bool close_pressed,
     float toolbar_width,
     float x,
@@ -153,6 +154,14 @@ void TabHandleLayer::SetProperties(
     tab_outline_->SetPosition(gfx::PointF(0, 0));
   }
 
+  // Display the tab outline only for the currently selected tab in group when
+  // TabGroupIndicator is enabled.
+  if (shouldShowTabOutline) {
+    tab_outline_->SetIsDrawable(true);
+  } else {
+    tab_outline_->SetIsDrawable(false);
+  }
+
   close_button_->SetUIResourceId(close_button_resource->ui_resource()->id());
   close_button_->SetBounds(close_button_resource->size());
 
@@ -174,6 +183,7 @@ void TabHandleLayer::SetProperties(
   }
 
   int divider_y = content_offset_y;
+  int divider_width = divider_resource->size().width();
 
   if (!is_start_divider_visible) {
     start_divider_->SetIsDrawable(false);
@@ -181,7 +191,8 @@ void TabHandleLayer::SetProperties(
     start_divider_->SetIsDrawable(true);
     start_divider_->SetUIResourceId(divider_resource->ui_resource()->id());
     start_divider_->SetBounds(divider_resource->size());
-    int divider_x = is_rtl ? width - divider_offset_x : divider_offset_x;
+    int divider_x =
+        is_rtl ? width - divider_width - divider_offset_x : divider_offset_x;
     if (foreground_) {
       divider_x += original_x;
     }
@@ -195,7 +206,8 @@ void TabHandleLayer::SetProperties(
     end_divider_->SetIsDrawable(true);
     end_divider_->SetUIResourceId(divider_resource->ui_resource()->id());
     end_divider_->SetBounds(divider_resource->size());
-    int divider_x = is_rtl ? divider_offset_x : width - divider_offset_x;
+    int divider_x =
+        is_rtl ? divider_offset_x : width - divider_width - divider_offset_x;
     if (foreground_) {
       divider_x += original_x;
     }

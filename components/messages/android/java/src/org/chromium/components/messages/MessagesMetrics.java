@@ -12,8 +12,8 @@ import org.chromium.base.TimeUtils;
 import org.chromium.base.metrics.RecordHistogram;
 
 /**
- * Static utility methods for recording messages related metrics.
- * TODO(https://crbug.com/1382967): remove logs.
+ * Static utility methods for recording messages related metrics. TODO(crbug.com/40877562): remove
+ * logs.
  */
 public class MessagesMetrics {
     private static final String TAG = "MessagesMetrics";
@@ -408,6 +408,14 @@ public class MessagesMetrics {
                 return "PromptHatsMicrophoneCustomInvitation";
             case MessageIdentifier.PROMPT_HATS_MICROPHONE_GENERIC_INVITATION:
                 return "PromptHatsMicrophoneGenericInvitation";
+            case MessageIdentifier.PERMISSION_BLOCKED:
+                return "PermissionBlocked";
+            case MessageIdentifier.SAVE_CARD_FAILURE:
+                return "SaveCardFailure";
+            case MessageIdentifier.VIRTUAL_CARD_ENROLL_FAILURE:
+                return "VirtualCardEnrollFailure";
+            case MessageIdentifier.PROMPT_HATS_QUICK_DELETE:
+                return "PromptHatsQuickDelete";
             default:
                 return "Unknown";
         }

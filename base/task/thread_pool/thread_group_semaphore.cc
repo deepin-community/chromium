@@ -5,10 +5,10 @@
 #include "base/task/thread_pool/thread_group_semaphore.h"
 
 #include <algorithm>
+#include <string_view>
 
 #include "base/metrics/histogram_macros.h"
 #include "base/sequence_token.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/common/checked_lock.h"
 #include "base/task/thread_pool/thread_group.h"
@@ -69,9 +69,9 @@ class ThreadGroupSemaphore::SemaphoreWorkerDelegate
   // `outer` owns the worker for which this delegate is
   // constructed. `join_called_for_testing` is shared amongst workers, and
   // owned by `outer`.
-  explicit SemaphoreWorkerDelegate(TrackedRef<ThreadGroup> outer,
-                                   bool is_excess,
-                                   AtomicFlag* join_called_for_testing);
+  SemaphoreWorkerDelegate(TrackedRef<ThreadGroup> outer,
+                          bool is_excess,
+                          AtomicFlag* join_called_for_testing);
   SemaphoreWorkerDelegate(const SemaphoreWorkerDelegate&) = delete;
   SemaphoreWorkerDelegate& operator=(const SemaphoreWorkerDelegate&) = delete;
 
@@ -118,8 +118,8 @@ ThreadGroupSemaphore::GetExecutor() {
   return std::make_unique<SemaphoreScopedCommandsExecutor>(this);
 }
 
-ThreadGroupSemaphore::ThreadGroupSemaphore(StringPiece histogram_label,
-                                           StringPiece thread_group_label,
+ThreadGroupSemaphore::ThreadGroupSemaphore(std::string_view histogram_label,
+                                           std::string_view thread_group_label,
                                            ThreadType thread_type_hint,
                                            TrackedRef<TaskTracker> task_tracker,
                                            TrackedRef<Delegate> delegate)
@@ -140,7 +140,7 @@ void ThreadGroupSemaphore::Start(
     WorkerThreadObserver* worker_thread_observer,
     WorkerEnvironment worker_environment,
     bool synchronous_thread_start_for_testing,
-    absl::optional<TimeDelta> may_block_threshold) {
+    std::optional<TimeDelta> may_block_threshold) {
   ThreadGroup::StartImpl(
       max_tasks, max_best_effort_tasks, suggested_reclaim_time,
       service_thread_task_runner, worker_thread_observer, worker_environment,
@@ -173,9 +173,7 @@ void ThreadGroupSemaphore::PushTaskSourceAndWakeUpWorkers(
 }
 
 size_t ThreadGroupSemaphore::NumberOfIdleWorkersLockRequiredForTesting() const {
-  return static_cast<size_t>(
-      ClampSub(static_cast<int64_t>(workers_.size()),
-               static_cast<int64_t>(num_active_signals_)));
+  return ClampSub(workers_.size(), num_active_signals_);
 }
 
 ThreadGroupSemaphore::SemaphoreWorkerDelegate::SemaphoreWorkerDelegate(
@@ -252,7 +250,7 @@ bool ThreadGroupSemaphore::SemaphoreWorkerDelegate::CanGetWorkLockRequired(
   // where this decision is made by the number of workers which were signaled),
   // this worker should not get work, until tasks are no longer in excess
   // (i.e. max tasks increases).
-  if (static_cast<size_t>(outer()->num_active_signals_) > outer()->max_tasks_) {
+  if (outer()->num_active_signals_ > outer()->max_tasks_) {
     OnWorkerBecomesIdleLockRequired(executor, worker);
     return false;
   }
@@ -284,7 +282,7 @@ ThreadGroupSemaphore::SemaphoreWorkerDelegate::SwapProcessedTask(
   // A transaction to the TaskSource to reenqueue, if any. Instantiated here as
   // `TaskSource::lock_` is a UniversalPredecessor and must always be acquired
   // prior to acquiring a second lock
-  absl::optional<RegisteredTaskSourceAndTransaction>
+  std::optional<RegisteredTaskSourceAndTransaction>
       transaction_with_task_source;
   if (task_source) {
     transaction_with_task_source.emplace(
@@ -317,8 +315,8 @@ ThreadGroupSemaphore::SemaphoreWorkerDelegate::SwapProcessedTask(
   // Running task bookkeeping.
   outer()->DecrementTasksRunningLockRequired(
       *read_worker().current_task_priority);
-  write_worker().current_shutdown_behavior = absl::nullopt;
-  write_worker().current_task_priority = absl::nullopt;
+  write_worker().current_shutdown_behavior = std::nullopt;
+  write_worker().current_task_priority = std::nullopt;
 
   if (transaction_with_task_source) {
     // If there is a task to enqueue, we can swap it for another task without
@@ -331,7 +329,7 @@ ThreadGroupSemaphore::SemaphoreWorkerDelegate::SwapProcessedTask(
     return GetWorkLockRequired(&workers_executor,
                                static_cast<WorkerThreadSemaphore*>(worker));
   } else if (outer()->GetDesiredNumAwakeWorkersLockRequired() >=
-             static_cast<size_t>(outer()->num_active_signals_)) {
+             outer()->num_active_signals_) {
     // When the thread pool wants more work to be run but hasn't signaled
     // workers for it yet we can take advantage and grab more work without
     // signal/wait contention.
@@ -378,9 +376,9 @@ void ThreadGroupSemaphore::SemaphoreWorkerDelegate::
     OnWorkerBecomesIdleLockRequired(BaseScopedCommandsExecutor* executor,
                                     WorkerThread* worker_base) {
   DCHECK_CALLED_ON_VALID_THREAD(worker_thread_checker_);
+  CHECK_GT(outer()->num_active_signals_, 0u);
   --outer()->num_active_signals_;
-  outer()->idle_workers_set_cv_for_testing_->Signal();
-  CHECK_GE(outer()->num_active_signals_, 0);
+  outer()->idle_workers_set_cv_for_testing_.Signal();
 }
 
 void ThreadGroupSemaphore::SemaphoreWorkerDelegate::RecordUnnecessaryWakeup() {
@@ -495,9 +493,8 @@ void ThreadGroupSemaphore::EnsureEnoughWorkersLockRequired(
 
   const size_t new_signals = std::min(
       // Don't signal more than `workers_.size()` workers.
-      {static_cast<size_t>(ClampSub(workers_.size(), num_active_signals_)),
-       static_cast<size_t>(
-           ClampSub(desired_awake_workers, num_active_signals_))});
+      {ClampSub(workers_.size(), num_active_signals_),
+       ClampSub(desired_awake_workers, num_active_signals_)});
   AnnotateAcquiredLockAlias alias(lock_, executor->outer()->lock_);
   for (size_t i = 0; i < new_signals; ++i) {
     executor->ScheduleSignal();

@@ -14,7 +14,6 @@
 #include "components/viz/common/viz_common_export.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/hdr_metadata.h"
 #include "ui/gfx/video_types.h"
 
 namespace viz {
@@ -64,7 +63,6 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
   gfx::PointF uv_top_left;
   gfx::PointF uv_bottom_right;
   SkColor4f background_color = SkColors::kTransparent;
-  std::array<float, 4> vertex_opacity = {1, 1, 1, 1};
   bool y_flipped : 1;
   bool nearest_neighbor : 1;
   bool premultiplied_alpha : 1;
@@ -83,8 +81,6 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
   // If true we will treat the alpha in the texture as 1. This works like rgbx
   // and not like blend mode 'kSrc' which would copy the alpha.
   bool force_rgbx : 1 = false;
-
-  gfx::HDRMetadata hdr_metadata;
 
   // kClear if the contents do not require any special protection. See enum of a
   // list of protected content types. Protected contents cannot be displayed via
@@ -106,6 +102,11 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
         int origin_rounded_display_mask_radius,
         int other_rounded_display_mask_radius,
         bool is_horizontally_positioned = true);
+
+    // Returns the bounds of rounded display masks in target space that are
+    // associated with the `quad`.
+    static std::array<gfx::RectF, kMaxRoundedDisplayMasksCount>
+    GetRoundedDisplayMasksBounds(const DrawQuad* quad);
 
     RoundedDisplayMasksInfo();
 
@@ -150,10 +151,6 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
   void set_force_rgbx(bool force_rgbx_value = true) {
     force_rgbx = force_rgbx_value;
   }
-
-  void set_vertex_opacity(float opacity);
-
-  void set_vertex_opacity(base::span<const float, 4> opacity);
 
   static const TextureDrawQuad* MaterialCast(const DrawQuad*);
 

@@ -9,6 +9,7 @@ import android.view.LayoutInflater;
 import android.view.ViewGroup;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import org.chromium.base.Callback;
 import org.chromium.base.supplier.ObservableSupplier;
@@ -16,23 +17,48 @@ import org.chromium.chrome.browser.magic_stack.ModuleConfigChecker;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate;
 import org.chromium.chrome.browser.magic_stack.ModuleProvider;
 import org.chromium.chrome.browser.magic_stack.ModuleProviderBuilder;
+import org.chromium.chrome.browser.page_image_service.ImageServiceBridge;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.recent_tabs.ForeignSessionHelper;
+import org.chromium.chrome.browser.tab_resumption.TabResumptionDataProvider.TabResumptionDataProviderFactory;
+import org.chromium.chrome.browser.tab_resumption.TabResumptionModuleMetricsUtils.ModuleNotShownReason;
+import org.chromium.chrome.browser.tab_ui.TabContentManager;
+import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+import org.chromium.components.browser_ui.util.GlobalDiscardableReferencePool;
+import org.chromium.components.favicon.LargeIconBridge;
+import org.chromium.components.image_fetcher.ImageFetcher;
+import org.chromium.components.image_fetcher.ImageFetcherConfig;
+import org.chromium.components.image_fetcher.ImageFetcherFactory;
+import org.chromium.page_image_service.mojom.ClientId;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
 public class TabResumptionModuleBuilder implements ModuleProviderBuilder, ModuleConfigChecker {
     private final Context mContext;
     private final ObservableSupplier<Profile> mProfileSupplier;
+    private final ObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
+    private final ObservableSupplier<TabContentManager> mTabContentManagerSupplier;
+    private final boolean mUseSalientImage;
 
-    // Foreign Session data source that listens to login / sync status changes. Shared among data
+    // SuggestionEntry data source that listens to login / sync status changes. Shared among data
     // providers to reduce resource use, and ref-counted to ensure proper resource management.
-    private ForeignSessionTabResumptionDataSource mForeignSessionTabResumptionDataSource;
-    private int mForeignSessionTabResumptionDataSourceRefCount;
+    private SyncDerivedSuggestionEntrySource mSuggestionEntrySource;
+    private int mSuggestionEntrySourceRefCount;
+
+    @Nullable private ImageServiceBridge mImageServiceBridge;
+    @NonNull private LargeIconBridge mLargeIconBridge;
 
     public TabResumptionModuleBuilder(
-            @NonNull Context context, @NonNull ObservableSupplier<Profile> profileSupplier) {
+            @NonNull Context context,
+            @NonNull ObservableSupplier<Profile> profileSupplier,
+            @NonNull ObservableSupplier<TabModelSelector> tabModelSelectorSupplier,
+            ObservableSupplier<TabContentManager> tabContentManagerSupplier) {
         mContext = context;
         mProfileSupplier = profileSupplier;
+        mTabModelSelectorSupplier = tabModelSelectorSupplier;
+        mTabContentManagerSupplier = tabContentManagerSupplier;
+        mUseSalientImage = TabResumptionModuleUtils.TAB_RESUMPTION_USE_SALIENT_IMAGE.getValue();
     }
 
     /** Build {@link ModuleProvider} for the tab resumption module. */
@@ -41,17 +67,38 @@ public class TabResumptionModuleBuilder implements ModuleProviderBuilder, Module
             @NonNull ModuleDelegate moduleDelegate,
             @NonNull Callback<ModuleProvider> onModuleBuiltCallback) {
         Profile profile = getRegularProfile();
-        if (!TabResumptionModuleUtils.shouldShowTabResumptionModule(profile)) {
+
+        Integer notShownReason =
+                TabResumptionModuleEnablement.computeModuleNotShownReason(
+                        moduleDelegate, getRegularProfile());
+        if (notShownReason != null) {
+            TabResumptionModuleMetricsUtils.recordModuleNotShownReason(notShownReason.intValue());
             return false;
         }
-        addRefToDataSource();
-        TabResumptionDataProvider dataProvider =
-                new ForeignSessionTabResumptionDataProvider(
-                        mForeignSessionTabResumptionDataSource, this::removeRefToDataSource);
-        UrlImageProvider urlImageProvider = new UrlImageProvider(profile, mContext);
+
+        assert mTabModelSelectorSupplier.hasValue();
+        TabModelSelector tabModelSelector = mTabModelSelectorSupplier.get();
+        TabModel tabModel =
+                tabModelSelector.getModel(
+                        /** incognito= */
+                        false);
+
+        TabResumptionDataProviderFactory dataProviderFactory =
+                () -> makeDataProvider(profile, moduleDelegate);
+
+        maybeInitImageServiceBridge(profile);
+        maybeInitLargeIconBridge(profile);
+
+        assert mTabContentManagerSupplier.hasValue();
+        UrlImageSourceImpl urlImageSource =
+                new UrlImageSourceImpl(mContext, mTabContentManagerSupplier.get());
+        UrlImageProvider urlImageProvider =
+                new UrlImageProvider(
+                        mContext, urlImageSource, mImageServiceBridge, mLargeIconBridge);
+
         TabResumptionModuleCoordinator coordinator =
                 new TabResumptionModuleCoordinator(
-                        mContext, moduleDelegate, dataProvider, urlImageProvider);
+                        mContext, moduleDelegate, tabModel, dataProviderFactory, urlImageProvider);
         onModuleBuiltCallback.onResult(coordinator);
         return true;
     }
@@ -73,6 +120,25 @@ public class TabResumptionModuleBuilder implements ModuleProviderBuilder, Module
         TabResumptionModuleViewBinder.bind(model, view, propertyKey);
     }
 
+    @Override
+    public void destroy() {
+        if (mLargeIconBridge != null) {
+            mLargeIconBridge.destroy();
+            mLargeIconBridge = null;
+        }
+        if (mImageServiceBridge != null) {
+            mImageServiceBridge.destroy();
+            mImageServiceBridge = null;
+        }
+    }
+
+    @Override
+    public void onPauseWithNative() {
+        if (mImageServiceBridge != null) {
+            mImageServiceBridge.clear();
+        }
+    }
+
     // ModuleEligibilityChecker implementation:
 
     @Override
@@ -81,7 +147,11 @@ public class TabResumptionModuleBuilder implements ModuleProviderBuilder, Module
         // See b/324138242.
         if (!mProfileSupplier.hasValue()) return false;
 
-        return TabResumptionModuleUtils.shouldShowTabResumptionModule(getRegularProfile());
+        if (TabResumptionModuleEnablement.isFeatureEnabled()) return true;
+
+        TabResumptionModuleMetricsUtils.recordModuleNotShownReason(
+                ModuleNotShownReason.FEATURE_DISABLED);
+        return false;
     }
 
     /** Gets the regular profile if exists. */
@@ -93,22 +163,81 @@ public class TabResumptionModuleBuilder implements ModuleProviderBuilder, Module
         return profile.isOffTheRecord() ? profile.getOriginalProfile() : profile;
     }
 
-    private void addRefToDataSource() {
-        if (mForeignSessionTabResumptionDataSourceRefCount == 0) {
-            assert mForeignSessionTabResumptionDataSource == null;
+    private void addRefToSuggestionEntrySource() {
+        if (mSuggestionEntrySourceRefCount == 0) {
+            assert mSuggestionEntrySource == null;
             Profile profile = getRegularProfile();
-            mForeignSessionTabResumptionDataSource =
-                    ForeignSessionTabResumptionDataSource.createFromProfile(profile);
+            SuggestionBackend suggestionBackend =
+                    TabResumptionModuleEnablement.SyncDerived.isV2Enabled()
+                            ? new VisitedUrlRankingBackend(profile)
+                            : new ForeignSessionSuggestionBackend(
+                                    new ForeignSessionHelper(profile),
+                                    (url) -> TabResumptionModuleUtils.shouldExcludeUrl(url));
+            mSuggestionEntrySource =
+                    SyncDerivedSuggestionEntrySource.createFromProfile(
+                            profile,
+                            suggestionBackend,
+                            /* servesLocalTabs= */ TabResumptionModuleEnablement.SyncDerived
+                                    .isV2EnabledWithLocalTabs());
         }
-        ++mForeignSessionTabResumptionDataSourceRefCount;
+        ++mSuggestionEntrySourceRefCount;
     }
 
-    private void removeRefToDataSource() {
-        assert mForeignSessionTabResumptionDataSource != null;
-        --mForeignSessionTabResumptionDataSourceRefCount;
-        if (mForeignSessionTabResumptionDataSourceRefCount == 0) {
-            mForeignSessionTabResumptionDataSource.destroy();
-            mForeignSessionTabResumptionDataSource = null;
+    private void removeRefToSuggestionEntrySource() {
+        assert mSuggestionEntrySource != null;
+        --mSuggestionEntrySourceRefCount;
+        if (mSuggestionEntrySourceRefCount == 0) {
+            mSuggestionEntrySource.destroy();
+            mSuggestionEntrySource = null;
         }
+    }
+
+    private TabResumptionDataProvider makeDataProvider(
+            Profile profile, @NonNull ModuleDelegate moduleDelegate) {
+        SyncDerivedTabResumptionDataProvider syncDerivedProvider = null;
+
+        if (TabResumptionModuleEnablement.SyncDerived.shouldMakeProvider(profile)) {
+            addRefToSuggestionEntrySource();
+            syncDerivedProvider =
+                    new SyncDerivedTabResumptionDataProvider(
+                            mSuggestionEntrySource, this::removeRefToSuggestionEntrySource);
+        }
+
+        if (TabResumptionModuleEnablement.SyncDerived.isV2EnabledWithLocalTabs()) {
+            // V2 suggestion does everything: No need for explicit mixing.
+            return syncDerivedProvider;
+        }
+
+        // Prior to V2 we'd need the Local Tab and Mixed providers.
+        LocalTabTabResumptionDataProvider localTabProvider =
+                TabResumptionModuleEnablement.LocalTab.shouldMakeProvider(moduleDelegate)
+                        ? new LocalTabTabResumptionDataProvider(moduleDelegate.getTrackingTab())
+                        : null;
+        return new MixedTabResumptionDataProvider(
+                localTabProvider,
+                syncDerivedProvider,
+                TabResumptionModuleUtils.TAB_RESUMPTION_DISABLE_BLEND.getValue());
+    }
+
+    private void maybeInitImageServiceBridge(Profile profile) {
+        if (!mUseSalientImage || mImageServiceBridge != null) return;
+
+        ImageFetcher imageFetcher =
+                ImageFetcherFactory.createImageFetcher(
+                        ImageFetcherConfig.IN_MEMORY_WITH_DISK_CACHE,
+                        profile.getProfileKey(),
+                        GlobalDiscardableReferencePool.getReferencePool());
+        mImageServiceBridge =
+                new ImageServiceBridge(
+                        ClientId.NTP_TAB_RESUMPTION,
+                        ImageFetcher.TAB_RESUMPTION_MODULE_NAME,
+                        profile,
+                        imageFetcher);
+    }
+
+    private void maybeInitLargeIconBridge(Profile profile) {
+        if (mLargeIconBridge != null) return;
+
+        mLargeIconBridge = new LargeIconBridge(profile);
     }
 }

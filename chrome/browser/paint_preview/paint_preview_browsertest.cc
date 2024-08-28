@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <optional>
+#include <string_view>
 
 #include "base/base64.h"
 #include "base/files/file_path.h"
@@ -115,7 +116,7 @@ class PaintPreviewBrowserTest
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   }
 
-  void LoadHtml(const base::StringPiece& html) const {
+  void LoadHtml(std::string_view html) const {
     std::string base64_html = base::Base64Encode(html);
     GURL url(std::string("data:text/html;base64,") + base64_html);
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
@@ -525,12 +526,12 @@ IN_PROC_BROWSER_TEST_P(PaintPreviewBrowserTest, DontReloadInRenderProcessExit) {
   CreateClient();
   auto* client = PaintPreviewClient::FromWebContents(web_contents);
   // Do this twice to simulate conditions for crash.
-  auto handle1 =
-      web_contents->IncrementCapturerCount(gfx::Size(), /*stay_hidden=*/true,
-                                           /*stay_awake=*/true);
-  auto handle2 =
-      web_contents->IncrementCapturerCount(gfx::Size(), /*stay_hidden=*/true,
-                                           /*stay_awake=*/true);
+  auto handle1 = web_contents->IncrementCapturerCount(
+      gfx::Size(), /*stay_hidden=*/true,
+      /*stay_awake=*/true, /*is_activity=*/true);
+  auto handle2 = web_contents->IncrementCapturerCount(
+      gfx::Size(), /*stay_hidden=*/true,
+      /*stay_awake=*/true, /*is_activity=*/true);
 
   // A callback that causes the frame to reload and end up in an invalid state
   // if it is allowed to run during crash handling.

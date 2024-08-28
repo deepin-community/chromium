@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <string>
+#include <string_view>
 
 #include "base/base64.h"
 #include "base/check_deref.h"
@@ -13,6 +14,8 @@
 #include "base/path_service.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/test/bind.h"
 #include "base/test/test_switches.h"
 #include "base/test/values_test_util.h"
 #include "base/threading/thread_restrictions.h"
@@ -68,6 +71,7 @@
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "net/ssl/ssl_server_config.h"
 #include "printing/buildflags/buildflags.h"
+#include "services/network/public/cpp/network_switches.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
@@ -145,6 +149,44 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
   EXPECT_EQ(chrome::kChromeUINewTabURL, wc->GetLastCommittedURL().spec());
 
   // Should not crash by this point.
+}
+
+IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
+                       CreateBrowserContextAcceptsProxyServer) {
+  AttachToBrowserTarget();
+  embedded_test_server()->RegisterRequestHandler(base::BindLambdaForTesting(
+      [&](const net::test_server::HttpRequest& request)
+          -> std::unique_ptr<net::test_server::HttpResponse> {
+        std::unique_ptr<net::test_server::BasicHttpResponse> http_response(
+            std::make_unique<net::test_server::BasicHttpResponse>());
+        http_response->set_code(net::HTTP_OK);
+        http_response->set_content_type("text/html");
+        http_response->set_content("<title>Hello from proxy server!</title>");
+        return std::move(http_response);
+      }));
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  base::Value::Dict params;
+  params.Set("proxyServer",
+             embedded_test_server()->host_port_pair().ToString());
+  const base::Value::Dict* result =
+      SendCommandSync("Target.createBrowserContext", std::move(params));
+  std::string context_id = *result->FindString("browserContextId");
+
+  content::WebContentsAddedObserver observer;
+
+  params = base::Value::Dict();
+  params.Set("url", "http://this-page-does-not-exist.com/site.html");
+  params.Set("browserContextId", context_id);
+  result = SendCommandSync("Target.createTarget", std::move(params));
+
+  content::WebContents* wc = observer.GetWebContents();
+  ASSERT_TRUE(content::WaitForLoadStop(wc));
+
+  EXPECT_EQ(GURL("http://this-page-does-not-exist.com/site.html"),
+            wc->GetURL());
+
+  EXPECT_EQ("Hello from proxy server!", base::UTF16ToUTF8(wc->GetTitle()));
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, CreateInDefaultContextById) {
@@ -386,10 +428,11 @@ IN_PROC_BROWSER_TEST_F(
   GURL url("invalid.scheme:for-sure");
   ui_test_utils::AllBrowserTabAddedWaiter tab_added_waiter;
 
-  content::WebContents* web_contents =
-      browser()->OpenURL(content::OpenURLParams(
-          url, content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-          ui::PAGE_TRANSITION_TYPED, false));
+  content::WebContents* web_contents = browser()->OpenURL(
+      content::OpenURLParams(url, content::Referrer(),
+                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                             ui::PAGE_TRANSITION_TYPED, false),
+      /*navigation_handle_callback=*/{});
   tab_added_waiter.Wait();
   ASSERT_TRUE(WaitForLoadStop(web_contents));
 
@@ -484,9 +527,11 @@ class DevToolsProtocolTest_BounceTrackingMitigations
     : public DevToolsProtocolTest {
  protected:
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeatureWithParameters(
-        features::kDIPS,
-        {{"delete", "true"}, {"triggering_action", "stateful_bounce"}});
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        /*enabled_features=*/{{features::kDIPS,
+                               {{"delete", "true"},
+                                {"triggering_action", "stateful_bounce"}}}},
+        /*disabled_features=*/{});
 
     DevToolsProtocolTest::SetUp();
   }
@@ -516,8 +561,6 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest_BounceTrackingMitigations,
 
   // Get DIPS Service
   DIPSService* dips_service = DIPSService::Get(browser()->profile());
-  dips_service->WaitForInitCompleteForTesting();
-
   // Record a stateful bounce for `bouncer`.
   dips_service->storage()
       ->AsyncCall(&DIPSStorage::RecordBounce)
@@ -811,7 +854,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, VisibleSecurityStateSecureState) {
     ASSERT_TRUE(base::Base64Decode(cert.GetString(), &decoded));
     der_certs.push_back(decoded);
   }
-  std::vector<base::StringPiece> cert_string_piece;
+  std::vector<std::string_view> cert_string_piece;
   for (const auto& str : der_certs) {
     cert_string_piece.push_back(str);
   }
@@ -871,7 +914,6 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, UntrustedClient) {
-  std::unique_ptr<base::Value::Dict> params(new base::Value::Dict());
   SetIsTrusted(false);
   Attach();
   EXPECT_FALSE(SendCommandSync("HeapProfiler.enable"));  // Implemented in V8
@@ -879,8 +921,6 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, UntrustedClient) {
   EXPECT_FALSE(SendCommandSync(
       "Memory.prepareForLeakDetection"));        // Implemented in content
   EXPECT_FALSE(SendCommandSync("Cast.enable"));  // Implemented in content
-  EXPECT_FALSE(SendCommandSync("Storage.getCookies"));
-  EXPECT_FALSE(SendCommandSync("Network.getAllCookies"));
   EXPECT_TRUE(SendCommandSync("Accessibility.enable"));
 }
 
@@ -952,9 +992,9 @@ class ExtensionProtocolTest : public DevToolsProtocolTest {
   }
 
  private:
-  extensions::ExtensionService* extension_service_;
-  extensions::ExtensionRegistry* extension_registry_;
-  content::WebContents* background_web_contents_;
+  raw_ptr<extensions::ExtensionService, DanglingUntriaged> extension_service_;
+  raw_ptr<extensions::ExtensionRegistry, DanglingUntriaged> extension_registry_;
+  raw_ptr<content::WebContents, DanglingUntriaged> background_web_contents_;
 #if BUILDFLAG(IS_WIN)
   // This is needed to stop ExtensionProtocolTestsfrom creating a
   // shortcut in the Windows start menu. The override needs to last until the
@@ -1253,6 +1293,57 @@ IN_PROC_BROWSER_TEST_F(PrivacySandboxAttestationsOverrideTest,
   EXPECT_FALSE(
       privacy_sandbox::PrivacySandboxAttestations::GetInstance()->IsOverridden(
           net::SchemefulSite(GURL(attestation_url))));
+}
+
+class DevToolsProtocolTest_RelatedWebsiteSets : public DevToolsProtocolTest {
+ protected:
+  const char* kPrimarySite = "https://a.test";
+  const char* kAssociatedSite = "https://b.test";
+  const char* kServiceSite = "https://c.test";
+  const char* kPrimaryCcTLD = "https://a.cctld";
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    DevToolsProtocolTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitchASCII(
+        network::switches::kUseRelatedWebsiteSet,
+        base::StringPrintf(R"({"primary": "%s",)"
+                           R"("associatedSites": ["%s"],)"
+                           R"("serviceSites": ["%s"],)"
+                           R"("ccTLDs": {"%s": ["%s"]}})",
+                           kPrimarySite, kAssociatedSite, kServiceSite,
+                           kPrimarySite, kPrimaryCcTLD));
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest_RelatedWebsiteSets,
+                       GetRelatedWebsiteSets) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL url(embedded_test_server()->GetURL("/empty.html"));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  Attach();
+
+  SendCommandSync("Storage.getRelatedWebsiteSets");
+
+  if (result()) {
+    const base::Value::List* set_list = result()->FindList("sets");
+    ASSERT_TRUE(set_list);
+
+    base::Value::List expected =
+        base::Value::List()  //
+            .Append(base::Value::Dict()
+                        .Set("associatedSites",
+                             base::Value::List().Append(kAssociatedSite))
+                        .Set("primarySites", base::Value::List()
+                                                 .Append(kPrimaryCcTLD)
+                                                 .Append(kPrimarySite))
+                        .Set("serviceSites",
+                             base::Value::List().Append(kServiceSite)));
+
+    EXPECT_EQ(*set_list, expected);
+  } else if (error()) {
+    EXPECT_EQ(*error()->FindString("message"),
+              "Failed fetching RelatedWebsiteSets");
+  }
 }
 
 }  // namespace

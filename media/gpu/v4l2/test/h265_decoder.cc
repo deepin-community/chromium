@@ -10,7 +10,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
 #include "media/gpu/macros.h"
-#include "media/video/h265_parser.h"
+#include "media/parsers/h265_parser.h"
 
 namespace media {
 namespace v4l2_test {
@@ -615,8 +615,9 @@ bool H265Decoder::ProcessCurrentSlice() {
   // supported in ChromeOS require the start code prefix.
   std::vector<uint8_t> slice_data = {0x00, 0x00, 0x01};
 
-  slice_data.insert(slice_data.end(), curr_slice_hdr_->nalu_data,
-                    curr_slice_hdr_->nalu_data + curr_slice_hdr_->nalu_size);
+  slice_data.insert(
+      slice_data.end(), curr_slice_hdr_->nalu_data.get(),
+      (curr_slice_hdr_->nalu_data + curr_slice_hdr_->nalu_size).get());
 
   scoped_refptr<MmappedBuffer> OUTPUT_buffer = OUTPUT_queue_->GetBuffer(0);
   OUTPUT_buffer->mmapped_planes()[0].CopyInSlice(
@@ -1139,6 +1140,8 @@ bool H265Decoder::DecodePicture() {
     CreateCAPTUREQueue(kNumberOfBuffersInCaptureQueue);
   }
 
+  v4l2_ioctl_->WaitForRequestCompletion(OUTPUT_queue_);
+
   uint32_t CAPTURE_id;
   v4l2_ioctl_->DQBuf(CAPTURE_queue_, &CAPTURE_id);
 
@@ -1388,7 +1391,8 @@ VideoDecoder::Result H265Decoder::DecodeNextFrame(const int frame_number,
                                                   std::vector<uint8_t>& y_plane,
                                                   std::vector<uint8_t>& u_plane,
                                                   std::vector<uint8_t>& v_plane,
-                                                  gfx::Size& size) {
+                                                  gfx::Size& size,
+                                                  BitDepth& bit_depth) {
   if (!parser_) {
     parser_ = std::make_unique<H265Parser>();
     parser_->SetStream(data_stream_->data(), data_stream_->length());
@@ -1412,7 +1416,8 @@ VideoDecoder::Result H265Decoder::DecodeNextFrame(const int frame_number,
   }
 
   if (frames_ready_to_be_outputted_.empty()) {
-    NOTREACHED() << "Stream ended with |frames_ready_to_be_outputted_| empty";
+    NOTREACHED_IN_MIGRATION()
+        << "Stream ended with |frames_ready_to_be_outputted_| empty";
   }
 
   scoped_refptr<H265Picture> picture = frames_ready_to_be_outputted_.front();
@@ -1420,9 +1425,10 @@ VideoDecoder::Result H265Decoder::DecodeNextFrame(const int frame_number,
   scoped_refptr<MmappedBuffer> buffer =
       CAPTURE_queue_->GetBuffer(picture->capture_queue_buffer_id_);
 
-  ConvertToYUV(y_plane, u_plane, v_plane, OUTPUT_queue_->resolution(),
-               buffer->mmapped_planes(), CAPTURE_queue_->resolution(),
-               CAPTURE_queue_->fourcc());
+  bit_depth =
+      ConvertToYUV(y_plane, u_plane, v_plane, OUTPUT_queue_->resolution(),
+                   buffer->mmapped_planes(), CAPTURE_queue_->resolution(),
+                   CAPTURE_queue_->fourcc());
 
   frames_ready_to_be_outputted_.pop();
 

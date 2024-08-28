@@ -6,10 +6,12 @@
 
 #include <cstdint>
 #include <optional>
+
 #include "ash/constants/ash_features.h"
 #include "base/files/scoped_file.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "chromeos/ash/components/dbus/fwupd/dbus_constants.h"
@@ -44,6 +46,7 @@ const char kPriorityKey[] = "Urgency";
 const char kUriKey[] = "Uri";
 const char kChecksumKey[] = "Checksum";
 const char kTrustFlagsKey[] = "TrustFlags";
+const char kFakeRemoteIdForTesting[] = "test-remote";
 
 void RunResponseOrErrorCallback(
     dbus::ObjectProxy::ResponseOrErrorCallback callback,
@@ -62,7 +65,6 @@ class MockObserver : public ash::FwupdClient::Observer {
               OnUpdateListResponse,
               (const std::string& device_id, ash::FwupdUpdateList* updates),
               (override));
-  MOCK_METHOD(void, OnInstallResponse, (bool success), (override));
   MOCK_METHOD(void,
               OnPropertiesChangedResponse,
               (ash::FwupdProperties * properties),
@@ -177,6 +179,11 @@ class FwupdClientTest : public testing::Test {
     dict_writer.AppendVariantOfString(checksum);
     device_array_writer.CloseContainer(&dict_writer);
 
+    device_array_writer.OpenDictEntry(&dict_writer);
+    dict_writer.AppendString(kTrustFlagsKey);
+    dict_writer.AppendVariantOfUint64(kFakeReportFlagForTesting);
+    device_array_writer.CloseContainer(&dict_writer);
+
     response_array_writer.CloseContainer(&device_array_writer);
     response_writer.CloseContainer(&response_array_writer);
 
@@ -216,6 +223,11 @@ class FwupdClientTest : public testing::Test {
     dict_writer.AppendVariantOfString(kFakeSha256ForTesting);
     device_array_writer.CloseContainer(&dict_writer);
     SetExpectedChecksum(kFakeSha256ForTesting);
+
+    device_array_writer.OpenDictEntry(&dict_writer);
+    dict_writer.AppendString(kTrustFlagsKey);
+    dict_writer.AppendVariantOfUint64(kFakeReportFlagForTesting);
+    device_array_writer.CloseContainer(&dict_writer);
 
     response_array_writer.CloseContainer(&device_array_writer);
     response_writer.CloseContainer(&response_array_writer);
@@ -505,6 +517,11 @@ TEST_F(FwupdClientTest, RequestUpgradesWithoutPriority) {
   device_array_writer.CloseContainer(&dict_writer);
   SetExpectedChecksum(kFakeSha256ForTesting);
 
+  device_array_writer.OpenDictEntry(&dict_writer);
+  dict_writer.AppendString(kTrustFlagsKey);
+  dict_writer.AppendVariantOfUint64(kFakeReportFlagForTesting);
+  device_array_writer.CloseContainer(&dict_writer);
+
   response_array_writer.CloseContainer(&device_array_writer);
   response_writer.CloseContainer(&response_array_writer);
 
@@ -632,14 +649,6 @@ TEST_F(FwupdClientTest, BadFormatChecksumOnlyComma) {
 }
 
 TEST_F(FwupdClientTest, Install) {
-  // The observer will check that the update description is parsed and passed
-  // correctly.
-  MockObserver observer;
-  EXPECT_CALL(observer, OnInstallResponse(_))
-      .Times(1)
-      .WillRepeatedly(Invoke(this, &FwupdClientTest::CheckInstallState));
-  fwupd_client_->AddObserver(&observer);
-
   EXPECT_CALL(*proxy_, DoCallMethodWithErrorResponse(_, _, _))
       .WillRepeatedly(Invoke(this, &FwupdClientTest::OnMethodCalled));
 
@@ -655,10 +664,14 @@ TEST_F(FwupdClientTest, Install) {
 
   AddDbusMethodCallResultSimulation(std::move(response), nullptr);
 
-  fwupd_client_->InstallUpdate(kFakeDeviceIdForTesting, base::ScopedFD(0),
-                               std::map<std::string, bool>());
-
-  base::RunLoop().RunUntilIdle();
+  base::RunLoop run_loop;
+  fwupd_client_->InstallUpdate(
+      kFakeDeviceIdForTesting, base::ScopedFD(0), std::map<std::string, bool>(),
+      base::BindLambdaForTesting([&](FwupdDbusResult result) {
+        EXPECT_EQ(result, FwupdDbusResult::kSuccess);
+        run_loop.Quit();
+      }));
+  run_loop.Run();
 }
 
 TEST_F(FwupdClientTest, PropertiesChanged) {
@@ -836,6 +849,29 @@ TEST_P(FwupdClientTest_DeviceRequest, OnDeviceRequestReceived) {
   EmitSignal(kFwupdDeviceRequestReceivedSignalName, signal);
 
   base::RunLoop().RunUntilIdle();
+}
+
+TEST_F(FwupdClientTest, UpdateMetadata) {
+  EXPECT_CALL(*proxy_, DoCallMethodWithErrorResponse(_, _, _))
+      .WillRepeatedly(Invoke(this, &FwupdClientTest::OnMethodCalled));
+
+  auto response = dbus::Response::CreateEmpty();
+
+  dbus::MessageWriter response_writer(response.get());
+
+  const bool update_success = true;
+  response_writer.AppendBool(update_success);
+
+  AddDbusMethodCallResultSimulation(std::move(response), nullptr);
+
+  base::RunLoop run_loop;
+  fwupd_client_->UpdateMetadata(
+      kFakeRemoteIdForTesting, base::ScopedFD(0), base::ScopedFD(1),
+      base::BindLambdaForTesting([&](FwupdDbusResult result) {
+        EXPECT_EQ(result, FwupdDbusResult::kSuccess);
+        run_loop.Quit();
+      }));
+  run_loop.Run();
 }
 
 }  // namespace ash

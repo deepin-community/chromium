@@ -32,7 +32,6 @@
 
 #include "src/tint/lang/core/builtin_value.h"
 #include "src/tint/lang/wgsl/ast/assignment_statement.h"
-#include "src/tint/lang/wgsl/ast/bitcast_expression.h"
 #include "src/tint/lang/wgsl/ast/variable_decl_statement.h"
 #include "src/tint/lang/wgsl/program/clone_context.h"
 #include "src/tint/lang/wgsl/program/program_builder.h"
@@ -73,11 +72,11 @@ enum class VertexDataType {
     kFloat,  // unsigned normalized, signed normalized, and float
 };
 
-/// Writes the VertexFormat to the stream.
+/// Writes the VertexFormat to the diagnostic.
 /// @param out the stream to write to
 /// @param format the VertexFormat to write
 /// @returns out so calls can be chained
-StringStream& operator<<(StringStream& out, VertexFormat format) {
+diag::Diagnostic& operator<<(diag::Diagnostic& out, VertexFormat format) {
     switch (format) {
         case VertexFormat::kUint8x2:
             return out << "uint8x2";
@@ -261,16 +260,15 @@ struct VertexPulling::State {
         for (auto* fn : src.AST().Functions()) {
             if (fn->PipelineStage() == PipelineStage::kVertex) {
                 if (func != nullptr) {
-                    b.Diagnostics().AddError(
-                        diag::System::Transform,
-                        "VertexPulling found more than one vertex entry point");
+                    b.Diagnostics().AddError(Source{})
+                        << "VertexPulling found more than one vertex entry point";
                     return resolver::Resolve(b);
                 }
                 func = fn;
             }
         }
         if (func == nullptr) {
-            b.Diagnostics().AddError(diag::System::Transform, "Vertex stage entry point not found");
+            b.Diagnostics().AddError(Source{}) << "Vertex stage entry point not found";
             return resolver::Resolve(b);
         }
 
@@ -358,12 +356,10 @@ struct VertexPulling::State {
             const VertexBufferLayoutDescriptor& buffer_layout = cfg.vertex_state[buffer_idx];
 
             if ((buffer_layout.array_stride & 3) != 0) {
-                b.Diagnostics().AddError(
-                    diag::System::Transform,
-                    "WebGPU requires that vertex stride must be a multiple of 4 bytes, "
-                    "but VertexPulling array stride for buffer " +
-                        std::to_string(buffer_idx) + " was " +
-                        std::to_string(buffer_layout.array_stride) + " bytes");
+                b.Diagnostics().AddError(Source{})
+                    << "WebGPU requires that vertex stride must be a multiple of 4 bytes, "
+                       "but VertexPulling array stride for buffer "
+                    << buffer_idx << " was " << buffer_layout.array_stride << " bytes";
                 return nullptr;
             }
 
@@ -398,12 +394,10 @@ struct VertexPulling::State {
 
                 // Base types must match between the vertex stream and the WGSL variable
                 if (!IsTypeCompatible(var_dt, fmt_dt)) {
-                    StringStream err;
-                    err << "VertexAttributeDescriptor for location "
-                        << std::to_string(attribute_desc.shader_location) << " has format "
-                        << attribute_desc.format << " but shader expects "
-                        << var.type->FriendlyName();
-                    b.Diagnostics().AddError(diag::System::Transform, err.str());
+                    b.Diagnostics().AddError(Source{})
+                        << "VertexAttributeDescriptor for location "
+                        << attribute_desc.shader_location << " has format " << attribute_desc.format
+                        << " but shader expects " << var.type->FriendlyName();
                     return nullptr;
                 }
 
@@ -443,7 +437,6 @@ struct VertexPulling::State {
                             break;
                         default:
                             TINT_UNREACHABLE() << var_dt.width;
-                            return nullptr;
                     }
                 } else if (var_dt.width > fmt_dt.width) {
                     // WGSL variable vector width is wider than the loaded vector width, do padding.
@@ -694,7 +687,6 @@ struct VertexPulling::State {
         }
 
         TINT_UNREACHABLE() << "format " << static_cast<int>(format);
-        return nullptr;
     }
 
     /// Generates an expression reading an aligned basic type (u32, i32, f32) from
@@ -747,7 +739,6 @@ struct VertexPulling::State {
                 break;
         }
         TINT_UNREACHABLE() << "invalid format for LoadPrimitive" << static_cast<int>(format);
-        return nullptr;
     }
 
     /// Generates an expression reading a vec2/3/4 from a vertex buffer.
@@ -797,16 +788,14 @@ struct VertexPulling::State {
 
             if (TINT_UNLIKELY(!sem->Attributes().location.has_value())) {
                 TINT_ICE() << "Location missing value";
-                return;
             }
             location_info[sem->Attributes().location.value()] = info;
         } else {
             auto* builtin_attr = GetAttribute<BuiltinAttribute>(param->attributes);
             if (TINT_UNLIKELY(!builtin_attr)) {
                 TINT_ICE() << "Invalid entry point parameter";
-                return;
             }
-            auto builtin = src.Sem().Get(builtin_attr)->Value();
+            auto builtin = builtin_attr->builtin;
             // Check for existing vertex_index and instance_index builtins.
             if (builtin == core::BuiltinValue::kVertexIndex) {
                 vertex_index_expr = [this, param] {
@@ -858,9 +847,8 @@ struct VertexPulling::State {
                 auto* builtin_attr = GetAttribute<BuiltinAttribute>(member->attributes);
                 if (TINT_UNLIKELY(!builtin_attr)) {
                     TINT_ICE() << "Invalid entry point parameter";
-                    return;
                 }
-                auto builtin = src.Sem().Get(builtin_attr)->Value();
+                auto builtin = builtin_attr->builtin;
                 // Check for existing vertex_index and instance_index builtins.
                 if (builtin == core::BuiltinValue::kVertexIndex) {
                     vertex_index_expr = member_expr;

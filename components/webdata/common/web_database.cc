@@ -6,27 +6,21 @@
 
 #include <algorithm>
 
+#include "base/feature_list.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/stringprintf.h"
 #include "sql/transaction.h"
 
-// Current version number.  Note: when changing the current version number,
-// corresponding changes must happen in the unit tests, and new migration test
-// added.  See `WebDatabaseMigrationTest::kCurrentTestedVersionNumber`.
-// static
-const int WebDatabase::kCurrentVersionNumber = 125;
-
-// TODO(crbug.com/324468207): Decide and document a process for updating this
-// number, i.e. what our deprecation strategy is for older versions of the
-// database.
-const int WebDatabase::kDeprecatedVersionNumber = 82;
-
 const base::FilePath::CharType WebDatabase::kInMemoryPath[] =
     FILE_PATH_LITERAL(":memory");
 
 namespace {
+
+BASE_FEATURE(kSqlWALModeOnWebDatabase,
+             "SqlWALModeOnWebDatabase",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // These values are logged as histogram buckets and most not be changed nor
 // reused.
@@ -48,9 +42,9 @@ void LogInitResult(WebDatabaseInitResult result) {
   base::UmaHistogramEnumeration("WebDatabase.InitResult", result);
 }
 
-// Version 125 deletes the 'unmasked_credit_cards' table, and thus is no longer
-// compatible with version 124.
-const int kCompatibleVersionNumber = 125;
+// Version 128 changes the primary key of 'plus_addresses', and thus is no
+// longer compatible with version 127.
+const int kCompatibleVersionNumber = 128;
 
 // Change the version number and possibly the compatibility version of
 // |meta_table_|.
@@ -78,7 +72,8 @@ sql::InitStatus FailedMigrationTo(int version_num) {
 }  // namespace
 
 WebDatabase::WebDatabase()
-    : db_({// We don't store that much data in the tables so use a small page
+    : db_({.wal_mode = base::FeatureList::IsEnabled(kSqlWALModeOnWebDatabase),
+           // We don't store that much data in the tables so use a small page
            // size. This provides a large benefit for empty tables (which is
            // very likely with the tables we create).
            .page_size = 2048,
@@ -97,11 +92,11 @@ WebDatabaseTable* WebDatabase::GetTable(WebDatabaseTable::TypeKey key) {
 }
 
 void WebDatabase::BeginTransaction() {
-  db_.BeginTransaction();
+  db_.BeginTransactionDeprecated();
 }
 
 void WebDatabase::CommitTransaction() {
-  db_.CommitTransaction();
+  db_.CommitTransactionDeprecated();
 }
 
 std::string WebDatabase::GetDiagnosticInfo(int extended_error,

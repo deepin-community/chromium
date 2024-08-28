@@ -12,6 +12,7 @@
 
 #include "base/base64.h"
 #include "base/command_line.h"
+#include "base/containers/to_value_list.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/json/values_util.h"
@@ -119,15 +120,6 @@ bool ValidateExpireDateFormat(const std::string& input) {
   return true;
 }
 
-// Helper for serialization of ExtensionIdSets to/from a base::Value::List.
-[[nodiscard]] base::Value::List ExtensionIdSetToList(
-    const ExtensionIdSet& ids) {
-  base::Value::List id_list;
-  base::ranges::for_each(ids,
-                         [&id_list](const auto& id) { id_list.Append(id); });
-  return id_list;
-}
-
 [[nodiscard]] std::optional<ExtensionIdSet> ExtensionIdSetFromList(
     const base::Value::List& list) {
   ExtensionIdSet ids;
@@ -150,8 +142,8 @@ InstallSignature::~InstallSignature() = default;
 base::Value::Dict InstallSignature::ToDict() const {
   base::Value::Dict dict;
   dict.Set(kSignatureFormatVersionKey, kSignatureFormatVersion);
-  dict.Set(kIdsKey, ExtensionIdSetToList(ids));
-  dict.Set(kInvalidIdsKey, ExtensionIdSetToList(invalid_ids));
+  dict.Set(kIdsKey, base::ToValueList(ids));
+  dict.Set(kInvalidIdsKey, base::ToValueList(invalid_ids));
   dict.Set(kExpireDateKey, expire_date);
   dict.Set(kSaltKey, base::Base64Encode(salt));
   dict.Set(kSignatureKey, base::Base64Encode(signature));
@@ -268,7 +260,7 @@ void InstallSigner::GetSignature(SignatureCallback callback) {
   }
 
   salt_ = std::string(kSaltBytes, 0);
-  crypto::RandBytes(std::data(salt_), salt_.size());
+  crypto::RandBytes(base::as_writable_byte_span(salt_));
 
   std::string hash_base64;
   if (!HashWithMachineId(salt_, &hash_base64)) {

@@ -22,6 +22,8 @@
 
 #include "fxbarcode/pdf417/BC_PDF417HighLevelEncoder.h"
 
+#include <array>
+
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_string.h"
 #include "third_party/bigint/BigIntegerLibrary.hh"
@@ -34,23 +36,23 @@ constexpr int16_t kLatchToNumeric = 902;
 constexpr int16_t kShiftToByte = 913;
 constexpr int16_t kLatchToByte = 924;
 
-constexpr int8_t kMixed[128] = {
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, 12, -1, -1, -1, 11, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 26, -1, -1, 15, 18, 21,
-    10, -1, -1, -1, 22, 20, 13, 16, 17, 19, 0,  1,  2,  3,  4,  5,  6,  7,  8,
-    9,  14, -1, -1, 23, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 24,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+constexpr std::array<const int8_t, 128> kMixed = {
+    {-1, -1, -1, -1, -1, -1, -1, -1, -1, 12, -1, -1, -1, 11, -1, -1, -1, -1, -1,
+     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 26, -1, -1, 15, 18, 21,
+     10, -1, -1, -1, 22, 20, 13, 16, 17, 19, 0,  1,  2,  3,  4,  5,  6,  7,  8,
+     9,  14, -1, -1, 23, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 24,
+     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1}};
 
-constexpr int8_t kPunctuation[128] = {
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, 12, 15, -1, -1, 11, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 10, 20, -1, 18, -1,
-    -1, 28, 23, 24, 22, -1, 13, 16, 17, 19, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, 14, 0,  1,  -1, 2,  25, 3,  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 4,  5,  6,  -1,
-    7,  8,  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, 26, 21, 27, 9,  -1};
+constexpr std::array<const int8_t, 128> kPunctuation = {
+    {-1, -1, -1, -1, -1, -1, -1, -1, -1, 12, 15, -1, -1, 11, -1, -1, -1, -1, -1,
+     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 10, 20, -1, 18, -1,
+     -1, 28, 23, 24, 22, -1, 13, 16, 17, 19, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+     -1, 14, 0,  1,  -1, 2,  25, 3,  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 4,  5,  6,  -1,
+     7,  8,  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+     -1, -1, -1, -1, -1, -1, -1, -1, -1, 26, 21, 27, 9,  -1}};
 
 bool IsAlphaUpperOrSpace(wchar_t ch) {
   return ch == ' ' || FXSYS_IsUpperASCII(ch);
@@ -116,7 +118,7 @@ std::optional<WideString> CBC_PDF417HighLevelEncoder::EncodeHighLevel(
         p += t;
       } else {
         std::optional<size_t> b =
-            DetermineConsecutiveBinaryCount(result, bytes.raw_span(), p);
+            DetermineConsecutiveBinaryCount(result, bytes.unsigned_span(), p);
         if (!b.has_value())
           return std::nullopt;
 
@@ -124,9 +126,9 @@ std::optional<WideString> CBC_PDF417HighLevelEncoder::EncodeHighLevel(
         if (b_value == 0)
           b_value = 1;
         if (b_value == 1 && encodingMode == EncodingMode::kText) {
-          EncodeBinary(bytes.raw_span(), p, 1, EncodingMode::kText, &sb);
+          EncodeBinary(bytes.unsigned_span(), p, 1, EncodingMode::kText, &sb);
         } else {
-          EncodeBinary(bytes.raw_span(), p, b_value, encodingMode, &sb);
+          EncodeBinary(bytes.unsigned_span(), p, b_value, encodingMode, &sb);
           encodingMode = EncodingMode::kByte;
           textSubMode = SubMode::kAlpha;
         }
@@ -262,7 +264,7 @@ void CBC_PDF417HighLevelEncoder::EncodeBinary(pdfium::span<const uint8_t> bytes,
   size_t idx = startpos;
   if (count >= 6) {
     *sb += kLatchToByte;
-    wchar_t chars[5];
+    std::array<wchar_t, 5> chars;
     while ((startpos + count - idx) >= 6) {
       int64_t t = 0;
       for (size_t i = 0; i < 6; i++) {

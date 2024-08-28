@@ -4,10 +4,10 @@
 
 #include "content/browser/accessibility/browser_accessibility_win.h"
 
+#include "base/memory/ptr_util.h"
 #include "content/browser/accessibility/browser_accessibility_manager.h"
 #include "content/browser/accessibility/browser_accessibility_manager_win.h"
 #include "content/browser/accessibility/browser_accessibility_state_impl.h"
-
 #include "ui/base/win/atl_module.h"
 
 namespace content {
@@ -16,8 +16,7 @@ namespace content {
 std::unique_ptr<BrowserAccessibility> BrowserAccessibility::Create(
     BrowserAccessibilityManager* manager,
     ui::AXNode* node) {
-  return std::unique_ptr<BrowserAccessibilityWin>(
-      new BrowserAccessibilityWin(manager, node));
+  return base::WrapUnique(new BrowserAccessibilityWin(manager, node));
 }
 
 BrowserAccessibilityWin::BrowserAccessibilityWin(
@@ -26,7 +25,7 @@ BrowserAccessibilityWin::BrowserAccessibilityWin(
     : BrowserAccessibility(manager, node) {
   ui::win::CreateATLModuleIfNeeded();
   HRESULT hr = CComObject<BrowserAccessibilityComWin>::CreateInstance(
-      &browser_accessibility_com_);
+      &browser_accessibility_com_.AsEphemeralRawAddr());
   DCHECK(SUCCEEDED(hr));
   browser_accessibility_com_->AddRef();
   browser_accessibility_com_->Init(this);
@@ -34,8 +33,7 @@ BrowserAccessibilityWin::BrowserAccessibilityWin(
 
 BrowserAccessibilityWin::~BrowserAccessibilityWin() {
   if (browser_accessibility_com_) {
-    browser_accessibility_com_->Destroy();
-    browser_accessibility_com_ = nullptr;
+    browser_accessibility_com_.ExtractAsDangling()->Destroy();
   }
 }
 

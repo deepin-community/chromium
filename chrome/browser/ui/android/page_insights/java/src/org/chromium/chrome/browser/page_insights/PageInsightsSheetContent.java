@@ -24,12 +24,10 @@ import org.chromium.base.Callback;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.supplier.ObservableSupplierImpl;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.page_insights.SheetStateTranslator.PageInsightsSheetState;
 import org.chromium.chrome.browser.page_insights.proto.IntentParams.PageInsightsIntentParams;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
-import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.ui.text.NoUnderlineClickableSpan;
 import org.chromium.ui.text.SpanApplier;
 
@@ -39,18 +37,11 @@ import java.util.Date;
 public class PageInsightsSheetContent implements BottomSheetContent, View.OnLayoutChangeListener {
 
     @VisibleForTesting
-    static final String PAGE_INSIGHTS_FULL_HEIGHT_RATIO_PARAM = "page_insights_full_height_ratio";
-
-    @VisibleForTesting
     static final String PAGE_INSIGHTS_PEEK_HEIGHT_RATIO_PARAM = "page_insights_peek_height_ratio";
 
     @VisibleForTesting
     static final String PAGE_INSIGHTS_PEEK_WITH_PRIVACY_HEIGHT_RATIO_PARAM =
             "page_insights_peek_with_privacy_height_ratio";
-
-    @VisibleForTesting
-    static final String PAGE_INSIGHTS_ALT_PRIVACY_NOTICE_URL_PARAM =
-            "page_insights_alt_privacy_notice_url";
 
     interface OnBottomSheetTouchHandler {
         /** Returns true if the tap has been handled. */
@@ -66,7 +57,7 @@ public class PageInsightsSheetContent implements BottomSheetContent, View.OnLayo
     }
 
     /** Ratio of the height when in full mode. */
-    static final float DEFAULT_FULL_HEIGHT_RATIO = 0.9f;
+    static final float FULL_HEIGHT_RATIO = 0.9f;
 
     /** Ratio of the height when in peek mode and privacy notice is not showing. */
     @VisibleForTesting static final float DEFAULT_PEEK_HEIGHT_RATIO = 0.201f;
@@ -77,13 +68,13 @@ public class PageInsightsSheetContent implements BottomSheetContent, View.OnLayo
     private static final SharedPreferencesManager sSharedPreferencesManager =
             ChromeSharedPreferences.getInstance();
     private static final long INVALID_TIMESTAMP = -1;
+    private static final String PRIVACY_NOTICE_URL =
+            "https://support.google.com/chrome?p=page_insights";
 
     private final OnBackPressHandler mOnBackPressHandler;
     private final ObservableSupplierImpl<Boolean> mWillHandleBackPressSupplier;
-    private final float mFullHeightRatio;
     private final float mPeekHeightRatio;
     private final float mPeekWithPrivacyHeightRatio;
-    private final String mAltPrivacyNoticeUrl;
 
     private Context mContext;
     private View mLayoutView;
@@ -115,18 +106,12 @@ public class PageInsightsSheetContent implements BottomSheetContent, View.OnLayo
             OnBackPressHandler onBackPressHandler,
             ObservableSupplierImpl<Boolean> willHandleBackPressSupplier,
             OnBottomSheetTouchHandler onBottomSheetTouchHandler) {
-        mFullHeightRatio =
-                (float)
-                        ChromeFeatureList.getFieldTrialParamByFeatureAsDouble(
-                                ChromeFeatureList.CCT_PAGE_INSIGHTS_HUB,
-                                PAGE_INSIGHTS_FULL_HEIGHT_RATIO_PARAM,
-                                DEFAULT_FULL_HEIGHT_RATIO);
         mPeekHeightRatio =
                 intentParams.hasPeekHeightRatio()
                         ? intentParams.getPeekHeightRatio()
                         : (float)
                                 ChromeFeatureList.getFieldTrialParamByFeatureAsDouble(
-                                        ChromeFeatureList.CCT_PAGE_INSIGHTS_HUB,
+                                        ChromeFeatureList.CCT_PAGE_INSIGHTS_HUB_PEEK,
                                         PAGE_INSIGHTS_PEEK_HEIGHT_RATIO_PARAM,
                                         DEFAULT_PEEK_HEIGHT_RATIO);
         mPeekWithPrivacyHeightRatio =
@@ -134,13 +119,9 @@ public class PageInsightsSheetContent implements BottomSheetContent, View.OnLayo
                         ? intentParams.getPeekWithNoticeHeightRatio()
                         : (float)
                                 ChromeFeatureList.getFieldTrialParamByFeatureAsDouble(
-                                        ChromeFeatureList.CCT_PAGE_INSIGHTS_HUB,
+                                        ChromeFeatureList.CCT_PAGE_INSIGHTS_HUB_PEEK,
                                         PAGE_INSIGHTS_PEEK_WITH_PRIVACY_HEIGHT_RATIO_PARAM,
                                         DEFAULT_PEEK_WITH_PRIVACY_HEIGHT_RATIO);
-        mAltPrivacyNoticeUrl =
-                ChromeFeatureList.getFieldTrialParamByFeature(
-                        ChromeFeatureList.CCT_PAGE_INSIGHTS_HUB,
-                        PAGE_INSIGHTS_ALT_PRIVACY_NOTICE_URL_PARAM);
         mLayoutView = layoutView;
         mToolbarView =
                 (ViewGroup)
@@ -176,13 +157,10 @@ public class PageInsightsSheetContent implements BottomSheetContent, View.OnLayo
         return true;
     }
 
-    /**
-     * Use custom scrim lifecycle so that the scrim is displayed between {@link
-     * PageInsightsSheetState.PEEK} and {@link PageInsightsSheetState.EXPANDED} states.
-     */
     @Override
     public boolean hasCustomScrimLifecycle() {
-        return true;
+        // We use the standard scrim that open when going beyond the peeking state.
+        return false;
     }
 
     @Override
@@ -406,7 +384,7 @@ public class PageInsightsSheetContent implements BottomSheetContent, View.OnLayo
         // sizing ourselves, here in Java. :(
         // TODO(b/306894418): See if this issue can be fixed or avoided.
         float contentHeight =
-                (mFullScreenHeight * mFullHeightRatio)
+                (mFullScreenHeight * FULL_HEIGHT_RATIO)
                         - mContext.getResources()
                                 .getDimensionPixelSize(R.dimen.page_insights_toolbar_height);
         int contentWidth =
@@ -505,31 +483,20 @@ public class PageInsightsSheetContent implements BottomSheetContent, View.OnLayo
         TextView privacyNoticeTextView =
                 mSheetContentView.findViewById(R.id.page_insights_privacy_notice_message);
         privacyNoticeTextView.setMovementMethod(LinkMovementMethod.getInstance());
-        if (mAltPrivacyNoticeUrl.isEmpty()) {
-            preparePrivacyNoticeText(
-                    privacyNoticeTextView,
-                    R.string.page_insights_hub_privacy_notice,
-                    UrlConstants.MY_ACTIVITY_HOME_URL);
-        } else {
-            preparePrivacyNoticeText(
-                    privacyNoticeTextView,
-                    R.string.page_insights_hub_alt_privacy_notice,
-                    mAltPrivacyNoticeUrl);
-        }
+        preparePrivacyNoticeText(privacyNoticeTextView);
     }
 
-    private void preparePrivacyNoticeText(
-            TextView privacyNoticeTextView, int resourceId, String url) {
+    private void preparePrivacyNoticeText(TextView privacyNoticeTextView) {
         privacyNoticeTextView.setText(
                 SpanApplier.applySpans(
-                        mContext.getString(resourceId),
+                        mContext.getString(R.string.page_insights_hub_privacy_notice),
                         new SpanApplier.SpanInfo(
                                 "<link>",
                                 "</link>",
                                 new NoUnderlineClickableSpan(
                                         mContext,
                                         R.color.default_bg_color_blue,
-                                        view -> mLoadUrlCallback.onResult(url)))));
+                                        view -> mLoadUrlCallback.onResult(PRIVACY_NOTICE_URL)))));
     }
 
     private void updateCurrentRecyclerView(View currentPageView) {

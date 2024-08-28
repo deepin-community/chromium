@@ -9,7 +9,7 @@
 #include "base/uuid.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/sharing/password_sender_service.h"
-#include "components/sync/model/dummy_metadata_change_list.h"
+#include "components/sync/model/empty_metadata_change_list.h"
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/model/metadata_change_list.h"
 #include "components/sync/model/model_type_change_processor.h"
@@ -63,28 +63,6 @@ CreateOutgoingPasswordSharingInvitationSpecifics(
     element_data->set_avatar_url(
         password.icon_url.is_valid() ? password.icon_url.spec() : "");
   }
-
-  // TODO(http://crbug.com/1448235) Stop populating the legacy proto format.
-  // Pick the first paassword and place it in the old proto format to achieve
-  // backwards compatibility.
-  sync_pb::PasswordSharingInvitationData::PasswordData* password_data =
-      specifics.mutable_client_only_unencrypted_data()->mutable_password_data();
-  password_data->set_password_value(
-      base::UTF16ToUTF8(passwords[0].password_value));
-  password_data->set_scheme(static_cast<int>(passwords[0].scheme));
-  password_data->set_signon_realm(passwords[0].signon_realm);
-  password_data->set_origin(
-      passwords[0].url.is_valid() ? passwords[0].url.spec() : "");
-  password_data->set_username_element(
-      base::UTF16ToUTF8(passwords[0].username_element));
-  password_data->set_password_element(
-      base::UTF16ToUTF8(passwords[0].password_element));
-  password_data->set_username_value(
-      base::UTF16ToUTF8(passwords[0].username_value));
-  password_data->set_display_name(base::UTF16ToUTF8(passwords[0].display_name));
-  password_data->set_avatar_url(
-      passwords[0].icon_url.is_valid() ? passwords[0].icon_url.spec() : "");
-
   return specifics;
 }
 
@@ -110,7 +88,7 @@ OutgoingPasswordSharingInvitationSyncBridge::CreateMetadataChangeList() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // The data type intentionally doesn't persist the data on disk, so metadata
   // is just ignored.
-  return std::make_unique<syncer::DummyMetadataChangeList>();
+  return std::make_unique<syncer::EmptyMetadataChangeList>();
 }
 
 void OutgoingPasswordSharingInvitationSyncBridge::SendPasswordGroup(
@@ -176,9 +154,9 @@ OutgoingPasswordSharingInvitationSyncBridge::ApplyIncrementalSyncChanges(
   return std::nullopt;
 }
 
-void OutgoingPasswordSharingInvitationSyncBridge::GetData(
-    StorageKeyList storage_keys,
-    DataCallback callback) {
+std::unique_ptr<syncer::DataBatch>
+OutgoingPasswordSharingInvitationSyncBridge::GetDataForCommit(
+    StorageKeyList storage_keys) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto batch = std::make_unique<syncer::MutableDataBatch>();
@@ -189,11 +167,11 @@ void OutgoingPasswordSharingInvitationSyncBridge::GetData(
       batch->Put(storage_key, ConvertToEntityData(iter->second));
     }
   }
-  std::move(callback).Run(std::move(batch));
+  return batch;
 }
 
-void OutgoingPasswordSharingInvitationSyncBridge::GetAllDataForDebugging(
-    DataCallback callback) {
+std::unique_ptr<syncer::DataBatch>
+OutgoingPasswordSharingInvitationSyncBridge::GetAllDataForDebugging() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto batch = std::make_unique<syncer::MutableDataBatch>();
@@ -202,7 +180,7 @@ void OutgoingPasswordSharingInvitationSyncBridge::GetAllDataForDebugging(
     batch->Put(GetStorageKeyFromSpecifics(outgoing_invitation.specifics),
                ConvertToEntityData(outgoing_invitation));
   }
-  std::move(callback).Run(std::move(batch));
+  return batch;
 }
 
 std::string OutgoingPasswordSharingInvitationSyncBridge::GetClientTag(

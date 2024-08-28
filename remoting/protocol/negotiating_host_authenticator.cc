@@ -17,13 +17,12 @@
 #include "base/strings/string_split.h"
 #include "remoting/base/rsa_key_pair.h"
 #include "remoting/protocol/channel_authenticator.h"
+#include "remoting/protocol/credentials_type.h"
 #include "remoting/protocol/host_authentication_config.h"
 #include "remoting/protocol/pairing_host_authenticator.h"
 #include "remoting/protocol/pairing_registry.h"
 #include "remoting/protocol/session_authz_authenticator.h"
 #include "remoting/protocol/spake2_authenticator.h"
-#include "remoting/protocol/third_party_host_authenticator.h"
-#include "remoting/protocol/token_validator.h"
 #include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
 
 namespace remoting::protocol {
@@ -99,7 +98,7 @@ void NegotiatingHostAuthenticator::ProcessMessage(
     if (method == Method::INVALID) {
       // Failed to find a common auth method.
       state_ = REJECTED;
-      rejection_reason_ = RejectionReason::PROTOCOL_ERROR;
+      rejection_reason_ = RejectionReason::NO_COMMON_AUTH_METHOD;
       std::move(resume_callback).Run();
       return;
     }
@@ -143,14 +142,13 @@ void NegotiatingHostAuthenticator::CreateAuthenticator(
 
   switch (current_method_) {
     case Method::INVALID:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
 
     case Method::CORP_SESSION_AUTHZ_SPAKE2_CURVE25519: {
       DCHECK(config_->session_authz_client_factory);
-      // TODO: b/323068262 - implement intra-session reauth and pass a valid
-      // reauth callback.
       auto authenticator = std::make_unique<SessionAuthzAuthenticator>(
+          CredentialsType::CORP_SESSION_AUTHZ,
           config_->session_authz_client_factory->Create(),
           base::BindRepeating(&Spake2Authenticator::CreateForHost, local_id_,
                               remote_id_, config_->local_cert,
@@ -159,16 +157,6 @@ void NegotiatingHostAuthenticator::CreateAuthenticator(
       current_authenticator_ = std::move(authenticator);
       break;
     }
-
-    case Method::THIRD_PARTY_SPAKE2_CURVE25519:
-      current_authenticator_ = std::make_unique<ThirdPartyHostAuthenticator>(
-          base::BindRepeating(&Spake2Authenticator::CreateForHost, local_id_,
-                              remote_id_, config_->local_cert,
-                              config_->key_pair),
-          config_->token_validator_factory->CreateTokenValidator(local_id_,
-                                                                 remote_id_));
-      std::move(resume_callback).Run();
-      break;
 
     case Method::PAIRED_SPAKE2_CURVE25519: {
       PairingHostAuthenticator* pairing_authenticator =

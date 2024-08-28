@@ -23,7 +23,6 @@
 #include "crypto/sha2.h"
 #include "net/base/features.h"
 #include "net/cert/internal/test_helpers.h"
-#include "net/cert/internal/trust_store_features.h"
 #include "net/cert/test_keychain_search_list_mac.h"
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util.h"
@@ -117,56 +116,16 @@ const char* TrustImplTypeToString(TrustStoreMac::TrustImplType t) {
 }  // namespace
 
 class TrustStoreMacImplTest
-    : public testing::TestWithParam<
-          std::tuple<TrustStoreMac::TrustImplType, bool, bool>> {
+    : public testing::TestWithParam<TrustStoreMac::TrustImplType> {
  public:
-  TrustStoreMacImplTest()
-      : scoped_enforce_local_anchor_constraints_(
-            ExpectedEnforceLocalAnchorConstraintsEnabled()) {
-    if (ExpectedTrustedLeafSupportEnabled()) {
-      feature_list_.InitAndEnableFeature(
-          features::kTrustStoreTrustedLeafSupport);
-    } else {
-      feature_list_.InitAndDisableFeature(
-          features::kTrustStoreTrustedLeafSupport);
-    }
-  }
-
-  TrustStoreMac::TrustImplType GetImplParam() const {
-    return std::get<0>(GetParam());
-  }
-
-  bool ExpectedTrustedLeafSupportEnabled() const {
-    return std::get<1>(GetParam());
-  }
-
-  bool ExpectedEnforceLocalAnchorConstraintsEnabled() const {
-    return std::get<2>(GetParam());
-  }
+  TrustStoreMac::TrustImplType GetImplParam() const { return GetParam(); }
 
   bssl::CertificateTrust ExpectedTrustForAnchor() const {
-    bssl::CertificateTrust trust;
-
-    if (ExpectedTrustedLeafSupportEnabled()) {
-      trust = bssl::CertificateTrust::ForTrustAnchorOrLeaf()
-                  .WithEnforceAnchorExpiry();
-    } else {
-      trust =
-          bssl::CertificateTrust::ForTrustAnchor().WithEnforceAnchorExpiry();
-    }
-
-    if (ExpectedEnforceLocalAnchorConstraintsEnabled()) {
-      trust = trust.WithEnforceAnchorConstraints()
-                  .WithRequireAnchorBasicConstraints();
-    }
-
-    return trust;
+    return bssl::CertificateTrust::ForTrustAnchorOrLeaf()
+        .WithEnforceAnchorExpiry()
+        .WithEnforceAnchorConstraints()
+        .WithRequireAnchorBasicConstraints();
   }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-  ScopedLocalAnchorConstraintsEnforcementForTesting
-      scoped_enforce_local_anchor_constraints_;
 };
 
 // Much of the Keychain API was marked deprecated as of the macOS 13 SDK.
@@ -431,18 +390,11 @@ TEST_P(TrustStoreMacImplTest, SystemCerts) {
 INSTANTIATE_TEST_SUITE_P(
     Impl,
     TrustStoreMacImplTest,
-    testing::Combine(
-        testing::Values(TrustStoreMac::TrustImplType::kSimple,
-                        TrustStoreMac::TrustImplType::kDomainCacheFullCerts,
-                        TrustStoreMac::TrustImplType::kKeychainCacheFullCerts),
-        testing::Bool(),
-        testing::Bool()),
+    testing::Values(TrustStoreMac::TrustImplType::kSimple,
+                    TrustStoreMac::TrustImplType::kDomainCacheFullCerts,
+                    TrustStoreMac::TrustImplType::kKeychainCacheFullCerts),
     [](const testing::TestParamInfo<TrustStoreMacImplTest::ParamType>& info) {
-      return base::StrCat(
-          {TrustImplTypeToString(std::get<0>(info.param)),
-           std::get<1>(info.param) ? "TrustedLeafSupported" : "TrustAnchorOnly",
-           std::get<2>(info.param) ? "EnforceLocalAnchorConstraints"
-                                   : "NoLocalAnchorConstraints"});
+      return TrustImplTypeToString(info.param);
     });
 
 }  // namespace net

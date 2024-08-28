@@ -10,8 +10,10 @@
 #include "base/callback_list.h"
 #include "components/download/public/common/download_danger_type.h"
 #include "components/download/public/common/download_item.h"
+#include "components/safe_browsing/content/browser/safe_browsing_navigation_observer_manager.h"
 #include "components/safe_browsing/core/browser/download_check_result.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
+#include "content/public/browser/file_system_access_write_item.h"
 #include "net/cert/x509_certificate.h"
 
 namespace safe_browsing {
@@ -60,6 +62,7 @@ enum DownloadCheckResultReason {
   REASON_DOWNLOAD_DANGEROUS_ACCOUNT_COMPROMISE = 36,
   REASON_LOCAL_DECRYPTION_PROMPT = 37,
   REASON_LOCAL_DECRYPTION_FAILED = 38,
+  REASON_IMMEDIATE_DEEP_SCAN = 39,
   REASON_MAX  // Always add new values before this one.
 };
 
@@ -98,9 +101,11 @@ enum class DeepScanEvent {
   kScanFailed = 5,
   kScanDeleted = 6,
   kPromptAcceptedFromWebUI = 7,
-  kMaxValue = kPromptAcceptedFromWebUI,
+  kIncorrectPassword = 8,
+  kMaxValue = kIncorrectPassword,
 };
 void LogDeepScanEvent(download::DownloadItem* item, DeepScanEvent event);
+void LogLocalDecryptionEvent(DeepScanEvent event);
 
 // Callback type which is invoked once the download request is done.
 typedef base::OnceCallback<void(DownloadCheckResult)> CheckDownloadCallback;
@@ -150,6 +155,21 @@ GURL GetFileSystemAccessDownloadUrl(const GURL& frame_url);
 google::protobuf::RepeatedPtrField<ClientDownloadRequest::ArchivedBinary>
 SelectArchiveEntries(const google::protobuf::RepeatedPtrField<
                      ClientDownloadRequest::ArchivedBinary>& src_binaries);
+
+// Identify referrer chain info of a download. This function also
+// records UMA stats of download attribution result. The referrer chain
+// will include at most `user_gesture_limit` user gestures.
+std::unique_ptr<ReferrerChainData> IdentifyReferrerChain(
+    const download::DownloadItem& item,
+    int user_gesture_limit);
+
+// Identify referrer chain info of a File System Access write. This
+// function also records UMA stats of download attribution result. The
+// referrer chain will include at most `user_gesture_limit` user
+// gestures.
+std::unique_ptr<ReferrerChainData> IdentifyReferrerChain(
+    const content::FileSystemAccessWriteItem& item,
+    int user_gesture_limit);
 
 }  // namespace safe_browsing
 

@@ -8,16 +8,8 @@ assert(!is_android)
 
 source_set("app_service") {
   sources = [
-    "app_icon/app_icon_factory.cc",
-    "app_icon/app_icon_factory.h",
-    "app_icon/app_icon_loader.cc",
-    "app_icon/app_icon_loader.h",
-    "app_icon/app_icon_source.cc",
-    "app_icon/app_icon_source.h",
-    "app_icon/app_icon_util.cc",
-    "app_icon/app_icon_util.h",
-    "app_icon/dip_px_util.cc",
-    "app_icon/dip_px_util.h",
+    "app_icon_source.cc",
+    "app_icon_source.h",
     "app_service_proxy.h",
     "app_service_proxy_factory.cc",
     "app_service_proxy_factory.h",
@@ -50,31 +42,35 @@ source_set("app_service") {
 
   configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
-  public_deps = [ ":constants" ]
+  public_deps = [
+    ":constants",
+    "//chrome/browser:browser_public_dependencies",
+  ]
 
   deps = [
     "//base",
     "//chrome/app/theme:chrome_unscaled_resources",
-    "//chrome/browser/apps:icon_standardizer",
+    "//chrome/browser/apps/app_service/app_icon",
+    "//chrome/browser/apps/app_service/app_icon:util",
     "//chrome/browser/extensions",
-    "//chrome/browser/favicon",
     "//chrome/browser/profiles",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/resources:app_icon_resources",
+    "//chrome/browser/sync",
     "//chrome/browser/ui/tabs:tab_enums",
     "//chrome/browser/web_applications",
     "//chrome/browser/web_applications/extensions",
     "//components/app_constants",
     "//components/crx_file",
-    "//components/favicon/core",
     "//components/keyed_service/content",
     "//components/services/app_service",
+    "//components/web_package",
     "//components/webapps/common",
     "//extensions/browser",
     "//extensions/common",
   ]
 
-  # TODO(crbug.com/1402145): Remove circular dependencies. Possibly flip
+  # TODO(crbug.com/40251079): Remove circular dependencies. Possibly flip
   # dependency direction so AppService doesn't depend on extensions
   # (crbug.com/1402146).
   allow_circular_includes_from = [
@@ -86,13 +82,6 @@ source_set("app_service") {
     sources += [
       "app_notifications.cc",
       "app_notifications.h",
-      "browser_app_instance.cc",
-      "browser_app_instance.h",
-      "browser_app_instance_map.h",
-      "browser_app_instance_observer.cc",
-      "browser_app_instance_observer.h",
-      "browser_app_instance_tracker.cc",
-      "browser_app_instance_tracker.h",
       "extension_apps_utils.cc",
       "extension_apps_utils.h",
       "media_requests.cc",
@@ -104,33 +93,31 @@ source_set("app_service") {
 
     deps += [
       "//ash/webui/projector_app/public/cpp",
-      "//chrome/browser/apps/app_service/app_install:app_install_service",
-      "//chromeos/constants",
+      "//chrome/browser/apps/app_service/app_install",
+      "//chrome/browser/apps/browser_instance",
+      "//chrome/browser/chromeos/arc",
       "//chromeos/crosapi/mojom",
       "//chromeos/startup",
       "//components/webapk:proto",
       "//third_party/smhasher:murmurhash2",
-      "//ui/views",
       "//ui/wm/public",
+    ]
+
+    # Needed only to allow circular includes.
+    deps += [ "//chrome/browser/chromeos/app_mode" ]
+
+    allow_circular_includes_from += [
+      "//chrome/browser/chromeos/app_mode",
+      "//chrome/browser/chromeos/arc",
     ]
   }
 
   if (is_chromeos_ash) {
     sources += [
-      "app_icon/app_icon_decoder.cc",
-      "app_icon/app_icon_decoder.h",
-      "app_icon/app_icon_reader.cc",
-      "app_icon/app_icon_reader.h",
-      "app_icon/app_icon_writer.cc",
-      "app_icon/app_icon_writer.h",
-      "app_icon/arc_activity_adaptive_icon_impl.cc",
-      "app_icon/arc_activity_adaptive_icon_impl.h",
       "app_service_proxy_ash.cc",
       "app_service_proxy_ash.h",
       "app_shortcut_item.cc",
       "app_shortcut_item.h",
-      "browser_app_instance_registry.cc",
-      "browser_app_instance_registry.h",
       "file_utils.cc",
       "file_utils.h",
       "instance_registry_updater.cc",
@@ -179,13 +166,10 @@ source_set("app_service") {
       "publishers/arc_apps_factory.h",
       "publishers/borealis_apps.cc",
       "publishers/borealis_apps.h",
-      "publishers/browser_shortcuts_crosapi_publisher.cc",
-      "publishers/browser_shortcuts_crosapi_publisher.h",
       "publishers/bruschetta_apps.cc",
       "publishers/bruschetta_apps.h",
       "publishers/built_in_chromeos_apps.cc",
       "publishers/built_in_chromeos_apps.h",
-      "publishers/compressed_icon_getter.h",
       "publishers/crostini_apps.cc",
       "publishers/crostini_apps.h",
       "publishers/extension_apps_chromeos.cc",
@@ -238,17 +222,62 @@ source_set("app_service") {
       "//ash/components/arc/session",
       "//ash/components/arc/session:connection_holder",
       "//ash/public/cpp",
+      "//ash/webui/mall:app_id",
       "//ash/webui/system_apps/public:system_web_app_type",
       "//chrome/browser:browser_process",
       "//chrome/browser/apps/almanac_api_client",
       "//chrome/browser/apps/app_service/promise_apps/proto",
+      "//chrome/browser/ash/app_list",
+      "//chrome/browser/ash/app_list/arc",
+      "//chrome/browser/ash/app_list/internal_app",
+      "//chrome/browser/ash/app_list/search",
+      "//chrome/browser/ash/app_mode/web_app",
+      "//chrome/browser/ash/app_restore",
+      "//chrome/browser/ash/apps",
+      "//chrome/browser/ash/arc",
+      "//chrome/browser/ash/arc/app_shortcuts",
+      "//chrome/browser/ash/arc/intent_helper",
+      "//chrome/browser/ash/arc/nearby_share",
+      "//chrome/browser/ash/arc/privacy_items",
+      "//chrome/browser/ash/arc/session",
+      "//chrome/browser/ash/arc/tracing",
+      "//chrome/browser/ash/borealis",
+      "//chrome/browser/ash/bruschetta",
+      "//chrome/browser/ash/child_accounts",
+      "//chrome/browser/ash/child_accounts/on_device_controls",
+      "//chrome/browser/ash/child_accounts/time_limits",
       "//chrome/browser/ash/crosapi",
+      "//chrome/browser/ash/crostini",
+      "//chrome/browser/ash/extensions",
+      "//chrome/browser/ash/extensions/autotest_private",
+      "//chrome/browser/ash/extensions/file_manager",
+      "//chrome/browser/ash/file_manager",
+      "//chrome/browser/ash/file_manager/virtual_tasks",
+      "//chrome/browser/ash/file_system_provider",
+      "//chrome/browser/ash/fusebox",
+      "//chrome/browser/ash/guest_os",
+      "//chrome/browser/ash/guest_os/public",
+      "//chrome/browser/ash/login/demo_mode",
+      "//chrome/browser/ash/mall",
+      "//chrome/browser/ash/plugin_vm",
+      "//chrome/browser/ash/policy/core",
+      "//chrome/browser/ash/policy/dlp",
+      "//chrome/browser/ash/policy/handlers",
+      "//chrome/browser/ash/printing",
+      "//chrome/browser/ash/profiles",
+      "//chrome/browser/ash/remote_apps",
+      "//chrome/browser/ash/scanning",
+      "//chrome/browser/ash/system_logs",
       "//chrome/browser/ash/system_web_apps",
+      "//chrome/browser/ash/system_web_apps/apps",
+      "//chrome/browser/ash/system_web_apps/apps/camera_app",
+      "//chrome/browser/ash/system_web_apps/apps/media_app",
       "//chrome/browser/ash/system_web_apps/types",
-      "//chrome/browser/image_decoder",
       "//chrome/browser/image_fetcher",
       "//chrome/browser/metrics/structured:features",
       "//chrome/browser/resources",
+      "//chrome/browser/ui/ash/calendar",
+      "//chrome/browser/ui/ash/multi_user",
       "//chromeos/ash/components/browser_context_helper",
       "//chromeos/ash/components/login/login_state",
       "//chromeos/components/kiosk:kiosk",
@@ -269,16 +298,51 @@ source_set("app_service") {
       "//ui/chromeos/styles:cros_tokens_color_mappings",
     ]
 
-    # TODO(crbug.com/1402145): Remove circular dependencies.
-    allow_circular_includes_from += [ "//chrome/browser/ash/crosapi" ]
+    # TODO(crbug.com/40251079): Remove circular dependencies.
+    allow_circular_includes_from += [
+      "//chrome/browser/ash/app_list",
+      "//chrome/browser/ash/app_list/arc",
+      "//chrome/browser/ash/app_list/internal_app",
+      "//chrome/browser/ash/app_list/search",
+      "//chrome/browser/ash/app_restore",
+      "//chrome/browser/ash/borealis",
+      "//chrome/browser/ash/app_mode/web_app",
+      "//chrome/browser/ash/apps",
+      "//chrome/browser/ash/arc",
+      "//chrome/browser/ash/arc/app_shortcuts",
+      "//chrome/browser/ash/arc/intent_helper",
+      "//chrome/browser/ash/arc/nearby_share",
+      "//chrome/browser/ash/arc/privacy_items",
+      "//chrome/browser/ash/arc/session",
+      "//chrome/browser/ash/arc/tracing",
+      "//chrome/browser/ash/child_accounts",
+      "//chrome/browser/ash/child_accounts/on_device_controls",
+      "//chrome/browser/ash/child_accounts/time_limits",
+      "//chrome/browser/ash/crosapi",
+      "//chrome/browser/ash/file_manager",
+      "//chrome/browser/ash/file_system_provider",
+      "//chrome/browser/ash/guest_os",
+      "//chrome/browser/ash/extensions",
+      "//chrome/browser/ash/extensions/autotest_private",
+      "//chrome/browser/ash/extensions/file_manager",
+      "//chrome/browser/ash/login/demo_mode",
+      "//chrome/browser/ash/policy/dlp",
+      "//chrome/browser/ash/policy/handlers",
+      "//chrome/browser/ash/printing",
+      "//chrome/browser/ash/remote_apps",
+      "//chrome/browser/ash/scanning",
+      "//chrome/browser/ash/system_logs",
+      "//chrome/browser/ash/system_web_apps/apps",
+      "//chrome/browser/ash/system_web_apps/apps/camera_app",
+      "//chrome/browser/ash/system_web_apps/apps/media_app",
+      "//chrome/browser/ui/ash/calendar",
+    ]
   }
 
   if (is_chromeos_lacros) {
     sources += [
       "app_service_proxy_lacros.cc",
       "app_service_proxy_lacros.h",
-      "browser_app_instance_forwarder.cc",
-      "browser_app_instance_forwarder.h",
       "metrics/website_metrics.cc",
       "metrics/website_metrics.h",
       "metrics/website_metrics_service_lacros.cc",
@@ -303,7 +367,7 @@ source_set("app_service") {
 
   if (!is_chromeos_lacros) {
     sources += [
-      # TODO(crbug.com/1402872): Make this safe to include in lacros by removing
+      # TODO(crbug.com/40251315): Make this safe to include in lacros by removing
       # redefinition of types in app_service_proxy_lacros.
       "app_service_proxy_base.cc",
       "app_service_proxy_base.h",
@@ -339,9 +403,6 @@ source_set("unit_tests") {
   testonly = true
 
   sources = [
-    "app_icon/app_icon_factory_unittest.cc",
-    "app_icon/chrome_apps_icon_unittest.cc",
-    "app_icon/web_app_icon_unittest.cc",
     "app_service_proxy_unittest.cc",
     "intent_util_unittest.cc",
     "launch_utils_unittest.cc",
@@ -358,6 +419,10 @@ source_set("unit_tests") {
     "//cc:test_support",
     "//chrome/app/theme:chrome_unscaled_resources_grit",
     "//chrome/browser/apps:icon_standardizer",
+    "//chrome/browser/apps/app_service/app_icon",
+    "//chrome/browser/apps/app_service/app_icon:unit_tests",
+    "//chrome/browser/apps/app_service/app_icon:util",
+    "//chrome/browser/apps/link_capturing:test_support",
     "//chrome/browser/extensions",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/resources:component_extension_resources",
@@ -398,10 +463,6 @@ source_set("unit_tests") {
 
   if (is_chromeos_ash) {
     sources += [
-      "app_icon/app_icon_decoder_unittest.cc",
-      "app_icon/arc_apps_icon_unittest.cc",
-      "app_icon/browser_shortcut_icon_unittest.cc",
-      "app_icon/guest_os_apps_icon_unittest.cc",
       "file_utils_unittest.cc",
       "metrics/app_platform_metrics_service_unittest.cc",
       "promise_apps/promise_app_almanac_connector_unittest.cc",
@@ -412,7 +473,6 @@ source_set("unit_tests") {
       "promise_apps/promise_app_update_unittest.cc",
       "promise_apps/promise_app_wrapper_unittest.cc",
       "publishers/arc_apps_unittest.cc",
-      "publishers/browser_shortcuts_crosapi_publisher_unittest.cc",
       "publishers/bruschetta_apps_unittest.cc",
       "publishers/crostini_apps_unittest.cc",
       "publishers/guest_os_apps_unittest.cc",
@@ -429,8 +489,25 @@ source_set("unit_tests") {
       "//chrome/browser/apps/app_service/promise_apps/proto",
       "//chrome/browser/ash",
       "//chrome/browser/ash:test_support",
+      "//chrome/browser/ash/app_list/arc",
+      "//chrome/browser/ash/app_list/internal_app",
+      "//chrome/browser/ash/apps",
+      "//chrome/browser/ash/arc",
+      "//chrome/browser/ash/arc/fileapi",
+      "//chrome/browser/ash/borealis/testing:test_support",
+      "//chrome/browser/ash/bruschetta",
+      "//chrome/browser/ash/bruschetta:test_support",
       "//chrome/browser/ash/crosapi:browser_util",
       "//chrome/browser/ash/crosapi:test_support",
+      "//chrome/browser/ash/crostini:test_support",
+      "//chrome/browser/ash/file_manager",
+      "//chrome/browser/ash/fusebox",
+      "//chrome/browser/ash/guest_os",
+      "//chrome/browser/ash/guest_os:test_support",
+      "//chrome/browser/ash/guest_os/public",
+      "//chrome/browser/ash/login/users:test_support",
+      "//chrome/browser/ash/plugin_vm",
+      "//chrome/browser/ash/plugin_vm:test_support",
       "//chrome/browser/metrics/structured:features",
       "//chrome/browser/resources:app_icon_resources_grit",
       "//chrome/browser/web_applications/app_service:unit_tests",
@@ -465,10 +542,6 @@ source_set("test_support") {
   testonly = true
 
   sources = [
-    "app_icon/app_icon_test_util.cc",
-    "app_icon/app_icon_test_util.h",
-    "app_icon/web_app_icon_test_helper.cc",
-    "app_icon/web_app_icon_test_helper.h",
     "app_service_test.cc",
     "app_service_test.h",
   ]
@@ -477,7 +550,7 @@ source_set("test_support") {
 
   deps = [
     "//build:chromeos_buildflags",
-    "//chrome/browser/apps:icon_standardizer",
+    "//chrome/browser/sync",
     "//chrome/test:test_support",
     "//components/services/app_service",
     "//skia",
@@ -493,6 +566,7 @@ source_set("test_support") {
 
     deps += [
       "//chrome/browser/ash:test_support",
+      "//chrome/browser/ash/login/users:test_support",
       "//components/webapk:proto",
     ]
   }

@@ -30,7 +30,6 @@ declare namespace chrome {
       CHECKED_STATE_CHANGED = 'checkedStateChanged',
       CHECKED_STATE_DESCRIPTION_CHANGED = 'checkedStateDescriptionChanged',
       CHILDREN_CHANGED = 'childrenChanged',
-      CLASS_NAME_CHANGED = 'classNameChanged',
       CLICKED = 'clicked',
       COLLAPSED = 'collapsed',
       CONTROLS_CHANGED = 'controlsChanged',
@@ -78,7 +77,7 @@ declare namespace chrome {
       MEDIA_STOPPED_PLAYING = 'mediaStoppedPlaying',
       MENU_END = 'menuEnd',
       MENU_ITEM_SELECTED = 'menuItemSelected',
-      MENU_LIST_VALUE_CHANGED = 'menuListValueChanged',
+      MENU_LIST_VALUE_CHANGED_DEPRECATED = 'menuListValueChangedDeprecated',
       MENU_POPUP_END = 'menuPopupEnd',
       MENU_POPUP_START = 'menuPopupStart',
       MENU_START = 'menuStart',
@@ -92,7 +91,6 @@ declare namespace chrome {
       NAME_CHANGED = 'nameChanged',
       OBJECT_ATTRIBUTE_CHANGED = 'objectAttributeChanged',
       ORIENTATION_CHANGED = 'orientationChanged',
-      OTHER_ATTRIBUTE_CHANGED = 'otherAttributeChanged',
       PARENT_CHANGED = 'parentChanged',
       PLACEHOLDER_CHANGED = 'placeholderChanged',
       PORTAL_ACTIVATED = 'portalActivated',
@@ -230,6 +228,7 @@ declare namespace chrome {
       GRAPHICS_OBJECT = 'graphicsObject',
       GRAPHICS_SYMBOL = 'graphicsSymbol',
       GRID = 'grid',
+      GRID_CELL = 'gridCell',
       GROUP = 'group',
       HEADER = 'header',
       HEADER_AS_NON_LANDMARK = 'headerAsNonLandmark',
@@ -927,6 +926,8 @@ declare namespace chrome {
       createPosition:
           (type: PositionType, offset: number,
            isUpstream?: boolean) => AutomationPosition;
+
+      [key: string]: any;
     }
 
     export function getDesktop(callback: (rootNode: AutomationNode) => void):

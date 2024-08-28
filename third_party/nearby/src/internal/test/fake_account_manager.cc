@@ -33,15 +33,17 @@ std::optional<AccountManager::Account> FakeAccountManager::GetCurrentAccount() {
 
 void FakeAccountManager::Login(
     absl::AnyInvocable<void(Account)> login_success_callback,
-    absl::AnyInvocable<void()> login_failure_callback) {
+    absl::AnyInvocable<void(absl::Status)> login_failure_callback) {
   if (account_.has_value()) {
-    login_success_callback(*account_);
     UpdateCurrentUser(account_->id);
     NotifyLogin(account_->id);
+    // Invoke callback after all operations have been performed since test cases
+    // may rely on the callback for synchronization.
+    login_success_callback(*account_);
     return;
   }
 
-  login_failure_callback();
+  login_failure_callback(absl::InternalError("No account."));
 }
 
 void FakeAccountManager::Logout(
@@ -49,8 +51,10 @@ void FakeAccountManager::Logout(
   if (is_logout_success_) {
     std::string account_id = account_->id;
     SetAccount(std::nullopt);
-    logout_callback(absl::OkStatus());
     NotifyLogout(account_id);
+    // Invoke callback after all operations have been performed since test cases
+    // may rely on the callback for synchronization.
+    logout_callback(absl::OkStatus());
     return;
   }
 

@@ -167,8 +167,8 @@ void GetShortcutInfoForApp(const extensions::Extension* extension,
 
   for (int size : GetDesiredIconSizesForShortcut()) {
     extensions::ExtensionResource resource =
-        extensions::IconsInfo::GetIconResource(extension, size,
-                                               ExtensionIconSet::MATCH_EXACTLY);
+        extensions::IconsInfo::GetIconResource(
+            extension, size, ExtensionIconSet::Match::kExactly);
     if (!resource.empty()) {
       info_list.emplace_back(
           resource, extensions::ImageLoader::ImageRepresentation::ALWAYS_RESIZE,
@@ -182,13 +182,14 @@ void GetShortcutInfoForApp(const extensions::Extension* extension,
 
     // If there is no icon at the desired sizes, we will resize what we can get.
     // Making a large icon smaller is preferred to making a small icon larger,
-    // so look for a larger icon first:
+    // so look for a larger icon first.
+    // TODO(crbug.com/329953472): Use a predefined threshold.
     extensions::ExtensionResource resource =
-        extensions::IconsInfo::GetIconResource(extension, size,
-                                               ExtensionIconSet::MATCH_BIGGER);
+        extensions::IconsInfo::GetIconResource(
+            extension, size, ExtensionIconSet::Match::kBigger);
     if (resource.empty()) {
       resource = extensions::IconsInfo::GetIconResource(
-          extension, size, ExtensionIconSet::MATCH_SMALLER);
+          extension, size, ExtensionIconSet::Match::kSmaller);
     }
     info_list.emplace_back(
         resource, extensions::ImageLoader::ImageRepresentation::ALWAYS_RESIZE,
@@ -257,20 +258,6 @@ void CreateShortcuts(ShortcutCreationReason reason,
   GetShortcutInfoForApp(app, profile,
                         base::BindOnce(&CreateShortcutsWithInfo, reason,
                                        locations, std::move(callback)));
-}
-
-void CreateShortcutsForWebApp(ShortcutCreationReason reason,
-                              const ShortcutLocations& locations,
-                              Profile* profile,
-                              const std::string& app_id,
-                              CreateShortcutsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-  WebAppProvider::GetForWebApps(profile)
-      ->os_integration_manager()
-      .GetShortcutInfoForApp(
-          app_id, base::BindOnce(&CreateShortcutsWithInfo, reason, locations,
-                                 std::move(callback)));
 }
 
 void DeleteAllShortcuts(Profile* profile, const extensions::Extension* app) {

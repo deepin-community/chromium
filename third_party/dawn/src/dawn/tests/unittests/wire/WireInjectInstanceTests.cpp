@@ -25,15 +25,19 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "dawn/tests/unittests/wire/WireTest.h"
+#include <array>
 
+#include "dawn/tests/MockCallback.h"
+#include "dawn/tests/unittests/wire/WireTest.h"
 #include "dawn/wire/WireClient.h"
 #include "dawn/wire/WireServer.h"
 
 namespace dawn::wire {
 namespace {
 
+using testing::_;
 using testing::Mock;
+using testing::MockCallback;
 using testing::NotNull;
 using testing::Return;
 
@@ -49,15 +53,21 @@ TEST_F(WireInjectInstanceTests, CallAfterReserveInject) {
     auto reserved = GetWireClient()->ReserveInstance();
 
     WGPUInstance serverInstance = api.GetNewInstance();
-    EXPECT_CALL(api, InstanceReference(serverInstance));
-    ASSERT_TRUE(GetWireServer()->InjectInstance(serverInstance, reserved.reservation));
+    EXPECT_CALL(api, InstanceAddRef(serverInstance));
+    ASSERT_TRUE(GetWireServer()->InjectInstance(serverInstance, reserved.handle));
 
-    WGPUSurfaceDescriptor surfaceDesc = {};
-    wgpuInstanceCreateSurface(reserved.instance, &surfaceDesc);
-    WGPUSurface serverSurface = api.GetNewSurface();
-    EXPECT_CALL(api, InstanceCreateSurface(serverInstance, NotNull()))
-        .WillOnce(Return(serverSurface));
+    MockCallback<void (*)(wgpu::RequestAdapterStatus, wgpu::Adapter, const char*, void*)> adapterCb;
+    instance.RequestAdapter(nullptr, wgpu::CallbackMode::AllowSpontaneous, adapterCb.Callback(),
+                            adapterCb.MakeUserdata(this));
+
+    EXPECT_CALL(api, OnInstanceRequestAdapter2(apiInstance, _, _)).WillOnce([&]() {
+        api.CallInstanceRequestAdapter2Callback(apiInstance, WGPURequestAdapterStatus_Error,
+                                                nullptr, "Some error message.");
+    });
     FlushClient();
+
+    EXPECT_CALL(adapterCb, Call(wgpu::RequestAdapterStatus::Error, _, _, this));
+    FlushServer();
 }
 
 // Test that reserve correctly returns different IDs each time.
@@ -65,7 +75,7 @@ TEST_F(WireInjectInstanceTests, ReserveDifferentIDs) {
     auto reserved1 = GetWireClient()->ReserveInstance();
     auto reserved2 = GetWireClient()->ReserveInstance();
 
-    ASSERT_NE(reserved1.reservation.id, reserved2.reservation.id);
+    ASSERT_NE(reserved1.handle.id, reserved2.handle.id);
     ASSERT_NE(reserved1.instance, reserved2.instance);
 }
 
@@ -74,21 +84,21 @@ TEST_F(WireInjectInstanceTests, InjectExistingID) {
     auto reserved = GetWireClient()->ReserveInstance();
 
     WGPUInstance serverInstance = api.GetNewInstance();
-    EXPECT_CALL(api, InstanceReference(serverInstance));
-    ASSERT_TRUE(GetWireServer()->InjectInstance(serverInstance, reserved.reservation));
+    EXPECT_CALL(api, InstanceAddRef(serverInstance));
+    ASSERT_TRUE(GetWireServer()->InjectInstance(serverInstance, reserved.handle));
 
     // ID already in use, call fails.
-    ASSERT_FALSE(GetWireServer()->InjectInstance(serverInstance, reserved.reservation));
+    ASSERT_FALSE(GetWireServer()->InjectInstance(serverInstance, reserved.handle));
 }
 
-// Test that the server only borrows the instance and does a single reference-release
+// Test that the server only borrows the instance and does a single addref-release
 TEST_F(WireInjectInstanceTests, InjectedInstanceLifetime) {
     auto reserved = GetWireClient()->ReserveInstance();
 
     // Injecting the instance adds a reference
     WGPUInstance serverInstance = api.GetNewInstance();
-    EXPECT_CALL(api, InstanceReference(serverInstance));
-    ASSERT_TRUE(GetWireServer()->InjectInstance(serverInstance, reserved.reservation));
+    EXPECT_CALL(api, InstanceAddRef(serverInstance));
+    ASSERT_TRUE(GetWireServer()->InjectInstance(serverInstance, reserved.handle));
 
     // Releasing the instance removes a single reference.
     wgpuInstanceRelease(reserved.instance);
@@ -118,8 +128,8 @@ TEST_F(WireInjectInstanceTests, ReclaimInstanceReservation) {
         auto reserved2 = GetWireClient()->ReserveInstance();
 
         // The ID is the same, but the generation is still different.
-        ASSERT_EQ(reserved1.reservation.id, reserved2.reservation.id);
-        ASSERT_NE(reserved1.reservation.generation, reserved2.reservation.generation);
+        ASSERT_EQ(reserved1.handle.id, reserved2.handle.id);
+        ASSERT_NE(reserved1.handle.generation, reserved2.handle.generation);
 
         // No errors should occur.
         FlushClient();

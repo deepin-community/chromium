@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <cmath>
+#include <string_view>
 
 #include "base/command_line.h"
 #include "base/containers/flat_map.h"
@@ -282,14 +283,15 @@ class TabCapturePerformanceTest : public TabCapturePerformanceTestBase,
 
 }  // namespace
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) && defined(MEMORY_SANITIZER)
+#if BUILDFLAG(IS_CHROMEOS)
 // Using MSAN on ChromeOS causes problems due to its hardware OpenGL library.
+// Failing on ChromeOS Lacros as well.
 #define MAYBE_Performance DISABLED_Performance
 #elif BUILDFLAG(IS_MAC)
 // TODO(crbug.com/1235358): Flaky on Mac 10.11
 #define MAYBE_Performance DISABLED_Performance
 #elif BUILDFLAG(IS_LINUX) && defined(ADDRESS_SANITIZER)
-// TODO(crbug.com/1295824): Flaky on Linux ASAN
+// TODO(crbug.com/40214499): Flaky on Linux ASAN
 #define MAYBE_Performance DISABLED_Performance
 #else
 #define MAYBE_Performance Performance
@@ -312,8 +314,8 @@ IN_PROC_BROWSER_TEST_P(TabCapturePerformanceTest, MAYBE_Performance) {
   // Observe the running browser for a while, collecting a trace.
   std::unique_ptr<trace_analyzer::TraceAnalyzer> analyzer = TraceAndObserve(
       "gpu,gpu.capture",
-      std::vector<base::StringPiece>{kEventCommitAndDrawCompositorFrame,
-                                     kEventCapture},
+      std::vector<std::string_view>{kEventCommitAndDrawCompositorFrame,
+                                    kEventCapture},
       // In a full performance run, events will be trimmed from both ends of
       // trace. Otherwise, just require the bare-minimum to verify the stats
       // calculations will work.

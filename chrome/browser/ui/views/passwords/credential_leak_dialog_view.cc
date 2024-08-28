@@ -55,7 +55,7 @@ CredentialLeakDialogView::CredentialLeakDialogView(
       views::DISTANCE_MODAL_DIALOG_PREFERRED_WIDTH));
 
   using ControllerClosureFn = void (CredentialLeakDialogController::*)();
-  auto close_callback = [](CredentialLeakDialogController** controller,
+  auto close_callback = [](raw_ptr<CredentialLeakDialogController>* controller,
                            ControllerClosureFn fn) {
     // Null out the controller pointer stored in the parent object, to avoid any
     // further calls to the controller and inhibit recursive closes that would
@@ -64,7 +64,7 @@ CredentialLeakDialogView::CredentialLeakDialogView(
     //
     // Note that when this lambda gets bound it closes over &controller_, not
     // controller_ itself!
-    (std::exchange(*controller, nullptr)->*(fn))();
+    (controller->ExtractAsDangling()->*(fn))();
   };
 
   SetAcceptCallback(
@@ -79,8 +79,9 @@ CredentialLeakDialogView::CredentialLeakDialogView(
 }
 
 CredentialLeakDialogView::~CredentialLeakDialogView() {
-  if (controller_)
+  if (controller_) {
     std::exchange(controller_, nullptr)->ResetDialog();
+  }
 }
 
 void CredentialLeakDialogView::ShowCredentialLeakPrompt() {
@@ -94,8 +95,9 @@ void CredentialLeakDialogView::ControllerGone() {
   // reentry into Close() - |controller_| might have been nulled out by the
   // closure callbacks already, in which case the dialog is already closing. See
   // the definition of |close_callback| in the constructor.
-  if (controller_)
+  if (controller_) {
     GetWidget()->Close();
+  }
 }
 
 void CredentialLeakDialogView::AddedToWidget() {
@@ -115,7 +117,7 @@ void CredentialLeakDialogView::AddedToWidget() {
     // Reduce width by a pixel on each side. This enforces that the banner image
     // is rescaled during the ImageView::OnPaint step. Without the rescaling,
     // the image will display compression artifacts due to the size mismatch.
-    // TODO(crbug.com/1171763): Remove once the scaling works automatically.
+    // TODO(crbug.com/40745285): Remove once the scaling works automatically.
     max_width -= 2;
     const float scale = max_width / preferred_size.width();
     preferred_size = gfx::ScaleToRoundedSize(preferred_size, scale);

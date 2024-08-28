@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2016, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -18,6 +18,7 @@
 #include "test/util.h"
 #include "test/y4m_video_source.h"
 #include "test/yuv_video_source.h"
+#include "av1/encoder/enc_enums.h"
 #include "av1/encoder/firstpass.h"
 
 namespace {
@@ -101,6 +102,8 @@ class AVxFirstPassEncoderThreadTest
     firstpass_stats_.sz += pkt_size;
   }
 
+  void DoTest();
+
   bool encoder_initialized_;
   ::libaom_test::TestMode encoding_mode_;
   int set_cpu_used_;
@@ -128,7 +131,7 @@ static void compare_fp_stats_md5(aom_fixed_buf_t *fp_stats) {
       << "MD5 checksums don't match";
 }
 
-TEST_P(AVxFirstPassEncoderThreadTest, FirstPassStatsTest) {
+void AVxFirstPassEncoderThreadTest::DoTest() {
   ::libaom_test::Y4mVideoSource video("niklas_1280_720_30.y4m", 0, 60);
   aom_fixed_buf_t firstpass_stats;
   size_t single_run_sz;
@@ -200,6 +203,13 @@ TEST_P(AVxFirstPassEncoderThreadTest, FirstPassStatsTest) {
   // Comparison 4 (between threads=4 and threads=8).
   compare_fp_stats_md5(&firstpass_stats);
 }
+
+TEST_P(AVxFirstPassEncoderThreadTest, FirstPassStatsTest) { DoTest(); }
+
+using AVxFirstPassEncoderThreadTestLarge = AVxFirstPassEncoderThreadTest;
+
+TEST_P(AVxFirstPassEncoderThreadTestLarge, FirstPassStatsTest) { DoTest(); }
+
 #endif  // !CONFIG_REALTIME_ONLY
 
 class AVxEncoderThreadTest
@@ -411,9 +421,7 @@ class AVxEncoderThreadTest
                                 const std::vector<size_t> ref_size_enc,
                                 const std::vector<std::string> ref_md5_enc,
                                 const std::vector<std::string> ref_md5_dec) {
-    // This value should be kept the same as MAX_NUM_THREADS
-    // in aom_thread.h
-    cfg_.g_threads = 64;
+    cfg_.g_threads = MAX_NUM_THREADS;
     ASSERT_NO_FATAL_FAILURE(RunLoop(video));
     std::vector<size_t> multi_thr_max_row_mt_size_enc;
     std::vector<std::string> multi_thr_max_row_mt_md5_enc;
@@ -505,10 +513,14 @@ TEST_P(AVxEncoderThreadAllIntraTestLarge, EncoderResultTest) {
 // first pass stats test
 AV1_INSTANTIATE_TEST_SUITE(AVxFirstPassEncoderThreadTest,
                            ::testing::Values(::libaom_test::kTwoPassGood),
-                           ::testing::Range(0, 6, 2), ::testing::Range(0, 2),
+                           ::testing::Values(4), ::testing::Range(0, 2),
                            ::testing::Range(1, 3));
 
-// For AV1, test speed 0, 1, 2, 3, 5.
+AV1_INSTANTIATE_TEST_SUITE(AVxFirstPassEncoderThreadTestLarge,
+                           ::testing::Values(::libaom_test::kTwoPassGood),
+                           ::testing::Values(0, 2), ::testing::Range(0, 2),
+                           ::testing::Range(1, 3));
+
 // Only test cpu_used 2 here.
 AV1_INSTANTIATE_TEST_SUITE(AVxEncoderThreadTest,
                            ::testing::Values(::libaom_test::kTwoPassGood),

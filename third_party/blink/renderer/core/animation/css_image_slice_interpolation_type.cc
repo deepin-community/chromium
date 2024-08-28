@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/core/animation/css_image_slice_interpolation_type.h"
 
 #include <memory>
@@ -167,7 +172,7 @@ InterpolationValue CSSImageSliceInterpolationType::MaybeConvertNeutral(
   SliceTypes underlying_types =
       UnderlyingSliceTypesChecker::GetUnderlyingSliceTypes(underlying);
   conversion_checkers.push_back(
-      std::make_unique<UnderlyingSliceTypesChecker>(underlying_types));
+      MakeGarbageCollected<UnderlyingSliceTypesChecker>(underlying_types));
   LengthBox zero_box(
       underlying_types.is_number[kSideTop] ? Length::Fixed(0)
                                            : Length::Percent(0),
@@ -195,8 +200,9 @@ InterpolationValue CSSImageSliceInterpolationType::MaybeConvertInherit(
   const ImageSlice& inherited_image_slice =
       ImageSlicePropertyFunctions::GetImageSlice(CssProperty(),
                                                  *state.ParentStyle());
-  conversion_checkers.push_back(std::make_unique<InheritedSliceTypesChecker>(
-      CssProperty(), SliceTypes(inherited_image_slice)));
+  conversion_checkers.push_back(
+      MakeGarbageCollected<InheritedSliceTypesChecker>(
+          CssProperty(), SliceTypes(inherited_image_slice)));
   return ConvertImageSlice(inherited_image_slice,
                            state.ParentStyle()->EffectiveZoom());
 }

@@ -302,13 +302,14 @@ void AuthIconView::OnPaint(gfx::Canvas* canvas) {
   }
 }
 
-gfx::Size AuthIconView::CalculatePreferredSize() const {
+gfx::Size AuthIconView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(kAuthIconViewDp, kAuthIconViewDp);
 }
 
 void AuthIconView::OnGestureEvent(ui::GestureEvent* event) {
-  if (event->type() != ui::ET_GESTURE_TAP &&
-      event->type() != ui::ET_GESTURE_TAP_DOWN) {
+  if (event->type() != ui::EventType::kGestureTap &&
+      event->type() != ui::EventType::kGestureTapDown) {
     return;
   }
 

@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/page_info/page_info_cookies_content_view.h"
+
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -11,12 +12,13 @@
 #include "components/content_settings/browser/ui/cookie_controls_util.h"
 #include "components/content_settings/core/common/cookie_blocking_3pcd_status.h"
 #include "components/content_settings/core/common/cookie_controls_enforcement.h"
-#include "components/content_settings/core/common/cookie_controls_status.h"
 #include "components/content_settings/core/common/features.h"
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/box_layout_view.h"
@@ -24,9 +26,54 @@
 
 using content_settings::CookieControlsUtil;
 
-namespace views {
-class StyledLabel;
-}  // namespace views
+namespace {
+class ThirdPartyCookieLabelWrapper : public views::BoxLayoutView {
+  METADATA_HEADER(ThirdPartyCookieLabelWrapper, views::BoxLayoutView)
+
+ public:
+  explicit ThirdPartyCookieLabelWrapper(std::unique_ptr<views::View> title) {
+    auto* provider = ChromeLayoutProvider::Get();
+
+    const int vertical_margin =
+        provider->GetDistanceMetric(DISTANCE_CONTENT_LIST_VERTICAL_MULTI);
+    const int side_margin =
+        provider->GetInsetsMetric(views::INSETS_DIALOG).left();
+
+    SetOrientation(views::BoxLayout::Orientation::kVertical);
+    SetProperty(views::kMarginsKey,
+                gfx::Insets::VH(vertical_margin, side_margin));
+
+    title_ = AddChildView(std::move(title));
+  }
+
+  ~ThirdPartyCookieLabelWrapper() override = default;
+
+ private:
+  // View:
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
+    // Set the preferred width of the label wrapper to the title width. It
+    // ensures that the title isn't truncated and it prevents the container
+    // expanding to try to fit the description (which should be wrapped).
+    const int title_width =
+        title_->GetPreferredSize(views::SizeBounds(title_->width(), {}))
+            .width();
+    DCHECK(available_size.width() >= title_width);
+    const int available_width = available_size.width().is_bounded() &&
+                                        available_size.width() > title_width
+                                    ? available_size.width().value()
+                                    : title_width;
+    return views::BoxLayoutView::CalculatePreferredSize(
+        views::SizeBounds(available_width, {}));
+  }
+
+  raw_ptr<views::View> title_ = nullptr;
+};
+
+BEGIN_METADATA(ThirdPartyCookieLabelWrapper)
+END_METADATA
+
+}  // namespace
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PageInfoCookiesContentView,
                                       kCookieDialogButton);
@@ -51,14 +98,9 @@ PageInfoCookiesContentView::PageInfoCookiesContentView(PageInfo* presenter)
   cookies_description_label_->SetProperty(views::kMarginsKey, button_insets);
   cookies_description_label_->SetID(
       PageInfoViewFactory::VIEW_ID_PAGE_INFO_COOKIES_DESCRIPTION_LABEL);
-  if (features::IsChromeRefresh2023()) {
-    cookies_description_label_->SetDefaultTextStyle(views::style::STYLE_BODY_5);
-    cookies_description_label_->SetDefaultEnabledColorId(
-        ui::kColorLabelForegroundSecondary);
-  } else {
-    cookies_description_label_->SetDefaultTextStyle(
-        views::style::STYLE_SECONDARY);
-  }
+  cookies_description_label_->SetDefaultTextStyle(views::style::STYLE_BODY_5);
+  cookies_description_label_->SetDefaultEnabledColorId(
+      ui::kColorLabelForegroundSecondary);
   cookies_description_label_->SizeToFit(PageInfoViewFactory::kMinBubbleWidth -
                                         button_insets.width());
 
@@ -196,14 +238,12 @@ void PageInfoCookiesContentView::SetThirdPartyCookiesToggle(
   third_party_cookies_toggle_->SetIsOn(!cookie_info.protections_on);
   third_party_cookies_toggle_->SetID(
       PageInfoViewFactory::VIEW_ID_PAGE_INFO_THIRD_PARTY_COOKIES_TOGGLE);
-  third_party_cookies_toggle_->SetAccessibleName(subtitle);
+  third_party_cookies_toggle_->GetViewAccessibility().SetName(subtitle);
   third_party_cookies_toggle_subtitle_->SetText(subtitle);
-  if (features::IsChromeRefresh2023()) {
-    third_party_cookies_toggle_subtitle_->SetTextStyle(
-        views::style::STYLE_BODY_5);
-    third_party_cookies_toggle_subtitle_->SetEnabledColorId(
-        ui::kColorLabelForegroundSecondary);
-  }
+  third_party_cookies_toggle_subtitle_->SetTextStyle(
+      views::style::STYLE_BODY_5);
+  third_party_cookies_toggle_subtitle_->SetEnabledColorId(
+      ui::kColorLabelForegroundSecondary);
 }
 
 void PageInfoCookiesContentView::SetDescriptionLabel(
@@ -240,6 +280,7 @@ void PageInfoCookiesContentView::SetDescriptionLabel(
       views::StyledLabel::RangeStyleInfo::CreateForLink(base::BindRepeating(
           &PageInfoCookiesContentView::CookiesSettingsLinkClicked,
           base::Unretained(this)));
+  link_style.text_style = views::style::STYLE_LINK_5;
   cookies_description_label_->AddStyleRange(link_range, link_style);
 }
 
@@ -276,18 +317,8 @@ void PageInfoCookiesContentView::SetThirdPartyCookiesInfo(
         PageInfoViewFactory::GetImageModel(
             CookieControlsUtil::GetEnforcedIcon(cookie_info.enforcement)));
     third_party_cookies_enforced_icon_->SetTooltipText(
-        l10n_util::GetStringUTF16(CookieControlsUtil::GetEnforcedTooltipTextId(
-            cookie_info.enforcement)));
+        CookieControlsUtil::GetEnforcedTooltip(cookie_info.enforcement));
   }
-
-  // Set the preferred width of the label wrapper to the title width. It ensures
-  // that the title isn't truncated and it prevents the container expanding to
-  // try to fit the description (which should be wrapped).
-  const int title_width =
-      third_party_cookies_title_->GetPreferredSize().width();
-  third_party_cookies_label_wrapper_->SetPreferredSize(gfx::Size(
-      title_width,
-      third_party_cookies_label_wrapper_->GetHeightForWidth(title_width)));
 }
 
 void PageInfoCookiesContentView::UpdateBlockingThirdPartyCookiesToggle(
@@ -356,49 +387,31 @@ void PageInfoCookiesContentView::FpsSettingsButtonClicked(ui::Event const&) {
 }
 
 void PageInfoCookiesContentView::AddThirdPartyCookiesContainer() {
-  auto* provider = ChromeLayoutProvider::Get();
-  const int vertical_margin =
-      provider->GetDistanceMetric(DISTANCE_CONTENT_LIST_VERTICAL_MULTI);
-  const int side_margin =
-      provider->GetInsetsMetric(views::INSETS_DIALOG).left();
-
   third_party_cookies_container_ =
       AddChildView(std::make_unique<views::BoxLayoutView>());
-  third_party_cookies_container_->SetAccessibleRole(ax::mojom::Role::kAlert);
+  third_party_cookies_container_->GetViewAccessibility().SetRole(
+      ax::mojom::Role::kAlert);
   third_party_cookies_container_->SetOrientation(
       views::BoxLayout::Orientation::kVertical);
   third_party_cookies_container_->SetVisible(false);
 
   third_party_cookies_label_wrapper_ =
       third_party_cookies_container_->AddChildView(
-          std::make_unique<views::BoxLayoutView>());
-  third_party_cookies_label_wrapper_->SetOrientation(
-      views::BoxLayout::Orientation::kVertical);
-  third_party_cookies_label_wrapper_->SetProperty(
-      views::kMarginsKey, gfx::Insets::VH(vertical_margin, side_margin));
-  third_party_cookies_title_ = third_party_cookies_label_wrapper_->AddChildView(
-      std::make_unique<views::Label>());
-  third_party_cookies_title_->SetTextContext(
-      views::style::CONTEXT_DIALOG_BODY_TEXT);
-  third_party_cookies_title_->SetTextStyle(views::style::STYLE_PRIMARY);
-  third_party_cookies_title_->SetHorizontalAlignment(
-      gfx::HorizontalAlignment::ALIGN_LEFT);
-  if (features::IsChromeRefresh2023()) {
-    third_party_cookies_title_->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
-  }
+          std::make_unique<ThirdPartyCookieLabelWrapper>(
+              views::Builder<views::Label>()
+                  .CopyAddressTo(&third_party_cookies_title_)
+                  .SetTextContext(views::style::CONTEXT_DIALOG_BODY_TEXT)
+                  .SetTextStyle(views::style::STYLE_BODY_3_MEDIUM)
+                  .SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT)
+                  .Build()));
 
   third_party_cookies_description_ =
       third_party_cookies_label_wrapper_->AddChildView(
           std::make_unique<views::Label>());
   third_party_cookies_description_->SetTextContext(views::style::CONTEXT_LABEL);
-  if (features::IsChromeRefresh2023()) {
-    third_party_cookies_description_->SetTextStyle(views::style::STYLE_BODY_5);
-    third_party_cookies_description_->SetEnabledColorId(
-        ui::kColorLabelForegroundSecondary);
-  } else {
-    third_party_cookies_description_->SetTextStyle(
-        views::style::STYLE_SECONDARY);
-  }
+  third_party_cookies_description_->SetTextStyle(views::style::STYLE_BODY_5);
+  third_party_cookies_description_->SetEnabledColorId(
+      ui::kColorLabelForegroundSecondary);
   third_party_cookies_description_->SetHorizontalAlignment(
       gfx::HorizontalAlignment::ALIGN_LEFT);
   third_party_cookies_description_->SetMultiLine(true);

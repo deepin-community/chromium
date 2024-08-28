@@ -27,13 +27,14 @@ this file with a file generated from [`api_template.__init__.py`](https://www.gi
 """
 # pylint: disable=g-bad-import-order,protected-access,g-import-not-at-top
 
-import distutils as _distutils
 import importlib
 import inspect as _inspect
 import os as _os
 import site as _site
 import sys as _sys
 
+# Do not remove this line; See https://github.com/tensorflow/tensorflow/issues/42596
+from tensorflow.python import pywrap_tensorflow as _pywrap_tensorflow  # pylint: disable=unused-import
 from tensorflow.python.tools import module_util as _module_util
 from tensorflow.python.util.lazy_loader import KerasLazyLoader as _KerasLazyLoader
 
@@ -97,9 +98,6 @@ if _site.ENABLE_USER_SITE and _site.USER_SITE is not None:
 _site_packages_dirs += [p for p in _sys.path if "site-packages" in p]
 if "getsitepackages" in dir(_site):
   _site_packages_dirs += _site.getsitepackages()
-
-if "sysconfig" in dir(_distutils):
-  _site_packages_dirs += [_distutils.sysconfig.get_python_lib()]
 
 _site_packages_dirs = list(set(_site_packages_dirs))
 

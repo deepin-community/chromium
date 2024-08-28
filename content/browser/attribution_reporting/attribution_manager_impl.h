@@ -27,8 +27,8 @@
 #include "content/browser/aggregation_service/report_scheduler_timer.h"
 #include "content/browser/attribution_reporting/attribution_manager.h"
 #include "content/browser/attribution_reporting/attribution_report.h"
-#include "content/browser/attribution_reporting/attribution_report_sender.h"
 #include "content/browser/attribution_reporting/attribution_reporting.mojom-forward.h"
+#include "content/browser/attribution_reporting/process_aggregatable_debug_report_result.mojom-forward.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/privacy_sandbox_attestations_observer.h"
 #include "content/public/browser/storage_partition.h"
@@ -43,6 +43,7 @@ class FilePath;
 class Time;
 class TimeDelta;
 class UpdateableSequencedTaskRunner;
+class ValueView;
 }  // namespace base
 
 namespace storage {
@@ -55,20 +56,24 @@ class Origin;
 
 namespace content {
 
+class AggregatableDebugReport;
 class AggregatableReport;
 class AggregatableReportRequest;
 class AttributionCookieChecker;
 class AttributionDataHostManager;
 class AttributionDebugReport;
 class AttributionOsLevelManager;
-class AttributionStorage;
-class AttributionStorageDelegate;
+class AttributionReportSender;
+class AttributionResolver;
+class AttributionResolverDelegate;
 class CreateReportResult;
 class StoragePartitionImpl;
 class StoreSourceResult;
 
 struct GlobalRenderFrameHostId;
 struct OsRegistration;
+struct ProcessAggregatableDebugReportResult;
+struct SendAggregatableDebugReportResult;
 struct SendResult;
 
 // UI thread class that manages the lifetime of the underlying attribution
@@ -104,12 +109,12 @@ class CONTENT_EXPORT AttributionManagerImpl
       const base::FilePath& user_data_directory,
       size_t max_pending_events,
       scoped_refptr<storage::SpecialStoragePolicy> special_storage_policy,
-      std::unique_ptr<AttributionStorageDelegate> storage_delegate,
+      std::unique_ptr<AttributionResolverDelegate> resolver_delegate,
       std::unique_ptr<AttributionCookieChecker> cookie_checker,
       std::unique_ptr<AttributionReportSender> report_sender,
       std::unique_ptr<AttributionOsLevelManager> os_level_manager,
       StoragePartitionImpl* storage_partition,
-      scoped_refptr<base::UpdateableSequencedTaskRunner> storage_task_runner);
+      scoped_refptr<base::UpdateableSequencedTaskRunner> resolver_task_runner);
 
   AttributionManagerImpl(
       StoragePartitionImpl* storage_partition,
@@ -135,8 +140,8 @@ class CONTENT_EXPORT AttributionManagerImpl
       int limit,
       base::OnceCallback<void(std::vector<AttributionReport>)> callback)
       override;
-  void SendReportsForWebUI(const std::vector<AttributionReport::Id>& ids,
-                           base::OnceClosure done) override;
+  void SendReportForWebUI(AttributionReport::Id,
+                          base::OnceClosure done) override;
   void ClearData(base::Time delete_begin,
                  base::Time delete_end,
                  StoragePartition::StorageKeyMatcherFunction filter,
@@ -145,6 +150,12 @@ class CONTENT_EXPORT AttributionManagerImpl
                  base::OnceClosure done) override;
   void SetDebugMode(std::optional<bool> enabled,
                     base::OnceClosure done) override;
+  void ReportRegistrationHeaderError(
+      attribution_reporting::SuitableOrigin reporting_origin,
+      const attribution_reporting::RegistrationHeaderError&,
+      const attribution_reporting::SuitableOrigin& context_origin,
+      bool is_within_fenced_frame,
+      GlobalRenderFrameHostId render_frame_id) override;
 
   void GetAllDataKeys(
       base::OnceCallback<void(std::set<DataKey>)> callback) override;
@@ -154,17 +165,13 @@ class CONTENT_EXPORT AttributionManagerImpl
 
   void HandleOsRegistration(OsRegistration) override;
 
-  void NotifyOsRegistration(base::Time time,
-                            const attribution_reporting::OsRegistrationItem&,
-                            const url::Origin& top_level_origin,
-                            bool is_debug_key_allowed,
-                            attribution_reporting::mojom::RegistrationType,
-                            attribution_reporting::mojom::OsRegistrationResult);
-
  private:
   friend class AttributionManagerImplTest;
 
-  using ReportSentCallback = AttributionReportSender::ReportSentCallback;
+  class ReportScheduler;
+
+  using ReportSentCallback =
+      base::OnceCallback<void(const AttributionReport&, SendResult)>;
   using SourceOrTrigger = absl::variant<StorableSource, AttributionTrigger>;
 
   struct SourceOrTriggerRFH;
@@ -176,28 +183,34 @@ class CONTENT_EXPORT AttributionManagerImpl
       const base::FilePath& user_data_directory,
       size_t max_pending_events,
       scoped_refptr<storage::SpecialStoragePolicy> special_storage_policy,
-      std::unique_ptr<AttributionStorageDelegate> storage_delegate,
+      std::unique_ptr<AttributionResolverDelegate> resolver_delegate,
       std::unique_ptr<AttributionCookieChecker> cookie_checker,
       std::unique_ptr<AttributionReportSender> report_sender,
       std::unique_ptr<AttributionOsLevelManager> os_level_manager,
-      scoped_refptr<base::UpdateableSequencedTaskRunner> storage_task_runner);
+      scoped_refptr<base::UpdateableSequencedTaskRunner> resolver_task_runner,
+      bool debug_mode);
 
   void MaybeEnqueueEvent(SourceOrTriggerRFH);
-  void ProcessEvents();
+  void PrepareNextEvent();
   void ProcessNextEvent(bool registration_allowed, bool is_debug_cookie_set);
-  void StoreSource(StorableSource source, bool is_debug_cookie_set);
+  void StoreSource(StorableSource source);
   void StoreTrigger(AttributionTrigger trigger, bool is_debug_cookie_set);
 
   void GetReportsToSend();
 
-  void OnGetReportsToSendFromWebUI(base::OnceClosure done,
-                                   std::vector<AttributionReport> reports);
+  void OnGetReportToSendFromWebUI(base::OnceClosure done,
+                                  std::optional<AttributionReport>);
 
-  void SendReports(base::RepeatingClosure web_ui_callback,
-                   std::vector<AttributionReport> reports);
+  void SendReports(std::vector<AttributionReport>);
+  void SendReport(base::OnceClosure web_ui_callback,
+                  base::Time now,
+                  AttributionReport);
   void PrepareToSendReport(AttributionReport report,
                            bool is_debug_report,
                            ReportSentCallback callback);
+  void SendReport(AttributionReport report,
+                  bool is_debug_report,
+                  ReportSentCallback callback);
   void OnReportSent(base::OnceClosure done,
                     const AttributionReport&,
                     SendResult info);
@@ -213,12 +226,9 @@ class CONTENT_EXPORT AttributionManagerImpl
       AggregationService::AssemblyStatus);
   void MarkReportCompleted(AttributionReport::Id report_id);
 
-  void OnSourceStored(const StorableSource& source,
-                      std::optional<uint64_t> cleared_debug_key,
-                      bool is_debug_cookie_set,
+  void OnSourceStored(std::optional<uint64_t> cleared_debug_key,
                       StoreSourceResult result);
-  void OnReportStored(const AttributionTrigger& trigger,
-                      std::optional<uint64_t> cleared_debug_key,
+  void OnReportStored(std::optional<uint64_t> cleared_debug_key,
                       bool is_debug_cookie_set,
                       CreateReportResult result);
 
@@ -233,18 +243,34 @@ class CONTENT_EXPORT AttributionManagerImpl
   void NotifyTotalOsRegistrationFailure(
       const OsRegistration&,
       attribution_reporting::mojom::OsRegistrationResult);
+  void NotifyOsRegistration(base::Time time,
+                            const attribution_reporting::OsRegistrationItem&,
+                            const url::Origin& top_level_origin,
+                            bool is_debug_key_allowed,
+                            attribution_reporting::mojom::RegistrationType,
+                            attribution_reporting::mojom::OsRegistrationResult);
 
   bool IsReportAllowed(const AttributionReport&) const;
 
-  void MaybeSendVerboseDebugReport(const StorableSource& source,
-                                   bool is_debug_cookie_set,
-                                   const StoreSourceResult& result);
+  void MaybeSendVerboseDebugReport(const StoreSourceResult& result);
 
-  void MaybeSendVerboseDebugReport(const AttributionTrigger& trigger,
-                                   bool is_debug_cookie_set,
+  void MaybeSendVerboseDebugReport(bool is_debug_cookie_set,
                                    const CreateReportResult& result);
 
   void MaybeSendVerboseDebugReports(const OsRegistration&);
+
+  void MaybeSendAggregatableDebugReport(const StoreSourceResult& result);
+  void MaybeSendAggregatableDebugReport(const CreateReportResult& result);
+  void OnAggregatableDebugReportProcessed(ProcessAggregatableDebugReportResult);
+  void OnAggregatableDebugReportAssembled(ProcessAggregatableDebugReportResult,
+                                          AggregatableReportRequest,
+                                          std::optional<AggregatableReport>,
+                                          AggregationService::AssemblyStatus);
+  void NotifyAggregatableDebugReportSent(
+      const AggregatableDebugReport&,
+      base::ValueView report_body,
+      attribution_reporting::mojom::ProcessAggregatableDebugReportResult,
+      SendAggregatableDebugReportResult);
 
   void AddPendingAggregatableReportTiming(const AttributionReport&);
   void RecordPendingAggregatableReportsTimings();
@@ -252,13 +278,13 @@ class CONTENT_EXPORT AttributionManagerImpl
   void OnUserVisibleTaskStarted();
   void OnUserVisibleTaskComplete();
 
-  void OnClearDataComplete();
+  void OnClearDataComplete(bool was_user_visible);
 
   void PrepareNextOsEvent();
   void ProcessNextOsEvent(const std::vector<bool>& is_debug_key_allowed);
   void OnOsRegistration(const std::vector<bool>& is_debug_key_allowed,
                         const OsRegistration&,
-                        bool success);
+                        const std::vector<bool>& success);
 
   // PrivacySandboxAttestationsObserver:
   void OnAttestationsLoaded() override;
@@ -281,17 +307,17 @@ class CONTENT_EXPORT AttributionManagerImpl
   // growth with adversarial input.
   size_t max_pending_events_;
 
-  // The task runner for all attribution reporting storage operations.
+  // The task runner for all operations on the resolver.
   // Updateable to allow for priority to be temporarily increased to
   // `USER_VISIBLE` when a user-visible storage task is queued or running.
   // Otherwise `BEST_EFFORT` is used.
-  scoped_refptr<base::UpdateableSequencedTaskRunner> storage_task_runner_;
+  scoped_refptr<base::UpdateableSequencedTaskRunner> resolver_task_runner_;
 
   // How many user-visible storage tasks are queued or running currently,
   // i.e. have been posted but the reply has not been run.
   int num_pending_user_visible_tasks_ = 0;
 
-  base::SequenceBound<AttributionStorage> attribution_storage_;
+  base::SequenceBound<AttributionResolver> attribution_resolver_;
 
   std::unique_ptr<ReportSchedulerTimer> scheduler_timer_;
 
@@ -328,6 +354,10 @@ class CONTENT_EXPORT AttributionManagerImpl
   // Timer to record the time elapsed since the construction. Used to measure
   // the delay due to privacy sandbox attestations loading.
   base::ElapsedTimer time_since_construction_;
+
+  // Technically redundant with fields in the `AttributionResolverDelegate` but
+  // duplicated here to avoid an async call to retrieve them.
+  bool debug_mode_ = false;
 
   base::WeakPtrFactory<AttributionManagerImpl> weak_factory_{this};
 };

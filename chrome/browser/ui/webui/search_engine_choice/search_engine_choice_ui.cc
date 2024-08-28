@@ -8,6 +8,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_forward.h"
 #include "base/json/json_writer.h"
+#include "base/not_fatal_until.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
@@ -22,7 +23,7 @@
 #include "chrome/grit/search_engine_choice_resources_map.h"
 #include "chrome/grit/signin_resources.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
-#include "components/search_engines/search_engine_choice_utils.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 #include "components/search_engines/template_url.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/strings/grit/components_branded_strings.h"
@@ -35,7 +36,7 @@ std::string GetChoiceListJSON(Profile& profile) {
   base::Value::List choice_value_list;
   SearchEngineChoiceDialogService* search_engine_choice_dialog_service =
       SearchEngineChoiceDialogServiceFactory::GetForProfile(&profile);
-  const std::vector<std::unique_ptr<TemplateURL>> choices =
+  const TemplateURL::TemplateURLVector choices =
       search_engine_choice_dialog_service->GetSearchEngines();
 
   for (const auto& choice : choices) {
@@ -52,6 +53,7 @@ std::string GetChoiceListJSON(Profile& profile) {
     choice_value.Set("url", choice->url());
     choice_value.Set("marketingSnippet",
                      search_engines::GetMarketingSnippetString(choice->data()));
+    choice_value.Set("showMarketingSnippet", false);
     choice_value_list.Append(std::move(choice_value));
   }
   std::string json_choice_list;
@@ -91,13 +93,11 @@ SearchEngineChoiceUI::SearchEngineChoiceUI(content::WebUI* web_ui)
   source->AddLocalizedString(
       "infoDialogThirdParagraph",
       IDS_SEARCH_ENGINE_CHOICE_INFO_DIALOG_BODY_THIRD_PARAGRAPH);
+  source->AddLocalizedString("choiceListA11yLabel",
+                             IDS_SEARCH_ENGINE_CHOICE_LIST_A11Y_LABEL);
   source->AddLocalizedString("infoDialogButtonText", IDS_CLOSE);
   source->AddLocalizedString("productLogoAltText",
                              IDS_SHORT_PRODUCT_LOGO_ALT_TEXT);
-  source->AddLocalizedString("fakeOmniboxText",
-                             IDS_SEARCH_ENGINE_CHOICE_FAKE_OMNIBOX_TEXT);
-  source->AddLocalizedString("chevronA11yLabel",
-                             IDS_SEARCH_ENGINE_CHOICE_CHEVRON_A11Y_LABEL);
   source->AddLocalizedString("moreButtonText",
                              IDS_SEARCH_ENGINE_CHOICE_MORE_BUTTON);
   source->AddResourcePath("images/left_illustration.svg",
@@ -114,8 +114,6 @@ SearchEngineChoiceUI::SearchEngineChoiceUI(content::WebUI* web_ui)
   source->AddResourcePath("signin_vars.css.js", IDR_SIGNIN_SIGNIN_VARS_CSS_JS);
 
   source->AddString("choiceList", GetChoiceListJSON(profile_.get()));
-
-  webui::SetupChromeRefresh2023(source);
 
   webui::SetupWebUIDataSource(
       source,
@@ -142,9 +140,23 @@ void SearchEngineChoiceUI::Initialize(
   display_dialog_callback_ = std::move(display_dialog_callback);
   on_choice_made_callback_ = std::move(on_choice_made_callback);
   entry_point_ = entry_point;
+
+  if (entry_point_ != SearchEngineChoiceDialogService::EntryPoint::kDialog) {
+    // This callback should always be populated.
+    // TODO(b/344899110): Cleanup once the bug root cause is found.
+    CHECK(on_choice_made_callback_, base::NotFatalUntil::M131);
+  }
 }
 
 void SearchEngineChoiceUI::HandleSearchEngineChoiceMade(int prepopulate_id) {
+  if (entry_point_ != SearchEngineChoiceDialogService::EntryPoint::kDialog) {
+    // If this callback is null, then this method has already been called, which
+    // is a bug. (Or the initialization was skipped, but that would point to
+    // users manually entering the URL, which is not supported)
+    // TODO(b/344899110): Cleanup once the bug root cause is found.
+    CHECK(on_choice_made_callback_, base::NotFatalUntil::M131);
+  }
+
   SearchEngineChoiceDialogService* search_engine_choice_dialog_service =
       SearchEngineChoiceDialogServiceFactory::GetForProfile(&profile_.get());
   search_engine_choice_dialog_service->NotifyChoiceMade(prepopulate_id,
@@ -163,6 +175,13 @@ void SearchEngineChoiceUI::HandleLearnMoreLinkClicked() {
   search_engine_choice_dialog_service->NotifyLearnMoreLinkClicked(entry_point_);
 }
 
+void SearchEngineChoiceUI::HandleMoreButtonClicked() {
+  SearchEngineChoiceDialogService* search_engine_choice_dialog_service =
+      SearchEngineChoiceDialogServiceFactory::GetForProfile(&profile_.get());
+
+  search_engine_choice_dialog_service->NotifyMoreButtonClicked(entry_point_);
+}
+
 void SearchEngineChoiceUI::CreatePageHandler(
     mojo::PendingReceiver<search_engine_choice::mojom::PageHandler> receiver) {
   page_handler_ = std::make_unique<SearchEngineChoiceHandler>(
@@ -170,5 +189,7 @@ void SearchEngineChoiceUI::CreatePageHandler(
       base::BindOnce(&SearchEngineChoiceUI::HandleSearchEngineChoiceMade,
                      weak_ptr_factory_.GetWeakPtr()),
       base::BindRepeating(&SearchEngineChoiceUI::HandleLearnMoreLinkClicked,
-                          weak_ptr_factory_.GetWeakPtr()));
+                          weak_ptr_factory_.GetWeakPtr()),
+      base::BindOnce(&SearchEngineChoiceUI::HandleMoreButtonClicked,
+                     weak_ptr_factory_.GetWeakPtr()));
 }

@@ -8,16 +8,15 @@
 
 #include "ash/frame/non_client_frame_view_ash.h"
 #include "ash/public/cpp/shell_window_ids.h"
-#include "ash/scoped_animation_disabler.h"
 #include "ash/shell.h"
 #include "ash/wm/desks/desks_util.h"
 #include "ash/wm/toplevel_window_event_handler.h"
 #include "ash/wm/window_resizer.h"
 #include "ash/wm/window_state.h"
 #include "base/containers/adapters.h"
+#include "base/debug/crash_logging.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "cc/layers/deadline_policy.h"
@@ -40,6 +39,7 @@
 #include "ui/compositor/layer.h"
 #include "ui/views/widget/widget.h"
 #include "ui/wm/core/coordinate_conversion.h"
+#include "ui/wm/core/scoped_animation_disabler.h"
 #include "ui/wm/core/transient_window_manager.h"
 #include "ui/wm/core/window_util.h"
 
@@ -155,12 +155,6 @@ void ShellSurface::OcclusionObserver::OnWindowOcclusionChanged(
 void ShellSurface::OcclusionObserver::MaybeConfigure(aura::Window* window) {
   auto new_state = window->GetOcclusionState();
   if (state_ != new_state && shell_surface_->IsReady()) {
-    // If the state changes to visible, take the compositor lock so we never
-    // show missing content.
-    if (new_state == aura::Window::OcclusionState::VISIBLE) {
-      shell_surface_->MaybeSetCompositorLockForNextConfigure(
-          kSlowCompositorLockTimeoutMs);
-    }
     state_ = new_state;
     shell_surface_->Configure();
   }
@@ -169,10 +163,10 @@ void ShellSurface::OcclusionObserver::MaybeConfigure(aura::Window* window) {
 aura::Window::OcclusionState
 ShellSurface::OcclusionObserver::GetInitialStateForConfigure(
     chromeos::WindowStateType state_type) {
-  // Assume the window is initially visible, unless it is minimized.
-  state_ = state_type == chromeos::WindowStateType::kMinimized
-               ? aura::Window::OcclusionState::HIDDEN
-               : aura::Window::OcclusionState::VISIBLE;
+  // TODO(crbug.com/328172097): Put this back to sending HIDDEN for minimized
+  // when we have some guarantee that the client will produce content while
+  // hidden for the initial configure.
+  state_ = aura::Window::OcclusionState::VISIBLE;
   return state_;
 }
 
@@ -192,7 +186,10 @@ ShellSurface::ShellSurface(Surface* surface)
     : ShellSurfaceBase(surface,
                        gfx::Point(),
                        /*can_minimize=*/true,
-                       ash::desks_util::GetActiveDeskContainerId()) {}
+                       ash::desks_util::GetActiveDeskContainerId()) {
+  CHECK(surface->window());
+  occlusion_observer_.emplace(this, surface->window());
+}
 
 ShellSurface::~ShellSurface() {
   DCHECK(!scoped_configure_);
@@ -242,7 +239,6 @@ void ShellSurface::AcknowledgeConfigure(uint32_t serial) {
 void ShellSurface::SetParent(ShellSurface* parent) {
   TRACE_EVENT1("exo", "ShellSurface::SetParent", "parent",
                parent ? base::UTF16ToASCII(parent->GetWindowTitle()) : "null");
-
   SetParentWindow(parent ? parent->GetWidget()->GetNativeWindow() : nullptr);
 }
 
@@ -536,6 +532,12 @@ const ui::Layer* ShellSurface::GetCommitTargetLayer() const {
 ////////////////////////////////////////////////////////////////////////////////
 // ShellSurfaceBase overrides:
 
+void ShellSurface::OnSurfaceCommit() {
+  // Send configure only after the effect of the commit is finalized.
+  ScopedConfigure scoped_configure(this, false);
+  ShellSurfaceBase::OnSurfaceCommit();
+}
+
 void ShellSurface::InitializeWindowState(ash::WindowState* window_state) {
   window_state->AddObserver(this);
   window_state->set_allow_set_bounds_direct(movement_disabled_);
@@ -596,7 +598,8 @@ gfx::Point ShellSurface::GetSurfaceOrigin() const {
                         client_bounds.height() - visible_bounds.height()) -
              visible_bounds.OffsetFromOrigin();
     default:
-      NOTREACHED() << "Unsupported component:" << resize_component_;
+      NOTREACHED_IN_MIGRATION()
+          << "Unsupported component:" << resize_component_;
       return gfx::Point();
   }
 }
@@ -669,8 +672,8 @@ void ShellSurface::OnWindowBoundsChanged(aura::Window* window,
       // dependency won't be fulfilled until corresponding configure
       // acknowledgement.
       // Synchronize bounds to it, s.t. the fallback surface looks reasonable.
-      // TODO(crbug.com/1251778): Take non-zero origin introduced by geometry or
-      // clipping into account.
+      // TODO(crbug.com/40057347): Take non-zero origin introduced by geometry
+      // or clipping into account.
       viz::ScopedSurfaceIdAllocator scoped_suppression =
           host_window()->GetSurfaceIdAllocator(base::NullCallback());
       host_window()->layer()->SetBounds(
@@ -689,7 +692,7 @@ void ShellSurface::OnWindowBoundsChanged(aura::Window* window,
       // prevent flashes.
       if (reason != ui::PropertyChangeReason::FROM_ANIMATION &&
           ash::WindowState::Get(window)->IsMaximizedOrFullscreenOrPinned()) {
-        // TODO(crbug.com/1399478): See if we can rid of the slow lock timeout
+        // TODO(crbug.com/40249858): See if we can rid of the slow lock timeout
         // by adjusting the order of resize of windows to top to bottom.
         MaybeSetCompositorLockForNextConfigure(kSlowCompositorLockTimeoutMs);
       }
@@ -745,16 +748,7 @@ void ShellSurface::OnWindowPropertyChanged(aura::Window* window,
         return;
       }
 
-      // We need to wait until raster scale changes are acked by the client. For
-      // example, upon entering overview mode, updating the raster scale of
-      // clients is meant to reduce buffer sizes and improve the smoothness of
-      // the overview enter animation. But, if we don't wait for these updated
-      // buffers, we will end up animating with unnecessarily large buffers,
-      // which negates the entire point of updating the raster scale. So, lock
-      // the compositor until we get an ack for updating the raster scale.
-      MaybeSetCompositorLockForNextConfigure(kDefaultCompositorLockTimeoutMs);
       pending_raster_scale_ = raster_scale;
-
       Configure();
     }
   }
@@ -774,9 +768,10 @@ void ShellSurface::OnPreWindowStateTypeChange(
   }
 
   if (chromeos::IsMaximizedOrFullscreenOrPinnedWindowStateType(old_type) ||
-      chromeos::IsMaximizedOrFullscreenOrPinnedWindowStateType(new_type)) {
-    if (!widget_)
-      return;
+      chromeos::IsMaximizedOrFullscreenOrPinnedWindowStateType(new_type) ||
+      window_state->IsMinimized()) {
+    CHECK(widget_);
+
     // When transitioning in/out of maximized or fullscreen mode, we need to
     // make sure we have a configure callback before we allow the default
     // cross-fade animations. The configure callback provides a mechanism for
@@ -787,7 +782,7 @@ void ShellSurface::OnPreWindowStateTypeChange(
       // account by acquiring a compositor lock.
       MaybeSetCompositorLockForNextConfigure(kDefaultCompositorLockTimeoutMs);
     } else {
-      animations_disabler_ = std::make_unique<ash::ScopedAnimationDisabler>(
+      animations_disabler_ = std::make_unique<wm::ScopedAnimationDisabler>(
           widget_->GetNativeWindow());
     }
   }
@@ -859,6 +854,14 @@ gfx::Rect ShellSurface::ComputeAdjustedBounds(const gfx::Rect& bounds) const {
   if (!max_size.IsEmpty()) {
     size.SetToMin(max_size);
   }
+
+  // The size should never be bigger than work area, even if the min size is
+  // bigger than that.
+  auto work_area = display::Screen::GetScreen()
+                       ->GetDisplayNearestWindow(widget_->GetNativeWindow())
+                       .work_area();
+  size.SetToMin(work_area.size());
+
   // Keep the origin instead of center.
   return gfx::Rect(bounds.origin(), size);
 }
@@ -921,6 +924,15 @@ bool ShellSurface::OnPreWidgetCommit() {
   return true;
 }
 
+void ShellSurface::ShowWidget(bool activate) {
+  ShellSurfaceBase::ShowWidget(activate);
+
+  // Now that the shell surface is ready, make sure it has up to date occlusion
+  // state.
+  CHECK(IsReady());
+  occlusion_observer_->MaybeConfigure(root_surface()->window());
+}
+
 std::unique_ptr<views::NonClientFrameView>
 ShellSurface::CreateNonClientFrameView(views::Widget* widget) {
   ash::WindowState* window_state =
@@ -945,23 +957,42 @@ void ShellSurface::OnLayerRecreated(ui::Layer* old_layer) {
   // anything.
   if (old_layer->GetSurfaceId()) {
     old_layer_ = old_layer->AsWeakPtr();
+    // TODO(b/319939913): Remove this log when the issue is fixed.
+    old_layer_->SetName(old_layer_->name() + "-old-has-surface");
+  } else {
+    old_layer->SetName(old_layer->name() + "-old-no-surface");
   }
+  CHECK(old_layer->parent());
+  CHECK(host_window()->layer()->parent());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // ShellSurface, private:
 
 void ShellSurface::SetParentWindow(aura::Window* new_parent) {
-  if (new_parent && GetWidget() &&
-      new_parent == GetWidget()->GetNativeWindow()) {
-    // Some apps e.g. crbug/1210235 try to be their own parent. Ignore them to
-    // prevent chrome from locking up/crashing.
-    auto* app_id = GetShellApplicationId(host_window());
-    LOG(WARNING)
-        << "Client attempts to add itself as a transient parent: app_id="
-        << app_id;
-    return;
+  if (new_parent && widget_) {
+    const aura::Window* window = widget_->GetNativeWindow();
+    const aura::Window* ancestor = new_parent;
+    while (ancestor) {
+      if (ancestor == window) {
+        // Some apps try to be their own parent, e.g. crbug/1210235, or parent
+        // to its ancestors, e.g., b/342265753. Ignore them to prevent chrome
+        // from locking up/crashing.
+        auto* app_id = GetShellApplicationId(host_window());
+        LOG(WARNING) << "Client attempts to parent to itself or its transient "
+                        "ancestors: app_id="
+                     << app_id;
+        return;
+      }
+
+      auto* transient_window_manager =
+          wm::TransientWindowManager::GetIfExists(ancestor);
+      ancestor = transient_window_manager
+                     ? transient_window_manager->transient_parent()
+                     : nullptr;
+    }
   }
+
   if (parent()) {
     parent()->RemoveObserver(this);
     if (widget_) {
@@ -992,8 +1023,10 @@ void ShellSurface::MaybeMakeTransient() {
 }
 
 void ShellSurface::Configure(bool ends_drag) {
-  // Delay configure callback if |scoped_configure_| is set.
-  if (scoped_configure_) {
+  // Delay configure callback if |scoped_configure_| is set. But if
+  // |widget_| is not set yet then it ignores |scoped_configure_| so that an
+  // initial configure can be sent.
+  if (widget_ && scoped_configure_) {
     scoped_configure_->set_needs_configure();
     return;
   }

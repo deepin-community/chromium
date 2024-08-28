@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -11,6 +16,7 @@
 #include <tuple>
 
 #include "base/command_line.h"
+#include "base/containers/heap_array.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -25,18 +31,20 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "cc/input/browser_controls_state.h"
 #include "cc/trees/layer_tree_host.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "content/common/renderer.mojom.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/renderer_preferences_util.h"
 #include "content/public/browser/web_ui_controller.h"
 #include "content/public/browser/web_ui_controller_factory.h"
 #include "content/public/common/bindings_policy.h"
 #include "content/public/common/content_switches.h"
-#include "content/public/common/input/native_web_keyboard_event.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/common/url_utils.h"
 #include "content/public/renderer/content_renderer_client.h"
@@ -66,6 +74,7 @@
 #include "net/dns/public/resolve_error_info.h"
 #include "net/http/http_util.h"
 #include "services/network/public/cpp/resource_request_body.h"
+#include "skia/ext/legacy_display_globals.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/dom_storage/session_storage_namespace_id.h"
@@ -108,6 +117,7 @@
 #include "third_party/blink/public/web/web_window_features.h"
 #include "ui/accessibility/ax_mode.h"
 #include "ui/base/ime/mojom/text_input_state.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
 #include "ui/events/keycodes/dom/dom_code.h"
@@ -312,7 +322,7 @@ class CommonParamsFrameLoadWaiter : public FrameLoadWaiter {
   }
 
   blink::mojom::CommonNavigationParamsPtr common_params_;
-  raw_ptr<const RenderFrameImpl, ExperimentalRenderer> frame_;
+  raw_ptr<const RenderFrameImpl> frame_;
 };
 
 }  // namespace
@@ -402,20 +412,20 @@ class RenderViewImplTest : public RenderViewTest {
                         std::u16string* output) {
     int flags = ConvertMockKeyboardModifier(modifiers);
 
-    ui::KeyEvent keydown_event(ui::ET_KEY_PRESSED,
+    ui::KeyEvent keydown_event(ui::EventType::kKeyPressed,
                                static_cast<ui::KeyboardCode>(key_code), flags);
-    NativeWebKeyboardEvent keydown_web_event(keydown_event);
+    input::NativeWebKeyboardEvent keydown_web_event(keydown_event);
     SendNativeKeyEvent(keydown_web_event);
 
     ui::KeyEvent char_event = ui::KeyEvent::FromCharacter(
         keydown_event.GetCharacter(), static_cast<ui::KeyboardCode>(key_code),
         ui::DomCode::NONE, flags);
-    NativeWebKeyboardEvent char_web_event(char_event);
+    input::NativeWebKeyboardEvent char_web_event(char_event);
     SendNativeKeyEvent(char_web_event);
 
-    ui::KeyEvent keyup_event(ui::ET_KEY_RELEASED,
+    ui::KeyEvent keyup_event(ui::EventType::kKeyReleased,
                              static_cast<ui::KeyboardCode>(key_code), flags);
-    NativeWebKeyboardEvent keyup_web_event(keyup_event);
+    input::NativeWebKeyboardEvent keyup_web_event(keyup_event);
     SendNativeKeyEvent(keyup_web_event);
 
     char16_t c = DomCodeToUsLayoutCharacter(
@@ -452,17 +462,17 @@ class RenderViewImplTest : public RenderViewTest {
     // WM_CHAR sends a composed Unicode character.
     CHROME_MSG msg1 = {NULL, WM_KEYDOWN, static_cast<WPARAM>(key_code), 0};
     ui::KeyEvent evt1(msg1);
-    NativeWebKeyboardEvent keydown_event(evt1);
+    input::NativeWebKeyboardEvent keydown_event(evt1);
     SendNativeKeyEvent(keydown_event);
 
     CHROME_MSG msg2 = {NULL, WM_CHAR, (*output)[0], 0};
     ui::KeyEvent evt2(msg2);
-    NativeWebKeyboardEvent char_event(evt2);
+    input::NativeWebKeyboardEvent char_event(evt2);
     SendNativeKeyEvent(char_event);
 
     CHROME_MSG msg3 = {NULL, WM_KEYUP, static_cast<WPARAM>(key_code), 0};
     ui::KeyEvent evt3(msg3);
-    NativeWebKeyboardEvent keyup_event(evt3);
+    input::NativeWebKeyboardEvent keyup_event(evt3);
     SendNativeKeyEvent(keyup_event);
 
     return length;
@@ -686,10 +696,9 @@ TEST_F(RenderViewImplTest, OnNavigationHttpPost) {
 
   // Set up post data.
   const char raw_data[] = "post \0\ndata";
-  const size_t length = std::size(raw_data);
   scoped_refptr<network::ResourceRequestBody> post_data(
       new network::ResourceRequestBody);
-  post_data->AppendBytes(raw_data, length);
+  post_data->AppendBytes(raw_data, sizeof(raw_data));
   common_params->post_data = post_data;
 
   frame()->Navigate(std::move(common_params), DummyCommitNavigationParams());
@@ -707,17 +716,18 @@ TEST_F(RenderViewImplTest, OnNavigationHttpPost) {
   bool successful = body.ElementAt(0, element);
   EXPECT_TRUE(successful);
   EXPECT_EQ(blink::HTTPBodyElementType::kTypeData, element.type);
-  EXPECT_EQ(length, element.data.size());
 
-  std::unique_ptr<char[]> flat_data(new char[element.data.size()]);
+  auto flat_data = base::HeapArray<char>::Uninit(element.data.size());
   element.data.ForEachSegment([&flat_data](const char* segment,
                                            size_t segment_size,
                                            size_t segment_offset) {
-    std::copy(segment, segment + segment_size,
-              flat_data.get() + segment_offset);
+    flat_data.subspan(segment_offset, segment_size)
+        .copy_from(
+            // TODO(crbug.com/40284755): ForEachSegment should be given a span.
+            UNSAFE_BUFFERS(base::span(segment, segment_size)));
     return true;
   });
-  EXPECT_EQ(0, memcmp(raw_data, flat_data.get(), length));
+  EXPECT_EQ(base::span_with_nul_from_cstring(raw_data), flat_data.as_span());
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -1682,7 +1692,7 @@ TEST_F(RenderViewImplTextInputStateChanged,
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, run_loop.QuitClosure());
   run_loop.Run();
-  double zoom_level = blink::PageZoomFactorToZoomLevel(1.25);
+  double zoom_level = blink::ZoomFactorToZoomLevel(1.25);
   // Change the zoom level to 125% and check if the view gets the change.
   main_frame_widget()->SetZoomLevelForTesting(zoom_level);
   // Update the IME status and verify if our IME backend sends an IPC message
@@ -2796,7 +2806,7 @@ TEST_F(RenderViewImplTest, PreferredSizeZoomed) {
   EXPECT_EQ(gfx::Size(400 + scrollbar_width, 400), size);
 
   main_frame_widget()->SetZoomLevelForTesting(
-      blink::PageZoomFactorToZoomLevel(2.0));
+      blink::ZoomFactorToZoomLevel(2.0));
   web_view_->MainFrameWidget()->UpdateAllLifecyclePhases(
       blink::DocumentUpdateReason::kTest);
   size = GetPreferredSize();
@@ -3195,13 +3205,13 @@ TEST_F(RenderViewImplScaleFactorTest, AutoResize) {
 TEST_F(RenderViewImplTest, ZoomLevelUpdate) {
   // 0 will use the minimum zoom level, which is the default, nothing will
   // change.
-  EXPECT_FLOAT_EQ(0u, web_view_->ZoomLevel());
+  EXPECT_FLOAT_EQ(0u, web_view_->MainFrameWidget()->GetZoomLevel());
 
-  double zoom_level = blink::PageZoomFactorToZoomLevel(0.25);
+  double zoom_level = blink::ZoomFactorToZoomLevel(0.25);
   // Change the zoom level to 25% and check if the view gets the change.
   main_frame_widget()->SetZoomLevelForTesting(zoom_level);
   // Use EXPECT_FLOAT_EQ here because view()->GetZoomLevel returns a float.
-  EXPECT_FLOAT_EQ(zoom_level, web_view_->ZoomLevel());
+  EXPECT_FLOAT_EQ(zoom_level, web_view_->MainFrameWidget()->GetZoomLevel());
 }
 
 #endif
@@ -3319,5 +3329,52 @@ TEST_F(RenderViewImplTest, CollapseSelectionNotChangeFocus) {
                                                  &is_body_again));
   EXPECT_EQ(1, is_body_again);
 }
+
+#if BUILDFLAG(IS_WIN)
+class RenderViewImplContrastGammaSettingsTest : public RenderViewImplTest {
+ protected:
+  void SetUp() override {
+    RenderViewImplTest::SetUp();
+    feature_list_.InitAndEnableFeature(
+        features::kUseGammaContrastRegistrySettings);
+  }
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_F(RenderViewImplContrastGammaSettingsTest,
+       ContrastGammaSetRendererPreferences) {
+  LoadHTML(R"HTML(
+      <input id='test' type='text'></input>
+    )HTML");
+
+  // Use non-default values for contrast and gamma.
+  constexpr float test_contrast = 0.95;
+  static_assert(test_contrast != SK_GAMMA_CONTRAST);
+  static_assert(test_contrast >= SkSurfaceProps::kMinContrastInclusive);
+  static_assert(test_contrast <= SkSurfaceProps::kMaxContrastInclusive);
+
+  constexpr float test_gamma = 3.99;
+  static_assert(test_gamma != SK_GAMMA_EXPONENT);
+  static_assert(test_gamma >= SkSurfaceProps::kMinGammaInclusive);
+  static_assert(test_gamma < SkSurfaceProps::kMaxGammaExclusive);
+
+  blink::RendererPreferences renderer_preferences =
+      web_view_->GetRendererPreferences();
+  EXPECT_NE(renderer_preferences.text_contrast, test_contrast);
+  EXPECT_NE(renderer_preferences.text_gamma, test_gamma);
+
+  // Set the non-default values on `RendererPreferences`.
+  renderer_preferences.text_contrast = test_contrast;
+  renderer_preferences.text_gamma = test_gamma;
+  web_view_->SetRendererPreferences(renderer_preferences);
+
+  // `GetSkSurfaceProps` should have the updated contrast and
+  // gamma properties from above.
+  SkSurfaceProps surface_props =
+      skia::LegacyDisplayGlobals::GetSkSurfaceProps();
+  EXPECT_EQ(surface_props.textContrast(), test_contrast);
+  EXPECT_EQ(surface_props.textGamma(), test_gamma);
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace content

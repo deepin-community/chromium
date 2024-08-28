@@ -29,14 +29,17 @@
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/interaction/element_identifier.h"
+#include "ui/base/interaction/element_test_util.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/interaction/expect_call_in_scope.h"
 #include "ui/base/interaction/interaction_sequence.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 namespace {
 
+DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kDummyElementId);
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsElementId);
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsElementId2);
 DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kInteractionTestUtilCustomEventType);
@@ -377,6 +380,46 @@ IN_PROC_BROWSER_TEST_F(WebContentsInteractionTestUtilTest,
                            [&](ui::InteractionSequence* sequence,
                                ui::TrackedElement* element) {
                              EXPECT_EQ(url2, util->web_contents()->GetURL());
+                           }))
+                       .Build())
+          .Build();
+
+  EXPECT_CALL_IN_SCOPE(completed, Run, sequence->RunSynchronouslyForTesting());
+}
+
+IN_PROC_BROWSER_TEST_F(WebContentsInteractionTestUtilTest,
+                       ElementCreatedInFreshBrowser) {
+  UNCALLED_MOCK_CALLBACK(ui::InteractionSequence::CompletedCallback, completed);
+  UNCALLED_MOCK_CALLBACK(ui::InteractionSequence::AbortedCallback, aborted);
+
+  const GURL url = embedded_test_server()->GetURL(kDocumentWithTitle1URL);
+
+  // Open a new browser, and immediately navigate to a new page. Even though the
+  // original chrome://new-tab-page might not have finished loading, the
+  // element should not be created until the new URL is loaded.
+  Browser* browser2 = chrome::OpenEmptyWindow(
+      browser()->profile(), /*should_trigger_session_restore=*/false);
+  auto util = WebContentsInteractionTestUtil::ForExistingTabInBrowser(
+      browser2, kWebContentsElementId);
+  util->LoadPage(url);
+
+  auto sequence =
+      ui::InteractionSequence::Builder()
+          .SetCompletedCallback(completed.Get())
+          .SetAbortedCallback(aborted.Get())
+          .SetContext(browser2->window()->GetElementContext())
+          .AddStep(ui::InteractionSequence::StepBuilder()
+                       .SetType(ui::InteractionSequence::StepType::kShown)
+                       .SetElementID(kWebContentsElementId)
+                       .SetContext(ui::InteractionSequence::ContextMode::kAny)
+                       .SetTransitionOnlyOnEvent(true)
+                       .SetStartCallback(base::BindLambdaForTesting(
+                           [&](ui::InteractionSequence* sequence,
+                               ui::TrackedElement* element) {
+                             EXPECT_EQ(util->web_contents()->GetURL(), url);
+                             EXPECT_EQ(
+                                 util->web_contents()->GetLastCommittedURL(),
+                                 url);
                            }))
                        .Build())
           .Build();
@@ -901,7 +944,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsInteractionTestUtilTest,
   EXPECT_CALL_IN_SCOPE(completed, Run, sequence->RunSynchronouslyForTesting());
 }
 
-// TODO(crbug.com/1492005): Resolve flakiness on ChromeOS and re-enable the
+// TODO(crbug.com/40285351): Resolve flakiness on ChromeOS and re-enable the
 // test.
 #if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_StateChangeExistsTimeoutSendsEvent \
@@ -2311,6 +2354,142 @@ IN_PROC_BROWSER_TEST_F(WebContentsInteractionTestUtilTest,
   EXPECT_CALL_IN_SCOPE(completed, Run, sequence->RunSynchronouslyForTesting());
 }
 
+IN_PROC_BROWSER_TEST_F(WebContentsInteractionTestUtilTest,
+                       PaintEventSentForExistingPage) {
+  UNCALLED_MOCK_CALLBACK(ui::InteractionSequence::CompletedCallback, completed);
+  UNCALLED_MOCK_CALLBACK(ui::InteractionSequence::AbortedCallback, aborted);
+  ui::test::TestElement test_el(kDummyElementId,
+                                browser()->window()->GetElementContext());
+  test_el.Show();
+
+  NavigateParams params(browser(),
+                        embedded_test_server()->GetURL(kDocumentWithLinksURL),
+                        ui::PAGE_TRANSITION_TYPED);
+  params.disposition = WindowOpenDisposition::CURRENT_TAB;
+  Navigate(&params);
+
+  // Using this constructor hits all of the rest of the constructors, saving us
+  // the hassle of writing three identical tests.
+  std::unique_ptr<WebContentsInteractionTestUtil> util;
+  auto sequence =
+      ui::InteractionSequence::Builder()
+          .SetCompletedCallback(completed.Get())
+          .SetAbortedCallback(aborted.Get())
+          .SetContext(browser()->window()->GetElementContext())
+          .AddStep(ui::InteractionSequence::StepBuilder()
+                       .SetType(ui::InteractionSequence::StepType::kShown)
+                       .SetElementID(kDummyElementId)
+                       .SetStartCallback(base::BindLambdaForTesting(
+                           [&](ui::InteractionSequence* sequence,
+                               ui::TrackedElement* element) {
+                             util = WebContentsInteractionTestUtil::
+                                 ForExistingTabInContext(
+                                     browser()->window()->GetElementContext(),
+                                     kWebContentsElementId);
+                           }))
+                       .Build())
+          .AddStep(ui::InteractionSequence::StepBuilder()
+                       .SetType(ui::InteractionSequence::StepType::kCustomEvent,
+                                TrackedElementWebContents::kFirstNonEmptyPaint)
+                       .SetElementID(kWebContentsElementId)
+                       .SetMustBeVisibleAtStart(false)
+                       .Build())
+          .Build();
+
+  EXPECT_CALL_IN_SCOPE(completed, Run, sequence->RunSynchronouslyForTesting());
+}
+
+IN_PROC_BROWSER_TEST_F(WebContentsInteractionTestUtilTest,
+                       PaintEventSentOnNavigate) {
+  UNCALLED_MOCK_CALLBACK(ui::InteractionSequence::CompletedCallback, completed);
+  UNCALLED_MOCK_CALLBACK(ui::InteractionSequence::AbortedCallback, aborted);
+
+  const GURL url = embedded_test_server()->GetURL(kEmptyDocumentURL);
+
+  auto util = WebContentsInteractionTestUtil::ForExistingTabInBrowser(
+      browser(), kWebContentsElementId);
+  auto sequence =
+      ui::InteractionSequence::Builder()
+          .SetCompletedCallback(completed.Get())
+          .SetAbortedCallback(aborted.Get())
+          .SetContext(browser()->window()->GetElementContext())
+          .AddStep(ui::InteractionSequence::StepBuilder()
+                       .SetType(ui::InteractionSequence::StepType::kShown)
+                       .SetElementID(kWebContentsElementId)
+                       .SetStartCallback(base::BindLambdaForTesting(
+                           [&](ui::InteractionSequence* sequence,
+                               ui::TrackedElement* element) {
+                             NavigateParams navigate_params(
+                                 browser(), url, ui::PAGE_TRANSITION_TYPED);
+                             Navigate(&navigate_params);
+                           }))
+                       .Build())
+          .AddStep(ui::InteractionSequence::StepBuilder()
+                       .SetType(ui::InteractionSequence::StepType::kHidden)
+                       .SetTransitionOnlyOnEvent(true)
+                       .SetElementID(kWebContentsElementId)
+                       .Build())
+          .AddStep(ui::InteractionSequence::StepBuilder()
+                       .SetType(ui::InteractionSequence::StepType::kCustomEvent,
+                                TrackedElementWebContents::kFirstNonEmptyPaint)
+                       .SetElementID(kWebContentsElementId)
+                       .SetMustBeVisibleAtStart(false)
+                       .Build())
+          .Build();
+
+  EXPECT_CALL_IN_SCOPE(completed, Run, sequence->RunSynchronouslyForTesting());
+}
+
+IN_PROC_BROWSER_TEST_F(WebContentsInteractionTestUtilTest,
+                       PaintEventSentOnNavigateInBackgroundThenActivate) {
+  UNCALLED_MOCK_CALLBACK(ui::InteractionSequence::CompletedCallback, completed);
+  UNCALLED_MOCK_CALLBACK(ui::InteractionSequence::AbortedCallback, aborted);
+
+  const GURL url = embedded_test_server()->GetURL(kEmptyDocumentURL);
+
+  auto util = WebContentsInteractionTestUtil::ForExistingTabInBrowser(
+      browser(), kWebContentsElementId);
+  auto util2 = WebContentsInteractionTestUtil::ForNextTabInContext(
+      browser()->window()->GetElementContext(), kWebContentsElementId2);
+
+  auto sequence =
+      ui::InteractionSequence::Builder()
+          .SetCompletedCallback(completed.Get())
+          .SetAbortedCallback(aborted.Get())
+          .SetContext(browser()->window()->GetElementContext())
+          .AddStep(ui::InteractionSequence::StepBuilder()
+                       .SetType(ui::InteractionSequence::StepType::kShown)
+                       .SetElementID(kWebContentsElementId)
+                       .SetStartCallback(base::BindLambdaForTesting(
+                           [&](ui::InteractionSequence* sequence,
+                               ui::TrackedElement* element) {
+                             util->LoadPageInNewTab(url, false);
+                           }))
+                       .Build())
+          .AddStep(ui::InteractionSequence::StepBuilder()
+                       .SetType(ui::InteractionSequence::StepType::kShown)
+                       .SetElementID(kWebContentsElementId2)
+                       .SetStartCallback(base::BindLambdaForTesting(
+                           [&](ui::InteractionSequence* sequence,
+                               ui::TrackedElement* element) {
+                             // An event won't actually be sent until the page
+                             // is loaded in a WebView of non-empty size, so
+                             // switch tabs.
+                             browser()->tab_strip_model()->ActivateTabAt(1);
+                           }))
+                       .Build())
+          .AddStep(ui::InteractionSequence::StepBuilder()
+                       .SetType(ui::InteractionSequence::StepType::kCustomEvent,
+                                TrackedElementWebContents::kFirstNonEmptyPaint)
+                       .SetElementID(kWebContentsElementId2)
+                       .SetMustBeVisibleAtStart(false)
+                       .Build())
+          .Build();
+
+  EXPECT_CALL_IN_SCOPE(completed, Run, sequence->RunSynchronouslyForTesting());
+  EXPECT_EQ(url, util2->web_contents()->GetURL());
+}
+
 class WebContentsInteractionTestUtilInteractiveTest
     : public InteractiveBrowserTest {
  public:
@@ -2334,7 +2513,7 @@ class WebContentsInteractionTestUtilInteractiveTest
   }
 };
 
-// TODO(crbug.com/1447298): flaky on Mac - see comments below for the likely
+// TODO(crbug.com/40268930): flaky on Mac - see comments below for the likely
 // culprit line.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_TrackWebContentsAcrossReplace \

@@ -12,6 +12,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/task_environment.h"
 #include "components/bookmarks/browser/bookmark_model.h"
@@ -20,11 +21,10 @@
 #include "components/reading_list/core/dual_reading_list_model.h"
 #include "components/reading_list/core/fake_reading_list_model_storage.h"
 #include "components/reading_list/core/reading_list_model_impl.h"
+#include "components/sync/base/features.h"
 #include "components/sync/service/local_data_description.h"
 #include "components/sync/test/mock_model_type_change_processor.h"
 #include "components/sync_bookmarks/bookmark_model_view.h"
-#include "components/sync_bookmarks/bookmark_sync_service.h"
-#include "components/undo/bookmark_undo_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -52,7 +52,6 @@ syncer::LocalDataDescription CreateLocalDataDescription(
     const std::vector<std::string>& domains,
     int domain_count) {
   syncer::LocalDataDescription desc;
-  desc.type = type;
   desc.item_count = item_count;
   desc.domains = domains;
   desc.domain_count = domain_count;
@@ -61,13 +60,7 @@ syncer::LocalDataDescription CreateLocalDataDescription(
 
 class LocalDataQueryHelperTest : public testing::Test {
  public:
-  LocalDataQueryHelperTest()
-      : local_bookmark_sync_service_(
-            &bookmark_undo_service_,
-            syncer::WipeModelUponSyncDisabledBehavior::kNever),
-        account_bookmark_sync_service_(
-            &bookmark_undo_service_,
-            syncer::WipeModelUponSyncDisabledBehavior::kNever) {
+  LocalDataQueryHelperTest() {
     local_password_store_->Init(/*prefs=*/nullptr,
                                 /*affiliated_match_helper=*/nullptr);
     account_password_store_->Init(/*prefs=*/nullptr,
@@ -75,26 +68,12 @@ class LocalDataQueryHelperTest : public testing::Test {
 
     auto local_bookmark_client =
         std::make_unique<bookmarks::TestBookmarkClient>();
-    local_managed_node_ = local_bookmark_client->EnableManagedNode();
-    local_bookmark_model_ =
-        bookmarks::TestBookmarkClient::CreateModelWithClient(
-            std::move(local_bookmark_client));
+    managed_node_ = local_bookmark_client->EnableManagedNode();
+    bookmark_model_ = bookmarks::TestBookmarkClient::CreateModelWithClient(
+        std::move(local_bookmark_client));
+    bookmark_model_->CreateAccountPermanentFolders();
 
-    // Make sure BookmarkSyncService is aware of bookmarks having been loaded.
-    local_bookmark_sync_service_.DecodeBookmarkSyncMetadata(
-        /*metadata_str=*/"",
-        /*schedule_save_closure=*/base::DoNothing(),
-        std::make_unique<
-            sync_bookmarks::BookmarkModelViewUsingLocalOrSyncableNodes>(
-            local_bookmark_model_.get()));
-    account_bookmark_sync_service_.DecodeBookmarkSyncMetadata(
-        /*metadata_str=*/"",
-        /*schedule_save_closure=*/base::DoNothing(),
-        std::make_unique<
-            sync_bookmarks::BookmarkModelViewUsingLocalOrSyncableNodes>(
-            account_bookmark_model_.get()));
-
-    // TODO(crbug.com/1451508): Simplify by wrapping into a helper.
+    // TODO(crbug.com/40065374): Simplify by wrapping into a helper.
     auto local_reading_list_storage =
         std::make_unique<FakeReadingListModelStorage>();
     auto* local_reading_list_storage_ptr = local_reading_list_storage.get();
@@ -124,8 +103,7 @@ class LocalDataQueryHelperTest : public testing::Test {
         std::make_unique<browser_sync::LocalDataQueryHelper>(
             /*profile_password_store=*/local_password_store_.get(),
             /*account_password_store=*/account_password_store_.get(),
-            /*local_bookmark_sync_service=*/&local_bookmark_sync_service_,
-            /*account_bookmark_sync_service=*/&account_bookmark_sync_service_,
+            /*bookmark_model=*/bookmark_model_.get(),
             /*dual_reading_list_model=*/dual_reading_list_model_.get());
 
     // Make sure PasswordStore is fully initialized.
@@ -140,6 +118,8 @@ class LocalDataQueryHelperTest : public testing::Test {
   void RunAllPendingTasks() { task_environment_.RunUntilIdle(); }
 
  protected:
+  base::test::ScopedFeatureList features_{
+      syncer::kSyncEnableBookmarksInTransportMode};
   base::test::SingleThreadTaskEnvironment task_environment_;
   base::SimpleTestClock clock_;
 
@@ -149,14 +129,9 @@ class LocalDataQueryHelperTest : public testing::Test {
       base::MakeRefCounted<password_manager::TestPasswordStore>(
           password_manager::IsAccountStore{true});
 
-  std::unique_ptr<bookmarks::BookmarkModel> local_bookmark_model_;
-  std::unique_ptr<bookmarks::BookmarkModel> account_bookmark_model_ =
-      bookmarks::TestBookmarkClient::CreateModel();
+  std::unique_ptr<bookmarks::BookmarkModel> bookmark_model_;
 
-  raw_ptr<bookmarks::BookmarkNode> local_managed_node_;
-  BookmarkUndoService bookmark_undo_service_;  // Needed by BookmarkSyncService.
-  sync_bookmarks::BookmarkSyncService local_bookmark_sync_service_;
-  sync_bookmarks::BookmarkSyncService account_bookmark_sync_service_;
+  raw_ptr<bookmarks::BookmarkNode> managed_node_;
 
   testing::NiceMock<syncer::MockModelTypeChangeProcessor> processor_;
   std::unique_ptr<reading_list::DualReadingListModel> dual_reading_list_model_;
@@ -190,8 +165,7 @@ TEST_F(LocalDataQueryHelperTest, ShouldHandleUnusableTypes) {
   LocalDataQueryHelper helper(
       /*profile_password_store=*/nullptr,
       /*account_password_store=*/nullptr,
-      /*local_bookmark_sync_service=*/nullptr,
-      /*account_bookmark_sync_service=*/nullptr,
+      /*bookmark_model=*/nullptr,
       /*dual_reading_list_model=*/nullptr);
   helper.Run(syncer::ModelTypeSet(
                  {syncer::PASSWORDS, syncer::BOOKMARKS, syncer::READING_LIST}),
@@ -297,24 +271,24 @@ TEST_F(LocalDataQueryHelperTest, ShouldReturnLocalBookmarksViaCallback) {
   //  |- folder 2
   //    |- url3(http://www.amazon.de/faq)
   const bookmarks::BookmarkNode* bookmark_bar_node =
-      local_bookmark_model_->bookmark_bar_node();
-  const bookmarks::BookmarkNode* folder1 = local_bookmark_model_->AddFolder(
-      bookmark_bar_node, /*index=*/0,
-      base::UTF8ToUTF16(std::string("folder1")));
-  const bookmarks::BookmarkNode* folder2 = local_bookmark_model_->AddFolder(
-      bookmark_bar_node, /*index=*/1,
-      base::UTF8ToUTF16(std::string("folder2")));
+      bookmark_model_->bookmark_bar_node();
+  const bookmarks::BookmarkNode* folder1 =
+      bookmark_model_->AddFolder(bookmark_bar_node, /*index=*/0,
+                                 base::UTF8ToUTF16(std::string("folder1")));
+  const bookmarks::BookmarkNode* folder2 =
+      bookmark_model_->AddFolder(bookmark_bar_node, /*index=*/1,
+                                 base::UTF8ToUTF16(std::string("folder2")));
   ASSERT_EQ(2u, bookmark_bar_node->children().size());
-  local_bookmark_model_->AddURL(folder1, /*index=*/0,
-                                base::UTF8ToUTF16(std::string("url1")),
-                                GURL("https://www.amazon.de"));
-  local_bookmark_model_->AddURL(folder1, /*index=*/1,
-                                base::UTF8ToUTF16(std::string("url2")),
-                                GURL("https://www.facebook.com"));
+  bookmark_model_->AddURL(folder1, /*index=*/0,
+                          base::UTF8ToUTF16(std::string("url1")),
+                          GURL("https://www.amazon.de"));
+  bookmark_model_->AddURL(folder1, /*index=*/1,
+                          base::UTF8ToUTF16(std::string("url2")),
+                          GURL("https://www.facebook.com"));
   ASSERT_EQ(2u, folder1->children().size());
-  local_bookmark_model_->AddURL(folder2, /*index=*/0,
-                                base::UTF8ToUTF16(std::string("url3")),
-                                GURL("https://www.amazon.de/faq"));
+  bookmark_model_->AddURL(folder2, /*index=*/0,
+                          base::UTF8ToUTF16(std::string("url3")),
+                          GURL("https://www.amazon.de/faq"));
   ASSERT_EQ(1u, folder2->children().size());
 
   base::MockOnceCallback<void(
@@ -341,16 +315,16 @@ TEST_F(LocalDataQueryHelperTest, ShouldIgnoreManagedBookmarks) {
   // managed_bookmarks
   //    |- url2(http://www.facebook.com)
   const bookmarks::BookmarkNode* bookmark_bar_node =
-      local_bookmark_model_->bookmark_bar_node();
+      bookmark_model_->bookmark_bar_node();
 
-  local_bookmark_model_->AddURL(bookmark_bar_node, /*index=*/0,
-                                base::UTF8ToUTF16(std::string("url1")),
-                                GURL("https://www.amazon.de"));
-  local_bookmark_model_->AddURL(local_managed_node_, /*index=*/0,
-                                base::UTF8ToUTF16(std::string("url2")),
-                                GURL("https://www.facebook.com"));
+  bookmark_model_->AddURL(bookmark_bar_node, /*index=*/0,
+                          base::UTF8ToUTF16(std::string("url1")),
+                          GURL("https://www.amazon.de"));
+  bookmark_model_->AddURL(managed_node_, /*index=*/0,
+                          base::UTF8ToUTF16(std::string("url2")),
+                          GURL("https://www.facebook.com"));
   ASSERT_EQ(1u, bookmark_bar_node->children().size());
-  ASSERT_EQ(1u, local_managed_node_->children().size());
+  ASSERT_EQ(1u, managed_node_->children().size());
 
   base::MockOnceCallback<void(
       std::map<syncer::ModelType, syncer::LocalDataDescription>)>
@@ -372,9 +346,9 @@ TEST_F(LocalDataQueryHelperTest,
        ShouldOnlyTriggerCallbackWhenAllTypesHaveReturned) {
   // Add test data to local store.
   local_password_store_->AddLogin(CreateTestPassword("https://www.amazon.de"));
-  local_bookmark_model_->AddURL(
-      local_bookmark_model_->bookmark_bar_node(), /*index=*/0,
-      base::UTF8ToUTF16(std::string("url1")), GURL("https://www.facebook.com"));
+  bookmark_model_->AddURL(bookmark_model_->bookmark_bar_node(), /*index=*/0,
+                          base::UTF8ToUTF16(std::string("url1")),
+                          GURL("https://www.facebook.com"));
 
   RunAllPendingTasks();
 
@@ -401,9 +375,9 @@ TEST_F(LocalDataQueryHelperTest,
        ShouldHandleMultipleRequestsForDifferentTypes) {
   // Add test data to local store.
   local_password_store_->AddLogin(CreateTestPassword("https://www.amazon.de"));
-  local_bookmark_model_->AddURL(
-      local_bookmark_model_->bookmark_bar_node(), /*index=*/0,
-      base::UTF8ToUTF16(std::string("url1")), GURL("https://www.facebook.com"));
+  bookmark_model_->AddURL(bookmark_model_->bookmark_bar_node(), /*index=*/0,
+                          base::UTF8ToUTF16(std::string("url1")),
+                          GURL("https://www.facebook.com"));
 
   RunAllPendingTasks();
 
@@ -493,13 +467,7 @@ TEST_F(LocalDataQueryHelperTest, ShouldWorkForUrlsWithNoTLD) {
 
 class LocalDataMigrationHelperTest : public testing::Test {
  public:
-  LocalDataMigrationHelperTest()
-      : local_bookmark_sync_service_(
-            &bookmark_undo_service_,
-            syncer::WipeModelUponSyncDisabledBehavior::kNever),
-        account_bookmark_sync_service_(
-            &bookmark_undo_service_,
-            syncer::WipeModelUponSyncDisabledBehavior::kNever) {
+  LocalDataMigrationHelperTest() {
     local_password_store_->Init(/*prefs=*/nullptr,
                                 /*affiliated_match_helper=*/nullptr);
     account_password_store_->Init(/*prefs=*/nullptr,
@@ -507,26 +475,12 @@ class LocalDataMigrationHelperTest : public testing::Test {
 
     auto local_bookmark_client =
         std::make_unique<bookmarks::TestBookmarkClient>();
-    local_managed_node_ = local_bookmark_client->EnableManagedNode();
-    local_bookmark_model_ =
-        bookmarks::TestBookmarkClient::CreateModelWithClient(
-            std::move(local_bookmark_client));
+    managed_node_ = local_bookmark_client->EnableManagedNode();
+    bookmark_model_ = bookmarks::TestBookmarkClient::CreateModelWithClient(
+        std::move(local_bookmark_client));
+    bookmark_model_->CreateAccountPermanentFolders();
 
-    // Make sure BookmarkSyncService is aware of bookmarks having been loaded.
-    local_bookmark_sync_service_.DecodeBookmarkSyncMetadata(
-        /*metadata_str=*/"",
-        /*schedule_save_closure=*/base::DoNothing(),
-        std::make_unique<
-            sync_bookmarks::BookmarkModelViewUsingLocalOrSyncableNodes>(
-            local_bookmark_model_.get()));
-    account_bookmark_sync_service_.DecodeBookmarkSyncMetadata(
-        /*metadata_str=*/"",
-        /*schedule_save_closure=*/base::DoNothing(),
-        std::make_unique<
-            sync_bookmarks::BookmarkModelViewUsingLocalOrSyncableNodes>(
-            account_bookmark_model_.get()));
-
-    // TODO(crbug.com/1451508): Simplify by wrapping into a helper.
+    // TODO(crbug.com/40065374): Simplify by wrapping into a helper.
     auto local_reading_list_storage =
         std::make_unique<FakeReadingListModelStorage>();
     auto* local_reading_list_storage_ptr = local_reading_list_storage.get();
@@ -554,11 +508,8 @@ class LocalDataMigrationHelperTest : public testing::Test {
 
     local_data_migration_helper_ =
         std::make_unique<browser_sync::LocalDataMigrationHelper>(
-            /*profile_password_store=*/local_password_store_.get(),
-            /*account_password_store=*/account_password_store_.get(),
-            /*local_bookmark_sync_service=*/&local_bookmark_sync_service_,
-            /*account_bookmark_sync_service=*/&account_bookmark_sync_service_,
-            /*dual_reading_list_model=*/dual_reading_list_model_.get());
+            local_password_store_.get(), account_password_store_.get(),
+            bookmark_model_.get(), dual_reading_list_model_.get());
 
     // Make sure PasswordStore is fully initialized.
     RunAllPendingTasks();
@@ -572,6 +523,8 @@ class LocalDataMigrationHelperTest : public testing::Test {
   void RunAllPendingTasks() { task_environment_.RunUntilIdle(); }
 
  protected:
+  base::test::ScopedFeatureList features_{
+      syncer::kSyncEnableBookmarksInTransportMode};
   base::test::SingleThreadTaskEnvironment task_environment_;
   base::SimpleTestClock clock_;
 
@@ -581,14 +534,9 @@ class LocalDataMigrationHelperTest : public testing::Test {
       base::MakeRefCounted<password_manager::TestPasswordStore>(
           password_manager::IsAccountStore{true});
 
-  std::unique_ptr<bookmarks::BookmarkModel> local_bookmark_model_;
-  std::unique_ptr<bookmarks::BookmarkModel> account_bookmark_model_ =
-      bookmarks::TestBookmarkClient::CreateModel();
+  std::unique_ptr<bookmarks::BookmarkModel> bookmark_model_;
 
-  raw_ptr<bookmarks::BookmarkNode> local_managed_node_;
-  BookmarkUndoService bookmark_undo_service_;  // Needed by BookmarkSyncService.
-  sync_bookmarks::BookmarkSyncService local_bookmark_sync_service_;
-  sync_bookmarks::BookmarkSyncService account_bookmark_sync_service_;
+  raw_ptr<bookmarks::BookmarkNode> managed_node_;
 
   testing::NiceMock<syncer::MockModelTypeChangeProcessor> processor_;
   std::unique_ptr<reading_list::DualReadingListModel> dual_reading_list_model_;
@@ -663,8 +611,7 @@ TEST_F(LocalDataMigrationHelperTest, ShouldHandleUnusableTypes) {
   LocalDataMigrationHelper helper(
       /*profile_password_store=*/nullptr,
       /*account_password_store=*/nullptr,
-      /*local_bookmark_model=*/nullptr,
-      /*account_bookmark_model=*/nullptr,
+      /*bookmark_model=*/nullptr,
       /*dual_reading_list_model=*/nullptr);
   helper.Run(syncer::ModelTypeSet(
       {syncer::PASSWORDS, syncer::BOOKMARKS, syncer::READING_LIST}));
@@ -689,8 +636,13 @@ TEST_F(LocalDataMigrationHelperTest, ShouldMovePasswordsToAccountStore) {
   base::HistogramTester histogram_tester;
 
   local_data_migration_helper_->Run(syncer::ModelTypeSet({syncer::PASSWORDS}));
+  EXPECT_EQ(local_data_migration_helper_->GetTypesWithOngoingMigrations(),
+            syncer::ModelTypeSet{syncer::PASSWORDS});
 
   RunAllPendingTasks();
+
+  EXPECT_EQ(local_data_migration_helper_->GetTypesWithOngoingMigrations(),
+            syncer::ModelTypeSet{});
 
   EXPECT_EQ(2, histogram_tester.GetTotalSum("Sync.PasswordsBatchUpload.Count"));
 
@@ -1009,95 +961,115 @@ TEST_F(LocalDataMigrationHelperTest,
 }
 
 TEST_F(LocalDataMigrationHelperTest, ShouldMoveBookmarksToAccountStore) {
-  // -------- The local model --------
+  // -------- The local bookmarks --------
   // bookmark_bar
   //    |- url1(https://www.amazon.de)
-  local_bookmark_model_->AddURL(
-      local_bookmark_model_->bookmark_bar_node(), /*index=*/0,
-      base::UTF8ToUTF16(std::string("url1")), GURL("https://www.amazon.de"));
+  bookmark_model_->AddURL(bookmark_model_->bookmark_bar_node(), /*index=*/0,
+                          base::UTF8ToUTF16(std::string("url1")),
+                          GURL("https://www.amazon.de"));
 
-  // -------- The account model --------
-  // bookmark_bar
+  // -------- The account bookmarks --------
+  // account_bookmark_bar
   //    |- url2(http://www.google.com)
-  account_bookmark_model_->AddURL(
-      account_bookmark_model_->bookmark_bar_node(), /*index=*/0,
-      base::UTF8ToUTF16(std::string("url2")), GURL("https://www.google.com"));
+  bookmark_model_->AddURL(bookmark_model_->account_bookmark_bar_node(),
+                          /*index=*/0, base::UTF8ToUTF16(std::string("url2")),
+                          GURL("https://www.google.com"));
 
   local_data_migration_helper_->Run(syncer::ModelTypeSet({syncer::BOOKMARKS}));
+  EXPECT_EQ(local_data_migration_helper_->GetTypesWithOngoingMigrations(),
+            syncer::ModelTypeSet{});
 
   // -------- The expected merge outcome --------
-  // bookmark_bar
+  // account_bookmark_bar
   //    |- url1(https://www.amazon.de)
   //    |- url2(http://www.google.com)
   EXPECT_EQ(2u,
-            account_bookmark_model_->bookmark_bar_node()->children().size());
-
-  EXPECT_FALSE(local_bookmark_model_->HasBookmarks());
+            bookmark_model_->account_bookmark_bar_node()->children().size());
+  EXPECT_EQ(0u, bookmark_model_->bookmark_bar_node()->children().size());
 }
 
 TEST_F(LocalDataMigrationHelperTest, ShouldClearBookmarksFromLocalStore) {
-  // -------- The local model --------
+  // -------- The local bookmarks --------
   // bookmark_bar
   //    |- url1(https://www.google.com)
-  local_bookmark_model_->AddURL(
-      local_bookmark_model_->bookmark_bar_node(), /*index=*/0,
-      base::UTF8ToUTF16(std::string("url1")), GURL("https://www.google.com"));
+  bookmark_model_->AddURL(bookmark_model_->bookmark_bar_node(), /*index=*/0,
+                          base::UTF8ToUTF16(std::string("url1")),
+                          GURL("https://www.google.com"));
 
-  // -------- The account model --------
-  // bookmark_bar
+  // -------- The account bookmarks --------
+  // account_bookmark_bar
   //    |- url1(https://www.google.com)
-  account_bookmark_model_->AddURL(
-      account_bookmark_model_->bookmark_bar_node(), /*index=*/0,
-      base::UTF8ToUTF16(std::string("url1")), GURL("https://www.google.com"));
+  bookmark_model_->AddURL(bookmark_model_->account_bookmark_bar_node(),
+                          /*index=*/0, base::UTF8ToUTF16(std::string("url1")),
+                          GURL("https://www.google.com"));
 
   local_data_migration_helper_->Run(syncer::ModelTypeSet({syncer::BOOKMARKS}));
 
   // No actual move happens since the data already exists in the account store.
   // -------- The expected merge outcome --------
-  // bookmark_bar
+  // account_bookmark_bar
   //    |- url1(https://www.google.com)
   EXPECT_EQ(1u,
-            account_bookmark_model_->bookmark_bar_node()->children().size());
+            bookmark_model_->account_bookmark_bar_node()->children().size());
 
   // The data is still cleared from the local store.
-  EXPECT_FALSE(local_bookmark_model_->HasBookmarks());
+  EXPECT_EQ(0u, bookmark_model_->bookmark_bar_node()->children().size());
 }
 
-TEST_F(LocalDataMigrationHelperTest, ShouldIgnoreManagedBookmarks) {
-  // -------- The local model --------
+TEST_F(LocalDataMigrationHelperTest,
+       ShouldDoNothingIfAccountBookmarksDontExist) {
+  bookmark_model_->RemoveAccountPermanentFolders();
+
+  // -------- The local bookmarks --------
   // bookmark_bar
   //    |- url1(https://www.amazon.de)
-  // managed_bookmarks
-  //    |- url2(http://www.facebook.com)
-  const bookmarks::BookmarkNode* bookmark_bar_node =
-      local_bookmark_model_->bookmark_bar_node();
+  bookmark_model_->AddURL(bookmark_model_->bookmark_bar_node(), /*index=*/0,
+                          base::UTF8ToUTF16(std::string("url1")),
+                          GURL("https://www.amazon.de"));
 
-  local_bookmark_model_->AddURL(bookmark_bar_node, /*index=*/0,
-                                base::UTF8ToUTF16(std::string("url1")),
-                                GURL("https://www.amazon.de"));
-  local_bookmark_model_->AddURL(local_managed_node_, /*index=*/0,
-                                base::UTF8ToUTF16(std::string("url2")),
-                                GURL("https://www.facebook.com"));
-
-  // The account model is empty.
-  EXPECT_FALSE(account_bookmark_model_->HasBookmarks());
+  // -------- The account bookmarks don't exist --------
+  ASSERT_EQ(nullptr, bookmark_model_->account_bookmark_bar_node());
 
   local_data_migration_helper_->Run(syncer::ModelTypeSet({syncer::BOOKMARKS}));
 
   // -------- The expected merge outcome --------
   // bookmark_bar
   //    |- url1(https://www.amazon.de)
+  EXPECT_EQ(1u, bookmark_model_->bookmark_bar_node()->children().size());
+  EXPECT_EQ(nullptr, bookmark_model_->account_bookmark_bar_node());
+}
+
+TEST_F(LocalDataMigrationHelperTest, ShouldIgnoreManagedBookmarks) {
+  // -------- The local bookmarks --------
+  // bookmark_bar
+  //    |- url1(https://www.amazon.de)
+  // managed_bookmarks
+  //    |- url2(http://www.facebook.com)
+  const bookmarks::BookmarkNode* bookmark_bar_node =
+      bookmark_model_->bookmark_bar_node();
+
+  bookmark_model_->AddURL(bookmark_bar_node, /*index=*/0,
+                          base::UTF8ToUTF16(std::string("url1")),
+                          GURL("https://www.amazon.de"));
+  bookmark_model_->AddURL(managed_node_, /*index=*/0,
+                          base::UTF8ToUTF16(std::string("url2")),
+                          GURL("https://www.facebook.com"));
+
+  // The account bookmark bar is empty.
+  EXPECT_EQ(0u,
+            bookmark_model_->account_bookmark_bar_node()->children().size());
+
+  local_data_migration_helper_->Run(syncer::ModelTypeSet({syncer::BOOKMARKS}));
+
+  // -------- The expected merge outcome --------
+  // managed_bookmarks
+  //    |- url2(http://www.facebook.com)
+  // account_bookmark_bar
+  //    |- url1(https://www.amazon.de)
   EXPECT_EQ(1u,
-            account_bookmark_model_->bookmark_bar_node()->children().size());
-
-  // Managed nodes should be ignored.
-  std::vector<raw_ptr<const bookmarks::BookmarkNode, VectorExperimental>>
-      nodes = account_bookmark_model_->GetNodesByURL(
-          GURL("https://www.facebook.com"));
-  EXPECT_TRUE(nodes.empty());
-
-  // The local bookmark is not empty since managed bookmarks were not moved.
-  EXPECT_TRUE(local_bookmark_model_->HasBookmarks());
+            bookmark_model_->account_bookmark_bar_node()->children().size());
+  EXPECT_EQ(1u, managed_node_->children().size());
+  EXPECT_EQ(0u, bookmark_model_->bookmark_bar_node()->children().size());
 }
 
 TEST_F(LocalDataMigrationHelperTest,
@@ -1105,23 +1077,30 @@ TEST_F(LocalDataMigrationHelperTest,
   // Add test data to local store.
   auto form = CreateTestPassword("https://amazon.de");
   local_password_store_->AddLogin(form);
-  local_bookmark_model_->AddURL(
-      local_bookmark_model_->bookmark_bar_node(), /*index=*/0,
-      base::UTF8ToUTF16(std::string("url1")), GURL("https://www.facebook.com"));
+  bookmark_model_->AddURL(bookmark_model_->bookmark_bar_node(), /*index=*/0,
+                          base::UTF8ToUTF16(std::string("url1")),
+                          GURL("https://www.facebook.com"));
 
   RunAllPendingTasks();
 
   // Account stores/models are empty.
   ASSERT_TRUE(account_password_store_->IsEmpty());
-  ASSERT_FALSE(account_bookmark_model_->HasBookmarks());
+  ASSERT_EQ(0u,
+            bookmark_model_->account_bookmark_bar_node()->children().size());
 
   // Request #1.
   local_data_migration_helper_->Run(syncer::ModelTypeSet({syncer::PASSWORDS}));
+  EXPECT_EQ(local_data_migration_helper_->GetTypesWithOngoingMigrations(),
+            syncer::ModelTypeSet{syncer::PASSWORDS});
 
   // Request #2.
   local_data_migration_helper_->Run(syncer::ModelTypeSet({syncer::BOOKMARKS}));
+  EXPECT_EQ(local_data_migration_helper_->GetTypesWithOngoingMigrations(),
+            syncer::ModelTypeSet{syncer::PASSWORDS});
 
   RunAllPendingTasks();
+  EXPECT_EQ(local_data_migration_helper_->GetTypesWithOngoingMigrations(),
+            syncer::ModelTypeSet{});
 
   // The local data has been moved to the account store/model.
   form.in_store = password_manager::PasswordForm::Store::kAccountStore;
@@ -1130,8 +1109,7 @@ TEST_F(LocalDataMigrationHelperTest,
                 {{form.signon_realm, {form}}}));
   EXPECT_TRUE(local_password_store_->IsEmpty());
   EXPECT_EQ(1u,
-            account_bookmark_model_->bookmark_bar_node()->children().size());
-  EXPECT_FALSE(local_bookmark_model_->HasBookmarks());
+            bookmark_model_->account_bookmark_bar_node()->children().size());
 }
 
 TEST_F(LocalDataMigrationHelperTest, ShouldHandleMultipleRequestsForPasswords) {
@@ -1156,11 +1134,18 @@ TEST_F(LocalDataMigrationHelperTest, ShouldHandleMultipleRequestsForPasswords) {
 
   // Request #1.
   local_data_migration_helper_->Run(syncer::ModelTypeSet({syncer::PASSWORDS}));
+  EXPECT_EQ(local_data_migration_helper_->GetTypesWithOngoingMigrations(),
+            syncer::ModelTypeSet{syncer::PASSWORDS});
 
   // Request #2.
   local_data_migration_helper_->Run(syncer::ModelTypeSet({syncer::PASSWORDS}));
+  EXPECT_EQ(local_data_migration_helper_->GetTypesWithOngoingMigrations(),
+            syncer::ModelTypeSet{syncer::PASSWORDS});
 
   RunAllPendingTasks();
+
+  EXPECT_EQ(local_data_migration_helper_->GetTypesWithOngoingMigrations(),
+            syncer::ModelTypeSet{});
 
   // Passwords have been moved to the account store.
   local_form1.in_store = password_manager::PasswordForm::Store::kAccountStore;
@@ -1192,6 +1177,8 @@ TEST_F(LocalDataMigrationHelperTest, ShouldMoveReadingListToAccountStore) {
 
   local_data_migration_helper_->Run(
       syncer::ModelTypeSet({syncer::READING_LIST}));
+  EXPECT_EQ(local_data_migration_helper_->GetTypesWithOngoingMigrations(),
+            syncer::ModelTypeSet{});
 
   RunAllPendingTasks();
 

@@ -119,7 +119,7 @@ std::string ProxyServerToPacResultElement(const ProxyServer& proxy_server) {
                                      proxy_server.GetPort());
     default:
       // Got called with an invalid scheme.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return std::string();
   }
 }
@@ -183,7 +183,7 @@ std::string ProxyServerToProxyUri(const ProxyServer& proxy_server) {
                                      proxy_server.GetPort());
     default:
       // Got called with an invalid scheme.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return std::string();
   }
 }
@@ -239,8 +239,6 @@ ProxyServer::Scheme GetSchemeFromUriScheme(std::string_view scheme) {
     return ProxyServer::SCHEME_SOCKS5;
   if (base::EqualsCaseInsensitiveASCII(scheme, "https"))
     return ProxyServer::SCHEME_HTTPS;
-  if (base::EqualsCaseInsensitiveASCII(scheme, "quic"))
-    return ProxyServer::SCHEME_QUIC;
   return ProxyServer::SCHEME_INVALID;
 }
 

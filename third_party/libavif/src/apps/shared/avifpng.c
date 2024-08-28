@@ -323,13 +323,15 @@ avifBool avifPNGRead(const char * inputFilename,
         goto cleanup;
     }
     const avifBool useYCgCoR = (avif->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_YCGCO_RE);
-#else
-    const avifBool useYCgCoR = AVIF_FALSE;
 #endif
     if (avif->yuvFormat == AVIF_PIXEL_FORMAT_NONE) {
         if ((rawColorType == PNG_COLOR_TYPE_GRAY) || (rawColorType == PNG_COLOR_TYPE_GRAY_ALPHA)) {
             avif->yuvFormat = AVIF_PIXEL_FORMAT_YUV400;
-        } else if (avif->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_IDENTITY || useYCgCoR) {
+        } else if (avif->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_IDENTITY
+#if defined(AVIF_ENABLE_EXPERIMENTAL_YCGCO_R)
+                   || useYCgCoR
+#endif
+        ) {
             // Identity and YCgCo-R are only valid with YUV444.
             avif->yuvFormat = AVIF_PIXEL_FORMAT_YUV444;
         } else {
@@ -454,8 +456,8 @@ avifBool avifPNGRead(const char * inputFilename,
         fprintf(stderr, "png_get_channels() should return 3 or 4 but returns %d.\n", numChannels);
         goto cleanup;
     }
-    if ((uint32_t)avif->width > imageSizeLimit / (uint32_t)avif->height) {
-        fprintf(stderr, "Too big PNG dimensions (%d x %d > %u px): %s\n", avif->width, avif->height, imageSizeLimit, inputFilename);
+    if (avif->width > imageSizeLimit / avif->height) {
+        fprintf(stderr, "Too big PNG dimensions (%u x %u > %u px): %s\n", avif->width, avif->height, imageSizeLimit, inputFilename);
         goto cleanup;
     }
 

@@ -11,13 +11,13 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
-#include "content/browser/preloading/prefetch/no_vary_search_helper.h"
 #include "content/browser/preloading/prefetch/prefetch_type.h"
 #include "content/browser/preloading/speculation_host_devtools_observer.h"
 #include "content/common/content_export.h"
 #include "content/common/features.h"
 #include "content/public/browser/document_user_data.h"
 #include "content/public/browser/prefetch_metrics.h"
+#include "content/public/browser/preloading.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "net/http/http_no_vary_search_data.h"
 #include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom.h"
@@ -25,15 +25,14 @@
 
 namespace content {
 
-class NavigationHandle;
 class PrefetchContainer;
 class PrefetchService;
+class PreloadingPredictor;
 
 // Manages the state of and tracks metrics about prefetches for a single page
 // load.
 class CONTENT_EXPORT PrefetchDocumentManager
-    : public DocumentUserData<PrefetchDocumentManager>,
-      public WebContentsObserver {
+    : public DocumentUserData<PrefetchDocumentManager> {
  public:
   using PrefetchDestructionCallback =
       base::RepeatingCallback<void(const GURL&)>;
@@ -50,9 +49,6 @@ class CONTENT_EXPORT PrefetchDocumentManager
       int process_id,
       const blink::DocumentToken& document_token);
 
-  // WebContentsObserver.
-  void DidStartNavigation(NavigationHandle* navigation_handle) override;
-
   // Processes the given speculation candidates to see if they can be
   // prefetched. Any candidates that can be prefetched are removed from
   // |candidates|, and a prefetch for the URL of the candidate is started.
@@ -64,12 +60,18 @@ class CONTENT_EXPORT PrefetchDocumentManager
   // for the candidate's URL is started.
   bool MaybePrefetch(
       blink::mojom::SpeculationCandidatePtr candidate,
+      const PreloadingPredictor& enacting_predictor,
       base::WeakPtr<SpeculationHostDevToolsObserver> devtools_observer);
+
+  void PrefetchAheadOfPrerender(blink::mojom::SpeculationCandidatePtr candidate,
+                                const PreloadingPredictor& enacting_predictor);
 
   // Starts the process to prefetch |url| with the given |prefetch_type|.
   void PrefetchUrl(
       const GURL& url,
       const PrefetchType& prefetch_type,
+      const PreloadingPredictor& enacting_predictor,
+      PreloadingType planned_max_preloading_type,
       const blink::mojom::Referrer& referrer,
       const network::mojom::NoVarySearchPtr& no_vary_search_expected,
       base::WeakPtr<SpeculationHostDevToolsObserver> devtools_observer);
@@ -102,9 +104,6 @@ class CONTENT_EXPORT PrefetchDocumentManager
 
   // Whether the prefetch attempt for target |url| failed or discarded
   bool IsPrefetchAttemptFailedOrDiscarded(const GURL& url);
-
-  void EnableNoVarySearchSupportFromOriginTrial();
-  bool NoVarySearchSupportEnabled() const;
 
   // Returns a tuple: (can_prefetch_now, prefetch_to_evict). 'can_prefetch_now'
   // is true if we can prefetch |next_prefetch| based on the state of the
@@ -158,8 +157,6 @@ class CONTENT_EXPORT PrefetchDocumentManager
 
   // Metrics related to the prefetches requested by this page load.
   PrefetchReferringPageMetrics referring_page_metrics_;
-
-  bool no_vary_search_support_enabled_ = false;
 
   // Callback that is run when a prefetch started by |this| is being destroyed.
   PrefetchDestructionCallback prefetch_destruction_callback_;

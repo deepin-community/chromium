@@ -89,10 +89,17 @@ enum class ManagePasswordsReferrer {
   // On Desktop, link clicked in the DefaultStoreChanged bubble.
   kDefaultStoreChangedBubble = 21,
 
+  // Corresponds to the manage password details bubble when clicking on the key
+  // icon and navigating to the details view of a particular password.
+  kManagePasswordDetailsBubble = 22,
+
+  // On Desktop, the bubble that notifies the user that a passkey was saved.
+  kPasskeySavedConfirmationBubble = 23,
+
   // NOTE: When adding a new value to this enum that applies or could apply to
   // Android, make sure it is correctly handled by the internal credential
   // manager launcher java implementation.
-  kMaxValue = kDefaultStoreChangedBubble,
+  kMaxValue = kPasskeySavedConfirmationBubble,
 };
 
 }  // namespace password_manager

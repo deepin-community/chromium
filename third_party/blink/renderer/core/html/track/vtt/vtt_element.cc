@@ -65,7 +65,7 @@ static const QualifiedName& NodeTypeToTagName(VTTNodeType node_type) {
       return v_tag;
     case kVTTNodeTypeNone:
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return c_tag;  // Make the compiler happy.
   }
 }
@@ -118,7 +118,7 @@ HTMLElement* VTTElement::CreateEquivalentHTMLElement(Document& document) {
           document.CreateRawElement(html_names::kRtTag, CreateElementFlags());
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   html_element->setAttribute(html_names::kClassAttr,
@@ -147,11 +147,13 @@ void VTTElement::Trace(Visitor* visitor) const {
 }
 
 LayoutObject* VTTElement::CreateLayoutObject(const ComputedStyle& style) {
-  switch (web_vtt_node_type_) {
-    case kVTTNodeTypeRuby:
-      return MakeGarbageCollected<LayoutRuby>(this);
-    case kVTTNodeTypeRubyText:
-      return MakeGarbageCollected<LayoutRubyText>(this);
+  if (!RuntimeEnabledFeatures::VttCueDisplayRubyEnabled()) {
+    switch (web_vtt_node_type_) {
+      case kVTTNodeTypeRuby:
+        return MakeGarbageCollected<LayoutRuby>(this);
+      case kVTTNodeTypeRubyText:
+        return MakeGarbageCollected<LayoutRubyText>(this);
+    }
   }
   return LayoutObject::CreateObject(this, style);
 }

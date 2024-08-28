@@ -32,11 +32,13 @@ limitations under the License.
 #include "rocm/include/rocblas.h"
 #endif
 #include "xla/stream_executor/blas.h"
+#include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/stream_executor/platform/port.h"
 #include "xla/stream_executor/plugin_registry.h"
 #if TF_HIPBLASLT
 #include "xla/stream_executor/rocm/hip_blas_lt.h"
 #endif
+#include "xla/stream_executor/stream_executor.h"
 
 namespace stream_executor {
 
@@ -198,12 +200,19 @@ class ROCMBlas : public blas::BlasSupport {
   // container holding solutions vector (to avoid reallocating it each time)
   std::vector<rocblas_int> solutions_;
 
+  void MaybeLogGemmOp(StreamExecutor::GemmCallTrace::GemmType op,
+                      blas::CallContext context, uint64_t size1,
+                      uint64_t size2);
+
 #if TF_HIPBLASLT
   rocm::BlasLt blas_lt_;
 #endif
 
   ROCMBlas(const ROCMBlas &) = delete;
   void operator=(const ROCMBlas &) = delete;
+
+  bool has_mfma_ = false;
+  bool use_hgemm_alt_impl_ = false;
 };
 
 }  // namespace gpu

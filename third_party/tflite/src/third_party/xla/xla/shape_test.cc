@@ -185,6 +185,15 @@ TEST_F(ShapeTest, IsDynamicDimension) {
   EXPECT_FALSE(unbounded_.is_dynamic_dimension(1));
 }
 
+TEST_F(ShapeTest, IsStaticDimension) {
+  Shape dynamic_matrix = matrix_;
+  dynamic_matrix.set_dynamic_dimension(1, true);
+  EXPECT_TRUE(dynamic_matrix.is_static_dimension(0));
+  EXPECT_FALSE(dynamic_matrix.is_static_dimension(1));
+  EXPECT_FALSE(unbounded_.is_static_dimension(0));
+  EXPECT_TRUE(unbounded_.is_static_dimension(1));
+}
+
 TEST_F(ShapeTest, ProgramShapeToFromProto) {
   ProgramShape program_shape;
   *program_shape.add_parameters() = ShapeUtil::MakeShape(F32, {1, 2, 3});
@@ -254,6 +263,15 @@ TEST_F(ShapeTest, ProgramShapeToString) {
       "-> "
       "((opaque[], f32[], u32[1,2], s32[3,4]), u32[1,2], token[])",
       prog.ToString());
+}
+
+TEST_F(ShapeTest, IgnoreSplitsComparison) {
+  Shape shape = ShapeUtil::MakeShapeWithDenseLayout(F32, {256, 256}, {1, 0});
+  Shape other_shape = shape;
+  SplitConfig split_config(/*dimension=*/0, {128});
+  other_shape.mutable_layout()->add_split_configs(split_config);
+
+  EXPECT_TRUE(Shape::Equal().IgnoreSplitConfigInLayout()(shape, other_shape));
 }
 
 TEST_F(ShapeTest, SupportsAbslHash) {

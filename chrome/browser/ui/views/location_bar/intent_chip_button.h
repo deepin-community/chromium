@@ -18,7 +18,7 @@ class IntentChipButton : public OmniboxChipButton {
   METADATA_HEADER(IntentChipButton, OmniboxChipButton)
 
  public:
-  // TODO(crbug.com/1295932): Consider creating a more appropriate Delegate
+  // TODO(crbug.com/40821394): Consider creating a more appropriate Delegate
   // interface.
   explicit IntentChipButton(Browser* browser,
                             PageActionIconView::Delegate* delegate);
@@ -27,6 +27,7 @@ class IntentChipButton : public OmniboxChipButton {
   ~IntentChipButton() override;
 
   void Update();
+  ui::ImageModel GetAppIconForTesting() const;
 
  private:
   bool GetShowChip() const;

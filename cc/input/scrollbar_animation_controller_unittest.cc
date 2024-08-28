@@ -81,11 +81,11 @@ class ScrollbarAnimationControllerOverlayTest
     const int kTrackLength = 100;
     const bool kIsLeftSideVerticalScrollbar = false;
 
-    scroll_layer_ = AddLayer<LayerImpl>();
-    h_scrollbar_layer_ = AddLayer<SolidColorScrollbarLayerImpl>(
+    scroll_layer_ = AddLayerInActiveTree<LayerImpl>();
+    h_scrollbar_layer_ = AddLayerInActiveTree<SolidColorScrollbarLayerImpl>(
         ScrollbarOrientation::kHorizontal, kThumbThickness, kTrackStart,
         kIsLeftSideVerticalScrollbar);
-    v_scrollbar_layer_ = AddLayer<SolidColorScrollbarLayerImpl>(
+    v_scrollbar_layer_ = AddLayerInActiveTree<SolidColorScrollbarLayerImpl>(
         ScrollbarOrientation::kVertical, kThumbThickness, kTrackStart,
         kIsLeftSideVerticalScrollbar);
     SetElementIdsForTesting();
@@ -1500,8 +1500,8 @@ class ScrollbarAnimationControllerAndroidTest
     const bool kIsLeftSideVerticalScrollbar = false;
 
     LayerImpl* root = root_layer();
-    scroll_layer_ = AddLayer<LayerImpl>();
-    scrollbar_layer_ = AddLayer<SolidColorScrollbarLayerImpl>(
+    scroll_layer_ = AddLayerInActiveTree<LayerImpl>();
+    scrollbar_layer_ = AddLayerInActiveTree<SolidColorScrollbarLayerImpl>(
         orientation(), kThumbThickness, kTrackStart,
         kIsLeftSideVerticalScrollbar);
     SetElementIdsForTesting();
@@ -1871,8 +1871,6 @@ TEST_F(ScrollbarAnimationControllerAndroidTest,
   scrollbar_controller_->Animate(time);
   EXPECT_TRUE(did_request_animate_);
   did_request_animate_ = false;
-  EXPECT_FLOAT_EQ(2.0f / 3.0f, scrollbar_layer_->Opacity());
-
   EXPECT_FLOAT_EQ(2.0f / 3.0f, scrollbar_layer_->Opacity());
 
   time += base::Seconds(1);

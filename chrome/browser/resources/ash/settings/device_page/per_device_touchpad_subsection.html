@@ -1,8 +1,11 @@
 <style include="settings-shared input-device-settings-shared">
 </style>
 <div id="touchpad">
-  <h2 class="subsection-header"
-      id="touchpadName">[[getTouchpadName(touchpad.name)]]</h2>
+  <per-device-subsection-header
+      device-key="[[touchpad.deviceKey]]"
+      name="[[getTouchpadName(touchpad.name)]]"
+      battery-info="[[touchpad.batteryInfo]]">
+  </per-device-subsection-header>
   <div class="subsection">
     <settings-toggle-button id="enableTapToClick"
         pref="{{enableTapToClickPref}}"
@@ -73,7 +76,7 @@
         </settings-slider>
       </div>
       <div class="settings-box two-line" id="touchpadHapticFeedbackRow"
-          on-click="onTouchpadHapticFeedbackRowClicked_">
+          on-click="onTouchpadHapticFeedbackRowClicked_" actionable-row>
         <div class="start settings-box-text">
           <div>$i18n{touchpadHapticFeedbackTitle}</div>
           <div class="secondary">
@@ -96,7 +99,7 @@
       </div>
     </template>
     <div class="settings-box bottom-divider" id="reverseScrollRow"
-          on-click="onTouchpadReverseScrollRowClicked_">
+          on-click="onTouchpadReverseScrollRowClicked_" actionable-row>
       <div class="start settings-box-text">
         <localized-link
             aria-describedby="touchpadName"

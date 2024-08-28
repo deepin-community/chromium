@@ -38,11 +38,9 @@
 #include "ui/gfx/color_space.h"
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-namespace cc {
-class DisplayResourceProvider;
-}
-
 namespace viz {
+
+class DisplayResourceProvider;
 
 // OverlayProcessor subclass that goes through a list of strategies to determine
 // overlay candidates. This is used by Android and Ozone platforms.
@@ -201,7 +199,7 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
       const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
       const OverlayProcessorInterface::FilterOperationsMap&
           render_pass_backdrop_filters,
-      DisplayResourceProvider* resource_provider,
+      const DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_pass_list,
       SurfaceDamageRectList* surface_damage_rect_list,
       OverlayProcessorInterface::OutputSurfaceOverlayPlane* primary_plane,
@@ -243,7 +241,8 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
   virtual void SortProposedOverlayCandidates(
       std::vector<OverlayProposedCandidate>* proposed_candidates);
 
-  // Used by Android pre-SurfaceControl to notify promotion hints.
+  // Used by Android pre-SurfaceControl to notify promotion hints, and by
+  // Ozone to notify overlay manager what overlays are actually promoted.
   virtual void NotifyOverlayPromotion(
       DisplayResourceProvider* display_resource_provider,
       const OverlayCandidateList& candidate_list,
@@ -253,10 +252,6 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
   // should be the src->dst scaling amount that is < 1.0f and |success| should
   // be whether that scaling worked or not.
   void UpdateDownscalingCapabilities(float scale_factor, bool success);
-
-  // Logs the number of times CheckOverlaySupport was called this frame, and
-  // resets the counter to 0.
-  void LogCheckOverlaySupportMetrics();
 
   // Moves `curr_overlays` into `prev_overlays`, and updates `curr_overlays` to
   // reflect the overlays that will be promoted this frame in `candidates`.
@@ -272,7 +267,6 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
   base::TimeTicks last_time_interval_switch_overlay_tick_;
   ProposedCandidateKey prev_overlay_tracking_id_;
   uint64_t frame_sequence_number_ = 0;
-  int check_overlay_support_call_count_ = 0;
 
   // These values are used for tracking how much we can downscale with overlays
   // and is used for when we require an overlay so we can determine how much we

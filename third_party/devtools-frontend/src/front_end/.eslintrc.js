@@ -23,7 +23,6 @@ module.exports = {
     'rulesdir/custom_element_definitions_location': ['error', {
       rootFrontendDirectory: __dirname,
     }],
-    'rulesdir/custom_element_component_definition': 'error',
   },
   'overrides': [
     {
@@ -49,6 +48,7 @@ module.exports = {
         'rulesdir/ban_a_tags_in_lit_html': 'error',
         'rulesdir/check_component_naming': 'error',
         'rulesdir/check_css_import': 'error',
+        'rulesdir/enforce-optional-properties-last': 'error',
         'rulesdir/check_enumerated_histograms': 'error',
         'rulesdir/check_was_shown_methods': 'error',
         'rulesdir/static_custom_event_names': 'error',
@@ -150,6 +150,14 @@ module.exports = {
           }
         ]
       }
+    },
+    {
+      'files': ['*.test.ts', '**/testing/*.ts'],
+      'rules': {
+        'rulesdir/check_component_naming': 'off',
+        'rulesdir/custom_element_definitions_location': 'off',
+        '@typescript-eslint/explicit-function-return-type': 'off',
+      },
     },
     {
       'files': ['panels/**/components/*.ts', 'ui/components/**/*.ts', 'entrypoints/**/*.ts'],

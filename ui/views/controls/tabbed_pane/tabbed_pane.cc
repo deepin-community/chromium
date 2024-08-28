@@ -71,9 +71,14 @@ TabbedPaneTab::TabbedPaneTab(TabbedPane* tabbed_pane,
 
   // Use leaf so that name is spoken by screen reader without exposing the
   // children.
-  GetViewAccessibility().OverrideIsLeaf(true);
+  GetViewAccessibility().SetIsLeaf(true);
+  UpdateAccessibleName();
 
   OnStateChanged();
+
+  title_text_changed_callback_ =
+      title_->AddTextChangedCallback(base::BindRepeating(
+          &TabbedPaneTab::UpdateAccessibleName, base::Unretained(this)));
 }
 
 TabbedPaneTab::~TabbedPaneTab() = default;
@@ -116,12 +121,12 @@ void TabbedPaneTab::OnMouseExited(const ui::MouseEvent& event) {
 
 void TabbedPaneTab::OnGestureEvent(ui::GestureEvent* event) {
   switch (event->type()) {
-    case ui::ET_GESTURE_TAP_DOWN:
-    case ui::ET_GESTURE_TAP:
+    case ui::EventType::kGestureTapDown:
+    case ui::EventType::kGestureTap:
       // SelectTab also sets the right tab color.
       tabbed_pane_->SelectTab(this);
       break;
-    case ui::ET_GESTURE_TAP_CANCEL:
+    case ui::EventType::kGestureTapCancel:
       SetState(selected() ? State::kActive : State::kInactive);
       break;
     default:
@@ -130,26 +135,18 @@ void TabbedPaneTab::OnGestureEvent(ui::GestureEvent* event) {
   event->SetHandled();
 }
 
-gfx::Size TabbedPaneTab::CalculatePreferredSize() const {
+gfx::Size TabbedPaneTab::CalculatePreferredSize(
+    const SizeBounds& available_size) const {
   int width = preferred_title_width_ + GetInsets().width();
   if (tabbed_pane_->GetStyle() == TabbedPane::TabStripStyle::kHighlight &&
-      tabbed_pane_->GetOrientation() == TabbedPane::Orientation::kVertical)
+      tabbed_pane_->GetOrientation() == TabbedPane::Orientation::kVertical) {
     width = std::max(width, 192);
+  }
   return gfx::Size(width, 32);
-}
-
-int TabbedPaneTab::GetHeightForWidth(int w) const {
-  // Because we set the LayoutManager, it will use
-  // LayoutManager::GetPreferredHeightForWidth by default, but this is not
-  // consistent with the fixed height desired by CalculatePreferredSize, so we
-  // override it and call it manually.
-  return CalculatePreferredSize().height();
 }
 
 void TabbedPaneTab::GetAccessibleNodeData(ui::AXNodeData* data) {
   data->role = ax::mojom::Role::kTab;
-  data->SetName(title_->GetText());
-  data->SetNameFrom(ax::mojom::NameFrom::kContents);
   data->AddBoolAttribute(ax::mojom::BoolAttribute::kSelected, selected());
 }
 
@@ -281,10 +278,10 @@ void TabbedPaneTab::UpdatePreferredTitleWidth() {
   // and reserve that amount of space.
   const State old_state = state_;
   SetState(State::kActive);
-  preferred_title_width_ = title_->GetPreferredSize().width();
+  preferred_title_width_ = title_->GetPreferredSize({}).width();
   SetState(State::kInactive);
   preferred_title_width_ =
-      std::max(preferred_title_width_, title_->GetPreferredSize().width());
+      std::max(preferred_title_width_, title_->GetPreferredSize({}).width());
   SetState(old_state);
 }
 
@@ -294,6 +291,16 @@ void TabbedPaneTab::UpdateTitleColor() {
       state_ == State::kActive ? ui::kColorTabForegroundSelected
                                : ui::kColorTabForeground);
   title_->SetEnabledColor(font_color);
+}
+
+void TabbedPaneTab::UpdateAccessibleName() {
+  if (title_->GetText().empty()) {
+    GetViewAccessibility().SetName(
+        std::string(), ax::mojom::NameFrom::kAttributeExplicitlyEmpty);
+  } else {
+    GetViewAccessibility().SetName(title_->GetText(),
+                                   ax::mojom::NameFrom::kContents);
+  }
 }
 
 BEGIN_METADATA(TabbedPaneTab)
@@ -322,7 +329,7 @@ TabbedPaneTabStrip::TabbedPaneTabStrip(TabbedPane::Orientation orientation,
   }
   SetLayoutManager(std::move(layout));
 
-  GetViewAccessibility().OverrideRole(ax::mojom::Role::kNone);
+  GetViewAccessibility().SetRole(ax::mojom::Role::kNone);
 
   // These durations are taken from the Paper Tabs source:
   // https://github.com/PolymerElements/paper-tabs/blob/master/paper-tabs.html
@@ -404,21 +411,6 @@ TabbedPane::Orientation TabbedPaneTabStrip::GetOrientation() const {
 
 TabbedPane::TabStripStyle TabbedPaneTabStrip::GetStyle() const {
   return style_;
-}
-
-gfx::Size TabbedPaneTabStrip::CalculatePreferredSize() const {
-  // In horizontal mode, use the preferred size as determined by the largest
-  // child or the minimum size necessary to display the tab titles, whichever is
-  // larger.
-  if (GetOrientation() == TabbedPane::Orientation::kHorizontal) {
-    return GetLayoutManager()->GetPreferredSize(this);
-  }
-
-  // In vertical mode, Tabstrips don't require any minimum space along their
-  // main axis, and can shrink all the way to zero size.  Only the cross axis
-  // thickness matters.
-  const gfx::Size size = GetLayoutManager()->GetPreferredSize(this);
-  return gfx::Size(size.width(), 0);
 }
 
 void TabbedPaneTabStrip::OnPaintBorder(gfx::Canvas* canvas) {
@@ -520,9 +512,8 @@ TabbedPane::TabbedPane(TabbedPane::Orientation orientation,
                        bool scrollable) {
   DCHECK(orientation != TabbedPane::Orientation::kHorizontal ||
          style != TabbedPane::TabStripStyle::kHighlight);
-  auto* layout = SetLayoutManager(std::make_unique<views::FlexLayout>());
   if (orientation == TabbedPane::Orientation::kHorizontal)
-    layout->SetOrientation(views::LayoutOrientation::kVertical);
+    SetOrientation(views::LayoutOrientation::kVertical);
 
   auto tab_strip = std::make_unique<TabbedPaneTabStrip>(orientation, style);
   if (scrollable) {
@@ -563,9 +554,10 @@ void TabbedPane::AddTabInternal(size_t index,
                                 std::unique_ptr<View> contents) {
   DCHECK_LE(index, GetTabCount());
   contents->SetVisible(false);
-  contents->GetViewAccessibility().OverrideRole(ax::mojom::Role::kTabPanel);
+  contents->GetViewAccessibility().SetRole(ax::mojom::Role::kTabPanel);
   if (!title.empty()) {
-    contents->GetViewAccessibility().OverrideName(title);
+    contents->GetViewAccessibility().SetName(title,
+                                             ax::mojom::NameFrom::kAttribute);
   }
 
   tab_strip_->AddChildViewAt(
@@ -650,6 +642,22 @@ bool TabbedPane::MoveSelectionBy(int delta) {
   }
   SelectTab(tab_strip_->GetTabAtDeltaFromSelected(delta));
   return true;
+}
+
+gfx::Size TabbedPane::CalculatePreferredSize(
+    const SizeBounds& available_size) const {
+  // In horizontal mode, use the preferred size as determined by the largest
+  // child or the minimum size necessary to display the tab titles, whichever is
+  // larger.
+  if (GetOrientation() == TabbedPane::Orientation::kHorizontal) {
+    return FlexLayoutView::CalculatePreferredSize(available_size);
+  }
+
+  // In vertical mode, Tabstrips don't require any minimum space along their
+  // main axis, and can shrink all the way to zero size.
+  const gfx::Size size =
+      GetLayoutManager()->GetPreferredSize(this, available_size);
+  return gfx::Size(size.width(), contents_->GetHeightForWidth(size.width()));
 }
 
 bool TabbedPane::AcceleratorPressed(const ui::Accelerator& accelerator) {

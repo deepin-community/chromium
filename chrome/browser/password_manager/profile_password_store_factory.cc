@@ -10,16 +10,18 @@
 #include "base/functional/bind.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/affiliations/affiliation_service_factory.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/password_manager/affiliation_service_factory.h"
-#include "chrome/browser/password_manager/affiliations_prefetcher_factory.h"
 #include "chrome/browser/password_manager/credentials_cleaner_runner_factory.h"
 #include "chrome/browser/password_manager/password_store_backend_factory.h"
 #include "chrome/browser/password_manager/password_store_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_paths_internal.h"
-#include "components/password_manager/core/browser/affiliation/affiliations_prefetcher.h"
+#include "components/affiliations/core/browser/affiliation_service.h"
+#include "components/password_manager/core/browser/affiliation/password_affiliation_source_adapter.h"
+#include "components/password_manager/core/browser/features/password_features.h"
+#include "components/password_manager/core/browser/password_manager_buildflags.h"
 #include "components/password_manager/core/browser/password_manager_constants.h"
 #include "components/password_manager/core/browser/password_store/password_store.h"
 #include "components/password_manager/core/browser/password_store_factory_util.h"
@@ -27,6 +29,9 @@
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/storage_partition.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/password_manager/android/password_manager_util_bridge.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 using password_manager::AffiliatedMatchHelper;
 using password_manager::PasswordStore;
@@ -36,9 +41,24 @@ namespace {
 
 scoped_refptr<RefcountedKeyedService> BuildPasswordStore(
     content::BrowserContext* context) {
+#if BUILDFLAG(IS_ANDROID) && !BUILDFLAG(USE_LOGIN_DATABASE_AS_BACKEND)
+  if (!password_manager_android_util::IsInternalBackendPresent()) {
+    LOG(ERROR)
+        << "Password store is not supported: use_login_database_as_backend is "
+           "false when Chrome's internal backend is not present. Please, set "
+           "use_login_database_as_backend=true in the args.gn file to enable "
+           "Chrome password store.";
+    return nullptr;
+  }
+#endif
+
   Profile* profile = Profile::FromBrowserContext(context);
 
   DCHECK(!profile->IsOffTheRecord());
+
+  std::unique_ptr<password_manager::PasswordAffiliationSourceAdapter>
+      password_affiliation_adapter = std::make_unique<
+          password_manager::PasswordAffiliationSourceAdapter>();
 
   scoped_refptr<PasswordStore> ps;
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC) || \
@@ -55,9 +75,16 @@ scoped_refptr<RefcountedKeyedService> BuildPasswordStore(
   // mechanism, if the sync service isn't created yet, we proceed as if the
   // user isn't syncing which forces moving the passwords to the Android backend
   // to avoid data loss.
+
+  os_crypt_async::OSCryptAsync* os_crypt_async =
+      base::FeatureList::IsEnabled(
+          password_manager::features::kUseAsyncOsCryptInLoginDatabase)
+          ? g_browser_process->os_crypt_async()
+          : nullptr;
+
   ps = new password_manager::PasswordStore(CreateProfilePasswordStoreBackend(
-      profile->GetPath(), profile->GetPrefs(),
-      AffiliationsPrefetcherFactory::GetForProfile(profile)));
+      profile->GetPath(), profile->GetPrefs(), *password_affiliation_adapter,
+      os_crypt_async));
 #else
   NOTIMPLEMENTED();
 #endif
@@ -72,8 +99,9 @@ scoped_refptr<RefcountedKeyedService> BuildPasswordStore(
 
   auto network_context_getter = base::BindRepeating(
       [](Profile* profile) -> network::mojom::NetworkContext* {
-        if (!g_browser_process->profile_manager()->IsValidProfile(profile))
+        if (!g_browser_process->profile_manager()->IsValidProfile(profile)) {
           return nullptr;
+        }
         return profile->GetDefaultStoragePartition()->GetNetworkContext();
       },
       profile);
@@ -81,8 +109,8 @@ scoped_refptr<RefcountedKeyedService> BuildPasswordStore(
       CredentialsCleanerRunnerFactory::GetForProfile(profile), ps,
       profile->GetPrefs(), base::Seconds(60), network_context_getter);
 
-  AffiliationsPrefetcherFactory::GetForProfile(profile)->RegisterPasswordStore(
-      ps.get());
+  password_affiliation_adapter->RegisterPasswordStore(ps.get());
+  affiliation_service->RegisterSource(std::move(password_affiliation_adapter));
 
   DelayReportingPasswordStoreMetrics(profile);
 
@@ -120,7 +148,6 @@ ProfilePasswordStoreFactory::ProfilePasswordStoreFactory()
               .WithAshInternals(ProfileSelection::kNone)
               .Build()) {
   DependsOn(AffiliationServiceFactory::GetInstance());
-  DependsOn(AffiliationsPrefetcherFactory::GetInstance());
   DependsOn(CredentialsCleanerRunnerFactory::GetInstance());
 }
 

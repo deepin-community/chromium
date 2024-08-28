@@ -101,6 +101,9 @@ class BackForwardCacheWithDedicatedWorkerBrowserTest
     } else {
       DisableFeature(blink::features::kPlzDedicatedWorker);
     }
+    // Disable the feature to test eviction for dedicated worker.
+    DisableFeature(
+        blink::features::kAllowDatapipeDrainedAsBytesConsumerInBFCache);
     BackForwardCacheBrowserTest::SetUpCommandLine(command_line);
     feature_list_.InitWithFeaturesAndParameters(
         {{blink::features::kLoadingTasksUnfreezable,
@@ -243,7 +246,7 @@ IN_PROC_BROWSER_TEST_P(BackForwardCacheWithDedicatedWorkerBrowserTest,
   ExpectRestored(FROM_HERE);
 }
 
-// TODO(https://crbug.com/1299018): Flaky on Linux.
+// TODO(crbug.com/40823301): Flaky on Linux.
 #if BUILDFLAG(IS_LINUX)
 #define MAYBE_DoNotCacheWithDedicatedWorkerWithWebTransportAndDocumentWithBroadcastChannel \
   DISABLED_DoNotCacheWithDedicatedWorkerWithWebTransportAndDocumentWithBroadcastChannel
@@ -299,7 +302,7 @@ IN_PROC_BROWSER_TEST_P(
       {}, {}, {}, FROM_HERE);
 }
 
-// TODO(https://crbug.com/1296306): Disabled due to being flaky.
+// TODO(crbug.com/40821593): Disabled due to being flaky.
 IN_PROC_BROWSER_TEST_P(
     BackForwardCacheWithDedicatedWorkerBrowserTest,
     DISABLED_DoNotCacheWithDedicatedWorkerWithClosedWebTransportAndDocumentWithBroadcastChannel) {
@@ -337,7 +340,7 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_TRUE(DedicatedWorkerHostsForDocument::GetOrCreateForCurrentDocument(
                   current_frame_host())
                   ->GetBackForwardCacheDisablingFeatures()
-                  .Empty());
+                  .empty());
 
   // Use a broadcast channel in the frame.
   EXPECT_TRUE(ExecJs(current_frame_host(),
@@ -1065,7 +1068,7 @@ IN_PROC_BROWSER_TEST_P(BackForwardCacheWithDedicatedWorkerBrowserTest,
             CountWorkerClients(current_frame_host()));
 }
 
-// TODO(https://crbug.com/154571): Shared workers are not available on Android.
+// TODO(crbug.com/40290702): Shared workers are not available on Android.
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_PageWithSharedWorkerNotCached \
   DISABLED_PageWithSharedWorkerNotCached
@@ -1130,27 +1133,7 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
   ExpectRestored(FROM_HERE);
 }
 
-// The parameter is used for switching
-// `kAllowBFCacheForClosedMediaStreamTrack`.
-class BackForwardCacheMediaTest : public BackForwardCacheBrowserTest,
-                                  public testing::WithParamInterface<bool> {
- protected:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    if (IsAllowBFCacheWhenClosedMediaStreamTrackEnabled()) {
-      EnableFeatureAndSetParams(
-          blink::features::kAllowBFCacheWhenClosedMediaStreamTrack, "", "");
-    } else {
-      DisableFeature(blink::features::kAllowBFCacheWhenClosedMediaStreamTrack);
-    }
-    BackForwardCacheBrowserTest::SetUpCommandLine(command_line);
-  }
-
-  bool IsAllowBFCacheWhenClosedMediaStreamTrackEnabled() { return GetParam(); }
-};
-
-INSTANTIATE_TEST_SUITE_P(All, BackForwardCacheMediaTest, testing::Bool());
-
-IN_PROC_BROWSER_TEST_P(BackForwardCacheMediaTest,
+IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
                        DoesNotCacheIfRecordingAudio) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -1182,26 +1165,15 @@ IN_PROC_BROWSER_TEST_P(BackForwardCacheMediaTest,
   // 3) Go back.
   ASSERT_TRUE(HistoryGoBack(web_contents()));
 
-  if (IsAllowBFCacheWhenClosedMediaStreamTrackEnabled()) {
-    // When the flag is enabled, a Media Stream Track that's in the live state
-    // will block BFCache.
-    ExpectNotRestored(
-        {NotRestoredReason::kBlocklistedFeatures},
-        {blink::scheduler::WebSchedulerTrackedFeature::kLiveMediaStreamTrack},
-        {}, {}, {}, FROM_HERE);
-  } else {
-    // Note that the reason for kWasGrantedMediaAccess occurs after
-    // MediaDevicesDispatcherHost is called, hence, both are reasons for the
-    // page not being restored.
-    auto reason = BackForwardCacheDisable::DisabledReason(
-        BackForwardCacheDisable::DisabledReasonId::kMediaDevicesDispatcherHost);
-    ExpectNotRestored({NotRestoredReason::kWasGrantedMediaAccess,
-                       NotRestoredReason::kDisableForRenderFrameHostCalled},
-                      {}, {}, {reason}, {}, FROM_HERE);
-  }
+  // A MediaStreamTrack that's in the live state
+  // will block BFCache.
+  ExpectNotRestored(
+      {NotRestoredReason::kBlocklistedFeatures},
+      {blink::scheduler::WebSchedulerTrackedFeature::kLiveMediaStreamTrack}, {},
+      {}, {}, FROM_HERE);
 }
 
-IN_PROC_BROWSER_TEST_P(BackForwardCacheMediaTest,
+IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
                        DoesNotCacheIfSubframeRecordingAudio) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -1234,28 +1206,15 @@ IN_PROC_BROWSER_TEST_P(BackForwardCacheMediaTest,
   // 3) Go back.
   ASSERT_TRUE(HistoryGoBack(web_contents()));
 
-  if (IsAllowBFCacheWhenClosedMediaStreamTrackEnabled()) {
-    // When the flag is enabled, a Media Stream Track that's in the live state
-    // blocks BFCache.
-    ExpectNotRestored(
-        {NotRestoredReason::kBlocklistedFeatures},
-        {blink::scheduler::WebSchedulerTrackedFeature::kLiveMediaStreamTrack},
-        {}, {}, {}, FROM_HERE);
-  } else {
-    // Note that the reason for kWasGrantedMediaAccess occurs after
-    // MediaDevicesDispatcherHost is called, hence, both are reasons for the
-    // page not being restored.
-    auto reason = BackForwardCacheDisable::DisabledReason(
-        BackForwardCacheDisable::DisabledReasonId::kMediaDevicesDispatcherHost);
-    ExpectNotRestored({NotRestoredReason::kWasGrantedMediaAccess,
-                       NotRestoredReason::kDisableForRenderFrameHostCalled},
-                      {}, {}, {reason}, {}, FROM_HERE);
-  }
+  // A MediaStreamTrack that's in the live state blocks BFCache.
+  ExpectNotRestored(
+      {NotRestoredReason::kBlocklistedFeatures},
+      {blink::scheduler::WebSchedulerTrackedFeature::kLiveMediaStreamTrack}, {},
+      {}, {}, FROM_HERE);
 }
 
-IN_PROC_BROWSER_TEST_P(
-    BackForwardCacheMediaTest,
-    DoesNotCacheIfMediaDeviceSubscribedButDoesCacheIfFlagEnabled) {
+IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
+                       DoesNotCacheIfMediaDeviceSubscribedButDoesCache) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   BackForwardCacheDisabledTester tester;
@@ -1283,27 +1242,14 @@ IN_PROC_BROWSER_TEST_P(
   // 3) Go back.
   ASSERT_TRUE(HistoryGoBack(web_contents()));
 
-  if (IsAllowBFCacheWhenClosedMediaStreamTrackEnabled()) {
-    // When the flag is enabled, ended Media Stream Track does not block
-    // BFCache.
-    ExpectRestored(FROM_HERE);
-  } else {
-    // The page was subscribed to media devices when we navigated away, so it
-    // shouldn't have been cached.
-    deleted.WaitUntilDeleted();
-
-    auto reason = BackForwardCacheDisable::DisabledReason(
-        BackForwardCacheDisable::DisabledReasonId::kMediaDevicesDispatcherHost);
-    ExpectNotRestored({NotRestoredReason::kDisableForRenderFrameHostCalled}, {},
-                      {}, {reason}, {}, FROM_HERE);
-  }
+  // Ended MediaStreamTrack does not block BFCache.
+  ExpectRestored(FROM_HERE);
 }
 
-// Checks that the page is not restored from BFCache when it calls
-// mediaDevice.enumerateDevices() unless the flag is enabled.
-IN_PROC_BROWSER_TEST_P(
-    BackForwardCacheMediaTest,
-    DoesNotCacheIfDevicesEnumeratedButDoesCacheIfFlagEnabled) {
+// Checks that the page is restored from BFCache when it calls
+// mediaDevice.enumerateDevices().
+IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
+                       RestoreIfDevicesEnumerated) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   // 1) Navigate to an empty page.
@@ -1321,22 +1267,9 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_TRUE(NavigateToURL(
       shell(), embedded_test_server()->GetURL("b.com", "/title1.html")));
 
-  if (IsAllowBFCacheWhenClosedMediaStreamTrackEnabled()) {
-    // 3) Go back. When the flag is enabled, MediaDevicesDispatcherHost does not
-    // block BFCache.
-    ASSERT_TRUE(HistoryGoBack(web_contents()));
-    ExpectRestored(FROM_HERE);
-  } else {
-    // The page shouldn't be cached when the flag is disabled.
-    ASSERT_TRUE(rfh.WaitUntilRenderFrameDeleted());
-
-    // 3) Go back.
-    ASSERT_TRUE(HistoryGoBack(web_contents()));
-    auto reason = BackForwardCacheDisable::DisabledReason(
-        BackForwardCacheDisable::DisabledReasonId::kMediaDevicesDispatcherHost);
-    ExpectNotRestored({NotRestoredReason::kDisableForRenderFrameHostCalled}, {},
-                      {}, {reason}, {}, FROM_HERE);
-  }
+  // 3) Go back. MediaDevicesDispatcherHost does not block BFCache.
+  ASSERT_TRUE(HistoryGoBack(web_contents()));
+  ExpectRestored(FROM_HERE);
 }
 
 // Checks that the page is not restored from BFCache when it calls
@@ -1344,7 +1277,7 @@ IN_PROC_BROWSER_TEST_P(
 // Since mediaDevice.getDisplayMedia() is not supported in Android, the tests
 // can't run on the OS.
 #if !BUILDFLAG(IS_ANDROID)
-IN_PROC_BROWSER_TEST_P(BackForwardCacheMediaTest,
+IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
                        DoesNotCacheIfDisplayMediaAccessGranted) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -1368,31 +1301,18 @@ IN_PROC_BROWSER_TEST_P(BackForwardCacheMediaTest,
 
   ASSERT_TRUE(rfh.WaitUntilRenderFrameDeleted());
 
-  if (IsAllowBFCacheWhenClosedMediaStreamTrackEnabled()) {
-    // 3) Go back. When the flag is enabled, a Media Stream Track that's in the
-    // live state blocks BFCache.
-    ASSERT_TRUE(HistoryGoBack(web_contents()));
-    ExpectNotRestored(
-        {NotRestoredReason::kBlocklistedFeatures},
-        {blink::scheduler::WebSchedulerTrackedFeature::kLiveMediaStreamTrack},
-        {}, {}, {}, FROM_HERE);
-  } else {
-    // 3) Go back.
-    ASSERT_TRUE(HistoryGoBack(web_contents()));
-    auto reason = BackForwardCacheDisable::DisabledReason(
-        BackForwardCacheDisable::DisabledReasonId::kMediaDevicesDispatcherHost);
-    ExpectNotRestored({NotRestoredReason::kWasGrantedMediaAccess,
-                       NotRestoredReason::kDisableForRenderFrameHostCalled},
-                      {}, {}, {reason}, {}, FROM_HERE);
-  }
+  // 3) Go back. A MediaStreamTrack that's in the live state blocks BFCache.
+  ASSERT_TRUE(HistoryGoBack(web_contents()));
+  ExpectNotRestored(
+      {NotRestoredReason::kBlocklistedFeatures},
+      {blink::scheduler::WebSchedulerTrackedFeature::kLiveMediaStreamTrack}, {},
+      {}, {}, FROM_HERE);
 }
 
 // Checks that the page is successfully restored from BFCache after stopping the
-// media stream track that was caused by getDisplayMedia(). However, the page
-// should not be stored in BFCache if the flag is enabled.
-IN_PROC_BROWSER_TEST_P(
-    BackForwardCacheMediaTest,
-    DoesCacheIfMediaStreamTrackUsingGetDisplayMediaEndedButDoesNotWithoutFlags) {
+// MediaStreamTrack that was caused by getDisplayMedia().
+IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
+                       CacheIfMediaStreamTrackUsingGetDisplayMediaEnded) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   // 1) Navigate to an empty page.
@@ -1419,22 +1339,10 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_TRUE(NavigateToURL(
       shell(), embedded_test_server()->GetURL("b.com", "/title1.html")));
 
-  if (IsAllowBFCacheWhenClosedMediaStreamTrackEnabled()) {
-    // 3) Go back. When flag is enabled, an ended Media Stream Track doesn't
-    // block BFCache.
-    ASSERT_TRUE(HistoryGoBack(web_contents()));
-    ExpectRestored(FROM_HERE);
-  } else {
-    ASSERT_TRUE(rfh.WaitUntilRenderFrameDeleted());
-
-    // 3) Go back.
-    ASSERT_TRUE(HistoryGoBack(web_contents()));
-    auto reason = BackForwardCacheDisable::DisabledReason(
-        BackForwardCacheDisable::DisabledReasonId::kMediaDevicesDispatcherHost);
-    ExpectNotRestored({NotRestoredReason::kWasGrantedMediaAccess,
-                       NotRestoredReason::kDisableForRenderFrameHostCalled},
-                      {}, {}, {reason}, {}, FROM_HERE);
-  }
+  // 3) Go back. an ended MediaStreamTrack doesn't
+  // block BFCache.
+  ASSERT_TRUE(HistoryGoBack(web_contents()));
+  ExpectRestored(FROM_HERE);
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
@@ -2202,14 +2110,14 @@ class BackForwardCacheBrowserTestWithJavaScriptDetails
  protected:
   void SetUpCommandLine(base::CommandLine* command_line) override {
     EnableFeatureAndSetParams(
-        blink::features::kRegisterJSSourceLocationBlockingBFCache, "", "true");
+        blink::features::kRegisterJSSourceLocationBlockingBFCache, "", "");
     BackForwardCacheBrowserTest::SetUpCommandLine(command_line);
   }
 };
 
 // Use a blocklisted feature in multiple locations from an external JavaScript
 // file and make sure all the JavaScript location details are captured.
-// TODO(crbug.com/1372291): WebSocket server is flaky Android.
+// TODO(crbug.com/40241677): WebSocket server is flaky Android.
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_MultipleBlocksFromJavaScriptFile \
   DISABLED_MultipleBlocksFromJavaScriptFile
@@ -2267,16 +2175,17 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTestWithJavaScriptDetails,
   EXPECT_TRUE(
       map.contains(blink::scheduler::WebSchedulerTrackedFeature::kWebSocket));
   // Both socketA and socketB's JavaScript locations should be reported.
-  EXPECT_THAT(map.at(blink::scheduler::WebSchedulerTrackedFeature::kWebSocket),
-              testing::UnorderedElementsAre(
-                  MatchesBlockingDetails(url_js.spec(), std::nullopt, 10, 15),
-                  MatchesBlockingDetails(url_js.spec(), std::nullopt, 17, 15)));
+  EXPECT_THAT(
+      map.at(blink::scheduler::WebSchedulerTrackedFeature::kWebSocket),
+      testing::UnorderedElementsAre(
+          MatchesBlockingDetails(MatchesSourceLocation(url_js, "", 10, 15)),
+          MatchesBlockingDetails(MatchesSourceLocation(url_js, "", 17, 15))));
 }
 
 // Use a blocklisted feature in multiple locations from an external JavaScript
 // file but stop using one of them before navigating away. Make sure that only
 // the one still in use is reported.
-// TODO(crbug.com/1372291): WebSocket server is flaky Android.
+// TODO(crbug.com/40241677): WebSocket server is flaky Android.
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_BlockAndUnblockFromJavaScriptFile \
   DISABLED_BlockAndUnblockFromJavaScriptFile
@@ -2338,13 +2247,13 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTestWithJavaScriptDetails,
       map.contains(blink::scheduler::WebSchedulerTrackedFeature::kWebSocket));
   // Only socketB's JavaScript locations should be reported.
   EXPECT_THAT(map.at(blink::scheduler::WebSchedulerTrackedFeature::kWebSocket),
-              testing::UnorderedElementsAre(
-                  MatchesBlockingDetails(url_js.spec(), std::nullopt, 17, 15)));
+              testing::UnorderedElementsAre(MatchesBlockingDetails(
+                  MatchesSourceLocation(url_js, "", 17, 15))));
 }
 
 // Use a blocklisted feature in multiple places from HTML file and make sure all
 // the JavaScript locations detail are captured.
-// TODO(crbug.com/1372291): WebSocket server is flaky Android.
+// TODO(crbug.com/40241677): WebSocket server is flaky Android.
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_MultipleBlocksFromHTMLFile DISABLED_MultipleBlocksFromHTMLFile
 #else
@@ -2397,16 +2306,17 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTestWithJavaScriptDetails,
   EXPECT_TRUE(
       map.contains(blink::scheduler::WebSchedulerTrackedFeature::kWebSocket));
   // Both socketA and socketB's JavaScript locations should be reported.
-  EXPECT_THAT(map.at(blink::scheduler::WebSchedulerTrackedFeature::kWebSocket),
-              testing::UnorderedElementsAre(
-                  MatchesBlockingDetails(url_a.spec(), std::nullopt, 11, 15),
-                  MatchesBlockingDetails(url_a.spec(), std::nullopt, 18, 15)));
+  EXPECT_THAT(
+      map.at(blink::scheduler::WebSchedulerTrackedFeature::kWebSocket),
+      testing::UnorderedElementsAre(
+          MatchesBlockingDetails(MatchesSourceLocation(url_a, "", 11, 15)),
+          MatchesBlockingDetails(MatchesSourceLocation(url_a, "", 18, 15))));
 }
 
 // Use a blocklisted feature in multiple locations from HTML file but stop using
 // one of them before navigating away. Make sure that only the one still in use
 // is reported.
-// TODO(crbug.com/1372291): WebSocket server is flaky Android.
+// TODO(crbug.com/40241677): WebSocket server is flaky Android.
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_BlockAndUnblockFromHTMLFile DISABLED_BlockAndUnblockFromHTMLFile
 #else
@@ -2464,18 +2374,74 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTestWithJavaScriptDetails,
       map.contains(blink::scheduler::WebSchedulerTrackedFeature::kWebSocket));
   // Only socketB's JavaScript locations should be reported.
   EXPECT_THAT(map.at(blink::scheduler::WebSchedulerTrackedFeature::kWebSocket),
-              testing::UnorderedElementsAre(
-                  MatchesBlockingDetails(url_a.spec(), std::nullopt, 18, 15)));
+              testing::UnorderedElementsAre(MatchesBlockingDetails(
+                  MatchesSourceLocation(url_a, "", 18, 15))));
 }
 
-// TODO(crbug.com/1317431): WebSQL does not work on Fuchsia.
-#if BUILDFLAG(IS_FUCHSIA)
-#define MAYBE_DoesNotCacheIfWebDatabase DISABLED_DoesNotCacheIfWebDatabase
+// Test that details for sticky feature are captured.
+// TODO(crbug.com/40241677): WebSocket server is flaky Android.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_StickyFeaturesWithDetails DISABLED_StickyFeaturesWithDetails
 #else
-#define MAYBE_DoesNotCacheIfWebDatabase DoesNotCacheIfWebDatabase
+#define MAYBE_StickyFeaturesWithDetails StickyFeaturesWithDetails
 #endif
+IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTestWithJavaScriptDetails,
+                       MAYBE_StickyFeaturesWithDetails) {
+  net::SpawnedTestServer ws_server(net::SpawnedTestServer::TYPE_WS,
+                                   net::GetWebSocketTestDataDirectory());
+  ASSERT_TRUE(ws_server.Start());
+  ASSERT_TRUE(embedded_test_server()->Start());
+  GURL url_a_no_store(embedded_test_server()->GetURL(
+      "a.com", "/set-header?Cache-Control: no-store"));
+  GURL url_b(embedded_test_server()->GetURL("b.com", "/title1.html"));
+
+  // 1) Navigate to `url_a_no_store`.
+  ASSERT_TRUE(NavigateToURL(shell(), url_a_no_store));
+  RenderFrameHostImplWrapper rfh_a(current_frame_host());
+  // Call this to access tree result later.
+  rfh_a->GetBackForwardCacheMetrics()->SetObserverForTesting(this);
+
+  // Open a WebSocket.
+  const char script[] = R"(
+      new Promise(resolve => {
+        const socket = new WebSocket($1);
+        socket.addEventListener('open', () => resolve());
+      });)";
+  ASSERT_TRUE(
+      ExecJs(rfh_a.get(),
+             JsReplace(script, ws_server.GetURL("echo-with-no-extension"))));
+
+  // 3) Navigate away to `url_b`.
+  ASSERT_TRUE(NavigateToURL(shell(), url_b));
+
+  // 4) Go back to `url_a`.
+  ASSERT_TRUE(HistoryGoBack(web_contents()));
+  ExpectNotRestored(
+      {NotRestoredReason::kBlocklistedFeatures},
+      {blink::scheduler::WebSchedulerTrackedFeature::kWebSocket,
+       blink::scheduler::WebSchedulerTrackedFeature::
+           kMainResourceHasCacheControlNoStore,
+       blink::scheduler::WebSchedulerTrackedFeature::kWebSocketSticky},
+      {}, {}, {}, FROM_HERE);
+  auto& map = GetTreeResult()->GetBlockingDetailsMap();
+  EXPECT_EQ(static_cast<int>(map.size()), 3);
+  EXPECT_TRUE(
+      map.contains(blink::scheduler::WebSchedulerTrackedFeature::kWebSocket));
+  EXPECT_TRUE(map.contains(
+      blink::scheduler::WebSchedulerTrackedFeature::kWebSocketSticky));
+  EXPECT_THAT(map.at(blink::scheduler::WebSchedulerTrackedFeature::kWebSocket),
+              testing::UnorderedElementsAre(MatchesBlockingDetails(
+                  MatchesSourceLocation(GURL::EmptyGURL(), "", 3, 24))));
+  EXPECT_THAT(
+      map.at(blink::scheduler::WebSchedulerTrackedFeature::kWebSocketSticky),
+      testing::UnorderedElementsAre(MatchesBlockingDetails(
+          MatchesSourceLocation(GURL::EmptyGURL(), "", 3, 24))));
+}
+
+// TODO(crbug.com/40834769): WebSQL does not work on Fuchsia.
+// TODO(crbug.com/337202186): Flaky timeouts on all other platforms.
 IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
-                       MAYBE_DoesNotCacheIfWebDatabase) {
+                       DISABLED_DoesNotCacheIfWebDatabase) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   // 1) Navigate to a page with WebDatabase usage.
@@ -2821,6 +2787,40 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
   ExpectRestored(FROM_HERE);
 }
 
+// Verifies that transactions from a single client/render frame and a dedicated
+// worker belonging to the frame cannot disable BFCache for that client.
+// Regression test for https://crbug.com/343519262.
+IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
+                       IndexedDBClientWithDedicatedWorkerDoesntBlockSelf) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  // 1) Use IDB and spam transactions.
+  ASSERT_TRUE(NavigateToURL(
+      shell(), embedded_test_server()->GetURL(
+                   "a.com",
+                   "/back_forward_cache/"
+                   "page_with_dedicated_worker_using_indexedDB.html")));
+  RenderFrameHostImplWrapper rfh_a(current_frame_host());
+  // 1.a) Setup IndexedDB on the main page and a dedicated worker.
+  ASSERT_TRUE(ExecJs(shell(), "setupIndexedDBConnection()"));
+  ASSERT_TRUE(
+      ExecJs(shell(), "sendMessageToWorker('setupIndexedDBConnection')"));
+  // 1.b) Run infinite loops on the worker and the main page.
+  ASSERT_TRUE(ExecJs(
+      shell(), "sendMessageToWorker('runInfiniteIndexedDBTransactionLoop')"));
+  ASSERT_TRUE(ExecJs(shell(), "runInfiniteIndexedDBTransactionLoop()"));
+
+  // 2) Navigate away.
+  ASSERT_TRUE(NavigateToURL(
+      shell(), embedded_test_server()->GetURL("b.com", "/title1.html")));
+  ASSERT_TRUE(rfh_a.get());
+  ASSERT_TRUE(rfh_a->IsInBackForwardCache());
+
+  // 3) Go back to the page with IndexedDB.
+  ASSERT_TRUE(HistoryGoBack(web_contents()));
+  ExpectRestored(FROM_HERE);
+}
+
 // Verifies that a RF will be evicted from the cache if one of its transactions
 // attempts to start while the RF is already in the cache, assuming the
 // transaction is blocking other clients. That is, the
@@ -3012,8 +3012,32 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
       FROM_HERE);
 }
 
-IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
-                       DoesNotCacheIfBroadcastChannelStillOpen) {
+// The parameter is used for switching `kBFCacheOpenBroadcastChannel`.
+class BackForwardCacheWithBroadcastChannelTest
+    : public BackForwardCacheBrowserTest,
+      public testing::WithParamInterface<bool> {
+ protected:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    if (IsBFCacheOpenBroadcastChannelEnabled()) {
+      EnableFeatureAndSetParams(blink::features::kBFCacheOpenBroadcastChannel,
+                                "", "");
+    } else {
+      DisableFeature(blink::features::kBFCacheOpenBroadcastChannel);
+    }
+    BackForwardCacheBrowserTest::SetUpCommandLine(command_line);
+  }
+
+  bool IsBFCacheOpenBroadcastChannelEnabled() { return GetParam(); }
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         BackForwardCacheWithBroadcastChannelTest,
+                         testing::Bool());
+
+// Checks that a page with an open broadcast channel is eligible for BFCache.
+// Expects it's not eligible if the flag is disabled.
+IN_PROC_BROWSER_TEST_P(BackForwardCacheWithBroadcastChannelTest,
+                       MaybeCacheIfBroadcastChannelStillOpen) {
   ASSERT_TRUE(CreateHttpsServer()->Start());
 
   // 1) Navigate to an empty page.
@@ -3037,12 +3061,14 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
   // 4) Go back.
   ASSERT_TRUE(HistoryGoBack(web_contents()));
 
-  // Because the RenderFrameHostManager changed, the blocklisted features will
-  // be tracked in RenderFrameHostManager::UnloadOldFrame.
-  ExpectNotRestored(
-      {NotRestoredReason::kBlocklistedFeatures},
-      {blink::scheduler::WebSchedulerTrackedFeature::kBroadcastChannel}, {}, {},
-      {}, FROM_HERE);
+  if (IsBFCacheOpenBroadcastChannelEnabled()) {
+    ExpectRestored(FROM_HERE);
+  } else {
+    ExpectNotRestored(
+        {NotRestoredReason::kBlocklistedFeatures},
+        {blink::scheduler::WebSchedulerTrackedFeature::kBroadcastChannel}, {},
+        {}, {}, FROM_HERE);
+  }
 }
 
 IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
@@ -3072,9 +3098,64 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
   ExpectRestored(FROM_HERE);
 }
 
+// Checks that a page will be evicted from BFCache as soon as its broadcast
+// channel receives a message.
+IN_PROC_BROWSER_TEST_P(BackForwardCacheWithBroadcastChannelTest,
+                       MaybeEvictOnMessage) {
+  // No need to test for when the flag is disabled. In that case the page will
+  // not enter BFCache if there's an open broadcast channel.
+  if (!IsBFCacheOpenBroadcastChannelEnabled()) {
+    return;
+  }
+
+  ASSERT_TRUE(CreateHttpsServer()->Start());
+
+  // Two same-origin pages and one empty page.
+  GURL url_a_receiver(https_server()->GetURL(
+      "a.test", "/back_forward_cache/page_with_broadcastchannel.html"));
+  GURL url_a_sender(https_server()->GetURL(
+      "a.test", "/back_forward_cache/page_with_broadcastchannel_sender.html"));
+  GURL url_b(https_server()->GetURL("b.test", "/title1.html"));
+
+  // Navigate to a page which will receive message.
+  EXPECT_TRUE(NavigateToURL(shell(), url_a_receiver));
+  EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
+  RenderFrameDeletedObserver receiver_rfh_deleted_observer(
+      current_frame_host());
+  // Set up a broadcast channel.
+  RenderFrameHostImpl* rfh_a_receiver = current_frame_host();
+  EXPECT_TRUE(ExecJs(rfh_a_receiver, "acquireBroadcastChannel();"));
+  EXPECT_TRUE(ExecJs(rfh_a_receiver, "setOnMessage();"));
+
+  // Navigate to an empty page.
+  EXPECT_TRUE(NavigateToURL(shell(), url_b));
+  EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
+  EXPECT_TRUE(rfh_a_receiver->IsInBackForwardCache());
+
+  // Open another tab and navigate to a page which will send message.
+  Shell* shell2 =
+      Shell::CreateNewWindow(shell()->web_contents()->GetBrowserContext(),
+                             url_a_sender, nullptr, gfx::Size());
+  ASSERT_TRUE(WaitForLoadStop(shell2->web_contents()));
+  // Open a broadcast channel and cast a message.
+  RenderFrameHostImplWrapper rfh_a_sender(
+      shell2->web_contents()->GetPrimaryMainFrame());
+  EXPECT_TRUE(ExecJs(rfh_a_sender.get(), "acquireBroadcastChannel();"));
+  EXPECT_TRUE(ExecJs(rfh_a_sender.get(), "sendMessageOnce();"));
+
+  // The receiver page's rfh should be deleted.
+  receiver_rfh_deleted_observer.WaitUntilDeleted();
+
+  // Navigate back from the empty page to the receiver page.
+  ASSERT_TRUE(HistoryGoBack(web_contents()));
+  // The receiver page should have been evicted upon message.
+  ExpectNotRestored({NotRestoredReason::kBroadcastChannelOnMessage}, {}, {}, {},
+                    {}, FROM_HERE);
+}
+
 // Disabled on Android, since we have problems starting up the websocket test
 // server in the host
-// TODO(crbug.com/1372291): Re-enable the test after solving the WS server.
+// TODO(crbug.com/40241677): Re-enable the test after solving the WS server.
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_WebSocketCachedIfClosed DISABLED_WebSocketCachedIfClosed
 #else
@@ -3202,7 +3283,7 @@ IN_PROC_BROWSER_TEST_F(WebTransportBackForwardCacheBrowserTest,
 
 // Disabled on Android, since we have problems starting up the websocket test
 // server in the host
-// TODO(crbug.com/1372291): Re-enable the test after solving the WS server.
+// TODO(crbug.com/40241677): Re-enable the test after solving the WS server.
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_WebSocketNotCached DISABLED_WebSocketNotCached
 #else
@@ -3301,7 +3382,8 @@ class TestVibrationManager : public device::mojom::VibrationManager {
   }
 
   void BindVibrationManager(
-      mojo::PendingReceiver<device::mojom::VibrationManager> receiver) {
+      mojo::PendingReceiver<device::mojom::VibrationManager> receiver,
+      mojo::PendingRemote<device::mojom::VibrationManagerListener> listener) {
     receiver_.Bind(std::move(receiver));
   }
 
@@ -3955,7 +4037,7 @@ class BackForwardCacheBrowserWebUsbTest
 };
 
 // Check the BackForwardCache is disabled when the WebUSB feature is used.
-// TODO(https://crbug.com/1339720): Consider testing in a subframe. This will
+// TODO(crbug.com/40849874): Consider testing in a subframe. This will
 // require adjustments to Permissions Policy.
 IN_PROC_BROWSER_TEST_P(BackForwardCacheBrowserWebUsbTest, Serials) {
   // WebUSB requires HTTPS.
@@ -4287,8 +4369,14 @@ IN_PROC_BROWSER_TEST_F(SensorBackForwardCacheBrowserTest, OrientationCached) {
 // resets the reading back to have alpha=0 and navigates back to the a-page and
 // captures 3 more events and verifies that all events on the a-page have
 // alpha=0.
+// TODO(crbug.com/330801676): Flaky on macOS.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_SensorPausedWhileCached DISABLED_SensorPausedWhileCached
+#else
+#define MAYBE_SensorPausedWhileCached SensorPausedWhileCached
+#endif
 IN_PROC_BROWSER_TEST_F(SensorBackForwardCacheBrowserTest,
-                       SensorPausedWhileCached) {
+                       MAYBE_SensorPausedWhileCached) {
   ASSERT_TRUE(CreateHttpsServer()->Start());
   GURL url_a(https_server()->GetURL("a.test", "/title1.html"));
   GURL url_b(https_server()->GetURL("b.test", "/title1.html"));
@@ -4418,7 +4506,7 @@ IN_PROC_BROWSER_TEST_F(SensorBackForwardCacheBrowserTest,
 // See the discussion at http://crrev.com/c/2564926.
 #if !BUILDFLAG(IS_ANDROID)
 
-// TODO(https://crbug.com/1213145): The test is consistently failing on some Mac
+// TODO(crbug.com/40183520): The test is consistently failing on some Mac
 // bots.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_TrivialRTCPeerConnectionCached \
@@ -4500,9 +4588,9 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
 // See the discussion at http://crrev.com/c/2564926.
 #if !BUILDFLAG(IS_ANDROID)
 
-// TODO(https://crbug.com/1213145): The test is consistently failing on some Mac
+// TODO(crbug.com/40183520): The test is consistently failing on some Mac
 // bots.
-// This test uses Media Stream Track, so the test class is
+// This test uses MediaStreamTrack, so the test class is
 // `BackForwardCacheMediaTest`.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_NonTrivialRTCPeerConnectionNotCached \
@@ -4511,7 +4599,7 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
 #define MAYBE_NonTrivialRTCPeerConnectionNotCached \
   NonTrivialRTCPeerConnectionNotCached
 #endif
-IN_PROC_BROWSER_TEST_P(BackForwardCacheMediaTest,
+IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
                        MAYBE_NonTrivialRTCPeerConnectionNotCached) {
   ASSERT_TRUE(CreateHttpsServer()->Start());
 
@@ -4577,18 +4665,12 @@ IN_PROC_BROWSER_TEST_P(BackForwardCacheMediaTest,
   // 3) Go back.
   ASSERT_TRUE(HistoryGoBack(web_contents()));
 
-  if (IsAllowBFCacheWhenClosedMediaStreamTrackEnabled()) {
-    // When the flag is enabled, a live Media Stream Track blocks BFCache.
-    ExpectNotRestored(
-        {NotRestoredReason::kBlocklistedFeatures},
-        {blink::scheduler::WebSchedulerTrackedFeature::kWebRTC,
-         blink::scheduler::WebSchedulerTrackedFeature::kLiveMediaStreamTrack},
-        {}, {}, {}, FROM_HERE);
-  } else {
-    ExpectNotRestored({NotRestoredReason::kBlocklistedFeatures},
-                      {blink::scheduler::WebSchedulerTrackedFeature::kWebRTC},
-                      {}, {}, {}, FROM_HERE);
-  }
+  // A live MediaStreamTrack blocks BFCache.
+  ExpectNotRestored(
+      {NotRestoredReason::kBlocklistedFeatures},
+      {blink::scheduler::WebSchedulerTrackedFeature::kWebRTC,
+       blink::scheduler::WebSchedulerTrackedFeature::kLiveMediaStreamTrack},
+      {}, {}, {}, FROM_HERE);
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
@@ -4626,7 +4708,7 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest, WebLocksNotCached) {
                     {}, {}, {}, FROM_HERE);
 }
 
-// TODO(https://crbug.com/1495476): Reenable. This is flaky because we block on
+// TODO(crbug.com/40937711): Reenable. This is flaky because we block on
 // the permission request, not on API usage.
 IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest, DISABLED_WebMidiNotCached) {
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -4823,7 +4905,7 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
   // restored if the flag is on.
   ASSERT_TRUE(HistoryGoBack(web_contents()));
   ExpectRestored(FROM_HERE);
-  // TODO(crbug.com/1411151): Test that onend callback is fired upon restore.
+  // TODO(crbug.com/40254716): Test that onend callback is fired upon restore.
 }
 
 IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
@@ -4874,7 +4956,7 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
                     {}, {reason}, {}, FROM_HERE);
 }
 
-// TODO(crbug.com/1491942): This fails with the field trial testing config.
+// TODO(crbug.com/40285326): This fails with the field trial testing config.
 class BackForwardCacheBrowserTestNoTestingConfig
     : public BackForwardCacheBrowserTest {
  public:
@@ -4921,7 +5003,7 @@ class BackForwardCacheBrowserTestWithSupportedFeatures
  protected:
   void SetUpCommandLine(base::CommandLine* command_line) override {
     EnableFeatureAndSetParams(features::kBackForwardCache, "supported_features",
-                              "broadcastchannel,keyboard-lock");
+                              "broadcastchannel,keyboardlock");
     BackForwardCacheBrowserTest::SetUpCommandLine(command_line);
   }
 };
@@ -5052,7 +5134,7 @@ class BackForwardCacheBrowserTestWithMediaSessionNoTestingConfig
     // The MediaSessionEnterPictureInPicture feature depends on the
     // BackForwardCacheMediaSessionService feature, so we need to also disable
     // it here.
-    // TODO(https://crbug.com/1510995): Remove these tests since the
+    // TODO(crbug.com/41483582): Remove these tests since the
     // BackForwardCacheMediaSessionService feature has been launched.
     DisableFeature(blink::features::kMediaSessionEnterPictureInPicture);
 
@@ -5089,7 +5171,7 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTestWithMediaSession,
                        CacheWhenMediaSessionServiceIsNotUsed) {
   // There are sometimes unexpected messages from a renderer to the browser,
   // which caused test flakiness.
-  // TODO(crbug.com/1253200): Fix the test flakiness.
+  // TODO(crbug.com/40793577): Fix the test flakiness.
   DoNotFailForUnexpectedMessagesWhileCached();
 
   ASSERT_TRUE(embedded_test_server()->Start());

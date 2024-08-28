@@ -120,6 +120,8 @@ class ASH_EXPORT SavedDeskItemView : public views::Button,
   void OnFocus() override;
   void OnBlur() override;
   KeyClickAction GetKeyClickActionForEvent(const ui::KeyEvent& event) override;
+  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
+  bool CanHandleAccelerators() const override;
 
   // views::TextfieldController:
   void ContentsChanged(views::Textfield* sender,
@@ -152,6 +154,8 @@ class ASH_EXPORT SavedDeskItemView : public views::Button,
 
   // Update saved desk name based on `name_view_` string.
   void UpdateSavedDeskName();
+
+  std::u16string ComputeAccessibleName() const;
 
   // OverviewFocusableView:
   views::View* GetView() override;

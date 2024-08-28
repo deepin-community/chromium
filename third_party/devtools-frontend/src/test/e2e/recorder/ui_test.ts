@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-/* eslint-disable rulesdir/es_modules_import */
-
 import {assert} from 'chai';
 import {type ElementHandle, type Page} from 'puppeteer-core';
 
@@ -120,7 +118,7 @@ describe('Recorder', function() {
         });
         await clickSelectButtonItem(
             'Normal (Default)',
-            'devtools-replay-button',
+            'devtools-replay-section',
         );
         await target.bringToFront();
         await promise;

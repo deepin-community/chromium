@@ -40,9 +40,9 @@ dictionary AudioSinkOptions {
     ActiveScriptWrappable
 ] interface AudioContext : BaseAudioContext {
     [HighEntropy, CallWith=ExecutionContext, RaisesException, Measure] constructor(optional AudioContextOptions contextOptions = {});
-    [MeasureAs=AudioContextSuspend, RaisesException, CallWith=ScriptState, ImplementedAs=suspendContext] Promise<void> suspend();
-    [MeasureAs=AudioContextClose, RaisesException, CallWith=ScriptState, ImplementedAs=closeContext] Promise<void> close();
-    [MeasureAs=AudioContextResume, RaisesException, CallWith=ScriptState, ImplementedAs=resumeContext] Promise<void> resume();
+    [MeasureAs=AudioContextSuspend, RaisesException, CallWith=ScriptState, ImplementedAs=suspendContext] Promise<undefined> suspend();
+    [MeasureAs=AudioContextClose, RaisesException, CallWith=ScriptState, ImplementedAs=closeContext] Promise<undefined> close();
+    [MeasureAs=AudioContextResume, RaisesException, CallWith=ScriptState, ImplementedAs=resumeContext] Promise<undefined> resume();
 
     // Output timestamp
     [MeasureAs=AudioContextGetOutputTimestamp, CallWith=ScriptState] AudioTimestamp getOutputTimestamp();
@@ -52,11 +52,14 @@ dictionary AudioSinkOptions {
     [HighEntropy=Direct, MeasureAs=AudioContextBaseLatency] readonly attribute double baseLatency;
     [HighEntropy=Direct, MeasureAs=AudioContextOutputLatency] readonly attribute double outputLatency;
 
+    [RuntimeEnabled=AudioContextPlayoutStats, SameObject] readonly attribute AudioPlayoutStats playoutStats;
+
     [RaisesException, MeasureAs=AudioContextCreateMediaElementSource] MediaElementAudioSourceNode createMediaElementSource(HTMLMediaElement mediaElement);
     [RaisesException, MeasureAs=AudioContextCreateMediaStreamSource] MediaStreamAudioSourceNode createMediaStreamSource(MediaStream mediaStream);
     [RaisesException, MeasureAs=AudioContextCreateMediaStreamDestination] MediaStreamAudioDestinationNode createMediaStreamDestination();
 
     [MeasureAs=AudioContextSinkId, SecureContext] readonly attribute (DOMString or AudioSinkInfo) sinkId;
-    [MeasureAs=AudioContextSetSinkId, RaisesException, CallWith=ScriptState, SecureContext] Promise<void> setSinkId((DOMString or AudioSinkOptions) sinkId);
+    [MeasureAs=AudioContextSetSinkId, RaisesException, CallWith=ScriptState, SecureContext] Promise<undefined> setSinkId((DOMString or AudioSinkOptions) sinkId);
+    [RuntimeEnabled=AudioContextOnError, MeasureAs=AudioContextOnError] attribute EventHandler onerror;
     [SecureContext] attribute EventHandler onsinkchange;
 };

@@ -30,7 +30,6 @@
 
 #include "third_party/blink/renderer/core/animation/effect_input.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/array_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/dictionary.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
@@ -103,7 +102,7 @@ Vector<std::optional<EffectModel::CompositeOperation>> ParseCompositeProperty(
       return result;
     }
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return {};
 }
 
@@ -215,7 +214,7 @@ std::optional<ParsedOffset> ParseOffset(Document& document,
 
   // If calling using a PropertyIndexKeyframe, we must already have handled
   // sequences.
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return std::nullopt;
 }
 
@@ -405,8 +404,7 @@ StringKeyframeVector ConvertArrayForm(Element* element,
   Vector<Vector<std::pair<String, String>>> processed_properties;
   ExecutionContext* execution_context = ExecutionContext::From(script_state);
   while (iterator.Next(execution_context, exception_state)) {
-    if (exception_state.HadException())
-      return {};
+    CHECK(!exception_state.HadException());
 
     // The value should already be non-empty, as guaranteed by the call to Next
     // and the exception_state check above.
@@ -827,10 +825,10 @@ StringKeyframeVector EffectInput::ParseKeyframesArgument(
 
   // Map logical to physical properties.
   const ComputedStyle* style = element ? element->GetComputedStyle() : nullptr;
-  TextDirection text_direction =
-      style ? style->Direction() : TextDirection::kLtr;
-  WritingMode writing_mode =
-      style ? style->GetWritingMode() : WritingMode::kHorizontalTb;
+  WritingDirectionMode writing_direction =
+      style ? style->GetWritingDirection()
+            : WritingDirectionMode(WritingMode::kHorizontalTb,
+                                   TextDirection::kLtr);
 
   StringKeyframeVector parsed_keyframes;
   if (script_iterator.IsNull()) {
@@ -844,7 +842,7 @@ StringKeyframeVector EffectInput::ParseKeyframesArgument(
 
   for (wtf_size_t i = 0; i < parsed_keyframes.size(); i++) {
     StringKeyframe* keyframe = parsed_keyframes[i];
-    keyframe->SetLogicalPropertyResolutionContext(text_direction, writing_mode);
+    keyframe->SetLogicalPropertyResolutionContext(writing_direction);
   }
 
   return parsed_keyframes;

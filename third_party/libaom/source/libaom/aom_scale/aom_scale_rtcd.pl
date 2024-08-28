@@ -1,5 +1,5 @@
 ##
-## Copyright (c) 2017, Alliance for Open Media. All rights reserved
+## Copyright (c) 2017, Alliance for Open Media. All rights reserved.
 ##
 ## This source code is subject to the terms of the BSD 2 Clause License and
 ## the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -49,7 +49,7 @@ add_proto qw/void aom_yv12_partial_coloc_copy_v/, "const struct yv12_buffer_conf
 
 add_proto qw/void aom_extend_frame_borders_plane_row/, "const struct yv12_buffer_config *ybf, int plane, int v_start, int v_end";
 
-add_proto qw/void aom_extend_frame_borders/, "struct yv12_buffer_config *ybf, const int num_planes";
+add_proto qw/void aom_extend_frame_borders/, "struct yv12_buffer_config *ybf, int num_planes";
 
 add_proto qw/void aom_extend_frame_inner_borders/, "struct yv12_buffer_config *ybf, const int num_planes";
 

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/ash/fwupd_download_client_impl.h"
 
+#include "base/check_is_test.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/user_manager/user_manager.h"
@@ -18,8 +19,16 @@ scoped_refptr<network::SharedURLLoaderFactory>
 FwupdDownloadClientImpl::GetURLLoaderFactory() {
   user_manager::User* active_user =
       user_manager::UserManager::Get()->GetActiveUser();
-  Profile* profile = ProfileHelper::Get()->GetProfileByUser(active_user);
-  DCHECK(profile);
+
+  Profile* profile = active_user
+                         ? ProfileHelper::Get()->GetProfileByUser(active_user)
+                         : nullptr;
+
+  // Active user and profile might not be initialized in some tests
+  if (!profile) {
+    CHECK_IS_TEST();
+    return nullptr;
+  }
 
   return profile->GetURLLoaderFactory();
 }

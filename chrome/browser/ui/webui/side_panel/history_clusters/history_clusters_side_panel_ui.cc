@@ -7,7 +7,8 @@
 #include <string>
 #include <utility>
 
-#include "chrome/browser/image_service/image_service_factory.h"
+#include "base/feature_list.h"
+#include "chrome/browser/page_image_service/image_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/cr_components/history_clusters/history_clusters_util.h"
@@ -20,6 +21,7 @@
 #include "chrome/grit/side_panel_shared_resources.h"
 #include "chrome/grit/side_panel_shared_resources_map.h"
 #include "components/favicon_base/favicon_url_parser.h"
+#include "components/history_clusters/core/features.h"
 #include "components/page_image_service/image_service.h"
 #include "components/page_image_service/image_service_handler.h"
 #include "components/strings/grit/components_strings.h"
@@ -28,8 +30,18 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/webui/color_change_listener/color_change_handler.h"
 
+HistoryClustersSidePanelUIConfig::HistoryClustersSidePanelUIConfig()
+    : DefaultTopChromeWebUIConfig(
+          content::kChromeUIScheme,
+          chrome::kChromeUIHistoryClustersSidePanelHost) {}
+
+bool HistoryClustersSidePanelUIConfig::IsWebUIEnabled(
+    content::BrowserContext* browser_context) {
+  return base::FeatureList::IsEnabled(history_clusters::kSidePanelJourneys);
+}
+
 HistoryClustersSidePanelUI::HistoryClustersSidePanelUI(content::WebUI* web_ui)
-    : ui::MojoBubbleWebUIController(web_ui),
+    : TopChromeWebUIController(web_ui),
       content::WebContentsObserver(web_ui->GetWebContents()) {
   Profile* const profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(

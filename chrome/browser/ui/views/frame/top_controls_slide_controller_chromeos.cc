@@ -9,6 +9,7 @@
 #include "base/auto_reset.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "cc/input/browser_controls_offset_tags_info.h"
 #include "cc/input/browser_controls_state.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
@@ -45,7 +46,7 @@ bool IsSpokenFeedbackEnabled() {
   return accessibility_manager &&
          accessibility_manager->IsSpokenFeedbackEnabled();
 #else
-  // TODO(https://crbug.com/1165746): Enable accessibility (a11y) support for
+  // TODO(crbug.com/40741702): Enable accessibility (a11y) support for
   // Lacros.
   NOTIMPLEMENTED() << "Enable accessibility support for Lacros.";
   return false;
@@ -592,7 +593,7 @@ void TopControlsSlideControllerChromeOS::UpdateBrowserControlsStateShown(
   const cc::BrowserControlsState current_state =
       cc::BrowserControlsState::kShown;
   web_contents->UpdateBrowserControlsState(constraints_state, current_state,
-                                           animate);
+                                           animate, std::nullopt);
 }
 
 bool TopControlsSlideControllerChromeOS::CanEnable(
@@ -759,7 +760,7 @@ void TopControlsSlideControllerChromeOS::OnBeginSliding() {
   // the layout now, before any transforms are installed. To do otherwise
   // results in NativeViewHost positioning the WebContents at the wrong
   // location.
-  // TODO(https://crbug.com/950981): this is rather fragile, and the code should
+  // TODO(crbug.com/40622302): this is rather fragile, and the code should
   // deal with layout being performed during the slide.
   root_view->GetWidget()->LayoutRootViewIfNecessary();
 

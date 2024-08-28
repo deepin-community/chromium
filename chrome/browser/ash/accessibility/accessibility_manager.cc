@@ -52,7 +52,6 @@
 #include "chrome/browser/ash/accessibility/magnification_manager.h"
 #include "chrome/browser/ash/accessibility/select_to_speak_event_handler_delegate_impl.h"
 #include "chrome/browser/ash/accessibility/service/accessibility_service_client.h"
-#include "chrome/browser/ash/crosapi/browser_manager.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_requisition_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
@@ -108,6 +107,9 @@
 #include "ui/base/ime/ash/extension_ime_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/events/ash/keyboard_capability.h"
+#include "ui/events/devices/device_data_manager.h"
+#include "ui/events/devices/input_device_event_observer.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/widget/widget.h"
@@ -221,7 +223,7 @@ std::string AccessibilityPrivateEnumForAction(SelectToSpeakPanelAction action) {
           extensions::api::accessibility_private::SelectToSpeakPanelAction::
               kExit);
     case SelectToSpeakPanelAction::kNone:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return "";
   }
 }
@@ -367,11 +369,15 @@ class AccessibilityPanelWidgetObserver : public views::WidgetObserver {
 
   ~AccessibilityPanelWidgetObserver() override { CHECK(!IsInObserverList()); }
 
-  void OnWidgetDestroying(views::Widget* widget) override {
+  void OnWidgetClosing(views::Widget* widget) override { Reset(widget); }
+
+  void OnWidgetDestroying(views::Widget* widget) override { Reset(widget); }
+
+  void Reset(views::Widget* widget) {
     CHECK_EQ(widget_, widget);
     widget->RemoveObserver(this);
     std::move(on_destroying_).Run();
-    // |this| should be deleted.
+    // |this| should be deleted by the above callback.
   }
 
  private:
@@ -470,6 +476,12 @@ AccessibilityManager::AccessibilityManager() {
   manager->Initialize(static_cast<int>(Sound::kStartup),
                       bundle.GetRawDataResource(IDR_SOUND_STARTUP_WAV),
                       media::AudioCodec::kPCM);
+  manager->Initialize(static_cast<int>(Sound::kLock),
+                      bundle.GetRawDataResource(IDR_SOUND_LOCK_WAV),
+                      media::AudioCodec::kPCM);
+  manager->Initialize(static_cast<int>(Sound::kUnlock),
+                      bundle.GetRawDataResource(IDR_SOUND_UNLOCK_WAV),
+                      media::AudioCodec::kPCM);
 
   if (VolumeAdjustSoundEnabled()) {
     manager->Initialize(static_cast<int>(Sound::kVolumeAdjust),
@@ -492,7 +504,7 @@ AccessibilityManager::AccessibilityManager() {
 
   base::FilePath resources_path;
   if (!base::PathService::Get(chrome::DIR_RESOURCES, &resources_path))
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   const bool enable_v3_manifest =
       base::CommandLine::ForCurrentProcess()->HasSwitch(
           ::switches::kEnableExperimentalAccessibilityManifestV3);
@@ -568,6 +580,8 @@ AccessibilityManager::AccessibilityManager() {
 
   CrasAudioHandler::Get()->AddAudioObserver(this);
 
+  ui::DeviceDataManager::GetInstance()->AddObserver(this);
+
   dlc_installer_ = std::make_unique<AccessibilityDlcInstaller>();
 }
 
@@ -576,6 +590,7 @@ AccessibilityManager::~AccessibilityManager() {
   AccessibilityStatusEventDetails details(
       AccessibilityNotificationType::kManagerShutdown, false);
   NotifyAccessibilityStatusChanged(details);
+  ui::DeviceDataManager::GetInstance()->RemoveObserver(this);
   CrasAudioHandler::Get()->RemoveAudioObserver(this);
   user_manager::UserManager::Get()->RemoveSessionStateObserver(this);
   input_method::InputMethodManager::Get()->RemoveObserver(this);
@@ -814,36 +829,8 @@ bool AccessibilityManager::PlayEarcon(Sound sound_key, PlaySoundOption option) {
   return audio::SoundsManager::Get()->Play(static_cast<int>(sound_key));
 }
 
-void AccessibilityManager::OnTwoFingerTouchStart() {
-  if (!profile_)
-    return;
-
-  extensions::EventRouter* event_router =
-      extensions::EventRouter::Get(profile_);
-
-  auto event = std::make_unique<extensions::Event>(
-      extensions::events::ACCESSIBILITY_PRIVATE_ON_TWO_FINGER_TOUCH_START,
-      extensions::api::accessibility_private::OnTwoFingerTouchStart::kEventName,
-      base::Value::List());
-  event_router->BroadcastEvent(std::move(event));
-}
-
-void AccessibilityManager::OnTwoFingerTouchStop() {
-  if (!profile_)
-    return;
-
-  extensions::EventRouter* event_router =
-      extensions::EventRouter::Get(profile_);
-
-  auto event = std::make_unique<extensions::Event>(
-      extensions::events::ACCESSIBILITY_PRIVATE_ON_TWO_FINGER_TOUCH_STOP,
-      extensions::api::accessibility_private::OnTwoFingerTouchStop::kEventName,
-      base::Value::List());
-  event_router->BroadcastEvent(std::move(event));
-}
-
 bool AccessibilityManager::ShouldToggleSpokenFeedbackViaTouch() {
-  return false;
+  return policy::EnrollmentRequisitionManager::IsMeetDevice();
 }
 
 bool AccessibilityManager::PlaySpokenFeedbackToggleCountdown(int tick_count) {
@@ -894,6 +881,23 @@ bool AccessibilityManager::IsAutoclickEnabled() const {
                          prefs::kAccessibilityAutoclickEnabled);
 }
 
+void AccessibilityManager::EnableReducedAnimations(bool enabled) {
+  if (!profile_) {
+    return;
+  }
+
+  PrefService* pref_service = profile_->GetPrefs();
+  pref_service->SetBoolean(prefs::kAccessibilityReducedAnimationsEnabled,
+                           enabled);
+  pref_service->CommitPendingWrite();
+}
+
+bool AccessibilityManager::IsReducedAnimationsEnabled() const {
+  return ::features::IsAccessibilityReducedAnimationsEnabled() && profile_ &&
+         profile_->GetPrefs()->GetBoolean(
+             prefs::kAccessibilityReducedAnimationsEnabled);
+}
+
 void AccessibilityManager::EnableFaceGaze(bool enabled) {
   if (!profile_) {
     return;
@@ -905,7 +909,7 @@ void AccessibilityManager::EnableFaceGaze(bool enabled) {
 }
 
 bool AccessibilityManager::IsFaceGazeEnabled() const {
-  return profile_ &&
+  return ::features::IsAccessibilityFaceGazeEnabled() && profile_ &&
          profile_->GetPrefs()->GetBoolean(prefs::kAccessibilityFaceGazeEnabled);
 }
 
@@ -1484,12 +1488,27 @@ void AccessibilityManager::UpdateBrailleImeState() {
   braille_ime_current_ = false;
 }
 
+bool AccessibilityManager::IsFullscreenMagnifierEnabled() const {
+  return ash::AccessibilityController::Get()->fullscreen_magnifier().enabled();
+}
+
+bool AccessibilityManager::IsDockedMagnifierEnabled() const {
+  return ash::AccessibilityController::Get()->docked_magnifier().enabled();
+}
+
+bool AccessibilityManager::AllowQRCodeUX() const {
+  // TODO(b/289246311): Should any other settings be included here?
+  return !(IsSpokenFeedbackEnabled() || IsSwitchAccessEnabled() ||
+           IsBrailleDisplayConnected() || IsFaceGazeEnabled() ||
+           IsFullscreenMagnifierEnabled() || IsDockedMagnifierEnabled());
+}
+
 // Overridden from InputMethodManager::Observer.
 void AccessibilityManager::InputMethodChanged(
     input_method::InputMethodManager* manager,
     Profile* /* profile */,
     bool show_message) {
-  Shell::Get()->sticky_keys_controller()->SetModifiersEnabled(
+  Shell::Get()->sticky_keys_controller()->SetMod3AndAltGrModifiersEnabled(
       manager->IsISOLevel5ShiftUsedByCurrentInputMethod(),
       manager->IsAltGrUsedByCurrentInputMethod());
   const input_method::InputMethodDescriptor descriptor =
@@ -1550,7 +1569,6 @@ void AccessibilityManager::SetProfile(Profile* profile) {
       prefs::kDockedMagnifierEnabled};
 
   if (profile) {
-    // TODO(yoshiki): Move following code to PrefHandler.
     pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
     pref_change_registrar_->Init(profile->GetPrefs());
     pref_change_registrar_->Add(
@@ -1772,8 +1790,12 @@ void AccessibilityManager::UpdateChromeOSAccessibilityHistograms() {
     base::UmaHistogramBoolean("Accessibility.CrosLargeCursor",
                               large_cursor_enabled);
     if (large_cursor_enabled) {
-      base::UmaHistogramCounts100(
-          "Accessibility.CrosLargeCursorSize",
+      base::HistogramBase* histogram = base::LinearHistogram::FactoryGet(
+          "Accessibility.CrosLargeCursorSize2", kMinLargeCursorSize,
+          kMaxLargeCursorSize + 1,
+          (kMaxLargeCursorSize + 1 - kMinLargeCursorSize) / 2 + 2,
+          base::HistogramBase::kUmaTargetedHistogramFlag);
+      histogram->Add(
           prefs->GetInteger(prefs::kAccessibilityLargeCursorDipSize));
     }
 
@@ -1784,6 +1806,20 @@ void AccessibilityManager::UpdateChromeOSAccessibilityHistograms() {
     bool autoclick_enabled =
         prefs->GetBoolean(prefs::kAccessibilityAutoclickEnabled);
     base::UmaHistogramBoolean("Accessibility.CrosAutoclick", autoclick_enabled);
+
+    if (::features::IsAccessibilityReducedAnimationsEnabled()) {
+      bool reduced_animations_enabled =
+          prefs->GetBoolean(prefs::kAccessibilityReducedAnimationsEnabled);
+      base::UmaHistogramBoolean("Accessibility.CrosReducedAnimations",
+                                reduced_animations_enabled);
+    }
+
+    if (::features::IsAccessibilityCaretBlinkIntervalSettingEnabled()) {
+      int caret_blink_interval_ms =
+          prefs->GetInteger(prefs::kAccessibilityCaretBlinkInterval);
+      base::UmaHistogramSparse("Accessibility.CrosCaretBlinkInterval",
+                               caret_blink_interval_ms);
+    }
 
     base::UmaHistogramBoolean(
         "Accessibility.CrosCursorColor",
@@ -1815,6 +1851,17 @@ void AccessibilityManager::UpdateChromeOSAccessibilityHistograms() {
                             IsSelectToSpeakEnabled());
   base::UmaHistogramBoolean("Accessibility.CrosSwitchAccess",
                             IsSwitchAccessEnabled());
+  base::UmaHistogramBoolean("Accessibility.CrosMonoAudio.Enabled",
+                            IsMonoAudioEnabled());
+  base::UmaHistogramBoolean("Accessibility.OOBEStartupSoundEnabled",
+                            GetStartupSoundEnabled());
+  base::UmaHistogramBoolean(
+      "Accessibility.CrosSpokenFeedback.BrailleDisplayConnected",
+      IsBrailleDisplayConnected());
+  if (::features::IsAccessibilityFaceGazeEnabled()) {
+    base::UmaHistogramBoolean("Accessibility.CrosFaceGaze",
+                              IsFaceGazeEnabled());
+  }
 }
 
 void AccessibilityManager::PlayVolumeAdjustSound() {
@@ -1828,6 +1875,19 @@ void AccessibilityManager::OnAppTerminating() {
   app_terminating_ = true;
 }
 
+void AccessibilityManager::MaybeLogBrailleDisplayConnectedTime() {
+  if (braille_display_connect_time_ == base::Time()) {
+    return;
+  }
+  base::TimeDelta duration = base::Time::Now() - braille_display_connect_time_;
+  base::UmaHistogramCustomCounts(
+      "Accessibility.CrosSpokenFeedback.BrailleDisplayConnected."
+      "ConnectionDuration",
+      /*sample=*/duration.InSeconds(), /*min=*/1,
+      /*exclusive_max=*/base::Days(1) / base::Seconds(1), /*buckets=*/100);
+  braille_display_connect_time_ = base::Time();
+}
+
 void AccessibilityManager::OnShimlessRmaLaunched() {
   SetActiveProfile();
 }
@@ -1835,6 +1895,20 @@ void AccessibilityManager::OnShimlessRmaLaunched() {
 void AccessibilityManager::OnLoginOrLockScreenVisible() {
   // Update `profile_` when entering the login screen.
   SetActiveProfile();
+}
+
+void AccessibilityManager::OnSessionStateChanged() {
+  if (session_manager::SessionManager::Get()->session_state() ==
+      session_manager::SessionState::LOCKED) {
+    // Enter into the lock screen.
+    CHECK(!locked_);
+    locked_ = true;
+    PlayEarcon(Sound::kLock, PlaySoundOption::kOnlyIfSpokenFeedbackEnabled);
+  } else if (locked_) {
+    // Exit from the lock screen.
+    locked_ = false;
+    PlayEarcon(Sound::kUnlock, PlaySoundOption::kOnlyIfSpokenFeedbackEnabled);
+  }
 }
 
 void AccessibilityManager::SetActiveProfile() {
@@ -1856,7 +1930,20 @@ void AccessibilityManager::OnFocusChangedInPage(
 
 void AccessibilityManager::OnBrailleDisplayStateChanged(
     const DisplayState& display_state) {
+  if (braille_display_connected_ != display_state.available) {
+    base::UmaHistogramBoolean(
+        "Accessibility.CrosSpokenFeedback.BrailleDisplayConnected."
+        "ConnectionChanged",
+        display_state.available);
+  }
   braille_display_connected_ = display_state.available;
+  if (braille_display_connected_ &&
+      braille_display_connect_time_ == base::Time()) {
+    braille_display_connect_time_ = base::Time::Now();
+  }
+  if (!braille_display_connected_) {
+    MaybeLogBrailleDisplayConnectedTime();
+  }
   AccessibilityController::Get()->BrailleDisplayStateChanged(
       braille_display_connected_);
   UpdateBrailleImeState();
@@ -1892,6 +1979,7 @@ void AccessibilityManager::OnExtensionUnloaded(
 }
 
 void AccessibilityManager::OnShutdown(extensions::ExtensionRegistry* registry) {
+  MaybeLogBrailleDisplayConnectedTime();
   extension_registry_observations_.RemoveObservation(registry);
 }
 
@@ -1936,8 +2024,9 @@ void AccessibilityManager::PostLoadChromeVox() {
 
   // Force volume slide gesture to be on for Chromebox for Meetings provisioned
   // devices.
-  if (policy::EnrollmentRequisitionManager::IsRemoraRequisition())
+  if (policy::EnrollmentRequisitionManager::IsMeetDevice()) {
     AccessibilityController::Get()->EnableChromeVoxVolumeSlideGesture();
+  }
 
   if (start_chromevox_with_tutorial_) {
     ShowChromeVoxTutorial();
@@ -2050,7 +2139,7 @@ void AccessibilityManager::LoadEnhancedNetworkTts() {
 
   base::FilePath resources_path;
   if (!base::PathService::Get(chrome::DIR_RESOURCES, &resources_path))
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
 
   const bool enable_v3_manifest =
       base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -2411,22 +2500,22 @@ void AccessibilityManager::SendMouseEventToSelectToSpeak(
   // Compare to ui::blink::MakeWebMouseEventFromUiEvent.
   extensions::api::accessibility_private::SyntheticMouseEventType event_type;
   switch (type) {
-    case ui::EventType::ET_MOUSE_PRESSED:
+    case ui::EventType::kMousePressed:
       event_type = extensions::api::accessibility_private::
           SyntheticMouseEventType::kPress;
       break;
-    case ui::EventType::ET_MOUSE_RELEASED:
+    case ui::EventType::kMouseReleased:
       event_type = extensions::api::accessibility_private::
           SyntheticMouseEventType::kRelease;
       break;
-    case ui::EventType::ET_MOUSE_MOVED:
-    case ui::EventType::ET_MOUSE_ENTERED:
-    case ui::EventType::ET_MOUSE_EXITED:
-    case ui::EventType::ET_MOUSE_DRAGGED:
+    case ui::EventType::kMouseMoved:
+    case ui::EventType::kMouseEntered:
+    case ui::EventType::kMouseExited:
+    case ui::EventType::kMouseDragged:
       event_type = extensions::api::accessibility_private::
           SyntheticMouseEventType::kMove;
       break;
-    case ui::EventType::ET_MOUSEWHEEL:
+    case ui::EventType::kMousewheel:
       // Mouse wheel not handled.
       return;
     default:
@@ -2499,7 +2588,8 @@ void AccessibilityManager::ShowNetworkDictationDialog() {
   const std::u16string text =
       l10n_util::GetStringUTF16(IDS_ACCESSIBILITY_DICTATION_CONFIRMATION_TEXT);
   AccessibilityController::Get()->ShowConfirmationDialog(
-      title, text, l10n_util::GetStringUTF16(IDS_APP_CANCEL),
+      title, text, l10n_util::GetStringUTF16(IDS_APP_CONTINUE),
+      l10n_util::GetStringUTF16(IDS_APP_CANCEL),
       base::BindOnce(&AccessibilityManager::OnNetworkDictationDialogAccepted,
                      base::Unretained(this)),
       base::BindOnce(&AccessibilityManager::OnNetworkDictationDialogDismissed,
@@ -2559,7 +2649,7 @@ void AccessibilityManager::OnSodaInstallUpdated(int progress) {
   const std::string dictation_locale =
       profile_->GetPrefs()->GetString(prefs::kAccessibilityDictationLocale);
   // Update the Dictation button tray.
-  // TODO(https://crbug.com/1266491): Ensure we use combined progress instead
+  // TODO(crbug.com/40802157): Ensure we use combined progress instead
   // of just the language pack progress.
   AccessibilityController::Get()
       ->UpdateDictationButtonOnSpeechRecognitionDownloadChanged(progress);
@@ -2720,8 +2810,8 @@ void AccessibilityManager::InstallFaceGazeAssets(
       AccessibilityDlcInstaller::DlcType::kFaceGazeAssets,
       base::BindOnce(&AccessibilityManager::OnFaceGazeAssetsInstalled,
                      weak_ptr_factory_.GetWeakPtr()),
-      base::BindRepeating([](double progress) {}),
-      base::BindOnce([](const std::string& error) {}));
+      /*on_progress=*/base::DoNothing(),
+      /*on_error=*/base::DoNothing());
 }
 
 void AccessibilityManager::OnFaceGazeAssetsInstalled(
@@ -2808,7 +2898,7 @@ void AccessibilityManager::OnPumpkinDataCreated(
   std::move(install_pumpkin_callback_).Run(std::move(data));
 }
 
-void AccessibilityManager::OnPumpkinError(const std::string& error) {
+void AccessibilityManager::OnPumpkinError(std::string_view error) {
   if (install_pumpkin_callback_.is_null()) {
     return;
   }
@@ -2865,7 +2955,7 @@ void AccessibilityManager::GetTtsDlcContentsOnPackState(
       file_name = kTtsStandardFileName;
       break;
     case TtsVariant::kNone:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   base::FilePath path;
@@ -2943,6 +3033,23 @@ void AccessibilityManager::SendSyntheticMouseEvent(
   if (!is_mouse_events_enabled) {
     cursor_client->DisableMouseEvents();
   }
+}
+
+void AccessibilityManager::OnInputDeviceConfigurationChanged(
+    uint8_t input_device_type) {
+  if (input_device_type & ui::InputDeviceEventObserver::kKeyboard) {
+    Shell::Get()->sticky_keys_controller()->SetFnModifierEnabled(
+        Shell::Get()->keyboard_capability()->HasFunctionKeyOnAnyKeyboard());
+  }
+}
+void AccessibilityManager::OnDeviceListsComplete() {
+  Shell::Get()->sticky_keys_controller()->SetFnModifierEnabled(
+      Shell::Get()->keyboard_capability()->HasFunctionKeyOnAnyKeyboard());
+}
+
+std::optional<ui::KeyboardCode>
+AccessibilityManager::GetCaretBrowsingActionKey() {
+  return AccessibilityController::Get()->GetCaretBrowsingActionKey();
 }
 
 }  // namespace ash

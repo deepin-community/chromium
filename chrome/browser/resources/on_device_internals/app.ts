@@ -3,12 +3,12 @@
 // found in the LICENSE file.
 
 import '//resources/cr_elements/cr_button/cr_button.js';
+import '//resources/cr_elements/cr_collapse/cr_collapse.js';
 import '//resources/cr_elements/cr_hidden_style.css.js';
 import '//resources/cr_elements/cr_input/cr_input.js';
 import '//resources/cr_elements/cr_shared_vars.css.js';
 import '//resources/cr_elements/cr_textarea/cr_textarea.js';
 import '//resources/cr_elements/cr_expand_button/cr_expand_button.js';
-import '//resources/polymer/v3_0/iron-collapse/iron-collapse.js';
 
 import type {CrInputElement} from '//resources/cr_elements/cr_input/cr_input.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
@@ -29,7 +29,9 @@ interface Response {
 interface OnDeviceInternalsAppElement {
   $: {
     modelInput: CrInputElement,
+    temperatureInput: CrInputElement,
     textInput: CrInputElement,
+    topKInput: CrInputElement,
   };
 }
 
@@ -94,6 +96,8 @@ class OnDeviceInternalsAppElement extends PolymerElement {
       contextExpanded_: Boolean,
       contextLength_: Number,
       contextText_: String,
+      topK_: Number,
+      temperature_: Number,
     };
   }
 
@@ -115,7 +119,9 @@ class OnDeviceInternalsAppElement extends PolymerElement {
   private performanceClassText_: string;
   private responses_: Response[];
   private session_: SessionRemote|null = null;
+  private temperature_: number = 0;
   private text_: string;
+  private topK_: number = 1;
 
   private proxy_: BrowserProxy = BrowserProxy.getInstance();
   private responseRouter_: StreamingResponderCallbackRouter =
@@ -124,6 +130,7 @@ class OnDeviceInternalsAppElement extends PolymerElement {
   override ready() {
     super.ready();
     this.getPerformanceClass_();
+    this.$.temperatureInput.inputElement.step = '0.1';
   }
 
   private async getPerformanceClass_() {
@@ -192,7 +199,17 @@ class OnDeviceInternalsAppElement extends PolymerElement {
       return;
     }
     this.session_.addContext(
-        {text: this.contextText_, ignoreContext: false}, null);
+        {
+          text: this.contextText_,
+          ignoreContext: false,
+          maxTokens: null,
+          tokenOffset: null,
+          maxOutputTokens: null,
+          unusedSafetyInterval: null,
+          topK: null,
+          temperature: null,
+        },
+        null);
     this.contextLength_ += this.contextText_.split(/(\s+)/).length;
     this.contextText_ = '';
   }
@@ -226,8 +243,23 @@ class OnDeviceInternalsAppElement extends PolymerElement {
     if (this.session_ === null) {
       return;
     }
+    if (!this.$.topKInput.validate()) {
+      return;
+    }
+    if (!this.$.temperatureInput.validate()) {
+      return;
+    }
     this.session_.execute(
-        {text: this.text_, ignoreContext: false},
+        {
+          text: this.text_,
+          ignoreContext: false,
+          maxTokens: null,
+          tokenOffset: null,
+          maxOutputTokens: null,
+          unusedSafetyInterval: null,
+          topK: this.topK_,
+          temperature: this.temperature_,
+        },
         this.responseRouter_.$.bindNewPipeAndPassRemote());
     const onResponseId =
         this.responseRouter_.onResponse.addListener((chunk: ResponseChunk) => {

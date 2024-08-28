@@ -12,9 +12,9 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
-#include "components/services/screen_ai/public/mojom/screen_ai_service.mojom.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/screen_ai/public/mojom/screen_ai_service.mojom.h"
 
 #include "ui/accessibility/ax_node_id_forward.h"
 #include "ui/accessibility/ax_tree_id.h"
@@ -110,7 +110,7 @@ class AXTreeDistiller {
                            base::TimeDelta elapsed_time,
                            bool success);
 
-  // TODO(crbug.com/1266555): Ensure this is called even if ScreenAIService is
+  // TODO(crbug.com/40802192): Ensure this is called even if ScreenAIService is
   // disconnected.
   OnAXTreeDistilledCallback on_ax_tree_distilled_callback_;
 

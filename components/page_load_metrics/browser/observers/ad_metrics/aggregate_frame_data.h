@@ -7,6 +7,8 @@
 
 #include <stdint.h>
 
+#include <optional>
+
 #include "base/time/time.h"
 #include "components/page_load_metrics/browser/observers/ad_metrics/frame_data_utils.h"
 #include "components/page_load_metrics/common/page_load_metrics.mojom-forward.h"
@@ -51,7 +53,7 @@ class AggregateFrameData {
     return total_peak_cpu_.peak_windowed_percent();
   }
 
-  // TODO(crbug.com/1136068): The size_t members should probably be int64_t.
+  // TODO(crbug.com/40152120): The size_t members should probably be int64_t.
   struct AdDataByVisibility {
     // The following are aggregated when metrics are recorded on navigation.
     size_t bytes = 0;

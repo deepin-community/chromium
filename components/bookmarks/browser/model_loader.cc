@@ -11,7 +11,6 @@
 #include "base/functional/bind.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/json/json_reader.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/numerics/clamped_math.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/task_traits.h"
@@ -97,6 +96,16 @@ std::unique_ptr<BookmarkLoadDetails> LoadBookmarks(
                                   codec.ids_reassigned());
       details->set_required_recovery(details->required_recovery() ||
                                      codec.required_recovery());
+
+      // Record metrics that indicate whether or not IDs were reassigned for
+      // account bookmarks.
+      metrics::RecordIdsReassignedOnProfileLoad(
+          metrics::StorageFileForUma::kAccount, codec.ids_reassigned());
+    } else {
+      // In the failure case, it is still possible that sync metadata was
+      // decoded, which includes legit scenarios like sync metadata indicating
+      // that there were too many bookmarks in sync, server-side.
+      details->set_account_sync_metadata_str(std::move(sync_metadata_str));
     }
   }
 
@@ -119,6 +128,13 @@ std::unique_ptr<BookmarkLoadDetails> LoadBookmarks(
                                   codec.ids_reassigned());
       details->set_required_recovery(details->required_recovery() ||
                                      codec.required_recovery());
+      details->set_local_or_syncable_reassigned_ids_per_old_id(
+          codec.release_reassigned_ids_per_old_id());
+
+      // Record metrics that indicate whether or not IDs were reassigned for
+      // local-or-syncable bookmarks.
+      metrics::RecordIdsReassignedOnProfileLoad(
+          metrics::StorageFileForUma::kLocalOrSyncable, codec.ids_reassigned());
     }
   }
 

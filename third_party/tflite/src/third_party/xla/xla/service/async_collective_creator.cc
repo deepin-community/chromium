@@ -15,10 +15,12 @@ limitations under the License.
 
 #include "xla/service/async_collective_creator.h"
 
+#include <cstdint>
 #include <iterator>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/log.h"
 #include "xla/frontend_attributes.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
@@ -38,12 +40,13 @@ struct ReplacedAsync {
   HloInstruction* done;
 };
 
-StatusOr<ReplacedAsync> CreateAsyncAllReduce(HloInstruction* instruction) {
+absl::StatusOr<ReplacedAsync> CreateAsyncAllReduce(
+    HloInstruction* instruction) {
   HloComputation* computation = instruction->parent();
   auto* ar = Cast<HloAllReduceInstruction>(instruction);
   HloInstruction* start =
       computation->AddInstruction(HloInstruction::CreateAllReduceStart(
-          ar->shape(), ar->operands(), ar->to_apply(), ar->replica_groups(),
+          ar->shape(), ar->operands(), ar->to_apply(), ar->device_list(),
           ar->constrain_layout(), ar->channel_id(),
           ar->use_global_device_ids()));
   HloInstruction* done =
@@ -52,7 +55,8 @@ StatusOr<ReplacedAsync> CreateAsyncAllReduce(HloInstruction* instruction) {
   return ReplacedAsync{start, done};
 }
 
-StatusOr<ReplacedAsync> CreateAsyncAllGather(HloInstruction* instruction) {
+absl::StatusOr<ReplacedAsync> CreateAsyncAllGather(
+    HloInstruction* instruction) {
   HloComputation* computation = instruction->parent();
   auto* ag = Cast<HloAllGatherInstruction>(instruction);
   std::vector<const Shape*> operand_shapes;
@@ -67,8 +71,8 @@ StatusOr<ReplacedAsync> CreateAsyncAllGather(HloInstruction* instruction) {
        ag->shape()});
   HloInstruction* start =
       computation->AddInstruction(HloInstruction::CreateAllGatherStart(
-          shape, ag->operands(), ag->all_gather_dimension(),
-          ag->replica_groups(), ag->constrain_layout(), ag->channel_id(),
+          shape, ag->operands(), ag->all_gather_dimension(), ag->device_list(),
+          ag->constrain_layout(), ag->channel_id(),
           ag->use_global_device_ids()));
   HloInstruction* done =
       computation->AddInstruction(HloInstruction::CreateUnary(
@@ -76,7 +80,7 @@ StatusOr<ReplacedAsync> CreateAsyncAllGather(HloInstruction* instruction) {
   return ReplacedAsync{start, done};
 }
 
-StatusOr<ReplacedAsync> CreateAsyncCollectivePermute(
+absl::StatusOr<ReplacedAsync> CreateAsyncCollectivePermute(
     HloInstruction* instruction, absl::Span<const Shape> context_shapes) {
   HloComputation* computation = instruction->parent();
   auto* cp = Cast<HloCollectivePermuteInstruction>(instruction);
@@ -113,7 +117,7 @@ StatusOr<ReplacedAsync> CreateAsyncCollectivePermute(
   return ReplacedAsync{start, done};
 }
 
-StatusOr<ReplacedAsync> CreateAsyncStartDone(
+absl::StatusOr<ReplacedAsync> CreateAsyncStartDone(
     HloInstruction* instruction, absl::Span<const Shape> context_shapes) {
   HloComputation* computation = instruction->parent();
   TF_ASSIGN_OR_RETURN(
@@ -138,6 +142,8 @@ std::vector<HloInstruction*> AsyncCollectiveCreator::MatchCollectives(
          config_.convert_all_reduce(instruction)) ||
         (op == HloOpcode::kAllGather &&
          config_.convert_all_gather(instruction)) ||
+        (op == HloOpcode::kCollectiveBroadcast &&
+         config_.convert_collective_broadcast(instruction)) ||
         (op == HloOpcode::kCollectivePermute &&
          config_.convert_collective_permute(instruction)) ||
         (op == HloOpcode::kAllToAll &&
@@ -150,7 +156,7 @@ std::vector<HloInstruction*> AsyncCollectiveCreator::MatchCollectives(
   return supported_collectives;
 }
 
-StatusOr<bool> AsyncCollectiveCreator::ReplaceCollectives(
+absl::StatusOr<bool> AsyncCollectiveCreator::ReplaceCollectives(
     HloComputation* computation,
     std::vector<HloInstruction*>& supported_collectives) {
   bool changed = false;
@@ -160,7 +166,7 @@ StatusOr<bool> AsyncCollectiveCreator::ReplaceCollectives(
       module->has_schedule() &&
       module->schedule().is_computation_scheduled(computation);
   for (HloInstruction* instruction : supported_collectives) {
-    StatusOr<ReplacedAsync> async_pair;
+    absl::StatusOr<ReplacedAsync> async_pair;
     switch (instruction->opcode()) {
       case HloOpcode::kAllReduce:
         async_pair = CreateAsyncAllReduce(instruction);
@@ -172,6 +178,7 @@ StatusOr<bool> AsyncCollectiveCreator::ReplaceCollectives(
         async_pair = CreateAsyncCollectivePermute(
             instruction, config_.get_context_shapes(instruction));
         break;
+      case HloOpcode::kCollectiveBroadcast:
       case HloOpcode::kAllToAll:
       case HloOpcode::kReduceScatter:
         async_pair = CreateAsyncStartDone(
@@ -217,10 +224,11 @@ StatusOr<bool> AsyncCollectiveCreator::ReplaceCollectives(
   return changed;
 }
 
-StatusOr<bool> AsyncCollectiveCreator::Run(
+absl::StatusOr<bool> AsyncCollectiveCreator::Run(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   bool changed = false;
+  int64_t collectives_replaced = 0;
   for (HloComputation* computation :
        module->MakeNonfusionComputations(execution_threads)) {
     std::vector<HloInstruction*> supported_collectives =
@@ -230,8 +238,11 @@ StatusOr<bool> AsyncCollectiveCreator::Run(
     }
     TF_ASSIGN_OR_RETURN(bool comp_changed,
                         ReplaceCollectives(computation, supported_collectives));
+    collectives_replaced += supported_collectives.size();
     changed |= comp_changed;
   }
+  VLOG(1) << "Replaced " << collectives_replaced
+          << " sync collectives with async versions.";
   return changed;
 }
 

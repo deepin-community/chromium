@@ -223,27 +223,19 @@ SK_API void SkDebugf_FileLine(const char* file,
 // Max. verb count for paths rendered by the edge-AA tessellating path renderer.
 #define GR_AA_TESSELLATOR_MAX_VERB_COUNT 100
 
-#define SK_FORCE_AAA
-
-#define SK_SUPPORT_LEGACY_DRAWLOOPER
-
 #define SK_USE_LEGACY_MIPMAP_BUILDER
 
 #define SK_SUPPORT_LEGACY_CONIC_CHOP
-
-#define SK_ENABLE_SKSL_IN_RASTER_PIPELINE
 
 #define SK_USE_PADDED_BLUR_UPSCALE
 
 #define SK_LEGACY_INITWITHPREV_LAYER_SIZING
 
-#define SK_LEGACY_BLEND_FOR_DROP_SHADOWS
+#define SK_USE_LEGACY_BLUR_RASTER
 
-/* When --disable-skia-runtime-opts is set in Chrome (or when SkGraphics::Init
-   is not called), Skia will prefer precision over performance when computing
-   reciprocals and inverse-square roots.
-*/
-#define SK_IMPROVE_RASTER_PIPELINE_PRECISION
+#define SK_USE_LEGACY_BLUR_GANESH
+
+#define SK_USE_LEGACY_BLUR_GRAPHITE
 
 ///////////////////////// Imported from BUILD.gn and skia_common.gypi
 

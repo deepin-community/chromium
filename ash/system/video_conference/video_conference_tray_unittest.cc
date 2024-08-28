@@ -112,8 +112,8 @@ class VideoConferenceTrayTest : public AshTestBase {
   // AshTestBase:
   void SetUp() override {
     scoped_feature_list_.InitWithFeatures(
-        {features::kVideoConference, features::kVcStopAllScreenShare,
-         features::kCameraEffectsSupportedByHardware},
+        {features::kVcStopAllScreenShare,
+         features::kFeatureManagementVideoConference},
         {});
 
     // Instantiates a fake controller (the real one is created in
@@ -167,7 +167,8 @@ class VideoConferenceTrayTest : public AshTestBase {
     Shelf* shelf = Shell::GetPrimaryRootWindowController()->shelf();
     shelf->SetAutoHideBehavior(ShelfAutoHideBehavior::kAlways);
     // Create a normal unmaximized window; the shelf should then hide.
-    std::unique_ptr<views::Widget> widget = CreateTestWidget();
+    std::unique_ptr<views::Widget> widget =
+        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
     widget->SetBounds(gfx::Rect(0, 0, 100, 100));
 
     EXPECT_EQ(SHELF_AUTO_HIDE, shelf->GetVisibilityState());
@@ -759,7 +760,8 @@ TEST_F(VideoConferenceTrayTest, AutoHiddenShelfTwoDisplays) {
 
   // Create a second window on the secondary display, the shelf should hide on
   // the secondary display as well.
-  auto secondary_display_window = CreateTestWidget();
+  auto secondary_display_window =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   secondary_display_window->SetBounds(gfx::Rect(900, 0, 100, 100));
 
   auto* secondary_shelf =
@@ -1116,10 +1118,8 @@ class VideoConferenceTrayDelayTest : public VideoConferenceTrayTest {
 
   // AshTestBase:
   void SetUp() override {
-    scoped_feature_list_.InitWithFeatures(
-        {features::kVideoConference,
-         features::kCameraEffectsSupportedByHardware},
-        {});
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kFeatureManagementVideoConference);
 
     // Instantiates a fake controller (the real one is created in
     // ChromeBrowserMainExtraPartsAsh::PreProfileInit() which is not called in

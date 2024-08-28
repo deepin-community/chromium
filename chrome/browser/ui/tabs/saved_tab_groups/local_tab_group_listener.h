@@ -8,17 +8,20 @@
 #include "base/uuid.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_web_contents_listener.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
-#include "components/saved_tab_groups/saved_tab_group_model.h"
+#include "components/saved_tab_groups/saved_tab_group.h"
 #include "components/tab_groups/tab_group_id.h"
+
+class TabStripModel;
+class Browser;
 
 namespace content {
 class WebContents;
 }
 
+namespace tab_groups {
+
+class TabGroupServiceWrapper;
 class SavedTabGroup;
-class SavedTabGroupModel;
-class TabStripModel;
-class Browser;
 
 // Keeps a saved tab group up to date as it's changed locally.
 class LocalTabGroupListener {
@@ -26,7 +29,7 @@ class LocalTabGroupListener {
   LocalTabGroupListener(
       tab_groups::TabGroupId local_id,
       base::Uuid saved_guid,
-      SavedTabGroupModel* model,
+      TabGroupServiceWrapper* wrapper_service,
       std::map<content::WebContents*, base::Uuid> web_contents_to_uuid);
   virtual ~LocalTabGroupListener();
 
@@ -104,17 +107,17 @@ class LocalTabGroupListener {
   void RemoveWebContentsFromSync(content::WebContents* contents,
                                  bool should_close_tab);
 
-  const SavedTabGroup* saved_group() const { return model_->Get(saved_guid_); }
-
   // Whether local tab group changes will be ignored (`paused_` is true) or
   // reflected in the saved group (`paused_` is false).
   bool paused_ = false;
 
   std::unordered_map<content::WebContents*, SavedTabGroupWebContentsListener>
       web_contents_to_tab_id_map_;
-  const raw_ptr<SavedTabGroupModel> model_;
+  const raw_ptr<TabGroupServiceWrapper> wrapper_service_;
   const tab_groups::TabGroupId local_id_;
   const base::Uuid saved_guid_;
 };
+
+}  // namespace tab_groups
 
 #endif  // CHROME_BROWSER_UI_TABS_SAVED_TAB_GROUPS_LOCAL_TAB_GROUP_LISTENER_H_

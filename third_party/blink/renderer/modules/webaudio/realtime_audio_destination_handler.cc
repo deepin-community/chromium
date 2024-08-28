@@ -10,7 +10,6 @@
 #include "third_party/blink/public/platform/web_audio_latency_hint.h"
 #include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
 #include "third_party/blink/public/web/web_local_frame.h"
-#include "third_party/blink/renderer/modules/webaudio/audio_context.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_input.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_output.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_worklet.h"
@@ -69,6 +68,10 @@ void RealtimeAudioDestinationHandler::Dispose() {
   AudioDestinationHandler::Dispose();
 }
 
+AudioContext* RealtimeAudioDestinationHandler::Context() const {
+  return static_cast<AudioContext*>(AudioDestinationHandler::Context());
+}
+
 void RealtimeAudioDestinationHandler::Initialize() {
   DCHECK(IsMainThread());
 
@@ -121,7 +124,7 @@ void RealtimeAudioDestinationHandler::SetChannelCount(
   // After the context is closed, changing channel count will be ignored
   // because it will trigger the recreation of the platform destination. This
   // in turn can activate the audio rendering thread.
-  AudioContext* context = static_cast<AudioContext*>(Context());
+  AudioContext* context = Context();
   CHECK(context);
   if (context->ContextState() == AudioContext::kClosed ||
       ChannelCount() == old_channel_count ||
@@ -183,14 +186,16 @@ void RealtimeAudioDestinationHandler::Render(
     AudioBus* destination_bus,
     uint32_t number_of_frames,
     const AudioIOPosition& output_position,
-    const AudioCallbackMetric& metric) {
+    const AudioCallbackMetric& metric,
+    base::TimeDelta playout_delay,
+    const media::AudioGlitchInfo& glitch_info) {
   TRACE_EVENT0("webaudio", "RealtimeAudioDestinationHandler::Render");
 
   // Denormals can seriously hurt performance of audio processing. This will
   // take care of all AudioNode processes within this scope.
   DenormalDisabler denormal_disabler;
 
-  AudioContext* context = static_cast<AudioContext*>(Context());
+  AudioContext* context = Context();
 
   // A sanity check for the associated context, but this does not guarantee the
   // safe execution of the subsequence operations because the handler holds
@@ -210,7 +215,8 @@ void RealtimeAudioDestinationHandler::Render(
     return;
   }
 
-  context->HandlePreRenderTasks(&output_position, &metric);
+  context->HandlePreRenderTasks(number_of_frames, &output_position, &metric,
+                                playout_delay, glitch_info);
 
   // Only pull on the audio graph if we have not stopped the destination.  It
   // takes time for the destination to stop, but we want to stop pulling before
@@ -252,6 +258,23 @@ void RealtimeAudioDestinationHandler::Render(
       context->GetDeferredTaskHandler().HasAutomaticPullNodes());
 }
 
+void RealtimeAudioDestinationHandler::OnRenderError() {
+  DCHECK(IsMainThread());
+
+  if (!RuntimeEnabledFeatures::AudioContextOnErrorEnabled()) {
+    return;
+  }
+
+  // When this method gets executed by the task runner, it is possible that
+  // the corresponding GC-managed objects are not valid anymore. Check the
+  // initialization state and stop if the disposition already happened.
+  if (!IsInitialized()) {
+    return;
+  }
+
+  Context()->OnRenderError();
+}
+
 // A flag for using FakeAudioWorker when an AudioContext with "playback"
 // latency outputs silence.
 BASE_FEATURE(kUseFakeAudioWorkerForPlaybackLatency,
@@ -284,7 +307,8 @@ void RealtimeAudioDestinationHandler::SetDetectSilenceIfNecessary(
     PostCrossThreadTask(
         *task_runner_, FROM_HERE,
         CrossThreadBindOnce(&RealtimeAudioDestinationHandler::SetDetectSilence,
-                            AsWeakPtr(), needs_silence_detection));
+                            weak_ptr_factory_.GetWeakPtr(),
+                            needs_silence_detection));
     is_detecting_silence_ = needs_silence_detection;
   }
 }
@@ -309,20 +333,20 @@ int RealtimeAudioDestinationHandler::GetFramesPerBuffer() const {
   return platform_destination_ ? platform_destination_->FramesPerBuffer() : 0;
 }
 
+base::TimeDelta RealtimeAudioDestinationHandler::GetPlatformBufferDuration()
+    const {
+  DCHECK(IsMainThread());
+  DCHECK(IsInitialized());
+
+  return platform_destination_->GetPlatformBufferDuration();
+}
+
 void RealtimeAudioDestinationHandler::CreatePlatformDestination() {
   DCHECK(IsMainThread());
 
-  if (base::FeatureList::IsEnabled(features::kWebAudioSinkSelection)) {
-    platform_destination_ = AudioDestination::Create(
-        *this, sink_descriptor_, ChannelCount(), latency_hint_, sample_rate_,
-        Context()->GetDeferredTaskHandler().RenderQuantumFrames());
-  } else {
-    WebAudioSinkDescriptor
-        sink_descriptor(String(""), sink_descriptor_.Token());
-    platform_destination_ = AudioDestination::Create(
-        *this, sink_descriptor, ChannelCount(), latency_hint_, sample_rate_,
-        Context()->GetDeferredTaskHandler().RenderQuantumFrames());
-  }
+  platform_destination_ = AudioDestination::Create(
+      *this, sink_descriptor_, ChannelCount(), latency_hint_, sample_rate_,
+      Context()->GetDeferredTaskHandler().RenderQuantumFrames());
 
   // if `sample_rate_` is nullopt, it is supposed to use the default device
   // sample rate. Update the internal sample rate for subsequent device change
@@ -348,6 +372,12 @@ void RealtimeAudioDestinationHandler::StartPlatformDestination() {
                   sample_rate_.has_value() ? sample_rate_.value() : -1,
                   GetCallbackBufferSize()));
   DCHECK(IsMainThread());
+
+  // Since we access `Context()` in this function and this object is not
+  // garbage-collected, check that we are still initialized.
+  if (!IsInitialized()) {
+    return;
+  }
 
   if (platform_destination_->IsPlaying()) {
     return;
@@ -408,7 +438,7 @@ void RealtimeAudioDestinationHandler::SetSinkDescriptor(
   // After the context is closed, `SetSinkDescriptor` request will be ignored
   // because it will trigger the recreation of the platform destination. This in
   // turn can activate the audio rendering thread.
-  AudioContext* context = static_cast<AudioContext*>(Context());
+  AudioContext* context = Context();
   CHECK(context);
   if (context->ContextState() == AudioContext::kClosed) {
     std::move(callback).Run(
@@ -426,7 +456,7 @@ void RealtimeAudioDestinationHandler::SetSinkDescriptor(
   // sink in order to query the device status. If the status is OK, then replace
   // the `platform_destination_` with the pending_platform_destination.
   media::OutputDeviceStatus status =
-      pending_platform_destination->CreateSinkAndGetDeviceStatus();
+      pending_platform_destination->MaybeCreateSinkAndGetStatus();
   if (status == media::OutputDeviceStatus::OUTPUT_DEVICE_STATUS_OK) {
     StopPlatformDestination();
     platform_destination_ = pending_platform_destination;
@@ -435,6 +465,11 @@ void RealtimeAudioDestinationHandler::SetSinkDescriptor(
   }
 
   std::move(callback).Run(status);
+}
+
+void RealtimeAudioDestinationHandler::
+    invoke_onrendererror_from_platform_for_testing() {
+  platform_destination_->OnRenderError();
 }
 
 }  // namespace blink

@@ -20,6 +20,10 @@ from model import *
 from schema_util import *
 
 
+CHROMIUM_SRC = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
 class TsDefinitionGenerator(object):
 
   def Generate(self, namespace):
@@ -172,6 +176,11 @@ class _Generator(object):
     elif type.property_type.is_fundamental:
       # Type alias
       c.Append(f"export type {type.name} = {type.property_type.name};")
+      c.Append()
+    elif (type.property_type is PropertyType.ARRAY or
+          type.property_type is PropertyType.CHOICES) :
+      ts_type = self._ExtractType(type)
+      c.Append(f"export type {type.name} = {ts_type};")
       c.Append()
     else:
       # Adding this for things we may not have accounted for here.
@@ -374,10 +383,18 @@ class _Generator(object):
     ) as f:
       f.write(c.Render())
       f_name = f.name
-    path = self._GetChromiumClangFormatPath()
-    cmd = f'clang-format --fallback-style=none --style=file:{path} "{f_name}"'
+    script_path = self._GetChromiumClangFormatScriptPath()
+    style_path = self._GetChromiumClangFormatStylePath()
+    cmd = (
+        f'python3 {script_path} --fallback-style=none '
+        f'--style=file:{style_path} "{f_name}"'
+    )
     p = subprocess.Popen(
-        cmd, encoding="utf-8", shell=True, stdout=subprocess.PIPE
+        cmd,
+        cwd=CHROMIUM_SRC,
+        encoding="utf-8",
+        shell=True,
+        stdout=subprocess.PIPE
     )
     out = p.communicate()[0]
     out_code = Code()
@@ -385,7 +402,9 @@ class _Generator(object):
     os.remove(f_name)
     return out_code
 
-  def _GetChromiumClangFormatPath(self):
-    return os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../../.clang-format")
-    )
+  def _GetChromiumClangFormatScriptPath(self):
+    return os.path.join(CHROMIUM_SRC, "third_party", "depot_tools",
+                        "clang_format.py")
+
+  def _GetChromiumClangFormatStylePath(self):
+    return os.path.join(CHROMIUM_SRC, ".clang-format")

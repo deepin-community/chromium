@@ -14,8 +14,8 @@
 #include "absl/types/optional.h"
 #include "api/dtls_transport_interface.h"
 #include "api/ref_count.h"
-#include "api/rtc_error.h"
 #include "api/scoped_refptr.h"
+#include "rtc_base/system/rtc_export.h"
 
 namespace webrtc {
 
@@ -53,7 +53,7 @@ class RTC_EXPORT SctpTransportInformation {
   absl::optional<int> MaxChannels() const { return max_channels_; }
 
  private:
-  SctpTransportState state_;
+  SctpTransportState state_ = SctpTransportState::kNew;
   rtc::scoped_refptr<DtlsTransportInterface> dtls_transport_;
   absl::optional<double> max_message_size_;
   absl::optional<int> max_channels_;

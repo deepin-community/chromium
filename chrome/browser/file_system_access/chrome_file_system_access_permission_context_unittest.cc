@@ -21,6 +21,7 @@
 #include "base/test/test_future.h"
 #include "base/test/values_test_util.h"
 #include "base/time/time.h"
+#include "base/win/windows_version.h"
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
@@ -34,6 +35,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/pref_names.h"
+#include "components/enterprise/buildflags/buildflags.h"
 #include "components/permissions/features.h"
 #include "components/permissions/permission_decision_auto_blocker.h"
 #include "components/permissions/permission_uma_util.h"
@@ -53,9 +55,17 @@
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/permissions/one_time_permissions_tracker_observer.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
+#include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
+#endif
+
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+#include "chrome/browser/enterprise/connectors/analysis/content_analysis_delegate.h"
+#include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"
+#include "chrome/browser/enterprise/connectors/test/fake_content_analysis_delegate.h"
+#include "chrome/browser/policy/dm_token_utils.h"
 #endif
 
 using content::BrowserContext;
@@ -80,6 +90,105 @@ using SensitiveDirectoryResult =
     ChromeFileSystemAccessPermissionContext::SensitiveEntryResult;
 using UserActivationState =
     content::FileSystemAccessPermissionGrant::UserActivationState;
+using PathInfo = content::FileSystemAccessPermissionContext::PathInfo;
+
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+using ContentAnalysisDelegate = enterprise_connectors::ContentAnalysisDelegate;
+using FakeContentAnalysisDelegate =
+    enterprise_connectors::test::FakeContentAnalysisDelegate;
+using ContentAnalysisResponse = enterprise_connectors::ContentAnalysisResponse;
+#endif
+
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+namespace {
+
+enum class CreateSymbolicLinkResult {
+  // The symbolic link creation failed because the platform does not support it.
+  // On Windows, that may be due to the lack of the required privilege.
+  kUnsupported = -1,
+
+  // The symbolic link creation failed.
+  kFailed,
+
+  // The symbolic link was created successfully.
+  kSucceeded,
+};
+
+constexpr char kDummyDmToken[] = "dm_token";
+
+void EnableEnterpriseAnalysis(Profile* profile) {
+  static constexpr char kEnabled[] = R"(
+    {
+        "service_provider": "google",
+        "enable": [
+          {
+            "url_list": ["*"],
+            "tags": ["dlp"]
+          }
+        ],
+        "block_until_verdict": 1
+    })";
+  enterprise_connectors::test::SetAnalysisConnector(
+      profile->GetPrefs(), enterprise_connectors::FILE_ATTACHED, kEnabled);
+  enterprise_connectors::ContentAnalysisDelegate::DisableUIForTesting();
+  policy::SetDMTokenForTesting(
+      policy::DMToken::CreateValidToken(kDummyDmToken));
+}
+
+bool CreateNonEmptyFile(const base::FilePath& path) {
+  return base::WriteFile(path, "data");
+}
+
+#if BUILDFLAG(IS_WIN)
+CreateSymbolicLinkResult CreateWinSymbolicLink(const base::FilePath& target,
+                                               const base::FilePath& symlink,
+                                               bool is_directory) {
+  // Creating symbolic links on Windows requires Administrator privileges.
+  // However, recent versions of Windows introduced the
+  // SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE flag, which allows the
+  // creation of symbolic links by processes with lower privileges, provided
+  // that Developer Mode is enabled.
+  //
+  // On older versions of Windows where the
+  // SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE flag does not exist, the OS
+  // will return the error code ERROR_INVALID_PARAMETER when attempting to
+  // create a symbolic link without sufficient privileges.
+  if (base::win::GetVersion() < base::win::Version::WIN10_RS3) {
+    return CreateSymbolicLinkResult::kUnsupported;
+  }
+
+  DWORD flags = is_directory ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0;
+
+  if (!::CreateSymbolicLink(
+          symlink.value().c_str(), target.value().c_str(),
+          flags | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+    // SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE works only if Developer Mode
+    // is enabled.
+    if (::GetLastError() == ERROR_PRIVILEGE_NOT_HELD) {
+      return CreateSymbolicLinkResult::kUnsupported;
+    }
+    return CreateSymbolicLinkResult::kFailed;
+  }
+
+  return CreateSymbolicLinkResult::kSucceeded;
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+CreateSymbolicLinkResult CreateSymbolicLinkForTesting(
+    const base::FilePath& target,
+    const base::FilePath& symlink) {
+#if BUILDFLAG(IS_WIN)
+  return CreateWinSymbolicLink(target, symlink, /*is_directory=*/true);
+#else
+  if (!base::CreateSymbolicLink(target, symlink)) {
+    return CreateSymbolicLinkResult::kFailed;
+  }
+  return CreateSymbolicLinkResult::kSucceeded;
+#endif  // BUILDFLAG(IS_WIN)
+}
+
+}  // namespace
+#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 
 class TestFileSystemAccessPermissionContext
     : public ChromeFileSystemAccessPermissionContext {
@@ -143,6 +252,10 @@ class ChromeFileSystemAccessPermissionContextTest : public testing::Test {
   }
 
   void TearDown() override {
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+    enterprise_connectors::test::ClearAnalysisConnector(
+        profile()->GetPrefs(), enterprise_connectors::FILE_ATTACHED);
+#endif
     task_environment_.RunUntilIdle();
     ASSERT_TRUE(temp_dir_.Delete());
     web_contents_.reset();
@@ -639,9 +752,6 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
 }
 #endif
 
-#if BUILDFLAG(IS_POSIX)
-// Test enabled on POSIX, as `base::CreateSymbolicLink()` is currently only
-// supported on POSIX. This should be enabled on Windows once supported.
 TEST_F(ChromeFileSystemAccessPermissionContextTest,
        ConfirmSensitiveEntryAccess_ResolveSymbolicLink) {
   if (!base::FeatureList::IsEnabled(
@@ -650,23 +760,40 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   }
 
   base::FilePath symlink1 = temp_dir_.GetPath().AppendASCII("symlink1");
+
   base::FilePath app_dir = temp_dir_.GetPath().AppendASCII("app");
+  ASSERT_TRUE(base::CreateDirectory(app_dir));
+
   base::ScopedPathOverride app_override(base::DIR_EXE, app_dir, true, true);
-  ASSERT_TRUE(base::CreateSymbolicLink(app_dir, symlink1));
+
+  CreateSymbolicLinkResult result =
+      CreateSymbolicLinkForTesting(app_dir, symlink1);
+  if (result == CreateSymbolicLinkResult::kUnsupported) {
+    GTEST_SKIP();
+  }
+  ASSERT_EQ(result, CreateSymbolicLinkResult::kSucceeded);
+
   EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
                 permission_context(), PathType::kLocal, symlink1,
                 HandleType::kFile, UserAction::kOpen),
             SensitiveDirectoryResult::kAbort);
 
   base::FilePath symlink2 = temp_dir_.GetPath().AppendASCII("symlink2");
+
   base::FilePath allowed_file = temp_dir_.GetPath().AppendASCII("foo");
-  ASSERT_TRUE(base::CreateSymbolicLink(allowed_file, symlink2));
+  ASSERT_TRUE(base::CreateDirectory(allowed_file));
+
+  result = CreateSymbolicLinkForTesting(allowed_file, symlink2);
+  if (result == CreateSymbolicLinkResult::kUnsupported) {
+    GTEST_SKIP();
+  }
+  ASSERT_EQ(result, CreateSymbolicLinkResult::kSucceeded);
+
   EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
                 permission_context(), PathType::kLocal, symlink2,
                 HandleType::kFile, UserAction::kOpen),
             SensitiveDirectoryResult::kAllowed);
 }
-#endif
 
 TEST_F(ChromeFileSystemAccessPermissionContextTest,
        ConfirmSensitiveEntryAccess_DangerousFile) {
@@ -1325,6 +1452,20 @@ TEST_F(ChromeFileSystemAccessPermissionContextNoPersistenceTest,
 }
 
 TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       GetOriginsWithGrants_ForGrantedActiveGrantsOnly) {
+  auto grant = permission_context()->GetReadPermissionGrant(
+      kTestOrigin, kTestPath, HandleType::kFile, UserAction::kOpen);
+  EXPECT_EQ(grant->GetStatus(), PermissionStatus::GRANTED);
+  ASSERT_THAT(permission_context()->GetOriginsWithGrants(), testing::SizeIs(1));
+
+  // After grants are revoked, `GetOriginsWithGrants()` only returns origins
+  // with active grants with a `GRANTED` permission status.
+  permission_context()->RevokeGrants(kTestOrigin);
+  EXPECT_EQ(grant->GetStatus(), PermissionStatus::ASK);
+  ASSERT_THAT(permission_context()->GetOriginsWithGrants(), testing::SizeIs(0));
+}
+
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
        RestorePermissionPrompt_Triggered_AfterTabBackgrounded) {
   FileSystemAccessPermissionRequestManager::FromWebContents(web_contents())
       ->set_auto_response_for_test(PermissionAction::GRANTED);
@@ -1358,7 +1499,7 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   EXPECT_EQ(grant2_future.Get(), PermissionRequestOutcome::kUserGranted);
   EXPECT_EQ(grant2->GetStatus(), PermissionStatus::GRANTED);
 
-  // TODO(crbug.com/1011533): Update this test to navigate away from the page,
+  // TODO(crbug.com/40101962): Update this test to navigate away from the page,
   // instead of manually resetting the grant.
   permission_context()->RevokeActiveGrantsForTesting(kTestOrigin);
   grant1.reset();
@@ -1409,7 +1550,7 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   EXPECT_EQ(grant2_future.Get(), PermissionRequestOutcome::kUserGranted);
   EXPECT_EQ(grant2->GetStatus(), PermissionStatus::GRANTED);
 
-  // TODO(crbug.com/1011533): Update this test to navigate away from the page,
+  // TODO(crbug.com/40101962): Update this test to navigate away from the page,
   // instead of manually resetting the grant.
   permission_context()->RevokeActiveGrantsForTesting(kTestOrigin);
   grant1.reset();
@@ -1523,11 +1664,11 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   ASSERT_THAT(permission_context()->GetGrantedObjects(kTestOrigin),
               testing::SizeIs(2));
 
-  // TODO(crbug.com/1011533): Update this test to navigate away from the page,
+  // TODO(crbug.com/40101962): Update this test to navigate away from the page,
   // instead of manually resetting the grants.
   permission_context()->RevokeActiveGrantsForTesting(kTestOrigin);
 
-  // TODO(crbug.com/1011533): Update this test to navigate away from the page,
+  // TODO(crbug.com/40101962): Update this test to navigate away from the page,
   // instead of manually resetting the grants.
   // The granted permission objects remain, even after navigating away from the
   // page.
@@ -1571,7 +1712,7 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   ASSERT_THAT(permission_context()->GetGrantedObjects(kTestOrigin),
               testing::SizeIs(2));
 
-  // TODO(crbug.com/1011533): Update this test to navigate away from the page,
+  // TODO(crbug.com/40101962): Update this test to navigate away from the page,
   // instead of manually resetting the grants.
   permission_context()->RevokeActiveGrantsForTesting(kTestOrigin);
   // The granted permissions are cleared after navigating away from the page.
@@ -1629,7 +1770,14 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   EXPECT_TRUE(origin_is_embargoed_after_rejection_limit);
 }
 
-TEST_F(ChromeFileSystemAccessPermissionContextTest, OnWebAppInstalled) {
+class ChromeFileSystemAccessPermissionContextTestWithWebApp
+    : public ChromeFileSystemAccessPermissionContextTest {
+ private:
+  web_app::OsIntegrationTestOverrideBlockingRegistration fake_os_integration_;
+};
+
+TEST_F(ChromeFileSystemAccessPermissionContextTestWithWebApp,
+       OnWebAppInstalled) {
   // Create a persisted grant for `kTestOrigin`.
   auto read_grant = permission_context()->GetReadPermissionGrant(
       kTestOrigin, kTestPath, HandleType::kFile, UserAction::kSave);
@@ -1651,7 +1799,7 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest, OnWebAppInstalled) {
       PersistedGrantStatus::kCurrent);
 }
 
-TEST_F(ChromeFileSystemAccessPermissionContextTest,
+TEST_F(ChromeFileSystemAccessPermissionContextTestWithWebApp,
        OnWebAppInstalled_WithCurrentGrants) {
   // Create current, persisted grants by triggering the restore prompt and
   // accepting it.
@@ -1671,57 +1819,7 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
               testing::SizeIs(2));
 }
 
-TEST_F(ChromeFileSystemAccessPermissionContextTest,
-       ToggleExtendedPermissionByUser) {
-  auto read_grant = permission_context()->GetReadPermissionGrant(
-      kTestOrigin, kTestPath, HandleType::kFile, UserAction::kSave);
-  auto write_grant = permission_context()->GetWritePermissionGrant(
-      kTestOrigin, kTestPath, HandleType::kFile, UserAction::kSave);
-
-  EXPECT_FALSE(
-      permission_context()->OriginHasExtendedPermissionForTesting(kTestOrigin));
-  EXPECT_EQ(
-      PersistedGrantStatus::kLoaded,
-      permission_context()->GetPersistedGrantStatusForTesting(kTestOrigin));
-
-  // The persisted grant status and content setting are updated after the user
-  // opts into extended permissions.
-  permission_context()->SetOriginExtendedPermissionByUser(kTestOrigin);
-  EXPECT_TRUE(
-      permission_context()->OriginHasExtendedPermissionForTesting(kTestOrigin));
-  EXPECT_EQ(
-      PersistedGrantStatus::kCurrent,
-      permission_context()->GetPersistedGrantStatusForTesting(kTestOrigin));
-
-  // Calling `SetOriginExtendedPermissionByUser` again results in the same
-  // state.
-  permission_context()->SetOriginExtendedPermissionByUser(kTestOrigin);
-  EXPECT_TRUE(
-      permission_context()->OriginHasExtendedPermissionForTesting(kTestOrigin));
-  EXPECT_EQ(
-      PersistedGrantStatus::kCurrent,
-      permission_context()->GetPersistedGrantStatusForTesting(kTestOrigin));
-
-  // Extended permissions are removed when the user opts out, and the
-  // persisted grants remain current.
-  permission_context()->RemoveOriginExtendedPermissionByUser(kTestOrigin);
-  EXPECT_FALSE(
-      permission_context()->OriginHasExtendedPermissionForTesting(kTestOrigin));
-  EXPECT_EQ(
-      PersistedGrantStatus::kCurrent,
-      permission_context()->GetPersistedGrantStatusForTesting(kTestOrigin));
-
-  // Calling `RemoveOriginExtendedPermissionByUser` again results in the same
-  // state.
-  permission_context()->RemoveOriginExtendedPermissionByUser(kTestOrigin);
-  EXPECT_FALSE(
-      permission_context()->OriginHasExtendedPermissionForTesting(kTestOrigin));
-  EXPECT_EQ(
-      PersistedGrantStatus::kCurrent,
-      permission_context()->GetPersistedGrantStatusForTesting(kTestOrigin));
-}
-
-TEST_F(ChromeFileSystemAccessPermissionContextTest,
+TEST_F(ChromeFileSystemAccessPermissionContextTestWithWebApp,
        OnWebAppInstalled_ExtendedPermissionsEnabled) {
   // Enable extended permissions.
   permission_context()->SetOriginHasExtendedPermissionForTesting(kTestOrigin);
@@ -1746,7 +1844,7 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
             PersistedGrantType::kExtended);
 }
 
-TEST_F(ChromeFileSystemAccessPermissionContextTest,
+TEST_F(ChromeFileSystemAccessPermissionContextTestWithWebApp,
        OnWebAppUninstalled_WithPeristentAndActiveGrants) {
   const base::FilePath kTestPath2 = base::FilePath(FILE_PATH_LITERAL("/a/b"));
   // Install a web app for `kTestOrigin`.
@@ -1779,7 +1877,7 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
               testing::SizeIs(1));
 }
 
-TEST_F(ChromeFileSystemAccessPermissionContextTest,
+TEST_F(ChromeFileSystemAccessPermissionContextTestWithWebApp,
        OnWebAppUninstalled_NoGrantedActiveGrants) {
   // Install a web app for `kTestOrigin`.
   const GURL kTestOriginUrl = GURL("https://example.com");
@@ -1810,6 +1908,51 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   EXPECT_EQ(
       permission_context()->GetPersistedGrantStatusForTesting(kTestOrigin),
       PersistedGrantStatus::kCurrent);
+}
+
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       ToggleExtendedPermissionByUser) {
+  auto read_grant = permission_context()->GetReadPermissionGrant(
+      kTestOrigin, kTestPath, HandleType::kFile, UserAction::kSave);
+  auto write_grant = permission_context()->GetWritePermissionGrant(
+      kTestOrigin, kTestPath, HandleType::kFile, UserAction::kSave);
+
+  EXPECT_FALSE(permission_context()->OriginHasExtendedPermission(kTestOrigin));
+  EXPECT_EQ(
+      PersistedGrantStatus::kLoaded,
+      permission_context()->GetPersistedGrantStatusForTesting(kTestOrigin));
+
+  // The persisted grant status and content setting are updated after the user
+  // opts into extended permissions.
+  permission_context()->SetOriginExtendedPermissionByUser(kTestOrigin);
+  EXPECT_TRUE(permission_context()->OriginHasExtendedPermission(kTestOrigin));
+  EXPECT_EQ(
+      PersistedGrantStatus::kCurrent,
+      permission_context()->GetPersistedGrantStatusForTesting(kTestOrigin));
+
+  // Calling `SetOriginExtendedPermissionByUser` again results in the same
+  // state.
+  permission_context()->SetOriginExtendedPermissionByUser(kTestOrigin);
+  EXPECT_TRUE(permission_context()->OriginHasExtendedPermission(kTestOrigin));
+  EXPECT_EQ(
+      PersistedGrantStatus::kCurrent,
+      permission_context()->GetPersistedGrantStatusForTesting(kTestOrigin));
+
+  // Extended permissions are removed when the user opts out, and the
+  // persisted grants remain current.
+  permission_context()->RemoveOriginExtendedPermissionByUser(kTestOrigin);
+  EXPECT_FALSE(permission_context()->OriginHasExtendedPermission(kTestOrigin));
+  EXPECT_EQ(
+      PersistedGrantStatus::kCurrent,
+      permission_context()->GetPersistedGrantStatusForTesting(kTestOrigin));
+
+  // Calling `RemoveOriginExtendedPermissionByUser` again results in the same
+  // state.
+  permission_context()->RemoveOriginExtendedPermissionByUser(kTestOrigin);
+  EXPECT_FALSE(permission_context()->OriginHasExtendedPermission(kTestOrigin));
+  EXPECT_EQ(
+      PersistedGrantStatus::kCurrent,
+      permission_context()->GetPersistedGrantStatusForTesting(kTestOrigin));
 }
 
 TEST_F(ChromeFileSystemAccessPermissionContextTest,
@@ -1865,7 +2008,7 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   EXPECT_TRUE(origin_is_embargoed_after_ignore_limit);
 }
 
-// TODO(crbug.com/1011533): Expand upon this test case to cover checking that
+// TODO(crbug.com/40101962): Expand upon this test case to cover checking that
 // dormant grants are not revoked, when backgrounded dormant grants exist.
 // Currently, there is no method to retrieve dormant grants, for testing
 // purposes.
@@ -2251,7 +2394,7 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   EXPECT_EQ(grant->GetStatus(), PermissionStatus::GRANTED);
 
   // Navigate away so that the persisted grant becomes dormant.
-  // TODO(crbug.com/1011533): Update this test to navigate away from the page,
+  // TODO(crbug.com/40101962): Update this test to navigate away from the page,
   // instead of manually resetting the grant.
   permission_context()->RevokeActiveGrantsForTesting(kTestOrigin);
   EXPECT_EQ(grant->GetStatus(), PermissionStatus::ASK);
@@ -2726,5 +2869,165 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   EXPECT_TRUE(permission_context()->HasExtendedPermissionForTesting(
       kTestOrigin, new_path, HandleType::kFile, GrantType::kWrite));
 }
+
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       CheckPathsAgainstEnterprisePolicy_Empty) {
+  EnableEnterpriseAnalysis(profile());
+  ContentAnalysisDelegate::SetFactoryForTesting(base::BindRepeating(
+      &FakeContentAnalysisDelegate::Create, base::DoNothing(),
+      base::BindRepeating(
+          [](const std::string& contents, const base::FilePath& path) {
+            return FakeContentAnalysisDelegate::SuccessfulResponse({"dlp"});
+          }),
+      kDummyDmToken));
+
+  std::vector<PathInfo> entries;
+
+  base::test::TestFuture<std::vector<PathInfo>> future;
+  permission_context_->CheckPathsAgainstEnterprisePolicy(entries, frame_id(),
+                                                         future.GetCallback());
+  EXPECT_TRUE(future.Get<0>().empty());
+}
+
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       CheckPathsAgainstEnterprisePolicy_BadFrameId) {
+  EnableEnterpriseAnalysis(profile());
+  ContentAnalysisDelegate::SetFactoryForTesting(base::BindRepeating(
+      &FakeContentAnalysisDelegate::Create, base::DoNothing(),
+      base::BindRepeating(
+          [](const std::string& contents, const base::FilePath& path) {
+            return FakeContentAnalysisDelegate::SuccessfulResponse({"dlp"});
+          }),
+      kDummyDmToken));
+
+  base::FilePath path = temp_dir_.GetPath().AppendASCII("foo");
+  EXPECT_TRUE(CreateNonEmptyFile(path));
+  std::vector<PathInfo> entries{
+      {PathType::kLocal, path},
+  };
+
+  base::test::TestFuture<std::vector<PathInfo>> future;
+  permission_context_->CheckPathsAgainstEnterprisePolicy(
+      entries, content::GlobalRenderFrameHostId(), future.GetCallback());
+  EXPECT_THAT(future.Get<0>(), testing::ElementsAreArray(entries));
+}
+
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       CheckPathsAgainstEnterprisePolicy_OneFile) {
+  EnableEnterpriseAnalysis(profile());
+  ContentAnalysisDelegate::SetFactoryForTesting(base::BindRepeating(
+      &FakeContentAnalysisDelegate::Create, base::DoNothing(),
+      base::BindRepeating(
+          [](const std::string& contents, const base::FilePath& path) {
+            return FakeContentAnalysisDelegate::SuccessfulResponse({"dlp"});
+          }),
+      kDummyDmToken));
+
+  base::FilePath path = temp_dir_.GetPath().AppendASCII("foo");
+  EXPECT_TRUE(CreateNonEmptyFile(path));
+  std::vector<PathInfo> entries{
+      {PathType::kLocal, path},
+  };
+
+  base::test::TestFuture<std::vector<PathInfo>> future;
+  permission_context_->CheckPathsAgainstEnterprisePolicy(entries, frame_id(),
+                                                         future.GetCallback());
+  EXPECT_THAT(future.Get<0>(), testing::ElementsAreArray(entries));
+}
+
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       CheckPathsAgainstEnterprisePolicy_OneDirectoryAllowed) {
+  base::FilePath path_foo = temp_dir_.GetPath().AppendASCII("foo");
+  base::FilePath path_bar = temp_dir_.GetPath().AppendASCII("bar");
+  EXPECT_TRUE(CreateNonEmptyFile(path_foo));
+  EXPECT_TRUE(CreateNonEmptyFile(path_bar));
+
+  // A directory is allowed if all contained files are allowed.
+  EnableEnterpriseAnalysis(profile());
+  ContentAnalysisDelegate::SetFactoryForTesting(base::BindRepeating(
+      &FakeContentAnalysisDelegate::Create, base::DoNothing(),
+      base::BindLambdaForTesting(
+          [path_foo](const std::string& contents, const base::FilePath& path) {
+            return FakeContentAnalysisDelegate::SuccessfulResponse({"dlp"});
+          }),
+      kDummyDmToken));
+
+  std::vector<PathInfo> entries{
+      {PathType::kLocal, temp_dir_.GetPath()},
+  };
+
+  base::test::TestFuture<std::vector<PathInfo>> future;
+  permission_context_->CheckPathsAgainstEnterprisePolicy(entries, frame_id(),
+                                                         future.GetCallback());
+  EXPECT_THAT(future.Get<0>(), testing::SizeIs(1));
+  EXPECT_EQ(future.Get<0>()[0].path, temp_dir_.GetPath());
+}
+
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       CheckPathsAgainstEnterprisePolicy_OneDirectoryBlocked) {
+  base::FilePath path_foo = temp_dir_.GetPath().AppendASCII("foo");
+  base::FilePath path_bar = temp_dir_.GetPath().AppendASCII("bar");
+  EXPECT_TRUE(CreateNonEmptyFile(path_foo));
+  EXPECT_TRUE(CreateNonEmptyFile(path_bar));
+
+  // A directory is blocked if at least one file is blocked.
+  EnableEnterpriseAnalysis(profile());
+  ContentAnalysisDelegate::SetFactoryForTesting(base::BindRepeating(
+      &FakeContentAnalysisDelegate::Create, base::DoNothing(),
+      base::BindLambdaForTesting([path_foo](const std::string& contents,
+                                            const base::FilePath& path) {
+        return path == path_foo
+                   ? FakeContentAnalysisDelegate::SuccessfulResponse({"dlp"})
+                   : FakeContentAnalysisDelegate::DlpResponse(
+                         ContentAnalysisResponse::Result::SUCCESS, "rule",
+                         ContentAnalysisResponse::Result::TriggeredRule::BLOCK);
+      }),
+      kDummyDmToken));
+
+  std::vector<PathInfo> entries{
+      {PathType::kLocal, temp_dir_.GetPath()},
+  };
+
+  base::test::TestFuture<std::vector<PathInfo>> future;
+  permission_context_->CheckPathsAgainstEnterprisePolicy(entries, frame_id(),
+                                                         future.GetCallback());
+  EXPECT_THAT(future.Get<0>(), testing::SizeIs(0));
+}
+
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       CheckPathsAgainstEnterprisePolicy_TwoFilesOneBlocked) {
+  base::FilePath path_foo = temp_dir_.GetPath().AppendASCII("foo");
+  base::FilePath path_bar = temp_dir_.GetPath().AppendASCII("bar");
+  EXPECT_TRUE(CreateNonEmptyFile(path_foo));
+  EXPECT_TRUE(CreateNonEmptyFile(path_bar));
+
+  EnableEnterpriseAnalysis(profile());
+  ContentAnalysisDelegate::SetFactoryForTesting(base::BindRepeating(
+      &FakeContentAnalysisDelegate::Create, base::DoNothing(),
+      base::BindLambdaForTesting([path_foo](const std::string& contents,
+                                            const base::FilePath& path) {
+        return path == path_foo
+                   ? FakeContentAnalysisDelegate::SuccessfulResponse({"dlp"})
+                   : FakeContentAnalysisDelegate::DlpResponse(
+                         ContentAnalysisResponse::Result::SUCCESS, "rule",
+                         ContentAnalysisResponse::Result::TriggeredRule::BLOCK);
+      }),
+      kDummyDmToken));
+
+  std::vector<PathInfo> entries{
+      {PathType::kLocal, path_foo},
+      {PathType::kLocal, path_bar},
+  };
+
+  base::test::TestFuture<std::vector<PathInfo>> future;
+  permission_context_->CheckPathsAgainstEnterprisePolicy(entries, frame_id(),
+                                                         future.GetCallback());
+  EXPECT_THAT(future.Get<0>(), testing::SizeIs(1));
+  EXPECT_EQ(future.Get<0>()[0].path, path_foo);
+}
+
+#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 
 #endif  // !BUILDFLAG(IS_ANDROID)

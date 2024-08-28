@@ -19,7 +19,6 @@
 #include "ash/public/cpp/assistant/assistant_state.h"
 #include "ash/public/cpp/assistant/controller/assistant_ui_controller.h"
 #include "ash/public/cpp/style/color_provider.h"
-#include "ash/public/cpp/view_shadow.h"
 #include "ash/search_box/search_box_constants.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
@@ -41,6 +40,7 @@
 #include "ui/display/tablet_state.h"
 #include "ui/gfx/geometry/transform_util.h"
 #include "ui/views/layout/layout_manager_base.h"
+#include "ui/views/view_shadow.h"
 
 namespace ash {
 
@@ -88,6 +88,12 @@ class AssistantPageViewLayout : public views::LayoutManagerBase {
 
   // views::LayoutManagerBase:
   gfx::Size GetPreferredSize(const views::View* host) const override {
+    return GetPreferredSize(host, {});
+  }
+
+  gfx::Size GetPreferredSize(
+      const views::View* host,
+      const views::SizeBounds& available_size) const override {
     DCHECK_EQ(assistant_page_view_, host);
     return assistant_page_view_->contents_view()
         ->AdjustSearchBoxSizeToFitMargins(
@@ -210,7 +216,7 @@ void AssistantPageView::VisibilityChanged(views::View* starting_from,
 
 void AssistantPageView::OnMouseEvent(ui::MouseEvent* event) {
   switch (event->type()) {
-    case ui::ET_MOUSE_PRESSED:
+    case ui::EventType::kMousePressed:
       // Prevents closing the AppListView when a click event is not handled.
       event->StopPropagation();
       break;
@@ -221,11 +227,11 @@ void AssistantPageView::OnMouseEvent(ui::MouseEvent* event) {
 
 void AssistantPageView::OnGestureEvent(ui::GestureEvent* event) {
   switch (event->type()) {
-    case ui::ET_GESTURE_TAP:
-    case ui::ET_GESTURE_DOUBLE_TAP:
-    case ui::ET_GESTURE_LONG_PRESS:
-    case ui::ET_GESTURE_LONG_TAP:
-    case ui::ET_GESTURE_TWO_FINGER_TAP:
+    case ui::EventType::kGestureTap:
+    case ui::EventType::kGestureDoubleTap:
+    case ui::EventType::kGestureLongPress:
+    case ui::EventType::kGestureLongTap:
+    case ui::EventType::kGestureTwoFingerTap:
       // Prevents closing the AppListView when a tap event is not handled.
       event->StopPropagation();
       break;
@@ -410,7 +416,7 @@ void AssistantPageView::InitLayout() {
   SetPaintToLayer(ui::LAYER_SOLID_COLOR);
   layer()->SetFillsBoundsOpaquely(false);
 
-  view_shadow_ = std::make_unique<ViewShadow>(this, kShadowElevation);
+  view_shadow_ = std::make_unique<views::ViewShadow>(this, kShadowElevation);
   view_shadow_->SetRoundedCornerRadius(
       kSearchBoxBorderCornerRadiusSearchResult);
 

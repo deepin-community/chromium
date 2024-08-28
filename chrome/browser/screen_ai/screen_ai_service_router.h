@@ -12,11 +12,11 @@
 #include "base/scoped_observation.h"
 #include "chrome/browser/screen_ai/screen_ai_install_state.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/services/screen_ai/public/mojom/screen_ai_factory.mojom.h"
-#include "components/services/screen_ai/public/mojom/screen_ai_service.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "services/screen_ai/public/mojom/screen_ai_factory.mojom.h"
+#include "services/screen_ai/public/mojom/screen_ai_service.mojom.h"
 
 namespace {
 class ComponentFiles;
@@ -34,16 +34,12 @@ class ScreenAIServiceRouter : public KeyedService,
     kOCR,
   };
 
-  ScreenAIServiceRouter();
   ScreenAIServiceRouter(const ScreenAIServiceRouter&) = delete;
   ScreenAIServiceRouter& operator=(const ScreenAIServiceRouter&) = delete;
   ~ScreenAIServiceRouter() override;
 
   void BindScreenAIAnnotator(
       mojo::PendingReceiver<mojom::ScreenAIAnnotator> receiver);
-
-  void BindScreenAIAnnotatorClient(
-      mojo::PendingRemote<mojom::ScreenAIAnnotatorClient> remote);
 
   void BindMainContentExtractor(
       mojo::PendingReceiver<mojom::Screen2xMainContentExtractor> receiver);
@@ -60,6 +56,9 @@ class ScreenAIServiceRouter : public KeyedService,
   bool IsConnectionBoundForTesting(Service service);
 
  private:
+  friend class ScreenAIServiceRouterFactory;
+
+  ScreenAIServiceRouter();
   // Initialzies the `service` if it's not already done.
   void InitializeServiceIfNeeded(Service service);
 

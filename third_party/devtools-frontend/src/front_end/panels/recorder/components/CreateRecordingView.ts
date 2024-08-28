@@ -8,7 +8,6 @@ import '../../../ui/legacy/legacy.js';
 
 import * as i18n from '../../../core/i18n/i18n.js';
 import * as Buttons from '../../../ui/components/buttons/buttons.js';
-import * as ComponentHelpers from '../../../ui/components/helpers/helpers.js';
 import * as IconButton from '../../../ui/components/icon_button/icon_button.js';
 import * as Input from '../../../ui/components/input/input.js';
 import * as LitHtml from '../../../ui/lit-html/lit-html.js';
@@ -273,7 +272,7 @@ export class CreateRecordingView extends HTMLElement {
               jslog=${VisualLogging.close().track({click: true})}
               .data=${
                 {
-                  variant: Buttons.Button.Variant.ROUND,
+                  variant: Buttons.Button.Variant.ICON,
                   size: Buttons.Button.Size.SMALL,
                   iconName: 'cross',
                 } as Buttons.Button.ButtonData
@@ -288,7 +287,7 @@ export class CreateRecordingView extends HTMLElement {
             value=${this.#defaultRecordingName}
             @focus=${this.#onInputFocus}
             @keydown=${this.#onKeyDown}
-            jslog=${VisualLogging.textField('user-flow-name').track({keydown: true})}
+            jslog=${VisualLogging.textField('user-flow-name').track({change: true})}
             class="devtools-text-input"
             id="user-flow-name"
           />
@@ -306,7 +305,7 @@ export class CreateRecordingView extends HTMLElement {
             value=${this.#recorderSettings?.selectorAttribute}
             placeholder="data-testid"
             @keydown=${this.#onKeyDown}
-            jslog=${VisualLogging.textField('selector-attribute').track({keydown: true})}
+            jslog=${VisualLogging.textField('selector-attribute').track({change: true})}
             class="devtools-text-input"
             id="selector-attribute"
           />
@@ -372,7 +371,7 @@ export class CreateRecordingView extends HTMLElement {
   }
 }
 
-ComponentHelpers.CustomElements.defineComponent(
+customElements.define(
     'devtools-create-recording-view',
     CreateRecordingView,
 );

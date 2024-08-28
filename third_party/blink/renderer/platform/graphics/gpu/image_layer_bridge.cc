@@ -23,7 +23,6 @@
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
 #include "third_party/blink/renderer/platform/graphics/image_orientation.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -243,7 +242,7 @@ bool ImageLayerBridge::PrepareTransferableResource(
     if (!sk_image->readPixels(dst_info, pixels, dst_info.minRowBytes(), 0, 0))
       return false;
 
-    *out_resource = viz::TransferableResource::MakeSoftware(
+    *out_resource = viz::TransferableResource::MakeSoftwareSharedBitmap(
         registered.bitmap->id(), gpu::SyncToken(), size, format,
         viz::TransferableResource::ResourceSource::kImageLayerBridge);
     out_resource->color_space = sk_image->colorSpace()

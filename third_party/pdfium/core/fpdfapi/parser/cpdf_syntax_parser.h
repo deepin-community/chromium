@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -81,7 +82,7 @@ class CPDF_SyntaxParser {
   FX_FILESIZE GetDocumentSize() const;
 
   ByteString ReadString();
-  ByteString ReadHexString();
+  DataVector<uint8_t> ReadHexString();
 
   void SetTrailerEnds(std::vector<unsigned int>* trailer_ends) {
     m_TrailerEnds = trailer_ends;
@@ -126,8 +127,8 @@ class CPDF_SyntaxParser {
   DataVector<uint8_t> m_pFileBuf;
   FX_FILESIZE m_BufOffset = 0;
   uint32_t m_WordSize = 0;
-  uint8_t m_WordBuffer[257] = {};
   uint32_t m_ReadBufferSize = CPDF_Stream::kFileBufSize;
+  std::array<uint8_t, 257> m_WordBuffer = {};
 
   // The syntax parser records traversed trailer end byte offsets here.
   UnownedPtr<std::vector<unsigned int>> m_TrailerEnds;

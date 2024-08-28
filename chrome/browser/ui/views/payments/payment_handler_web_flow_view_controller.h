@@ -65,10 +65,6 @@ class PaymentHandlerWebFlowViewController
   bool ShouldShowPrimaryButton() override;
   bool ShouldShowSecondaryButton() override;
   void PopulateSheetHeaderView(views::View* view) override;
-  std::unique_ptr<views::View> CreateHeaderContentView(
-      views::View* header_view) override;
-  std::unique_ptr<views::Background> GetHeaderBackground(
-      views::View* header_view) override;
   bool GetSheetId(DialogViewID* sheet_id) override;
   bool DisplayDynamicBorderForHiddenContents() override;
   bool CanContentViewBeScrollable() override;
@@ -83,9 +79,8 @@ class PaymentHandlerWebFlowViewController
                       const blink::mojom::WindowFeatures& window_features,
                       bool user_gesture,
                       bool* was_blocked) override;
-  bool HandleKeyboardEvent(
-      content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event) override;
+  bool HandleKeyboardEvent(content::WebContents* source,
+                           const input::NativeWebKeyboardEvent& event) override;
 
   // content::WebContentsObserver:
   void DidFinishNavigation(
@@ -94,6 +89,11 @@ class PaymentHandlerWebFlowViewController
   void TitleWasSet(content::NavigationEntry* entry) override;
 
   void AbortPayment();
+
+  // Calculates the header background based on the web contents theme, if any,
+  // otherwise the Chrome theme.
+  std::unique_ptr<views::Background> GetHeaderBackground(
+      views::View* header_view);
 
   DeveloperConsoleLogger log_;
   raw_ptr<Profile> profile_;

@@ -9,12 +9,16 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
+#include "base/values.h"
 #include "chrome/browser/ip_protection/ip_protection_config_provider_factory.h"
+#include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/chrome_test_utils.h"
+#include "components/policy/core/common/policy_map.h"
+#include "components/policy/core/common/policy_types.h"
+#include "components/policy/policy_constants.h"
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
@@ -54,11 +58,13 @@ class IpProtectionConfigGetterInterceptor
   IpProtectionConfigGetterInterceptor(IpProtectionConfigProvider* getter,
                                       std::string token,
                                       base::Time expiration,
+                                      network::mojom::GeoHint geo_hint,
                                       bool should_intercept = true)
       : getter_(getter),
         receiver_id_(getter_->receiver_id_for_testing()),
         token_(std::move(token)),
         expiration_(expiration),
+        geo_hint_(geo_hint),
         should_intercept_(should_intercept) {
     auto* old_impl =
         getter_->receivers_for_testing().SwapImplForTesting(receiver_id_, this);
@@ -79,11 +85,15 @@ class IpProtectionConfigGetterInterceptor
                         network::mojom::IpProtectionProxyLayer proxy_layer,
                         TryGetAuthTokensCallback callback) override {
     if (should_intercept_) {
-      // NOTE: We'll ignore batch size and just return one token.
       std::vector<network::mojom::BlindSignedAuthTokenPtr> tokens;
-      auto token =
-          network::mojom::BlindSignedAuthToken::New(token_, expiration_);
-      tokens.push_back(std::move(token));
+      for (uint32_t i = 0; i < batch_size; i++) {
+        auto token = network::mojom::BlindSignedAuthToken::New();
+        token->token = token_;
+        token->expiration = expiration_;
+        token->geo_hint = geo_hint_.Clone();
+
+        tokens.push_back(std::move(token));
+      }
       std::move(callback).Run(std::move(tokens), base::Time());
       return;
     }
@@ -94,6 +104,8 @@ class IpProtectionConfigGetterInterceptor
   std::string token() const { return token_; }
 
   base::Time expiration() const { return expiration_; }
+
+  network::mojom::GeoHint geo_hint() const { return geo_hint_; }
 
   void EnableInterception() { should_intercept_ = true; }
   void DisableInterception() { should_intercept_ = false; }
@@ -107,81 +119,48 @@ class IpProtectionConfigGetterInterceptor
   mojo::ReceiverId receiver_id_;
   std::string token_;
   base::Time expiration_;
+  network::mojom::GeoHint geo_hint_;
   bool should_intercept_;
 };
 
-constexpr char kTestEmail[] = "test@example.com";
 constexpr base::Time kDontRetry = base::Time::Max();
 }  // namespace
 
-class IpProtectionConfigProviderBrowserTest : public InProcessBrowserTest {
+class IpProtectionConfigProviderBrowserTest : public PlatformBrowserTest {
  public:
   IpProtectionConfigProviderBrowserTest()
       : profile_selections_(IpProtectionConfigProviderFactory::GetInstance(),
                             IpProtectionConfigProviderFactory::
-                                CreateProfileSelectionsForTesting()) {
-    create_services_subscription_ =
-        BrowserContextDependencyManager::GetInstance()
-            ->RegisterCreateServicesCallbackForTesting(
-                base::BindRepeating(&IpProtectionConfigProviderBrowserTest::
-                                        OnWillCreateBrowserContextServices,
-                                    base::Unretained(this)));
-  }
-
-  void SetUpOnMainThread() override {
-    identity_test_environment_adaptor_ =
-        std::make_unique<IdentityTestEnvironmentProfileAdaptor>(
-            browser()->profile());
-
-    MakePrimaryAccountAvailable();
-
-    identity_test_environment_adaptor_->identity_test_env()
-        ->SetAutomaticIssueOfAccessTokens(true);
-  }
+                                CreateProfileSelectionsForTesting()) {}
 
   void TearDownOnMainThread() override {
-    IpProtectionConfigProvider::Get(browser()->profile())->Shutdown();
-    identity_test_environment_adaptor_.reset();
-  }
+    PlatformBrowserTest::TearDownOnMainThread();
 
-  signin::IdentityManager* IdentityManager() {
-    return identity_test_environment_adaptor_->identity_test_env()
-        ->identity_manager();
-  }
-
-  void MakePrimaryAccountAvailable() {
-    identity_test_environment_adaptor_->identity_test_env()
-        ->MakePrimaryAccountAvailable(kTestEmail,
-                                      signin::ConsentLevel::kSignin);
-  }
-
-  void ClearPrimaryAccount() {
-    identity_test_environment_adaptor_->identity_test_env()
-        ->ClearPrimaryAccount();
+    IpProtectionConfigProvider::Get(GetProfile())->Shutdown();
   }
 
   void CreateIncognitoNetworkContextAndInterceptors() {
     IpProtectionConfigProvider* provider =
-        IpProtectionConfigProvider::Get(browser()->profile());
+        IpProtectionConfigProvider::Get(GetProfile());
     ASSERT_TRUE(provider);
     ASSERT_EQ(provider->receivers_for_testing().size(), 1U);
 
     std::string token = "best_token_ever";
     base::Time expiration = base::Time::Now() + base::Seconds(12345);
+    auto geo_hint = network::mojom::GeoHint::New("US", "US-AL", "ALABASTER");
     main_profile_auth_token_getter_interceptor_ =
         std::make_unique<IpProtectionConfigGetterInterceptor>(
-            provider, token, expiration, /*should_intercept=*/false);
+            provider, token, expiration, *geo_hint, /*should_intercept=*/false);
 
     network::mojom::NetworkContext* main_profile_network_context =
-        browser()->profile()->GetDefaultStoragePartition()->GetNetworkContext();
+        GetProfile()->GetDefaultStoragePartition()->GetNetworkContext();
     main_profile_ipp_proxy_delegate_ = provider->last_remote_for_testing();
 
-    incognito_profile_browser_ = CreateIncognitoBrowser(browser()->profile());
+    incognito_profile_ =
+        GetProfile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
     ASSERT_EQ(provider->receivers_for_testing().size(), 2U);
     network::mojom::NetworkContext* incognito_profile_network_context =
-        incognito_profile_browser_->profile()
-            ->GetDefaultStoragePartition()
-            ->GetNetworkContext();
+        incognito_profile_->GetDefaultStoragePartition()->GetNetworkContext();
     incognito_profile_ipp_proxy_delegate_ = provider->last_remote_for_testing();
     ASSERT_NE(main_profile_network_context, incognito_profile_network_context);
     ASSERT_NE(main_profile_ipp_proxy_delegate_,
@@ -189,7 +168,7 @@ class IpProtectionConfigProviderBrowserTest : public InProcessBrowserTest {
 
     incognito_profile_auth_token_getter_interceptor_ =
         std::make_unique<IpProtectionConfigGetterInterceptor>(
-            provider, token, expiration, /*should_intercept=*/false);
+            provider, token, expiration, *geo_hint, /*should_intercept=*/false);
   }
 
   void EnableInterception() {
@@ -198,7 +177,7 @@ class IpProtectionConfigProviderBrowserTest : public InProcessBrowserTest {
   }
 
   void DestroyIncognitoNetworkContextAndInterceptors() {
-    ASSERT_TRUE(incognito_profile_browser_)
+    ASSERT_TRUE(incognito_profile_)
         << "CreateNetworkContextsAndInterceptors() must have been called first";
 
     incognito_profile_auth_token_getter_interceptor_ = nullptr;
@@ -207,24 +186,22 @@ class IpProtectionConfigProviderBrowserTest : public InProcessBrowserTest {
     main_profile_ipp_proxy_delegate_ = nullptr;
     incognito_profile_ipp_proxy_delegate_ = nullptr;
 
-    Browser* incognito_profile_browser = incognito_profile_browser_;
-    incognito_profile_browser_ = nullptr;
-    CloseBrowserSynchronously(incognito_profile_browser);
+    Profile* incognito_profile = incognito_profile_;
+    incognito_profile_ = nullptr;
+    GetProfile()->DestroyOffTheRecordProfile(incognito_profile);
   }
+
+  Profile* GetProfile() { return chrome_test_utils::GetProfile(this); }
 
  protected:
-  void OnWillCreateBrowserContextServices(content::BrowserContext* context) {
-    IdentityTestEnvironmentProfileAdaptor::
-        SetIdentityTestEnvironmentFactoriesOnBrowserContext(context);
-  }
-
-  raw_ptr<Browser> incognito_profile_browser_ = nullptr;
   raw_ptr<network::mojom::IpProtectionProxyDelegate>
       main_profile_ipp_proxy_delegate_ = nullptr;
-  raw_ptr<network::mojom::IpProtectionProxyDelegate>
-      incognito_profile_ipp_proxy_delegate_ = nullptr;
   std::unique_ptr<IpProtectionConfigGetterInterceptor>
       main_profile_auth_token_getter_interceptor_;
+
+  raw_ptr<Profile> incognito_profile_ = nullptr;
+  raw_ptr<network::mojom::IpProtectionProxyDelegate>
+      incognito_profile_ipp_proxy_delegate_ = nullptr;
   std::unique_ptr<IpProtectionConfigGetterInterceptor>
       incognito_profile_auth_token_getter_interceptor_;
 
@@ -235,24 +212,21 @@ class IpProtectionConfigProviderBrowserTest : public InProcessBrowserTest {
   ScopedIpProtectionFeatureList scoped_ip_protection_feature_list_;
   profiles::testing::ScopedProfileSelectionsForFactoryTesting
       profile_selections_;
-
-  std::unique_ptr<IdentityTestEnvironmentProfileAdaptor>
-      identity_test_environment_adaptor_;
-  base::CallbackListSubscription create_services_subscription_;
 };
 
 IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderBrowserTest,
                        NetworkServiceCanRequestTokens) {
   IpProtectionConfigProvider* getter =
-      IpProtectionConfigProvider::Get(browser()->profile());
+      IpProtectionConfigProvider::Get(GetProfile());
   ASSERT_TRUE(getter);
 
   std::string token = "best_token_ever";
   base::Time expiration = base::Time::Now() + base::Seconds(12345);
+  auto geo_hint = network::mojom::GeoHint::New("US", "US-AL", "ALABASTER");
   ASSERT_EQ(getter->receivers_for_testing().size(), 1U);
   auto auth_token_getter_interceptor_ =
-      std::make_unique<IpProtectionConfigGetterInterceptor>(getter, token,
-                                                            expiration);
+      std::make_unique<IpProtectionConfigGetterInterceptor>(
+          getter, token, expiration, *geo_hint);
 
   // To test that the Network Service can successfully request tokens, use the
   // test method on NetworkContext that will have it request tokens and then
@@ -272,14 +246,14 @@ IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderBrowserTest,
 
   // Now create a new incognito mode profile (with a different associated
   // network context) and see whether we can request tokens from that.
-  CreateIncognitoBrowser(browser()->profile());
+  GetProfile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
 
   // We need a new interceptor that will intercept messages corresponding to the
   // incognito mode network context's `mojo::Receiver()`.
   ASSERT_EQ(getter->receivers_for_testing().size(), 2U);
   auto incognito_auth_token_getter_interceptor_ =
-      std::make_unique<IpProtectionConfigGetterInterceptor>(getter, token,
-                                                            expiration);
+      std::make_unique<IpProtectionConfigGetterInterceptor>(
+          getter, token, expiration, *geo_hint);
 
   // Verify that we can get tokens from the incognito mode profile.
   future.Clear();
@@ -307,11 +281,12 @@ IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderBrowserTest,
 IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderBrowserTest,
                        ExpectedReceiverSetStateAfterNetworkServiceCrash) {
   IpProtectionConfigProvider* getter =
-      IpProtectionConfigProvider::Get(browser()->profile());
+      IpProtectionConfigProvider::Get(GetProfile());
   ASSERT_TRUE(getter);
   ASSERT_EQ(getter->receivers_for_testing().size(), 1U);
 
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->profile());
+  Profile* incognito_profile =
+      GetProfile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
   ASSERT_EQ(getter->receivers_for_testing().size(), 2U);
 
   // If the network service isn't out-of-process then we can't crash it.
@@ -324,12 +299,8 @@ IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderBrowserTest,
   // attempt to get tokens and we should ensure that nothing crashes as a
   // result.
   SimulateNetworkServiceCrash();
-  browser()
-      ->profile()
-      ->GetDefaultStoragePartition()
-      ->FlushNetworkInterfaceForTesting();
-  incognito_browser->profile()
-      ->GetDefaultStoragePartition()
+  GetProfile()->GetDefaultStoragePartition()->FlushNetworkInterfaceForTesting();
+  incognito_profile->GetDefaultStoragePartition()
       ->FlushNetworkInterfaceForTesting();
   // Ensure that any lingering receivers have had time to be removed.
   getter->receivers_for_testing().FlushForTesting();
@@ -337,7 +308,64 @@ IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderBrowserTest,
   ASSERT_EQ(getter->receivers_for_testing().size(), 2U);
 }
 
-IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderBrowserTest,
+#if !BUILDFLAG(IS_ANDROID)
+class IpProtectionConfigProviderIdentityBrowserTest
+    : public IpProtectionConfigProviderBrowserTest {
+ public:
+  IpProtectionConfigProviderIdentityBrowserTest() {
+    create_services_subscription_ =
+        BrowserContextDependencyManager::GetInstance()
+            ->RegisterCreateServicesCallbackForTesting(base::BindRepeating(
+                &IpProtectionConfigProviderIdentityBrowserTest::
+                    OnWillCreateBrowserContextServices,
+                base::Unretained(this)));
+  }
+
+  void SetUpOnMainThread() override {
+    identity_test_environment_adaptor_ =
+        std::make_unique<IdentityTestEnvironmentProfileAdaptor>(GetProfile());
+
+    MakePrimaryAccountAvailable();
+
+    identity_test_environment_adaptor_->identity_test_env()
+        ->SetAutomaticIssueOfAccessTokens(true);
+  }
+
+  void TearDownOnMainThread() override {
+    IpProtectionConfigProviderBrowserTest::TearDownOnMainThread();
+
+    identity_test_environment_adaptor_.reset();
+  }
+
+  signin::IdentityManager* IdentityManager() {
+    return identity_test_environment_adaptor_->identity_test_env()
+        ->identity_manager();
+  }
+
+  void MakePrimaryAccountAvailable() {
+    identity_test_environment_adaptor_->identity_test_env()
+        ->MakePrimaryAccountAvailable("test@example.com",
+                                      signin::ConsentLevel::kSignin);
+  }
+
+  void ClearPrimaryAccount() {
+    identity_test_environment_adaptor_->identity_test_env()
+        ->ClearPrimaryAccount();
+  }
+
+ protected:
+  void OnWillCreateBrowserContextServices(content::BrowserContext* context) {
+    IdentityTestEnvironmentProfileAdaptor::
+        SetIdentityTestEnvironmentFactoriesOnBrowserContext(context);
+  }
+
+ private:
+  std::unique_ptr<IdentityTestEnvironmentProfileAdaptor>
+      identity_test_environment_adaptor_;
+  base::CallbackListSubscription create_services_subscription_;
+};
+
+IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderIdentityBrowserTest,
                        BackoffTimeResetAfterProfileAvailabilityChange) {
   CreateIncognitoNetworkContextAndInterceptors();
   // Simulate logging the user out, which should make the provider indicate that
@@ -346,7 +374,7 @@ IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderBrowserTest,
   ClearPrimaryAccount();
 #else
   IpProtectionConfigProvider* provider =
-      IpProtectionConfigProvider::Get(browser()->profile());
+      IpProtectionConfigProvider::Get(GetProfile());
   ASSERT_TRUE(provider);
 
   // On ChromeOS, `ClearPrimaryAccount()` either isn't supported (Ash) or
@@ -357,7 +385,8 @@ IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderBrowserTest,
           IdentityManager()->GetPrimaryAccountInfo(
               signin::ConsentLevel::kSignin),
           signin::ConsentLevel::kSignin),
-      signin::PrimaryAccountChangeEvent::State()));
+      signin::PrimaryAccountChangeEvent::State(),
+      signin_metrics::ProfileSignout::kTest));
 #endif
 
   // Request tokens from both contexts and ensure that the "don't retry"
@@ -412,7 +441,8 @@ IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderBrowserTest,
       signin::PrimaryAccountChangeEvent::State(
           IdentityManager()->GetPrimaryAccountInfo(
               signin::ConsentLevel::kSignin),
-          signin::ConsentLevel::kSignin)));
+          signin::ConsentLevel::kSignin),
+      signin_metrics::AccessPoint::ACCESS_POINT_UNKNOWN));
 #endif
 
   // Verify that cooldown timers in the network context have been reset and
@@ -443,6 +473,7 @@ IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderBrowserTest,
 
   DestroyIncognitoNetworkContextAndInterceptors();
 }
+#endif
 
 class IpProtectionConfigProviderUserSettingBrowserTest
     : public IpProtectionConfigProviderBrowserTest {
@@ -460,12 +491,11 @@ IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderUserSettingBrowserTest,
   CreateIncognitoNetworkContextAndInterceptors();
 
   IpProtectionConfigProvider* provider =
-      IpProtectionConfigProvider::Get(browser()->profile());
+      IpProtectionConfigProvider::Get(GetProfile());
   ASSERT_TRUE(provider);
 
   // Simulate the user disabling the IP Protection setting.
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kIpProtectionEnabled,
-                                               false);
+  GetProfile()->GetPrefs()->SetBoolean(prefs::kIpProtectionEnabled, false);
   provider->OnIpProtectionEnabledChanged();
 
   // Check that network contexts got notified that IP Protection should be
@@ -506,8 +536,7 @@ IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderUserSettingBrowserTest,
 
   // Re-enable the setting and ensure that the network contexts got notified
   // accordingly.
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kIpProtectionEnabled,
-                                               true);
+  GetProfile()->GetPrefs()->SetBoolean(prefs::kIpProtectionEnabled, true);
   provider->OnIpProtectionEnabledChanged();
 
   main_profile_is_enabled_future.Clear();
@@ -559,4 +588,65 @@ IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderUserSettingBrowserTest,
             incognito_profile_auth_token_getter_interceptor_->expiration());
 
   DestroyIncognitoNetworkContextAndInterceptors();
+}
+
+class IpProtectionConfigProviderPolicyBrowserTest : public policy::PolicyTest {
+ public:
+  IpProtectionConfigProviderPolicyBrowserTest()
+      : profile_selections_(IpProtectionConfigProviderFactory::GetInstance(),
+                            IpProtectionConfigProviderFactory::
+                                CreateProfileSelectionsForTesting()) {}
+
+  void UpdateIpProtectionEnterpisePolicyValue(bool enabled) {
+    policy::PolicyMap policies;
+    policies.Set(policy::key::kPrivacySandboxIpProtectionEnabled,
+                 policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+                 policy::POLICY_SOURCE_CLOUD, base::Value(enabled), nullptr);
+    provider_.UpdateChromePolicy(policies);
+  }
+
+  void UnsetIpProtectionEnterprisePolicyValue() {
+    policy::PolicyMap policies;
+    provider_.UpdateChromePolicy(policies);
+  }
+
+  Profile* GetProfile() { return chrome_test_utils::GetProfile(this); }
+
+  // Note that the order of initialization is important here.
+  ScopedIpProtectionFeatureList scoped_ip_protection_feature_list_;
+  profiles::testing::ScopedProfileSelectionsForFactoryTesting
+      profile_selections_;
+};
+
+IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderPolicyBrowserTest,
+                       IpProtectionEnterprisePolicyDisableAndEnable) {
+  IpProtectionConfigProvider* provider =
+      IpProtectionConfigProvider::Get(GetProfile());
+
+  ASSERT_TRUE(provider->IsIpProtectionEnabled());
+
+  // Setting the enterprise policy value to "Disabled" should change the default
+  // IP Protection feature state.
+  UpdateIpProtectionEnterpisePolicyValue(/*enabled=*/false);
+  EXPECT_FALSE(provider->IsIpProtectionEnabled());
+
+  // Setting the enterprise policy value to "Enabled" should re-enable IP
+  // Protection.
+  UpdateIpProtectionEnterpisePolicyValue(/*enabled=*/true);
+  EXPECT_TRUE(provider->IsIpProtectionEnabled());
+}
+
+// Test transitioning from the policy being set to the policy being unset - the
+// pref value should no longer be considered managed and should effectively be
+// reset to its initial state.
+IN_PROC_BROWSER_TEST_F(IpProtectionConfigProviderPolicyBrowserTest,
+                       IpProtectionEnterprisePolicyUnsetAfterSet) {
+  IpProtectionConfigProvider* provider =
+      IpProtectionConfigProvider::Get(GetProfile());
+
+  UpdateIpProtectionEnterpisePolicyValue(/*enabled=*/false);
+  EXPECT_FALSE(provider->IsIpProtectionEnabled());
+
+  UnsetIpProtectionEnterprisePolicyValue();
+  EXPECT_TRUE(provider->IsIpProtectionEnabled());
 }

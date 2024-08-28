@@ -11,7 +11,7 @@
 #include "chrome/browser/apps/app_discovery_service/almanac_api/launcher_app.pb.h"
 #include "chrome/browser/apps/app_discovery_service/app_discovery_service.h"
 #include "chrome/browser/apps/app_discovery_service/game_extras.h"
-#include "chrome/browser/apps/app_discovery_service/launcher_app_almanac_connector.h"
+#include "chrome/browser/apps/app_discovery_service/launcher_app_almanac_endpoint.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/pref_registry/pref_registry_syncable.h"
@@ -46,11 +46,11 @@ std::vector<Result> MapToApps(const proto::LauncherAppResponse& proto) {
         app_group.action_link().empty()) {
       continue;
     }
-    // There should be just a single GFN app with a single icon. We want to
+    // There should be just a single app with a single icon. We want to
     // handle more in the future but for now just read the first icon.
     const proto::LauncherAppResponse::Icon& icon = app_group.icons(0);
     auto extras = std::make_unique<GameExtras>(
-        u"GeForce NOW",
+        base::UTF8ToUTF16(app_group.badge_text()),
         /*relative_icon_path_=*/base::FilePath(""), icon.is_masking_allowed(),
         GURL(app_group.action_link()));
 
@@ -73,14 +73,12 @@ void OnIconDownloaded(GetIconCallback callback, const gfx::Image& icon) {
 AlmanacFetcher::AlmanacFetcher(Profile* profile,
                                std::unique_ptr<AlmanacIconCache> icon_cache)
     : profile_(profile),
-      server_connector_(std::make_unique<LauncherAppAlmanacConnector>()),
       device_info_manager_(std::make_unique<DeviceInfoManager>(profile)),
       icon_cache_(std::move(icon_cache)) {
   // The whole feature would not work unless the build includes the Google
   // Chrome API key or this is a test environment as the server call would fail.
   if ((google_apis::IsGoogleChromeAPIKeyUsed() ||
        skip_api_key_check_for_testing) &&
-      base::FeatureList::IsEnabled(kAlmanacGameMigration) &&
       chromeos::features::IsCloudGamingDeviceEnabled()) {
     base::FilePath path = profile->GetPath().AppendASCII(kLauncherAppFilePath);
     proto_file_manager_ =
@@ -151,9 +149,10 @@ void AlmanacFetcher::DownloadApps() {
 }
 
 void AlmanacFetcher::OnGetDeviceInfo(DeviceInfo device_info) {
-  server_connector_->GetApps(device_info, profile_->GetURLLoaderFactory(),
-                             base::BindOnce(&AlmanacFetcher::OnServerResponse,
-                                            weak_factory_.GetWeakPtr()));
+  launcher_app_almanac_endpoint::GetApps(
+      device_info, *profile_->GetURLLoaderFactory(),
+      base::BindOnce(&AlmanacFetcher::OnServerResponse,
+                     weak_factory_.GetWeakPtr()));
 }
 
 void AlmanacFetcher::OnServerResponse(

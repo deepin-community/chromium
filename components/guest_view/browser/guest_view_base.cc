@@ -95,9 +95,10 @@ class GuestViewBase::OwnerContentsObserver : public WebContentsObserver {
   }
 
   void DidUpdateAudioMutingState(bool muted) override {
-    if (IsGuestInitialized()) {
-      guest_->web_contents()->SetAudioMuted(muted);
+    if (!IsGuestInitialized()) {
+      return;
     }
+    guest_->OnOwnerAudioMutedStateUpdated(muted);
   }
 
  private:
@@ -377,7 +378,7 @@ bool GuestViewBase::ZoomPropagatesFromEmbedderToGuest() const {
 }
 
 content::NavigationController& GuestViewBase::GetController() {
-  // TODO(crbug/1261928): Migrate the implementation for MPArch.
+  // TODO(crbug.com/40202416): Migrate the implementation for MPArch.
   return web_contents()->GetController();
 }
 
@@ -448,7 +449,7 @@ void GuestViewBase::AttachToOuterWebContentsFrame(
     GuestViewMessageHandler::AttachToEmbedderFrameCallback
         attachment_callback) {
   // Stop tracking the old embedder's zoom level.
-  // TODO(crbug.com/533069): We should assert that we're not tracking the
+  // TODO(crbug.com/40436245): We should assert that we're not tracking the
   // embedder at this point, since guest reattachment is no longer possible.
   StopTrackingEmbedderZoomLevel();
 
@@ -508,6 +509,11 @@ void GuestViewBase::AttachToOuterWebContentsFrame(
                                  weak_ptr_factory_.GetWeakPtr()));
 }
 
+void GuestViewBase::OnOwnerAudioMutedStateUpdated(bool muted) {
+  CHECK(web_contents());
+  web_contents()->SetAudioMuted(muted);
+}
+
 void GuestViewBase::SignalWhenReady(base::OnceClosure callback) {
   // The default behavior is to call the |callback| immediately. Derived classes
   // can implement an alternative signal for readiness.
@@ -548,7 +554,7 @@ void GuestViewBase::WebContentsDestroyed() {
 
 void GuestViewBase::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  // TODO(crbug.com/1261928): Due to the use of inner WebContents, a
+  // TODO(crbug.com/40202416): Due to the use of inner WebContents, a
   // GuestViewBase's main frame is considered primary. This will no
   // longer be the case once we migrate guest views to MPArch.
   if (!navigation_handle->IsInPrimaryMainFrame() ||
@@ -568,13 +574,12 @@ void GuestViewBase::ActivateContents(WebContents* web_contents) {
 }
 
 void GuestViewBase::ContentsMouseEvent(WebContents* source,
-                                       bool motion,
-                                       bool exited) {
+                                       const ui::Event& event) {
   if (!attached() || !embedder_web_contents()->GetDelegate())
     return;
 
   embedder_web_contents()->GetDelegate()->ContentsMouseEvent(
-      embedder_web_contents(), motion, exited);
+      embedder_web_contents(), event);
 }
 
 void GuestViewBase::ContentsZoomChange(bool zoom_in) {
@@ -585,7 +590,7 @@ void GuestViewBase::ContentsZoomChange(bool zoom_in) {
 
 bool GuestViewBase::HandleKeyboardEvent(
     WebContents* source,
-    const content::NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   if (!attached() || !embedder_web_contents()->GetDelegate())
     return false;
 
@@ -666,8 +671,8 @@ void GuestViewBase::OnZoomChanged(
     // The embedder's zoom level has changed.
     auto* guest_zoom_controller =
         zoom::ZoomController::FromWebContents(web_contents());
-    if (blink::PageZoomValuesEqual(data.new_zoom_level,
-                                   guest_zoom_controller->GetZoomLevel())) {
+    if (blink::ZoomValuesEqual(data.new_zoom_level,
+                               guest_zoom_controller->GetZoomLevel())) {
       return;
     }
     // When the embedder's zoom level doesn't match the guest's, then update the
@@ -757,7 +762,7 @@ double GuestViewBase::GetEmbedderZoomFactor() const {
   if (!embedder_web_contents())
     return 1.0;
 
-  return blink::PageZoomLevelToZoomFactor(
+  return blink::ZoomLevelToZoomFactor(
       zoom::ZoomController::GetZoomLevelForWebContents(
           embedder_web_contents()));
 }
@@ -900,7 +905,7 @@ bool GuestViewBase::IsPermissionRequestable(ContentSettingsType type) const {
 }
 
 content::RenderFrameHost* GuestViewBase::GetGuestMainFrame() const {
-  // TODO(crbug/1261928): Migrate the implementation for MPArch.
+  // TODO(crbug.com/40202416): Migrate the implementation for MPArch.
   return web_contents()->GetPrimaryMainFrame();
 }
 

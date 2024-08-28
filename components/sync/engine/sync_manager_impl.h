@@ -33,8 +33,7 @@ class Cryptographer;
 class ModelTypeRegistry;
 class SyncCycleContext;
 
-// Unless stated otherwise, all methods of SyncManager should be called on the
-// same thread.
+// Lives on the sync sequence.
 class SyncManagerImpl
     : public SyncManager,
       public network::NetworkConnectionTracker::NetworkConnectionObserver,
@@ -134,7 +133,8 @@ class SyncManagerImpl
 
   SEQUENCE_CHECKER(sequence_checker_);
 
-  base::ObserverList<SyncManager::Observer>::Unchecked observers_;
+  base::ObserverList<SyncManager::Observer>::UncheckedAndDanglingUntriaged
+      observers_;
 
   // The ServerConnectionManager used to abstract communication between the
   // client (the Syncer) and the sync server.

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,8 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
+#include "components/content_settings/core/common/content_settings.h"
+#include "components/permissions/features.h"
 #include "components/permissions/permission_prompt.h"
 #include "components/permissions/permission_request_queue.h"
 #include "components/permissions/permission_ui_selector.h"
@@ -265,6 +268,10 @@ class PermissionRequestManager
 
   void SetHatsShownCallback(base::OnceCallback<void()> callback) override;
 
+  // For permissions that have visible views, we should only record
+  // PromptResolved metrics, for ask prompts.
+  bool ShouldRecordUmaForCurrentPrompt() const;
+
  private:
   friend class test::PermissionRequestManagerTestApi;
   friend class content::WebContentsUserData<PermissionRequestManager>;
@@ -297,8 +304,8 @@ class PermissionRequestManager
   // Return true if we keep showing the current request, otherwise return false
   bool ReprioritizeCurrentRequestIfNeeded();
 
-  // Validate the input request. If the request is invalid and |should_finalize|
-  // is set, cancel and remove it from *_map_ and *_set_.
+  // Validate the input request. If the request is invalid and
+  // |should_finalize| is set, cancel and remove it from *_map_ and *_set_.
   // Return true if the request is valid, otherwise false.
   bool ValidateRequest(PermissionRequest* request, bool should_finalize = true);
 
@@ -414,6 +421,14 @@ class PermissionRequestManager
       content::BrowserContext* browser_context,
       PermissionRequest* request,
       PermissionAction permission_action);
+
+  // Take a snapshot of the content setting status for the current requests,
+  // which can change based on the user's decision. Used in HaTS as a filter.
+  // This defaults to "DEFAULT" if there's no ContentSettingsType associated
+  // with the PermissionType.
+  void SetCurrentRequestsInitialStatuses();
+
+  ContentSetting GetRequestInitialStatus(PermissionRequest* request);
 
   // Factory to be used to create views when needed.
   PermissionPrompt::Factory view_factory_;
@@ -535,6 +550,16 @@ class PermissionRequestManager
   base::OneShotTimer preignore_timer_;
 
   std::optional<base::OnceCallback<void()>> hats_shown_callback_;
+
+  // Holds the position of the current prompt, only relevant for permission
+  // element prompts.
+  std::optional<feature_params::PermissionElementPromptPosition>
+      current_request_pepc_prompt_position_;
+
+  // Holds the initial statuses of the current requests, one for each request in
+  // |requests_|.
+  std::map<PermissionRequest*, ContentSetting>
+      current_requests_initial_statuses_;
 
   base::WeakPtrFactory<PermissionRequestManager> weak_factory_{this};
   WEB_CONTENTS_USER_DATA_KEY_DECL();

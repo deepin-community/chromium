@@ -10,10 +10,7 @@
 
 #include "base/files/scoped_temp_dir.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
-#include "base/time/tick_clock.h"
-#include "components/services/storage/indexed_db/leveldb/leveldb_factory.h"
 #include "components/services/storage/indexed_db/leveldb/mock_level_db.h"
 #include "components/services/storage/indexed_db/scopes/leveldb_scopes.h"
 #include "components/services/storage/indexed_db/scopes/varint_coding.h"
@@ -26,6 +23,7 @@
 #include "third_party/blink/public/common/indexeddb/indexeddb_key_path.h"
 #include "third_party/blink/public/common/indexeddb/indexeddb_metadata.h"
 #include "third_party/leveldatabase/env_chromium.h"
+#include "third_party/leveldatabase/leveldb_chrome.h"
 #include "third_party/leveldatabase/src/include/leveldb/db.h"
 #include "third_party/leveldatabase/src/include/leveldb/filter_policy.h"
 #include "third_party/leveldatabase/src/include/leveldb/slice.h"
@@ -45,12 +43,9 @@ using ::testing::Eq;
 using ::testing::Return;
 using ::testing::StrictMock;
 using Status = ::leveldb::Status;
-using Slice = ::leveldb::Slice;
 
 constexpr int kRoundIterations = 11;
 constexpr int kMaxIterations = 100;
-const base::TimeTicks kTaskStartTime = base::TimeTicks() + base::Seconds(1);
-const base::TimeTicks kTaskEndTime = base::TimeTicks() + base::Seconds(2);
 
 constexpr int64_t kDb1 = 1;
 constexpr int64_t kDb2 = 1;
@@ -61,7 +56,6 @@ constexpr int64_t kOs4 = 9;
 constexpr int64_t kIndex1 = 31;
 constexpr int64_t kIndex2 = 32;
 constexpr int64_t kIndex3 = 35;
-constexpr int kTombstoneSize = 33;
 
 MATCHER_P(SliceEq,
           str,
@@ -74,22 +68,15 @@ MATCHER_P(SliceEq,
 leveldb_env::Options GetLevelDBOptions() {
   leveldb_env::Options options;
   options.comparator = indexed_db::GetDefaultLevelDBComparator();
+  options.create_if_missing = true;
+  options.write_buffer_size = 4 * 1024 * 1024;
   options.paranoid_checks = true;
 
-  static base::NoDestructor<leveldb_env::ChromiumEnv> g_leveldb_env(
-      "LevelDBEnv.IDB");
+  static base::NoDestructor<leveldb_env::ChromiumEnv> g_leveldb_env;
   options.env = g_leveldb_env.get();
 
   return options;
 }
-
-class MockTickClock : public base::TickClock {
- public:
-  MockTickClock() = default;
-  ~MockTickClock() override = default;
-
-  MOCK_METHOD(base::TimeTicks, NowTicks, (), (const));
-};
 
 class IndexedDBTombstoneSweeperTest : public testing::Test {
  public:
@@ -148,50 +135,24 @@ class IndexedDBTombstoneSweeperTest : public testing::Test {
   }
 
   void SetupRealDB() {
-    leveldb_factory_ =
-        std::make_unique<LevelDBFactory>(GetLevelDBOptions(), "indexedDB-test");
-    scoped_refptr<LevelDBState> level_db_state;
-    leveldb::Status s;
-    std::tie(level_db_state, s, std::ignore) =
-        leveldb_factory_->OpenLevelDBState(
-            base::FilePath(), indexed_db::GetDefaultLevelDBComparator(),
-            /* create_if_missing=*/true);
+    leveldb_env::Options options = GetLevelDBOptions();
+    std::unique_ptr<leveldb::Env> in_memory_env =
+        leveldb_chrome::NewMemEnv("in-memory-testing-db", options.env);
+    options.env = in_memory_env.get();
+
+    std::unique_ptr<leveldb::DB> db;
+    leveldb::Status s = leveldb_env::OpenDB(options, std::string(), &db);
     ASSERT_TRUE(s.ok());
+    scoped_refptr<LevelDBState> level_db_state =
+        LevelDBState::CreateForInMemoryDB(std::move(in_memory_env),
+                                          options.comparator, std::move(db),
+                                          "in-memory-testing-db");
     in_memory_db_ = DefaultTransactionalLevelDBFactory().CreateLevelDBDatabase(
         std::move(level_db_state), nullptr, nullptr,
         TransactionalLevelDBDatabase::kDefaultMaxOpenIteratorsPerDatabase);
     sweeper_ = std::make_unique<IndexedDBTombstoneSweeper>(
         kRoundIterations, kMaxIterations, in_memory_db_->db());
     sweeper_->SetStartSeedsForTesting(0, 0, 0);
-  }
-
-  void SetClockExpectations() {
-    EXPECT_CALL(tick_clock_, NowTicks())
-        .WillOnce(testing::Return(kTaskStartTime))
-        .WillOnce(testing::Return(kTaskEndTime));
-    sweeper_->SetClockForTesting(&tick_clock_);
-  }
-
-  void SetFirstClockExpectation() {
-    EXPECT_CALL(tick_clock_, NowTicks())
-        .WillOnce(testing::Return(kTaskStartTime));
-    sweeper_->SetClockForTesting(&tick_clock_);
-  }
-
-  void ExpectUmaTombstones(int num, int size, bool reached_max = false) {
-    std::string category = reached_max ? "MaxIterations" : "Complete";
-    histogram_tester_.ExpectUniqueSample(
-        "WebCore.IndexedDB.TombstoneSweeper.NumDeletedTombstones." + category,
-        num, 1);
-    histogram_tester_.ExpectUniqueSample(
-        "WebCore.IndexedDB.TombstoneSweeper.DeletedTombstonesSize." + category,
-        size, 1);
-  }
-
-  void ExpectTaskTimeRecorded() {
-    histogram_tester_.ExpectTimeBucketCount(
-        "WebCore.IndexedDB.TombstoneSweeper.DeletionTotalTime.Complete",
-        base::Seconds(1), 1);
   }
 
   void ExpectIndexEntry(leveldb::MockIterator& iterator,
@@ -243,15 +204,9 @@ class IndexedDBTombstoneSweeperTest : public testing::Test {
 
   std::unique_ptr<IndexedDBTombstoneSweeper> sweeper_;
 
-  StrictMock<MockTickClock> tick_clock_;
-
   std::vector<IndexedDBDatabaseMetadata> metadata_;
 
-  // Used to verify recorded data.
-  base::HistogramTester histogram_tester_;
-
  private:
-  std::unique_ptr<LevelDBFactory> leveldb_factory_;
   base::test::TaskEnvironment task_environment_;
 };
 
@@ -259,16 +214,12 @@ TEST_F(IndexedDBTombstoneSweeperTest, EmptyDB) {
   SetupMockDB();
   sweeper_->SetMetadata(&metadata_);
   EXPECT_TRUE(sweeper_->RunRound());
-
-  EXPECT_TRUE(
-      histogram_tester_.GetTotalCountsForPrefix("WebCore.IndexedDB.").empty());
 }
 
 TEST_F(IndexedDBTombstoneSweeperTest, NoTombstonesComplexDB) {
   SetupMockDB();
   PopulateMultiDBMetdata();
   sweeper_->SetMetadata(&metadata_);
-  SetClockExpectations();
 
   // We'll have one index entry per index, and simulate reaching the end.
   leveldb::MockIterator* mock_iterator = new leveldb::MockIterator();
@@ -334,17 +285,12 @@ TEST_F(IndexedDBTombstoneSweeperTest, NoTombstonesComplexDB) {
   }
 
   ASSERT_TRUE(sweeper_->RunRound());
-  ExpectTaskTimeRecorded();
-  ExpectUmaTombstones(0, 0);
-  histogram_tester_.ExpectUniqueSample(
-      "WebCore.IndexedDB.TombstoneSweeper.IndexScanPercent", 20, 1);
 }
 
 TEST_F(IndexedDBTombstoneSweeperTest, AllTombstonesComplexDB) {
   SetupMockDB();
   PopulateMultiDBMetdata();
   sweeper_->SetMetadata(&metadata_);
-  SetClockExpectations();
 
   // We'll have one index entry per index, and simulate reaching the end.
   leveldb::MockIterator* mock_iterator = new leveldb::MockIterator();
@@ -412,17 +358,12 @@ TEST_F(IndexedDBTombstoneSweeperTest, AllTombstonesComplexDB) {
   EXPECT_CALL(mock_db_, Write(_, _));
 
   ASSERT_TRUE(sweeper_->RunRound());
-  ExpectTaskTimeRecorded();
-  ExpectUmaTombstones(3, kTombstoneSize * 3);
-  histogram_tester_.ExpectUniqueSample(
-      "WebCore.IndexedDB.TombstoneSweeper.IndexScanPercent", 20, 1);
 }
 
 TEST_F(IndexedDBTombstoneSweeperTest, SimpleRealDBNoTombstones) {
   PopulateSingleIndexDBMetadata();
   SetupRealDB();
   sweeper_->SetMetadata(&metadata_);
-  SetClockExpectations();
 
   for (int i = 0; i < kRoundIterations; i++) {
     auto index_key = IndexedDBKey(i, blink::mojom::IDBKeyType::Number);
@@ -444,20 +385,13 @@ TEST_F(IndexedDBTombstoneSweeperTest, SimpleRealDBNoTombstones) {
 
   ASSERT_FALSE(sweeper_->RunRound());
   EXPECT_TRUE(sweeper_->RunRound());
-
-  ExpectTaskTimeRecorded();
-  ExpectUmaTombstones(0, 0);
-  histogram_tester_.ExpectUniqueSample(
-      "WebCore.IndexedDB.TombstoneSweeper.IndexScanPercent", 20, 1);
 }
 
 TEST_F(IndexedDBTombstoneSweeperTest, SimpleRealDBWithTombstones) {
   PopulateSingleIndexDBMetadata();
   SetupRealDB();
   sweeper_->SetMetadata(&metadata_);
-  SetClockExpectations();
 
-  int tombstones = 0;
   for (int i = 0; i < kRoundIterations + 1; i++) {
     auto index_key = IndexedDBKey(i, blink::mojom::IDBKeyType::Number);
     auto primary_key = IndexedDBKey(i + 1, blink::mojom::IDBKeyType::Number);
@@ -472,7 +406,6 @@ TEST_F(IndexedDBTombstoneSweeperTest, SimpleRealDBWithTombstones) {
     std::string encoded_primary_key;
     EncodeIDBKey(primary_key, &encoded_primary_key);
     bool tombstone = i % 2 != 0;
-    tombstones += i % 2 ? 1 : 0;
     EncodeVarInt(tombstone ? 2 : 1, &exists_value);
     in_memory_db_->Put(ExistsEntryKey::Encode(kDb1, kOs1, encoded_primary_key),
                        &exists_value);
@@ -480,11 +413,6 @@ TEST_F(IndexedDBTombstoneSweeperTest, SimpleRealDBWithTombstones) {
 
   ASSERT_FALSE(sweeper_->RunRound());
   EXPECT_TRUE(sweeper_->RunRound());
-
-  ExpectTaskTimeRecorded();
-  ExpectUmaTombstones(tombstones, kTombstoneSize * tombstones);
-  histogram_tester_.ExpectUniqueSample(
-      "WebCore.IndexedDB.TombstoneSweeper.IndexScanPercent", 20, 1);
 
   for (int i = 0; i < kRoundIterations + 1; i++) {
     if (i % 2 == 1) {
@@ -502,43 +430,10 @@ TEST_F(IndexedDBTombstoneSweeperTest, SimpleRealDBWithTombstones) {
   }
 }
 
-TEST_F(IndexedDBTombstoneSweeperTest, HitMaxIters) {
-  PopulateSingleIndexDBMetadata();
-  SetupRealDB();
-  sweeper_->SetMetadata(&metadata_);
-  SetFirstClockExpectation();
-
-  for (int i = 0; i < kMaxIterations + 1; i++) {
-    auto index_key = IndexedDBKey(i, blink::mojom::IDBKeyType::Number);
-    auto primary_key = IndexedDBKey(i + 1, blink::mojom::IDBKeyType::Number);
-    std::string value_str;
-    EncodeVarInt(1, &value_str);
-    EncodeIDBKey(primary_key, &value_str);
-    in_memory_db_->Put(
-        IndexDataKey::Encode(kDb1, kOs1, kIndex1, index_key, primary_key),
-        &value_str);
-
-    std::string exists_value;
-    std::string encoded_primary_key;
-    EncodeIDBKey(primary_key, &encoded_primary_key);
-    EncodeVarInt(i % 2 == 0 ? 2 : 1, &exists_value);
-    in_memory_db_->Put(ExistsEntryKey::Encode(kDb1, kOs1, encoded_primary_key),
-                       &exists_value);
-  }
-
-  while (!sweeper_->RunRound())
-    ;
-
-  ExpectUmaTombstones(41, kTombstoneSize * 41, true);
-  histogram_tester_.ExpectUniqueSample(
-      "WebCore.IndexedDB.TombstoneSweeper.IndexScanPercent", 0, 1);
-}
-
 TEST_F(IndexedDBTombstoneSweeperTest, LevelDBError) {
   SetupMockDB();
   PopulateMultiDBMetdata();
   sweeper_->SetMetadata(&metadata_);
-  SetFirstClockExpectation();
 
   // We'll have one index entry per index, and simulate reaching the end.
   leveldb::MockIterator* mock_iterator = new leveldb::MockIterator();
@@ -585,13 +480,6 @@ TEST_F(IndexedDBTombstoneSweeperTest, LevelDBError) {
   }
 
   ASSERT_TRUE(sweeper_->RunRound());
-
-  histogram_tester_.ExpectUniqueSample(
-      "WebCore.IndexedDB.TombstoneSweeper.SweepError",
-      leveldb_env::GetLevelDBStatusUMAValue(Status::Corruption("")), 1);
-  // Only finished scanning the first index.
-  histogram_tester_.ExpectUniqueSample(
-      "WebCore.IndexedDB.TombstoneSweeper.IndexScanPercent", 1 * 20 / 3, 1);
 }
 
 }  // namespace indexed_db_tombstone_sweeper_unittest

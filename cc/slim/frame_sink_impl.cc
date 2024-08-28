@@ -11,6 +11,7 @@
 #include "base/check.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
+#include "base/not_fatal_until.h"
 #include "base/threading/platform_thread.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/typed_macros.h"
@@ -172,22 +173,24 @@ void FrameSinkImpl::UploadUIResource(cc::UIResourceId resource_id,
   UploadedUIResource uploaded_resource;
   auto* sii = context_provider_->SharedImageInterface();
   constexpr gfx::ColorSpace color_space = gfx::ColorSpace::CreateSRGB();
-  uint32_t shared_image_usage = gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
+  gpu::SharedImageUsageSet shared_image_usage =
+      gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
   uploaded_resource.shared_image = sii->CreateSharedImage(
-      format, resource_bitmap.GetSize(), color_space, kTopLeft_GrSurfaceOrigin,
-      kPremul_SkAlphaType, shared_image_usage, "SlimCompositorUIResource",
+      {format, resource_bitmap.GetSize(), color_space, shared_image_usage,
+       "SlimCompositorUIResource"},
       base::span<const uint8_t>(resource_bitmap.GetPixels(),
                                 resource_bitmap.SizeInBytes()));
   CHECK(uploaded_resource.shared_image);
   gpu::SyncToken sync_token = sii->GenUnverifiedSyncToken();
 
-  GLenum texture_target = gpu::GetBufferTextureTarget(
-      gfx::BufferUsage::SCANOUT,
-      viz::SinglePlaneSharedImageFormatToBufferFormat(format), caps);
+  // NOTE: This resource will never be used as an overlay, as we we hardcode
+  // `is_overlay_candidate` to false. Hence, the texture target should always be
+  // GL_TEXTURE_2D (other texture targets are needed only for overlays).
   uploaded_resource.viz_resource_id = resource_provider_.ImportResource(
       viz::TransferableResource::MakeGpu(
-          uploaded_resource.shared_image, texture_target, sync_token,
-          resource_bitmap.GetSize(), format, /*is_overlay_candidate=*/false,
+          uploaded_resource.shared_image, /*texture_target=*/GL_TEXTURE_2D,
+          sync_token, resource_bitmap.GetSize(), format,
+          /*is_overlay_candidate=*/false,
           viz::TransferableResource::ResourceSource::kUI),
       base::BindOnce(&FrameSinkImpl::UIResourceReleased, base::Unretained(this),
                      resource_id));
@@ -202,7 +205,7 @@ void FrameSinkImpl::UIResourceReleased(cc::UIResourceId ui_resource_id,
                                        const gpu::SyncToken& sync_token,
                                        bool is_lost) {
   auto itr = uploaded_resources_.find(ui_resource_id);
-  DCHECK(itr != uploaded_resources_.end());
+  CHECK(itr != uploaded_resources_.end(), base::NotFatalUntil::M130);
   auto* sii = context_provider_->SharedImageInterface();
   sii->DestroySharedImage(sync_token, std::move(itr->second.shared_image));
   uploaded_resources_.erase(itr);

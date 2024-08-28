@@ -13,195 +13,330 @@
 // limitations under the License.
 
 import m from 'mithril';
-import {Disposable, Trash} from '../base/disposable';
+
 import {AggregationPanel} from './aggregation_panel';
 import {globals} from './globals';
-import {Area, AreaSelection} from '../common/state';
-import {Anchor} from '../widgets/anchor';
-import {Actions} from '../common/actions';
 import {isEmptyData} from '../common/aggregation_data';
 import {DetailsShell} from '../widgets/details_shell';
-import {Section} from '../widgets/section';
-import {GridLayout} from '../widgets/grid_layout';
-import {Icons} from '../base/semantic_icons';
-import {Tree, TreeNode} from '../widgets/tree';
-import {Timestamp} from './widgets/timestamp';
-import {PIVOT_TABLE_REDUX_FLAG} from '../controller/pivot_table_controller';
+import {Button, ButtonBar} from '../widgets/button';
+import {raf} from '../core/raf_scheduler';
+import {EmptyState} from '../widgets/empty_state';
+import {FlowEventsAreaSelectedPanel} from './flow_events_panel';
+import {PivotTable} from './pivot_table';
+import {
+  LegacyFlamegraphDetailsPanel,
+  FlamegraphSelectionParams,
+} from './legacy_flamegraph_panel';
+import {AreaSelection, ProfileType, TrackState} from '../common/state';
+import {assertExists} from '../base/logging';
+import {Monitor} from '../base/monitor';
+import {PERF_SAMPLES_PROFILE_TRACK_KIND} from '../core/track_kinds';
+import {
+  QueryFlamegraph,
+  QueryFlamegraphAttrs,
+  USE_NEW_FLAMEGRAPH_IMPL,
+  metricsFromTableOrSubquery,
+} from '../core/query_flamegraph';
+import {DisposableStack} from '../base/disposable_stack';
 
-interface AreaDetailsPanelAttrs {
-  selection: AreaSelection;
+interface View {
+  key: string;
+  name: string;
+  content: m.Children;
 }
 
-class AreaDetailsPanel implements m.ClassComponent<AreaDetailsPanelAttrs> {
-  view(vnode: m.Vnode<AreaDetailsPanelAttrs>): m.Children {
-    const {
-      selection,
-    } = vnode.attrs;
+class AreaDetailsPanel implements m.ClassComponent {
+  private readonly monitor = new Monitor([() => globals.state.selection]);
+  private currentTab: string | undefined = undefined;
+  private flamegraphAttrs?: QueryFlamegraphAttrs;
+  private legacyFlamegraphSelection?: FlamegraphSelectionParams;
 
-    const areaId = selection.areaId;
-    const area = globals.state.areas[areaId];
+  private getCurrentView(): string | undefined {
+    const types = this.getViews().map(({key}) => key);
 
-    return m(DetailsShell,
-      {
-        title: 'Area Selection',
-      },
-      m(GridLayout,
-        this.renderDetailsSection(area),
-        this.renderLinksSection(),
-      ),
-    );
-  }
-
-  private renderDetailsSection(area: Area) {
-    return m(Section,
-      {
-        title: 'Details',
-      },
-      m(Tree,
-        m(TreeNode, {left: 'Start', right: m(Timestamp, {ts: area.start})}),
-        m(TreeNode, {left: 'End', right: m(Timestamp, {ts: area.end})}),
-        m(TreeNode, {left: 'Track Count', right: area.tracks.length}),
-      ),
-    );
-  }
-
-  private renderLinksSection() {
-    const linkNodes: m.Children = [];
-
-    globals.aggregateDataStore.forEach((value, type) => {
-      if (!isEmptyData(value)) {
-        const anchor = m(Anchor,
-          {
-            icon: Icons.ChangeTab,
-            onclick: () => {
-              globals.dispatch(Actions.showTab({uri: uriForAggType(type)}));
-            },
-          },
-          value.tabName,
-        );
-        const node = m(TreeNode, {left: anchor});
-        linkNodes.push(node);
-      }
-    });
-
-    linkNodes.push(m(TreeNode, {
-      left: m(
-        Anchor,
-        {
-          icon: Icons.ChangeTab,
-          onclick: () => {
-            globals.dispatch(
-              Actions.showTab({uri: 'perfetto.Flows#FlowEvents'}));
-          },
-        },
-        'Flow Events'),
-    }));
-
-    if (PIVOT_TABLE_REDUX_FLAG.get()) {
-      linkNodes.push(m(TreeNode, {
-        left: m(
-          Anchor,
-          {
-            icon: Icons.ChangeTab,
-            onclick: () => {
-              globals.dispatch(
-                Actions.showTab({uri: 'perfetto.PivotTable#PivotTable'}));
-            },
-          },
-          'Pivot Table'),
-      }));
+    if (types.length === 0) {
+      return undefined;
     }
 
-    if (linkNodes.length === 0) return undefined;
+    if (this.currentTab === undefined) {
+      return types[0];
+    }
 
-    return m(Section,
+    if (!types.includes(this.currentTab)) {
+      return types[0];
+    }
+
+    return this.currentTab;
+  }
+
+  private getViews(): View[] {
+    const views: View[] = [];
+
+    if (USE_NEW_FLAMEGRAPH_IMPL.get()) {
+      this.addFlamegraphView(views);
+    } else {
+      this.addLegacyFlamegraphView(views);
+    }
+
+    for (const [key, value] of globals.aggregateDataStore.entries()) {
+      if (!isEmptyData(value)) {
+        views.push({
+          key: value.tabName,
+          name: value.tabName,
+          content: m(AggregationPanel, {kind: key, key, data: value}),
+        });
+      }
+    }
+
+    const pivotTableState = globals.state.nonSerializableState.pivotTable;
+    if (pivotTableState.selectionArea !== undefined) {
+      views.push({
+        key: 'pivot_table',
+        name: 'Pivot Table',
+        content: m(PivotTable, {
+          selectionArea: pivotTableState.selectionArea,
+        }),
+      });
+    }
+
+    // Add this after all aggregation panels, to make it appear after 'Slices'
+    if (globals.selectedFlows.length > 0) {
+      views.push({
+        key: 'selected_flows',
+        name: 'Flow Events',
+        content: m(FlowEventsAreaSelectedPanel),
+      });
+    }
+
+    return views;
+  }
+
+  view(_: m.Vnode): m.Children {
+    const views = this.getViews();
+    const currentViewKey = this.getCurrentView();
+
+    const aggregationButtons = views.map(({key, name}) => {
+      return m(Button, {
+        onclick: () => {
+          this.currentTab = key;
+          raf.scheduleFullRedraw();
+        },
+        key,
+        label: name,
+        active: currentViewKey === key,
+      });
+    });
+
+    if (currentViewKey === undefined) {
+      return this.renderEmptyState();
+    }
+
+    const content = views.find(({key}) => key === currentViewKey)?.content;
+    if (content === undefined) {
+      return this.renderEmptyState();
+    }
+
+    return m(
+      DetailsShell,
       {
-        title: 'Relevant Aggregations',
+        title: 'Area Selection',
+        description: m(ButtonBar, aggregationButtons),
       },
-      m(Tree, linkNodes),
+      content,
     );
   }
-}
 
-function uriForAggType(type: string): string {
-  return `aggregationTab#${type}`;
+  private renderEmptyState(): m.Children {
+    return m(
+      EmptyState,
+      {
+        className: 'pf-noselection',
+        title: 'Unsupported area selection',
+      },
+      'No details available for this area selection',
+    );
+  }
+
+  private addFlamegraphView(views: View[]) {
+    this.flamegraphAttrs = this.computeFlamegraphAttrs();
+    if (this.flamegraphAttrs === undefined) {
+      return;
+    }
+    views.push({
+      key: 'flamegraph_selection',
+      name: 'Flamegraph Selection',
+      content: m(QueryFlamegraph, this.flamegraphAttrs),
+    });
+  }
+
+  private computeFlamegraphAttrs() {
+    const currentSelection = globals.state.selection;
+    if (currentSelection.kind !== 'area') {
+      return undefined;
+    }
+    if (!this.monitor.ifStateChanged()) {
+      // If the selection has not changed, just return a copy of the last seen
+      // attrs.
+      return this.flamegraphAttrs;
+    }
+    const upids = getUpidsFromAreaSelection(currentSelection);
+    if (upids.length === 0) {
+      const utids = getUtidsFromAreaSelection(currentSelection);
+      if (utids.length === 0) {
+        return undefined;
+      }
+      return {
+        engine: assertExists(this.getCurrentEngine()),
+        metrics: [
+          ...metricsFromTableOrSubquery(
+            `
+              (
+                select id, parent_id as parentId, name, self_count
+                from _linux_perf_callstacks_for_samples!((
+                  select p.callsite_id
+                  from perf_sample p
+                  where p.ts >= ${currentSelection.start}
+                    and p.ts <= ${currentSelection.end}
+                    and p.utid in (${utids.join(',')})
+                ))
+              )
+            `,
+            [
+              {
+                name: 'Perf Samples',
+                unit: '',
+                columnName: 'self_count',
+              },
+            ],
+            'include perfetto module linux.perf.samples',
+          ),
+        ],
+      };
+    }
+    return {
+      engine: assertExists(this.getCurrentEngine()),
+      metrics: [
+        ...metricsFromTableOrSubquery(
+          `
+            (
+              select id, parent_id as parentId, name, self_count
+              from _linux_perf_callstacks_for_samples!((
+                select p.callsite_id
+                from perf_sample p
+                join thread t using (utid)
+                where p.ts >= ${currentSelection.start}
+                  and p.ts <= ${currentSelection.end}
+                  and t.upid in (${upids.join(',')})
+              ))
+            )
+          `,
+          [
+            {
+              name: 'Perf Samples',
+              unit: '',
+              columnName: 'self_count',
+            },
+          ],
+          'include perfetto module linux.perf.samples',
+        ),
+      ],
+    };
+  }
+
+  private addLegacyFlamegraphView(views: View[]) {
+    this.legacyFlamegraphSelection = this.computeLegacyFlamegraphSelection();
+    if (this.legacyFlamegraphSelection === undefined) {
+      return;
+    }
+    views.push({
+      key: 'flamegraph_selection',
+      name: 'Flamegraph Selection',
+      content: m(LegacyFlamegraphDetailsPanel, {
+        cache: globals.areaFlamegraphCache,
+        selection: this.legacyFlamegraphSelection,
+      }),
+    });
+  }
+
+  private computeLegacyFlamegraphSelection() {
+    const currentSelection = globals.state.selection;
+    if (currentSelection.kind !== 'area') {
+      return undefined;
+    }
+    if (!this.monitor.ifStateChanged()) {
+      // If the selection has not changed, just return a copy of the last seen
+      // selection.
+      return this.legacyFlamegraphSelection;
+    }
+    const upids = getUpidsFromAreaSelection(currentSelection);
+    if (upids.length === 0) {
+      return undefined;
+    }
+    return {
+      profileType: ProfileType.PERF_SAMPLE,
+      start: currentSelection.start,
+      end: currentSelection.end,
+      upids,
+    };
+  }
+
+  private getCurrentEngine() {
+    const engineId = globals.getCurrentEngine()?.id;
+    if (engineId === undefined) return undefined;
+    return globals.engines.get(engineId);
+  }
 }
 
 export class AggregationsTabs implements Disposable {
-  private tabs = [
-    {
-      type: 'cpu_aggregation',
-      title: 'CPU by thread',
-    },
-    {
-      type: 'thread_state_aggregation',
-      title: 'Thread States',
-    },
-    {
-      type: 'cpu_by_process_aggregation',
-      title: 'CPU by process',
-    },
-    {
-      type: 'slice_aggregation',
-      title: 'Slices',
-    },
-    {
-      type: 'counter_aggregation',
-      title: 'Counters',
-    },
-    {
-      type: 'frame_aggregation',
-      title: 'Frames',
-    },
-  ];
-
-  private trash = new Trash();
+  private trash = new DisposableStack();
 
   constructor() {
-    for (const {type, title} of this.tabs) {
-      const uri = uriForAggType(type);
-      const unregister = globals.tabManager.registerTab({
-        uri,
-        isEphemeral: false,
-        content: {
-          hasContent: () => {
-            const data = globals.aggregateDataStore.get(type);
-            const hasData = Boolean(data && !isEmptyData(data));
-            return hasData;
-          },
-          getTitle: () => title,
-          render: () => {
-            const data = globals.aggregateDataStore.get(type);
-            return m(AggregationPanel, {kind: type, data});
-          },
-        },
-      });
-      this.trash.add(unregister);
-
-      const unregisterCmd = globals.commandManager.registry.register({
-        id: uri,
-        name: `Show ${title} Aggregation Tab`,
-        callback: () => {
-          globals.dispatch(Actions.showTab({uri}));
-        },
-      });
-      this.trash.add(unregisterCmd);
-    }
-
     const unregister = globals.tabManager.registerDetailsPanel({
       render(selection) {
-        if (selection.kind === 'AREA') {
-          return m(AreaDetailsPanel, {selection});
+        if (selection.kind === 'area') {
+          return m(AreaDetailsPanel);
         } else {
           return undefined;
         }
       },
     });
 
-    this.trash.add(unregister);
+    this.trash.use(unregister);
   }
 
-  dispose(): void {
+  [Symbol.dispose]() {
     this.trash.dispose();
   }
+}
+
+function getUpidsFromAreaSelection(currentSelection: AreaSelection) {
+  const upids = [];
+  for (const trackId of currentSelection.tracks) {
+    const track: TrackState | undefined = globals.state.tracks[trackId];
+    const trackInfo = globals.trackManager.resolveTrackInfo(track?.uri);
+    if (trackInfo?.tags?.kind !== PERF_SAMPLES_PROFILE_TRACK_KIND) {
+      continue;
+    }
+    if (trackInfo.tags?.upid === undefined) {
+      continue;
+    }
+    upids.push(trackInfo.tags?.upid);
+  }
+  return upids;
+}
+
+function getUtidsFromAreaSelection(currentSelection: AreaSelection) {
+  const utids = [];
+  for (const trackId of currentSelection.tracks) {
+    const track: TrackState | undefined = globals.state.tracks[trackId];
+    const trackInfo = globals.trackManager.resolveTrackInfo(track?.uri);
+    if (trackInfo?.tags?.kind !== PERF_SAMPLES_PROFILE_TRACK_KIND) {
+      continue;
+    }
+    if (trackInfo.tags?.utid === undefined) {
+      continue;
+    }
+    utids.push(trackInfo.tags?.utid);
+  }
+  return utids;
 }

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "base/android/jni_array.h"
 
 #include "base/android/jni_android.h"
@@ -35,6 +40,15 @@ ScopedJavaLocalRef<jbyteArray> ToJavaByteArray(
 ScopedJavaLocalRef<jbyteArray> ToJavaByteArray(JNIEnv* env,
                                                const std::string& str) {
   return ToJavaByteArray(env, base::as_byte_span(str));
+}
+
+ScopedJavaLocalRef<jbooleanArray> ToJavaBooleanArray(
+    JNIEnv* env,
+    const std::vector<bool>& bool_vec) {
+  bool bool_arr[bool_vec.size()];
+  std::copy(bool_vec.begin(), bool_vec.end(), bool_arr);
+
+  return ToJavaBooleanArray(env, bool_arr, bool_vec.size());
 }
 
 ScopedJavaLocalRef<jbooleanArray> ToJavaBooleanArray(JNIEnv* env,
@@ -137,10 +151,10 @@ BASE_EXPORT ScopedJavaLocalRef<jdoubleArray> ToJavaDoubleArray(
 
 BASE_EXPORT ScopedJavaLocalRef<jobjectArray> ToJavaArrayOfObjects(
     JNIEnv* env,
-    ScopedJavaLocalRef<jclass> clazz,
+    jclass clazz,
     base::span<const ScopedJavaLocalRef<jobject>> v) {
   jobjectArray joa =
-      env->NewObjectArray(checked_cast<jsize>(v.size()), clazz.obj(), nullptr);
+      env->NewObjectArray(checked_cast<jsize>(v.size()), clazz, nullptr);
   CheckException(env);
 
   for (size_t i = 0; i < v.size(); ++i) {
@@ -152,16 +166,14 @@ BASE_EXPORT ScopedJavaLocalRef<jobjectArray> ToJavaArrayOfObjects(
 BASE_EXPORT ScopedJavaLocalRef<jobjectArray> ToJavaArrayOfObjects(
     JNIEnv* env,
     base::span<const ScopedJavaLocalRef<jobject>> v) {
-  return ToJavaArrayOfObjects(env, GetClass(env, "java/lang/Object"), v);
+  return ToJavaArrayOfObjects(env, jni_zero::g_object_class, v);
 }
 
 BASE_EXPORT ScopedJavaLocalRef<jobjectArray> ToJavaArrayOfObjects(
     JNIEnv* env,
     base::span<const ScopedJavaGlobalRef<jobject>> v) {
-  ScopedJavaLocalRef<jclass> object_array_clazz =
-      GetClass(env, "java/lang/Object");
   jobjectArray joa = env->NewObjectArray(checked_cast<jsize>(v.size()),
-                                         object_array_clazz.obj(), nullptr);
+                                         jni_zero::g_object_class, nullptr);
   CheckException(env);
 
   for (size_t i = 0; i < v.size(); ++i) {
@@ -173,9 +185,9 @@ BASE_EXPORT ScopedJavaLocalRef<jobjectArray> ToJavaArrayOfObjects(
 BASE_EXPORT ScopedJavaLocalRef<jobjectArray> ToTypedJavaArrayOfObjects(
     JNIEnv* env,
     base::span<const ScopedJavaLocalRef<jobject>> v,
-    const JavaRef<jclass>& type) {
+    jclass type) {
   jobjectArray joa =
-      env->NewObjectArray(checked_cast<jsize>(v.size()), type.obj(), nullptr);
+      env->NewObjectArray(checked_cast<jsize>(v.size()), type, nullptr);
   CheckException(env);
 
   for (size_t i = 0; i < v.size(); ++i) {
@@ -187,9 +199,9 @@ BASE_EXPORT ScopedJavaLocalRef<jobjectArray> ToTypedJavaArrayOfObjects(
 BASE_EXPORT ScopedJavaLocalRef<jobjectArray> ToTypedJavaArrayOfObjects(
     JNIEnv* env,
     base::span<const ScopedJavaGlobalRef<jobject>> v,
-    const JavaRef<jclass>& type) {
+    jclass type) {
   jobjectArray joa =
-      env->NewObjectArray(checked_cast<jsize>(v.size()), type.obj(), nullptr);
+      env->NewObjectArray(checked_cast<jsize>(v.size()), type, nullptr);
   CheckException(env);
 
   for (size_t i = 0; i < v.size(); ++i) {
@@ -231,9 +243,8 @@ ScopedJavaLocalRef<jobjectArray> ToJavaArrayOfByteArray(
 ScopedJavaLocalRef<jobjectArray> ToJavaArrayOfStrings(
     JNIEnv* env,
     base::span<const std::string> v) {
-  ScopedJavaLocalRef<jclass> string_clazz = GetClass(env, "java/lang/String");
   jobjectArray joa = env->NewObjectArray(checked_cast<jsize>(v.size()),
-                                         string_clazz.obj(), nullptr);
+                                         jni_zero::g_string_class, nullptr);
   CheckException(env);
 
   for (size_t i = 0; i < v.size(); ++i) {
@@ -284,9 +295,8 @@ ScopedJavaLocalRef<jobjectArray> ToJavaArrayOfStringArray(
 ScopedJavaLocalRef<jobjectArray> ToJavaArrayOfStrings(
     JNIEnv* env,
     base::span<const std::u16string> v) {
-  ScopedJavaLocalRef<jclass> string_clazz = GetClass(env, "java/lang/String");
   jobjectArray joa = env->NewObjectArray(checked_cast<jsize>(v.size()),
-                                         string_clazz.obj(), nullptr);
+                                         jni_zero::g_string_class, nullptr);
   CheckException(env);
 
   for (size_t i = 0; i < v.size(); ++i) {

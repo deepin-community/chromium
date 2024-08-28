@@ -78,7 +78,8 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   bool CanTakeFocus(mojom::blink::FocusType) override;
   void TakeFocus(mojom::blink::FocusType) override;
   void SetKeyboardFocusURL(Element* new_focus_element) override;
-  bool SupportsAppRegion() override;
+  bool SupportsDraggableRegions() override;
+  void DraggableRegionsChanged() override;
   void BeginLifecycleUpdates(LocalFrame& main_frame) override;
   void RegisterForCommitObservation(CommitObserver*) override;
   void UnregisterFromCommitObservation(CommitObserver*) override;
@@ -265,6 +266,7 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   void HandleKeyboardEventOnTextField(HTMLInputElement&,
                                       KeyboardEvent&) override;
   void DidChangeValueInTextField(HTMLFormControlElement&) override;
+  void DidClearValueInTextField(HTMLFormControlElement&) override;
   void DidUserChangeContentEditableContent(Element&) override;
   void DidEndEditingOnTextField(HTMLInputElement&) override;
   void OpenTextDataListChooser(HTMLInputElement&) override;
@@ -272,8 +274,9 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   void DidChangeSelectionInSelectControl(HTMLFormControlElement&) override;
   void SelectOrSelectListFieldOptionsChanged(HTMLFormControlElement&) override;
   void AjaxSucceeded(LocalFrame*) override;
-  void JavaScriptChangedAutofilledValue(HTMLFormControlElement&,
-                                        const String& old_value) override;
+  void JavaScriptChangedValue(HTMLFormControlElement&,
+                              const String& old_value,
+                              bool was_autofilled) override;
 
   void ShowVirtualKeyboardOnElementFocus(LocalFrame&) override;
 
@@ -307,7 +310,7 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
 
   void DocumentDetached(Document&) override;
 
-  double UserZoomFactor() const override;
+  double UserZoomFactor(LocalFrame* frame) const override;
 
   void FormElementReset(HTMLFormElement& element) override;
 

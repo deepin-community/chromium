@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/base64.h"
@@ -118,7 +119,7 @@ std::string RouteMessageToString(const RouteMessagePtr& message) {
     result = "text=";
     base::EscapeJSONString(message->message.value(), true, &result);
   } else {
-    const base::StringPiece src(
+    const std::string_view src(
         reinterpret_cast<const char*>(message->data.value().data()),
         message->data.value().size());
     result = "binary=" + base::Base64Encode(src);
@@ -220,6 +221,12 @@ class MediaRouterDesktopTest : public MediaRouterMojoTest {
       MediaRouterDesktop::RecordPresentationRequestUrlBySink(source,
                                                              provider_id);
     }
+  }
+
+  void OnUserGesture() { router()->OnUserGesture(); }
+
+  void SetMockSinkServiceForTest(MockDualMediaSinkService* sink_service) {
+    router()->media_sink_service_ = sink_service;
   }
 
  private:
@@ -918,12 +925,16 @@ TEST_F(MediaRouterDesktopTest, TestRecordPresentationRequestUrlBySink) {
   using PresentationUrlBySink = MediaRouterDesktop::PresentationUrlBySink;
 
   MediaSource cast_source("cast:ABCD1234");
+  MediaSource remote_playback_source(
+      "remote-playback:media-session?&video_codec=vp8&audio_codec=aac");
   MediaSource dial_source(
       GURL(base::StrCat({kCastDialPresentationUrlScheme, ":YouTube"})));
   MediaSource presentation_url(GURL("https://www.example.com"));
 
   base::HistogramTester tester;
   RecordPresentationRequestUrlBySink(cast_source,
+                                     mojom::MediaRouteProviderId::CAST, 6);
+  RecordPresentationRequestUrlBySink(remote_playback_source,
                                      mojom::MediaRouteProviderId::CAST, 5);
   RecordPresentationRequestUrlBySink(dial_source,
                                      mojom::MediaRouteProviderId::DIAL, 4);
@@ -937,18 +948,19 @@ TEST_F(MediaRouterDesktopTest, TestRecordPresentationRequestUrlBySink) {
                                      mojom::MediaRouteProviderId::DIAL, 1);
 
   EXPECT_THAT(
-      tester.GetAllSamples("MediaRouter.PresentationRequest.UrlBySink"),
+      tester.GetAllSamples("MediaRouter.PresentationRequest.UrlBySink2"),
       testing::UnorderedElementsAre(
           Bucket(static_cast<int>(PresentationUrlBySink::kUnknown), 1),
           Bucket(
-              static_cast<int>(PresentationUrlBySink::kNormalUrlToChromecast),
-              3),
-          Bucket(
               static_cast<int>(PresentationUrlBySink::kNormalUrlToWiredDisplay),
               2),
+          Bucket(
+              static_cast<int>(PresentationUrlBySink::kNormalUrlToChromecast),
+              3),
+          Bucket(static_cast<int>(PresentationUrlBySink::kDialUrlToDial), 4),
+          Bucket(static_cast<int>(PresentationUrlBySink::kRemotePlayback), 5),
           Bucket(static_cast<int>(PresentationUrlBySink::kCastUrlToChromecast),
-                 5),
-          Bucket(static_cast<int>(PresentationUrlBySink::kDialUrlToDial), 4)));
+                 6)));
 }
 
 TEST_F(MediaRouterDesktopTest, TestGetCurrentRoutes) {
@@ -1000,6 +1012,32 @@ TEST_F(MediaRouterDesktopTest, GetMirroringMediaControllerHost) {
 
   // Expect that no host for kRouteId2 exists, as it is not a local source.
   EXPECT_EQ(nullptr, router()->GetMirroringMediaControllerHost(kRouteId2));
+}
+
+TEST_F(MediaRouterDesktopTest, OnUserGesture) {
+  auto media_sink_service = std::make_unique<MockDualMediaSinkService>();
+  SetMockSinkServiceForTest(media_sink_service.get());
+
+  // If Cast and DIAL discovery hasn't started yet, user gesture will start
+  // discovery.
+  EXPECT_CALL(*media_sink_service, StartDiscovery);
+  EXPECT_CALL(*media_sink_service, DiscoverSinksNow).Times(0);
+  OnUserGesture();
+
+  // If Cast and DIAL discovery has started, user gesture will not lead to
+  // starting discovery again. Instead, the sink service will request to start a
+  // new discovery cycle.
+  ON_CALL(*media_sink_service, MdnsDiscoveryStarted)
+      .WillByDefault(Return(true));
+  ON_CALL(*media_sink_service, DialDiscoveryStarted)
+      .WillByDefault(Return(true));
+
+  EXPECT_CALL(*media_sink_service, StartDiscovery).Times(0);
+  EXPECT_CALL(*media_sink_service, DiscoverSinksNow);
+  OnUserGesture();
+
+  // Clean up
+  SetMockSinkServiceForTest(nullptr);
 }
 
 }  // namespace media_router

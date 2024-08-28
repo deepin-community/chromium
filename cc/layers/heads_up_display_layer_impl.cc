@@ -93,7 +93,7 @@ class DummyImageProvider : public ImageProvider {
   ~DummyImageProvider() override = default;
   ImageProvider::ScopedResult GetRasterContent(
       const DrawImage& draw_image) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return ScopedResult();
   }
 };
@@ -140,6 +140,10 @@ HeadsUpDisplayLayerImpl::HeadsUpDisplayLayerImpl(
 
 HeadsUpDisplayLayerImpl::~HeadsUpDisplayLayerImpl() {
   ReleaseResources();
+}
+
+mojom::LayerType HeadsUpDisplayLayerImpl::GetLayerType() const {
+  return mojom::LayerType::kHeadsUpDisplay;
 }
 
 std::unique_ptr<LayerImpl> HeadsUpDisplayLayerImpl::CreateLayerImpl(
@@ -214,7 +218,7 @@ bool HeadsUpDisplayLayerImpl::WillDraw(
   }
 
   int max_texture_size = layer_tree_impl()->max_texture_size();
-  // TODO(crbug.com/1196414): Support 2D scales in heads up layers.
+  // TODO(crbug.com/40176440): Support 2D scales in heads up layers.
   internal_contents_scale_ = GetIdealContentsScaleKey();
   internal_content_bounds_ =
       gfx::ScaleToCeiledSize(bounds(), internal_contents_scale_);
@@ -313,10 +317,9 @@ void HeadsUpDisplayLayerImpl::UpdateHudTexture(
       auto* sii = raster_context_provider->SharedImageInterface();
       backing->shared_image_interface = sii;
       backing->overlay_candidate = raster_caps.tile_overlay_candidate;
-      backing->texture_target = raster_caps.tile_texture_target;
 
-      uint32_t flags = gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
-                       gpu::SHARED_IMAGE_USAGE_RASTER_WRITE;
+      gpu::SharedImageUsageSet flags = gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
+                                       gpu::SHARED_IMAGE_USAGE_RASTER_WRITE;
       if (raster_caps.use_gpu_rasterization) {
         flags |= gpu::SHARED_IMAGE_USAGE_OOP_RASTERIZATION;
       }
@@ -324,9 +327,8 @@ void HeadsUpDisplayLayerImpl::UpdateHudTexture(
         flags |= gpu::SHARED_IMAGE_USAGE_SCANOUT;
       }
       backing->shared_image = sii->CreateSharedImage(
-          pool_resource.format(), pool_resource.size(),
-          pool_resource.color_space(), kTopLeft_GrSurfaceOrigin,
-          kPremul_SkAlphaType, flags, "HeadsUpDisplayLayer",
+          {pool_resource.format(), pool_resource.size(),
+           pool_resource.color_space(), flags, "HeadsUpDisplayLayer"},
           gpu::kNullSurfaceHandle);
       CHECK(backing->shared_image);
       auto* ri = raster_context_provider->RasterInterface();
@@ -352,10 +354,9 @@ void HeadsUpDisplayLayerImpl::UpdateHudTexture(
         auto backing = std::make_unique<HudSoftwareBacking>();
         backing->layer_tree_frame_sink = layer_tree_frame_sink;
         auto shared_image_mapping = sii->CreateSharedImage(
-            pool_resource.format(), pool_resource.size(),
-            pool_resource.color_space(), kTopLeft_GrSurfaceOrigin,
-            kPremul_SkAlphaType, gpu::SHARED_IMAGE_USAGE_CPU_WRITE,
-            "HeadsUpDisplayLayer");
+            {pool_resource.format(), pool_resource.size(),
+             pool_resource.color_space(), gpu::SHARED_IMAGE_USAGE_CPU_WRITE,
+             "HeadsUpDisplayLayer"});
 
         backing->shared_image = std::move(shared_image_mapping.shared_image);
         backing->shared_mapping = std::move(shared_image_mapping.mapping);
@@ -413,10 +414,10 @@ void HeadsUpDisplayLayerImpl::UpdateHudTexture(
       DummyImageProvider image_provider;
       size_t max_op_size_limit =
           gpu::raster::RasterInterface::kDefaultMaxOpSizeHint;
-      ri->RasterCHROMIUM(display_item_list.get(), &image_provider, size,
-                         gfx::Rect(size), gfx::Rect(size), post_translate,
-                         post_scale, /*requires_clear=*/false,
-                         &max_op_size_limit);
+      ri->RasterCHROMIUM(
+          display_item_list.get(), &image_provider, size, gfx::Rect(size),
+          gfx::Rect(size), post_translate, post_scale, /*requires_clear=*/false,
+          /*raster_inducing_scroll_offsets=*/nullptr, &max_op_size_limit);
       ri->EndRasterCHROMIUM();
     } else {
       // If not using |gpu_raster| but using gpu compositing, DrawHudContents()
@@ -439,9 +440,9 @@ void HeadsUpDisplayLayerImpl::UpdateHudTexture(
       SkPixmap pixmap;
       staging_surface_->peekPixels(&pixmap);
 
+      uint32_t texture_target = backing->shared_image->GetTextureTarget();
       ri->WritePixels(backing->shared_image->mailbox(), /*dst_x_offset=*/0,
-                      /*dst_y_offset=*/0,
-                      /*dst_plane_index=*/0, backing->texture_target, pixmap);
+                      /*dst_y_offset=*/0, texture_target, pixmap);
     }
 
     backing->mailbox_sync_token =
@@ -965,7 +966,7 @@ SkRect HeadsUpDisplayLayerImpl::DrawGpuRasterizationStatus(PaintCanvas* canvas,
 
   SkPoint gpu_status_pos = SkPoint::Make(left + width - kPadding,
                                          top + 2 * kFontHeight + 2 * kPadding);
-  // TODO(crbug/1308932): Remove toSkColor and make all SkColor4f.
+  // TODO(crbug.com/40219248): Remove toSkColor and make all SkColor4f.
   flags.setColor(DebugColors::HUDTitleColor().toSkColor());
   DrawText(canvas, flags, "GPU raster", TextAlign::kLeft, kTitleFontHeight,
            left + kPadding, top + kFontHeight + kPadding);
@@ -1131,8 +1132,8 @@ void HeadsUpDisplayLayerImpl::DrawDebugRects(
   if (layout_shift_rects_fade_step_ > 0) {
     layout_shift_rects_fade_step_--;
     for (auto& layout_shift_debug_rect : layout_shift_debug_rects_) {
-      // TODO(crbug/1308932): Remove all instances of toSkColor below and make
-      // all SkColor4f.
+      // TODO(crbug.com/40219248): Remove all instances of toSkColor below and
+      // make all SkColor4f.
       DrawDebugRect(
           canvas, &flags, layout_shift_debug_rect,
           DebugColors::LayoutShiftRectBorderColor(),
@@ -1214,13 +1215,25 @@ SkRect HeadsUpDisplayLayerImpl::DrawWebVitalMetrics(PaintCanvas* canvas,
                                                     int left,
                                                     int top,
                                                     int width) const {
-  const int height = ComputeTotalHeight(3);
+  const int height = ComputeTotalHeight(5);
   const SkRect area = SkRect::MakeXYWH(left, top, width, height);
 
   PaintFlags flags;
   DrawGraphBackground(canvas, &flags, area);
 
   int current_top = top + metrics_sizes.kTopPadding + metrics_sizes.kFontHeight;
+
+  // Add a deprecation notice
+  flags.setColor(DebugColors::PlatformLayerTreeTextColor());
+  std::string line1 = "This overlay is deprecated. Use the";
+  DrawText(canvas, flags, line1, TextAlign::kLeft, metrics_sizes.kFontHeight,
+           left + metrics_sizes.kSidePadding, current_top);
+  current_top += metrics_sizes.kFontHeight * 1.2;
+  std::string line2 = "Web Vitals Extension: goo.gle/wve";
+  DrawText(canvas, flags, line2, TextAlign::kLeft, metrics_sizes.kFontHeight,
+           left + metrics_sizes.kSidePadding, current_top);
+  current_top += metrics_sizes.kTopPadding;
+
   double metric_value = 0.f;
   bool has_lcp = web_vital_metrics_ && web_vital_metrics_->has_lcp;
   if (has_lcp)
@@ -1253,12 +1266,12 @@ int HeadsUpDisplayLayerImpl::DrawSinglePercentageMetric(PaintCanvas* canvas,
                                                         std::string name,
                                                         double value) const {
   std::string value_str = "-";
-  // TODO(crbug/1308932): Remove toSkColor and make all SkColor4f.
+  // TODO(crbug.com/40219248): Remove toSkColor and make all SkColor4f.
   SkColor metrics_color = DebugColors::HUDTitleColor().toSkColor();
   value_str = ToStringTwoDecimalPrecision(value) + "%";
 
   PaintFlags flags;
-  // TODO(crbug/1308932): Remove toSkColor and make all SkColor4f.
+  // TODO(crbug.com/40219248): Remove toSkColor and make all SkColor4f.
   flags.setColor(DebugColors::HUDTitleColor().toSkColor());
   DrawText(canvas, flags, name, TextAlign::kLeft, metrics_sizes.kFontHeight,
            left + metrics_sizes.kSidePadding + metrics_sizes.kBadgeWidth, top);
@@ -1306,10 +1319,6 @@ SkRect HeadsUpDisplayLayerImpl::DrawSmoothnessMetrics(PaintCanvas* canvas,
                                  "95th Percentile DF", percentile_smoothness);
 
   return area;
-}
-
-const char* HeadsUpDisplayLayerImpl::LayerTypeAsString() const {
-  return "cc::HeadsUpDisplayLayerImpl";
 }
 
 void HeadsUpDisplayLayerImpl::AsValueInto(

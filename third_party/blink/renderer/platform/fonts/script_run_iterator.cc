@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/platform/fonts/script_run_iterator.h"
 
 #include <algorithm>
@@ -23,7 +28,7 @@ namespace {
 // HarfBuzz, but normalizing earlier helps to reduce splitting runs between
 // these scripts.
 // https://docs.microsoft.com/en-us/typography/opentype/spec/scripttags
-inline UScriptCode getScriptForOpenType(UChar32 ch, UErrorCode* status) {
+inline UScriptCode GetScriptForOpenType(UChar32 ch, UErrorCode* status) {
   UScriptCode script = uscript_getScript(ch, status);
   if (UNLIKELY(U_FAILURE(*status)))
     return script;
@@ -60,7 +65,7 @@ ScriptRunIterator::UScriptCodeList GetHanScriptExtensions() {
     list.resize(count);
     return list;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return ScriptRunIterator::UScriptCodeList();
 }
 
@@ -102,7 +107,7 @@ void FixScriptsByEastAsianWidth(UChar32 ch,
     if (UNLIKELY(han_scripts.empty())) {
       // When |GetHanScriptExtensions| returns an empty list, replacing with it
       // will crash later, which makes the analysis complicated.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return;
     }
     set->Shrink(0);
@@ -141,7 +146,7 @@ void ICUScriptData::GetScripts(UChar32 ch, UScriptCodeList& dst) const {
     count = dst.size();
     status = U_ZERO_ERROR;
   }
-  UScriptCode primary_script = getScriptForOpenType(ch, &status);
+  UScriptCode primary_script = GetScriptForOpenType(ch, &status);
 
   if (U_FAILURE(status)) {
     DLOG(ERROR) << "Could not get icu script data: " << status << " for 0x"
@@ -228,7 +233,7 @@ ScriptRunIterator::ScriptRunIterator(const UChar* text,
       brackets_fixup_depth_(0),
       next_set_(std::make_unique<UScriptCodeList>()),
       ahead_set_(std::make_unique<UScriptCodeList>()),
-      // The initial value of m_aheadCharacter is not used.
+      // The initial value of ahead_character_ is not used.
       ahead_character_(0),
       ahead_pos_(0),
       common_preferred_(USCRIPT_COMMON),
@@ -238,9 +243,9 @@ ScriptRunIterator::ScriptRunIterator(const UChar* text,
 
   if (ahead_pos_ < length_) {
     current_set_.clear();
-    // Priming the m_currentSet with USCRIPT_COMMON here so that the first
-    // resolution between m_currentSet and m_nextSet in mergeSets() leads to
-    // chosing the script of the first consumed character.
+    // Priming the current_set_ with USCRIPT_COMMON here so that the first
+    // resolution between current_set_ and next_set_ in MergeSets() leads to
+    // choosing the script of the first consumed character.
     current_set_.push_back(USCRIPT_COMMON);
     U16_NEXT(text_, ahead_pos_, length_, ahead_character_);
     script_data_->GetScripts(ahead_character_, *ahead_set_);
@@ -338,9 +343,9 @@ void ScriptRunIterator::CloseBracket(UChar32 ch) {
   // leave stack alone, no match
 }
 
-// Keep items in m_currentSet that are in m_nextSet.
+// Keep items in current_set_ that are in next_set_.
 //
-// If the sets are disjoint, return false and leave m_currentSet unchanged. Else
+// If the sets are disjoint, return false and leave current_set_ unchanged. Else
 // return true and make current set the intersection. Make sure to maintain
 // current priority script as priority if it remains, else retain next priority
 // script if it remains.
@@ -463,9 +468,8 @@ bool ScriptRunIterator::Fetch(wtf_size_t* pos, UChar32* ch) {
 
   std::swap(next_set_, ahead_set_);
   if (ahead_pos_ == length_) {
-    // No more data to fetch, but last character still needs to be
-    // processed. Advance m_aheadPos so that next time we will know
-    // this has been done.
+    // No more data to fetch, but last character still needs to be processed.
+    // Advance ahead_pos_ so that next time we will know this has been done.
     ahead_pos_++;
     return true;
   }

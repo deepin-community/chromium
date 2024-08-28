@@ -13,13 +13,13 @@
 
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/numerics/math_constants.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/encryption_pattern.h"
 #include "media/base/encryption_scheme.h"
+#include "media/base/media_client.h"
 #include "media/base/media_tracks.h"
 #include "media/base/media_util.h"
 #include "media/base/stream_parser.h"
@@ -54,7 +54,7 @@ EncryptionScheme GetEncryptionScheme(const ProtectionSchemeInfo& sinf) {
     case FOURCC_CBCS:
       return EncryptionScheme::kCbcs;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   return EncryptionScheme::kUnencrypted;
@@ -63,9 +63,9 @@ EncryptionScheme GetEncryptionScheme(const ProtectionSchemeInfo& sinf) {
 class ExternalMemoryAdapter : public DecoderBuffer::ExternalMemory {
  public:
   explicit ExternalMemoryAdapter(std::vector<uint8_t> memory)
-      : memory_(std::move(memory)) {
-    span_ = {memory_.data(), memory_.size()};
-  }
+      : memory_(std::move(memory)) {}
+
+  const base::span<const uint8_t> Span() const override { return memory_; }
 
  private:
   std::vector<uint8_t> memory_;
@@ -141,7 +141,7 @@ bool MP4StreamParser::GetGenerateTimestampsFlag() const {
   return false;
 }
 
-bool MP4StreamParser::AppendToParseBuffer(const uint8_t* buf, size_t size) {
+bool MP4StreamParser::AppendToParseBuffer(base::span<const uint8_t> buf) {
   DCHECK_NE(state_, kWaitingForInit);
 
   if (state_ == kError) {
@@ -153,8 +153,8 @@ bool MP4StreamParser::AppendToParseBuffer(const uint8_t* buf, size_t size) {
     // synchronous with the app's appendBuffer() call, instead of async decode
     // error during async parse. Since Parse() cannot succeed in kError state,
     // don't even copy `buf` into `queue_` in this case.
-    // TODO(crbug.com/1379160): Instrument this path to see if it can be changed
-    // to just DCHECK_NE(state_, kError).
+    // TODO(crbug.com/40244241): Instrument this path to see if it can be
+    // changed to just DCHECK_NE(state_, kError).
     return true;
   }
 
@@ -164,8 +164,9 @@ bool MP4StreamParser::AppendToParseBuffer(const uint8_t* buf, size_t size) {
   // could lead to memory corruption, preferring CHECK.
   CHECK_EQ(queue_.tail(), max_parse_offset_);
 
-  if (!queue_.Push(buf, base::checked_cast<int>(size))) {
-    DVLOG(2) << "AppendToParseBuffer(): Failed to push buf of size " << size;
+  if (!queue_.Push(buf)) {
+    DVLOG(2) << "AppendToParseBuffer(): Failed to push buf of size "
+             << buf.size();
     return false;
   }
 
@@ -494,7 +495,7 @@ bool MP4StreamParser::ParseMoov(BoxReader* reader) {
         }
 
         codec = AudioCodec::kIAMF;
-        profile = entry.iamf.profile == 0 ? AudioCodecProfile::kIAMF_SIMPLE
+        profile = entry.iacb.profile == 0 ? AudioCodecProfile::kIAMF_SIMPLE
                                           : AudioCodecProfile::kIAMF_BASE;
         // The correct values for the channel layout and sample rate can
         // be parsed from the descriptor bitstream prepended to each sample.
@@ -553,29 +554,25 @@ bool MP4StreamParser::ParseMoov(BoxReader* reader) {
         }
 
         // Check if it is MPEG4 AAC defined in ISO 14496 Part 3 or
-        // supported MPEG2 AAC varients.
+        // supported MPEG2 AAC variants.
         if (ESDescriptor::IsAAC(audio_type)) {
           const AAC& aac = entry.esds.aac;
           codec = AudioCodec::kAAC;
           profile = aac.GetProfile();
           channel_layout = aac.GetChannelLayout(has_sbr_);
           sample_per_second = aac.GetOutputSamplesPerSecond(has_sbr_);
-          // Set `aac_extra_data` on all platforms but only set `extra_data` on
-          // Android. This is for backward compatibility until we have a better
-          // solution. See crbug.com/1245123 for details.
+          // Set `aac_extra_data` on all platforms. This is for backward
+          // compatibility until we have a better solution.
+          // See crbug.com/1245123 for details.
           aac_extra_data = aac.codec_specific_data();
-#if BUILDFLAG(IS_ANDROID)
-          extra_data = aac.codec_specific_data();
-#endif  // BUILDFLAG(IS_ANDROID)
 #if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
         } else if (audio_type == kAC3) {
           codec = AudioCodec::kAC3;
-          channel_layout = GuessChannelLayout(entry.ac3.dac3.GetChannelCount());
+          channel_layout = entry.ac3.dac3.GetChannelLayout();
           sample_per_second = entry.samplerate;
         } else if (audio_type == kEAC3) {
           codec = AudioCodec::kEAC3;
-          channel_layout =
-              GuessChannelLayout(entry.eac3.dec3.GetChannelCount());
+          channel_layout = entry.eac3.dec3.GetChannelLayout();
           sample_per_second = entry.samplerate;
 #endif
 #if BUILDFLAG(ENABLE_PLATFORM_AC4_AUDIO)
@@ -670,7 +667,7 @@ bool MP4StreamParser::ParseMoov(BoxReader* reader) {
       audio_track_ids_.insert(audio_track_id);
       const char* track_kind = (audio_track_ids_.size() == 1 ? "main" : "");
       media_tracks->AddAudioTrack(
-          audio_config, audio_track_id, MediaTrack::Kind(track_kind),
+          audio_config, true, audio_track_id, MediaTrack::Kind(track_kind),
           MediaTrack::Label(track->media.handler.name),
           MediaTrack::Language(track->media.header.language()));
       continue;
@@ -770,7 +767,7 @@ bool MP4StreamParser::ParseMoov(BoxReader* reader) {
       auto track_kind =
           MediaTrack::Kind(video_track_ids_.size() == 1 ? "main" : "");
       media_tracks->AddVideoTrack(
-          video_config, video_track_id, track_kind,
+          video_config, true, video_track_id, track_kind,
           MediaTrack::Label(track->media.handler.name),
           MediaTrack::Language(track->media.header.language()));
       continue;
@@ -896,18 +893,18 @@ bool MP4StreamParser::PrepareAACBuffer(
 
 #if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
 bool MP4StreamParser::PrependIADescriptors(
-    const IamfSpecificBox& iamf_box,
+    const IamfSpecificBox& iacb,
     std::vector<uint8_t>* frame_buf,
     std::vector<SubsampleEntry>* subsamples) const {
   // Prepend the IA Descriptors to every IA Sample.
-  frame_buf->insert(frame_buf->begin(), iamf_box.ia_descriptors.begin(),
-                    iamf_box.ia_descriptors.end());
+  frame_buf->insert(frame_buf->begin(), iacb.ia_descriptors.begin(),
+                    iacb.ia_descriptors.end());
+  size_t descriptors_size = iacb.ia_descriptors.size();
   if (subsamples->empty()) {
     subsamples->push_back(
-        SubsampleEntry(iamf_box.ia_descriptors.size(),
-                       frame_buf->size() - iamf_box.ia_descriptors.size()));
+        SubsampleEntry(descriptors_size, frame_buf->size() - descriptors_size));
   } else {
-    (*subsamples)[0].clear_bytes += iamf_box.ia_descriptors.size();
+    (*subsamples)[0].clear_bytes += descriptors_size;
   }
 
   return true;
@@ -1087,7 +1084,7 @@ ParseResult MP4StreamParser::EnqueueSample(BufferQueueMap* buffers) {
     } else {
 #if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
       if (runs_->audio_description().format == FOURCC_IAMF) {
-        if (!PrependIADescriptors(runs_->audio_description().iamf, &frame_buf,
+        if (!PrependIADescriptors(runs_->audio_description().iacb, &frame_buf,
                                   &subsamples)) {
           MEDIA_LOG(ERROR, media_log_)
               << "Failed to prepare IA sample for decode";
@@ -1111,9 +1108,20 @@ ParseResult MP4StreamParser::EnqueueSample(BufferQueueMap* buffers) {
   StreamParserBuffer::Type buffer_type = audio ? DemuxerStream::AUDIO :
       DemuxerStream::VIDEO;
 
-  auto stream_buf = StreamParserBuffer::FromExternalMemory(
-      std::make_unique<ExternalMemoryAdapter>(std::move(frame_buf)),
-      is_keyframe, buffer_type, runs_->track_id());
+  scoped_refptr<StreamParserBuffer> stream_buf;
+
+  if (auto* media_client = GetMediaClient()) {
+    if (auto* alloc = media_client->GetMediaAllocator()) {
+      stream_buf = StreamParserBuffer::FromExternalMemory(
+          alloc->CopyFrom(frame_buf), is_keyframe, buffer_type,
+          runs_->track_id());
+    }
+  }
+  if (!stream_buf) {
+    stream_buf = StreamParserBuffer::FromExternalMemory(
+        std::make_unique<ExternalMemoryAdapter>(std::move(frame_buf)),
+        is_keyframe, buffer_type, runs_->track_id());
+  }
 
   if (decrypt_config)
     stream_buf->set_decrypt_config(std::move(decrypt_config));

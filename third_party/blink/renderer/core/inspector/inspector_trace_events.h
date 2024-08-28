@@ -49,6 +49,7 @@ class DocumentLoader;
 class Element;
 class EncodedFormData;
 class Event;
+class MessageEvent;
 class ExecutionContext;
 class HitTestLocation;
 class HitTestRequest;
@@ -217,6 +218,8 @@ String DescendantInvalidationSetToIdString(const InvalidationSet&);
 namespace inspector_style_invalidator_invalidate_event {
 extern const char kElementHasPendingInvalidationList[];
 extern const char kInvalidateCustomPseudo[];
+extern const char kInvalidationSetInvalidatesSelf[];
+extern const char kInvalidationSetInvalidatesSubtree[];
 extern const char kInvalidationSetMatchedAttribute[];
 extern const char kInvalidationSetMatchedClass[];
 extern const char kInvalidationSetMatchedId[];
@@ -228,7 +231,7 @@ void SelectorPart(perfetto::TracedValue context,
                   Element&,
                   const char* reason,
                   const InvalidationSet&,
-                  const String&);
+                  const AtomicString&);
 void InvalidationList(perfetto::TracedValue context,
                       ContainerNode&,
                       const Vector<scoped_refptr<InvalidationSet>>&);
@@ -249,6 +252,11 @@ void InvalidationList(perfetto::TracedValue context,
       inspector_style_invalidator_invalidate_event::SelectorPart, (element), \
       (inspector_style_invalidator_invalidate_event::reason),                \
       (invalidationSet), (singleSelectorPart))
+
+#define TRACE_STYLE_INVALIDATOR_INVALIDATION_SET(element, reason, \
+                                                 invalidationSet) \
+  TRACE_STYLE_INVALIDATOR_INVALIDATION_SELECTORPART(              \
+      element, reason, invalidationSet, g_empty_atom)
 
 // From a web developer's perspective: what caused this layout? This is strictly
 // for tracing. Blink logic must not depend on these.
@@ -485,6 +493,15 @@ void Data(perfetto::TracedValue context,
           const WTF::TextPosition&);
 }
 
+namespace inspector_target_rundown_event {
+
+void Data(perfetto::TracedValue context,
+          ExecutionContext* execution_context,
+          v8::Isolate* isolate,
+          ScriptState* script_state,
+          int scriptId);
+}
+
 namespace inspector_parse_script_event {
 void Data(perfetto::TracedValue context,
           uint64_t identifier,
@@ -589,6 +606,18 @@ void EndData(perfetto::TracedValue context,
 
 namespace inspector_async_task {
 void Data(perfetto::TracedValue context, const StringView&);
+}
+
+namespace inspector_schedule_post_message_event {
+void Data(perfetto::TracedValue context,
+          ExecutionContext* execution_context,
+          uint64_t trace_id);
+}
+
+namespace inspector_handle_post_message_event {
+void Data(perfetto::TracedValue context,
+          ExecutionContext* execution_context,
+          const MessageEvent& event);
 }
 
 CORE_EXPORT String ToHexString(const void* p);

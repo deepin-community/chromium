@@ -5,11 +5,11 @@
 
 load("//lib/branches.star", "branches")
 load("//lib/builder_config.star", "builder_config")
-load("//lib/builders.star", "os", "reclient", "sheriff_rotations")
+load("//lib/builder_health_indicators.star", "health_spec")
+load("//lib/builders.star", "free_space", "gardener_rotations", "os", "siso")
 load("//lib/ci.star", "ci")
 load("//lib/consoles.star", "consoles")
 load("//lib/gn_args.star", "gn_args")
-load("//lib/builder_health_indicators.star", "health_spec")
 
 ci.defaults.set(
     executable = ci.DEFAULT_EXECUTABLE,
@@ -17,14 +17,15 @@ ci.defaults.set(
     pool = ci.DEFAULT_POOL,
     cores = 8,
     os = os.LINUX_DEFAULT,
-    sheriff_rotations = sheriff_rotations.FUCHSIA,
+    gardener_rotations = gardener_rotations.FUCHSIA,
     execution_timeout = 10 * time.hour,
     health_spec = health_spec.DEFAULT,
     notifies = ["cr-fuchsia"],
-    reclient_instance = reclient.instance.DEFAULT_TRUSTED,
-    reclient_jobs = reclient.jobs.DEFAULT,
     service_account = ci.DEFAULT_SERVICE_ACCOUNT,
     shadow_service_account = ci.DEFAULT_SHADOW_SERVICE_ACCOUNT,
+    siso_enabled = True,
+    siso_project = siso.project.DEFAULT_TRUSTED,
+    siso_remote_jobs = siso.remote_jobs.DEFAULT,
 )
 
 ci.builder(
@@ -48,16 +49,16 @@ ci.builder(
             target_platform = builder_config.target_platform.FUCHSIA,
         ),
         build_gs_bucket = "chromium-fyi-archive",
-        run_tests_serially = True,
     ),
     gn_args = gn_args.config(
         configs = [
             "debug_builder",
-            "reclient",
+            "remoteexec",
             "fuchsia_smart_display",
             "arm64_host",
         ],
     ),
+    free_space = free_space.high,
     console_view_entry = [
         consoles.console_view_entry(
             branch_selector = branches.selector.MAIN,
@@ -88,15 +89,18 @@ ci.builder(
             target_platform = builder_config.target_platform.FUCHSIA,
         ),
         build_gs_bucket = "chromium-fyi-archive",
+        # This builder is slow naturally, running everything in serial to avoid
+        # using too much resource.
         run_tests_serially = True,
     ),
     gn_args = gn_args.config(
         configs = [
             "release_builder",
-            "reclient",
+            "remoteexec",
             "fuchsia",
             "asan",
             "lsan",
+            "x64",
         ],
     ),
     console_view_entry = [
@@ -111,7 +115,7 @@ ci.builder(
 )
 
 ci.builder(
-    name = "fuchsia-fyi-x64-dbg",
+    name = "fuchsia-fyi-x64-dbg-persistent-emulator",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -129,49 +133,16 @@ ci.builder(
             target_platform = builder_config.target_platform.FUCHSIA,
         ),
         build_gs_bucket = "chromium-fyi-archive",
-        run_tests_serially = True,
     ),
     gn_args = gn_args.config(
         configs = [
             "debug_builder",
-            "reclient",
+            "remoteexec",
             "fuchsia_smart_display",
+            "x64",
         ],
     ),
-    console_view_entry = [
-        consoles.console_view_entry(
-            branch_selector = branches.selector.MAIN,
-            console_view = "sheriff.fuchsia",
-            category = "gardener|fuchsia ci|x64",
-            short_name = "dbg",
-        ),
-    ],
-    contact_team_email = "chrome-fuchsia-engprod@google.com",
-)
-
-ci.builder(
-    name = "fuchsia-fyi-x64-dbg-persistent-emulator",
-    triggered_by = ["ci/fuchsia-fyi-x64-dbg"],
-    builder_spec = builder_config.builder_spec(
-        execution_mode = builder_config.execution_mode.TEST,
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = [
-                "fuchsia_x64",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "mb",
-            ],
-            build_config = builder_config.build_config.DEBUG,
-            target_bits = 64,
-            target_platform = builder_config.target_platform.FUCHSIA,
-        ),
-        build_gs_bucket = "chromium-fyi-archive",
-        run_tests_serially = True,
-    ),
+    free_space = free_space.high,
     console_view_entry = [
         consoles.console_view_entry(
             branch_selector = branches.selector.MAIN,

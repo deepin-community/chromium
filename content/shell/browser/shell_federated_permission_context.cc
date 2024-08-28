@@ -8,6 +8,7 @@
 
 #include "base/containers/contains.h"
 #include "base/feature_list.h"
+#include "base/functional/callback_helpers.h"
 #include "content/public/common/content_features.h"
 #include "content/shell/common/shell_switches.h"
 
@@ -76,18 +77,25 @@ bool ShellFederatedPermissionContext::IsAutoReauthnEmbargoed(
 }
 
 void ShellFederatedPermissionContext::SetRequiresUserMediation(
-    const GURL& rp_url,
+    const url::Origin& rp_origin,
     bool requires_user_mediation) {
   if (requires_user_mediation) {
-    require_user_mediation_sites_.insert(rp_url);
+    require_user_mediation_sites_.insert(net::SchemefulSite(rp_origin));
   } else {
-    require_user_mediation_sites_.erase(rp_url);
+    require_user_mediation_sites_.erase(net::SchemefulSite(rp_origin));
   }
+  OnSetRequiresUserMediation(rp_origin, base::DoNothing());
 }
 
 bool ShellFederatedPermissionContext::RequiresUserMediation(
-    const GURL& rp_url) {
-  return require_user_mediation_sites_.contains(rp_url);
+    const url::Origin& rp_origin) {
+  return require_user_mediation_sites_.contains(net::SchemefulSite(rp_origin));
+}
+
+void ShellFederatedPermissionContext::OnSetRequiresUserMediation(
+    const url::Origin& relying_party,
+    base::OnceClosure callback) {
+  std::move(callback).Run();
 }
 
 base::Time ShellFederatedPermissionContext::GetAutoReauthnEmbargoStartTime(
@@ -103,6 +111,10 @@ void ShellFederatedPermissionContext::RemoveEmbargoForAutoReauthn(
 
 void ShellFederatedPermissionContext::AddIdpSigninStatusObserver(
     IdpSigninStatusObserver* observer) {
+  if (idp_signin_status_observer_list_.HasObserver(observer)) {
+    return;
+  }
+
   idp_signin_status_observer_list_.AddObserver(observer);
 }
 
@@ -114,9 +126,23 @@ void ShellFederatedPermissionContext::RemoveIdpSigninStatusObserver(
 bool ShellFederatedPermissionContext::HasSharingPermission(
     const url::Origin& relying_party_requester,
     const url::Origin& relying_party_embedder,
+    const url::Origin& identity_provider) {
+  return std::find_if(sharing_permissions_.begin(), sharing_permissions_.end(),
+                      [&](const auto& entry) {
+                        return relying_party_requester.Serialize() ==
+                                   std::get<0>(entry) &&
+                               relying_party_embedder.Serialize() ==
+                                   std::get<1>(entry) &&
+                               identity_provider.Serialize() ==
+                                   std::get<2>(entry);
+                      }) != sharing_permissions_.end();
+}
+
+std::optional<base::Time> ShellFederatedPermissionContext::GetLastUsedTimestamp(
+    const url::Origin& relying_party_requester,
+    const url::Origin& relying_party_embedder,
     const url::Origin& identity_provider,
-    const std::optional<std::string>& account_id) {
-  bool skip_account_check = !account_id;
+    const std::string& account_id) {
   return std::find_if(sharing_permissions_.begin(), sharing_permissions_.end(),
                       [&](const auto& entry) {
                         return relying_party_requester.Serialize() ==
@@ -125,9 +151,10 @@ bool ShellFederatedPermissionContext::HasSharingPermission(
                                    std::get<1>(entry) &&
                                identity_provider.Serialize() ==
                                    std::get<2>(entry) &&
-                               (skip_account_check ||
-                                account_id.value() == std::get<3>(entry));
-                      }) != sharing_permissions_.end();
+                               account_id == std::get<3>(entry);
+                      }) != sharing_permissions_.end()
+             ? std::make_optional<base::Time>()
+             : std::nullopt;
 }
 
 bool ShellFederatedPermissionContext::HasSharingPermission(
@@ -178,6 +205,15 @@ void ShellFederatedPermissionContext::RevokeSharingPermission(
   }
 }
 
+void ShellFederatedPermissionContext::RefreshExistingSharingPermission(
+    const url::Origin& relying_party_requester,
+    const url::Origin& relying_party_embedder,
+    const url::Origin& identity_provider,
+    const std::string& account_id) {
+  // `sharing_permissions_` does not currently store timestamps, so this method
+  // does nothing.
+}
+
 std::optional<bool> ShellFederatedPermissionContext::GetIdpSigninStatus(
     const url::Origin& idp_origin) {
   auto idp_signin_status = idp_signin_status_.find(idp_origin.Serialize());
@@ -196,7 +232,7 @@ void ShellFederatedPermissionContext::SetIdpSigninStatus(
     observer.OnIdpSigninStatusReceived(idp_origin, idp_signin_status);
   }
 
-  // TODO(crbug.com/1382989): Replace this with AddIdpSigninStatusObserver.
+  // TODO(crbug.com/40245925): Replace this with AddIdpSigninStatusObserver.
   if (idp_signin_status_closure_)
     idp_signin_status_closure_.Run();
 }

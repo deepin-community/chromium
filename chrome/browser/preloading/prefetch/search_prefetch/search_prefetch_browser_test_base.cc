@@ -66,7 +66,9 @@ SearchPrefetchBaseBrowserTest::~SearchPrefetchBaseBrowserTest() = default;
 
 void SearchPrefetchBaseBrowserTest::SetUpOnMainThread() {
   InProcessBrowserTest::SetUpOnMainThread();
-
+#if BUILDFLAG(IS_ANDROID)
+  SearchPrefetchService::SetIsTest();
+#endif
   host_resolver()->AddRule(kSearchDomain, "127.0.0.1");
   host_resolver()->AddRule(kSuggestDomain, "127.0.0.1");
 
@@ -77,7 +79,9 @@ void SearchPrefetchBaseBrowserTest::SetUpOnMainThread() {
   ASSERT_TRUE(model->loaded());
 
   SetDSEWithURL(
-      GetSearchServerQueryURL("{searchTerms}&{google:prefetchSource}"), false);
+      GetSearchServerQueryURL(
+          "{searchTerms}&{google:assistedQueryStats}{google:prefetchSource}"),
+      false);
 
   mock_cert_verifier_.mock_cert_verifier()->set_default_result(net::OK);
 }
@@ -95,7 +99,7 @@ void SearchPrefetchBaseBrowserTest::SetUpCommandLine(base::CommandLine* cmd) {
 
   mock_cert_verifier_.SetUpCommandLine(cmd);
 
-  // TODO(crbug.com/1491942): This fails with the field trial testing config.
+  // TODO(crbug.com/40285326): This fails with the field trial testing config.
   cmd->AppendSwitch("disable-field-trial-config");
 }
 
@@ -112,7 +116,7 @@ GURL SearchPrefetchBaseBrowserTest::GetSearchServerQueryURLWithNoQuery(
 GURL SearchPrefetchBaseBrowserTest::GetCanonicalSearchURL(
     const GURL& prefetch_url) {
   GURL canonical_search_url;
-  EXPECT_TRUE(HasCanoncialPreloadingOmniboxSearchURL(
+  EXPECT_TRUE(HasCanonicalPreloadingOmniboxSearchURL(
       prefetch_url, browser()->profile(), &canonical_search_url));
   return canonical_search_url;
 }
@@ -168,6 +172,14 @@ void SearchPrefetchBaseBrowserTest::WaitUntilStatusChangesTo(
     base::RunLoop run_loop;
     run_loop.RunUntilIdle();
   }
+}
+
+GURL SearchPrefetchBaseBrowserTest::GetRealPrefetchUrlForTesting(
+    const GURL& canonical_search_url) {
+  auto* search_prefetch_service =
+      SearchPrefetchServiceFactory::GetForProfile(browser()->profile());
+  return search_prefetch_service->GetRealPrefetchUrlForTesting(
+      canonical_search_url);
 }
 
 content::WebContents* SearchPrefetchBaseBrowserTest::GetWebContents() const {

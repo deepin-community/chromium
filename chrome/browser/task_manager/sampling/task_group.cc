@@ -6,8 +6,8 @@
 
 #include <algorithm>
 #include <limits>
+#include <vector>
 
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
@@ -170,7 +170,7 @@ void TaskGroup::AddTask(Task* task) {
 
 void TaskGroup::RemoveTask(Task* task) {
   DCHECK(task);
-  base::Erase(tasks_, task);
+  std::erase(tasks_, task);
 }
 
 void TaskGroup::Refresh(const gpu::VideoMemoryUsageStats& gpu_memory_stats,
@@ -261,7 +261,7 @@ Task* TaskGroup::GetTaskById(TaskId task_id) const {
     if (task->task_id() == task_id)
       return task;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return nullptr;
 }
 

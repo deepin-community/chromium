@@ -59,6 +59,10 @@
         padding-block-start: var(--cr-section-vertical-padding);
         padding-block-end: var(--cr-section-vertical-padding);
       }
+
+      #learnMoreLabelContainer {
+        pointer-events: auto;
+      }
     </style>
     <picture>
       <source
@@ -122,7 +126,7 @@
                 class="settings-columned-section">
               <div class="column">
                 <h3 class="description-header">
-                  $i18n{safeBrowsingEnhancedWhenOnLabel}
+                  $i18n{columnHeadingWhenOn}
                 </h3>
                 <ul class="icon-bulleted-list">
                   <li>
@@ -164,7 +168,7 @@
               </div>
               <div class="column">
                 <h3 class="description-header">
-                  $i18n{safeBrowsingEnhancedThingsToConsiderLabel}
+                  $i18n{columnHeadingConsider}
                 </h3>
                 <ul class="icon-bulleted-list">
                   <li>
@@ -187,7 +191,7 @@
                   </li>
                 </ul>
                 <div id="learnMoreLabelContainer" class="cr-secondary-text">
-                  $i18nRaw{enhancedProtectionLearnMoreLabel}
+                  $i18nRaw{safeBrowsingEnhancedLearnMoreLabel}
                 </div>
               </div>
             </div>
@@ -224,14 +228,16 @@
             </div>
           </template>
           <div slot="noSelectionCollapse">
-            <settings-toggle-button id="safeBrowsingReportingToggle"
+            <template is="dom-if" if="[[!hideExtendedReportingRadioButton_]]">
+              <settings-toggle-button id="safeBrowsingReportingToggle"
                 pref="{{prefs.safebrowsing.scout_reporting_enabled}}"
                 label="$i18n{safeBrowsingStandardReportingLabel}"
                 sub-label="$i18n{safeBrowsingEnableExtendedReportingDesc}"
                 on-change="onSafeBrowsingExtendedReportingChange_"
                 disabled="[[getDisabledExtendedSafeBrowsing_(
                               prefs.generated.safe_browsing.*)]]">
-            </settings-toggle-button>
+              </settings-toggle-button>
+            </template>
             <settings-toggle-button id="passwordsLeakToggle"
                 label="[[getPasswordsLeakToggleLabel_(
                         enableFriendlierSafeBrowsingSettings_)]]"
@@ -314,55 +320,88 @@
         </cr-link-row>
     </template>
 </if>
-    <cr-link-row id="v8-setting-link"
-        class="hr"
-        on-click="onV8SettingsClick_"
+    <cr-link-row id="v8-setting-link" class="hr" on-click="onV8SettingsClick_"
         label="$i18n{securityV8LinkTitle}"
         sub-label="$i18n{securityV8LinkDescription}"
-        role-description="$i18n{subpageArrowRoleDescription}"
-        external></cr-link-row>
+        role-description="$i18n{subpageArrowRoleDescription}">
+    </cr-link-row>
     <template is="dom-if" if="[[enableSecurityKeysSubpage_]]">
-        <cr-link-row id="security-keys-subpage-trigger"
-          class="hr"
-          label="$i18n{securityKeysTitle}"
-          sub-label="$i18n{securityKeysDesc}"
-          on-click="onSecurityKeysClick_"
-          role-description="$i18n{subpageArrowRoleDescription}"></cr-link-row>
+        <cr-link-row id="security-keys-subpage-trigger" class="hr"
+            label="$i18n{securityKeysTitle}"
+            sub-label="$i18n{securityKeysDesc}"
+            on-click="onSecurityKeysClick_"
+            role-description="$i18n{subpageArrowRoleDescription}">
+        </cr-link-row>
     </template>
 
 <if expr="is_win">
     <template is="dom-if" if="[[enableSecurityKeysPhonesSubpage_]]">
-        <cr-link-row
-          id="security-keys-phones-subpage-trigger"
-          label="$i18n{securityKeysPhonesManage}"
-          sub-label="$i18n{securityKeysPhonesManageDesc}"
-          on-click="onManagePhonesClick_"></cr-link-row>
+        <cr-link-row id="security-keys-phones-subpage-trigger"
+            label="$i18n{securityKeysPhonesManage}"
+            sub-label="$i18n{securityKeysPhonesManageDesc}"
+            on-click="onManagePhonesClick_">
+        </cr-link-row>
     </template>
 </if>
 
-    <cr-link-row id="manageCertificates"
-        class="hr"
+<if expr="chrome_root_store_cert_management_ui">
+    <template is="dom-if" if="[[enableCertManagementUIV2_]]">
+      <cr-link-row id="manageCertificatesLinkRow" class="hr"
+          role-description="$i18n{subpageArrowRoleDescription}"
+          label="$i18n{manageCertificates}"
+          sub-label="$i18n{manageCertificatesDescription}"
+          on-click="onNewManageCertificatesClick_" external>
+      </cr-link-row>
+    </template>
+
+    <template is="dom-if" if="[[!enableCertManagementUIV2_]]">
+      <cr-link-row id="manageCertificatesLinkRow"
+          class="hr"
 <if expr="not use_nss_certs">
-        external
+          external
 </if>
 <if expr="use_nss_certs">
-        role-description="$i18n{subpageArrowRoleDescription}"
+          role-description="$i18n{subpageArrowRoleDescription}"
 </if>
-        label="$i18n{manageCertificates}"
-        sub-label="$i18n{manageCertificatesDescription}"
-        on-click="onManageCertificatesClick_"></cr-link-row>
+          label="$i18n{manageCertificates}"
+          sub-label="$i18n{manageCertificatesDescription}"
+          on-click="onManageCertificatesClick_">
+      </cr-link-row>
 
-    <template is="dom-if" if="[[showChromeRootStoreCertificates_]]">
       <cr-link-row id="chromeCertificates"
           class="hr"
           external
           label="$i18n{chromeCertificates}"
           sub-label="$i18n{chromeCertificatesDescription}"
-          on-click="onChromeCertificatesClick_"></cr-link-row>
+          on-click="onChromeCertificatesClick_">
+      </cr-link-row>
     </template>
+</if>
 
-    <cr-link-row id="advanced-protection-program-link"
-        class="hr"
+<if expr="not chrome_root_store_cert_management_ui">
+      <cr-link-row id="manageCertificatesLinkRow"
+          class="hr"
+<if expr="not use_nss_certs">
+          external
+</if>
+<if expr="use_nss_certs">
+          role-description="$i18n{subpageArrowRoleDescription}"
+</if>
+          label="$i18n{manageCertificates}"
+          sub-label="$i18n{manageCertificatesDescription}"
+          on-click="onManageCertificatesClick_">
+      </cr-link-row>
+
+      <cr-link-row id="chromeCertificates"
+          class="hr"
+          external
+          label="$i18n{chromeCertificates}"
+          sub-label="$i18n{chromeCertificatesDescription}"
+          on-click="onChromeCertificatesClick_">
+      </cr-link-row>
+</if>
+
+    <cr-link-row id="advanced-protection-program-link" class="hr"
         label="$i18n{advancedProtectionProgramTitle}"
         sub-label="$i18n{advancedProtectionProgramDesc}"
         on-click="onAdvancedProtectionProgramLinkClick_"

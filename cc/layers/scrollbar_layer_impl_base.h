@@ -41,6 +41,8 @@ class CC_EXPORT ScrollbarLayerImplBase : public LayerImpl {
   void set_is_overlay_scrollbar(bool is_overlay) {
     is_overlay_scrollbar_ = is_overlay;
   }
+  bool is_web_test() const { return is_web_test_; }
+  void set_is_web_test(bool is_web_test) { is_web_test_ = is_web_test; }
 
   ScrollbarOrientation orientation() const { return orientation_; }
   bool is_left_side_vertical_scrollbar() const {
@@ -56,7 +58,7 @@ class CC_EXPORT ScrollbarLayerImplBase : public LayerImpl {
   virtual gfx::Rect ComputeHitTestableThumbQuadRect() const;
   virtual gfx::Rect ComputeHitTestableExpandedThumbQuadRect() const;
 
-  float thumb_thickness_scale_factor() {
+  float thumb_thickness_scale_factor() const {
     return thumb_thickness_scale_factor_;
   }
   void SetThumbThicknessScaleFactor(float thumb_thickness_scale_factor);
@@ -77,7 +79,7 @@ class CC_EXPORT ScrollbarLayerImplBase : public LayerImpl {
   virtual bool JumpOnTrackClick() const;
   virtual ScrollbarPart IdentifyScrollbarPart(
       const gfx::PointF position_in_widget) const;
-  // Only Aura (PaintedOverlayScrollbar) and Fluent (PaintedScrollbar) overlay
+  // Only Aura (NinePatchThumbScrollbar) and Fluent (PaintedScrollbar) overlay
   // scrollbars need to know tickmarks's state to trigger the painting of the
   // scrollbar's track.
   bool has_find_in_page_tickmarks() const {
@@ -116,6 +118,7 @@ class CC_EXPORT ScrollbarLayerImplBase : public LayerImpl {
 
   ElementId scroll_element_id_;
   bool is_overlay_scrollbar_;
+  bool is_web_test_ = false;
 
   float thumb_thickness_scale_factor_;
   float current_pos_;
@@ -129,7 +132,7 @@ class CC_EXPORT ScrollbarLayerImplBase : public LayerImpl {
   float vertical_adjust_;
   bool has_find_in_page_tickmarks_;
 
-  FRIEND_TEST_ALL_PREFIXES(ScrollbarLayerTest,
+  FRIEND_TEST_ALL_PREFIXES(CommitToActiveTreeScrollbarLayerTest,
                            ScrollElementIdPushedAcrossCommit);
 };
 

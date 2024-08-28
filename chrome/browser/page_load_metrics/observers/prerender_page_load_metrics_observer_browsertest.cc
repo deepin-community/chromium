@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "build/build_config.h"
-
 #include "base/containers/contains.h"
 #include "chrome/browser/page_load_metrics/integration_tests/metric_integration_test.h"
 #include "chrome/browser/preloading/prerender/prerender_utils.h"
@@ -40,7 +38,7 @@ class PrerenderPageLoadMetricsObserverBrowserTest
       : prerender_helper_(base::BindRepeating(
             &PrerenderPageLoadMetricsObserverBrowserTest::web_contents,
             base::Unretained(this))) {
-    // TODO(crbug.com/1239281): Remove this once kPrerender2MainFrameNavigation
+    // TODO(crbug.com/40193792): Remove this once kPrerender2MainFrameNavigation
     // is enabled by default.
     scoped_feature_list_.InitAndEnableFeature(
         blink::features::kPrerender2MainFrameNavigation);
@@ -201,14 +199,8 @@ class PrerenderPageLoadMetricsObserverBrowserTest
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-// TODO(crbug.com/1329881): Re-enable this test
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_Activate_SpeculationRule DISABLED_Activate_SpeculationRule
-#else
-#define MAYBE_Activate_SpeculationRule Activate_SpeculationRule
-#endif
 IN_PROC_BROWSER_TEST_F(PrerenderPageLoadMetricsObserverBrowserTest,
-                       MAYBE_Activate_SpeculationRule) {
+                       Activate_SpeculationRule) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   // Navigate to an initial page.
@@ -417,15 +409,8 @@ IN_PROC_BROWSER_TEST_F(PrerenderPageLoadMetricsObserverBrowserTest,
       0);
 }
 
-// TODO(crbug.com/1329881): Re-enable this test
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_Activate_Embedder_DirectURLInput \
-  DISABLED_Activate_Embedder_DirectURLInput
-#else
-#define MAYBE_Activate_Embedder_DirectURLInput Activate_Embedder_DirectURLInput
-#endif
 IN_PROC_BROWSER_TEST_F(PrerenderPageLoadMetricsObserverBrowserTest,
-                       MAYBE_Activate_Embedder_DirectURLInput) {
+                       Activate_Embedder_DirectURLInput) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   GURL prerender_url = embedded_test_server()->GetURL("/title2.html");
@@ -455,11 +440,14 @@ IN_PROC_BROWSER_TEST_F(PrerenderPageLoadMetricsObserverBrowserTest,
   waiter->AddPageExpectation(page_load_metrics::PageLoadMetricsTestWaiter::
                                  TimingField::kFirstContentfulPaint);
   // Simulate a browser-initiated navigation.
-  web_contents()->OpenURL(content::OpenURLParams(
-      prerender_url, content::Referrer(), WindowOpenDisposition::CURRENT_TAB,
-      ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
-                                ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
-      /*is_renderer_initiated=*/false));
+  web_contents()->OpenURL(
+      content::OpenURLParams(
+          prerender_url, content::Referrer(),
+          WindowOpenDisposition::CURRENT_TAB,
+          ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
+                                    ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
+          /*is_renderer_initiated=*/false),
+      /*navigation_handle_callback=*/{});
   waiter->Wait();
 
   histogram_tester().ExpectBucketCount(
@@ -598,14 +586,8 @@ IN_PROC_BROWSER_TEST_F(PrerenderPageLoadMetricsObserverBrowserTest,
   EXPECT_FALSE(base::Contains(entries, prerender_url));
 }
 
-// TODO(crbug.com/1329881): Re-enable this test
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_Redirection DISABLED_Redirection
-#else
-#define MAYBE_Redirection Redirection
-#endif
 IN_PROC_BROWSER_TEST_F(PrerenderPageLoadMetricsObserverBrowserTest,
-                       MAYBE_Redirection) {
+                       Redirection) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   // Navigate to an initial page.

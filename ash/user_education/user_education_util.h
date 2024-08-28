@@ -33,7 +33,6 @@ class View;
 namespace ash {
 
 enum class HelpBubbleId;
-enum class HelpBubbleStyle;
 enum class TimeBucket;
 enum class TutorialId;
 struct UserSession;
@@ -49,13 +48,17 @@ CreateExtendedProperties(const gfx::VectorIcon& body_icon);
 ASH_EXPORT user_education::HelpBubbleParams::ExtendedProperties
 CreateExtendedProperties(HelpBubbleId help_bubble_id);
 
-// Returns extended properties for a help bubble having set `help_bubble_style`.
-ASH_EXPORT user_education::HelpBubbleParams::ExtendedProperties
-CreateExtendedProperties(HelpBubbleStyle help_bubble_style);
-
 // Returns extended properties for a help bubble having set `modal_type`.
 ASH_EXPORT user_education::HelpBubbleParams::ExtendedProperties
 CreateExtendedProperties(ui::ModalType modal_type);
+
+// Returns extended properties for a help bubble having set `accessible_name`.
+ASH_EXPORT user_education::HelpBubbleParams::ExtendedProperties
+CreateExtendedPropertiesWithAccessibleName(const std::string& accessible_name);
+
+// Returns extended properties for a help bubble having set `body_text`.
+ASH_EXPORT user_education::HelpBubbleParams::ExtendedProperties
+CreateExtendedPropertiesWithBodyText(const std::string& body_text);
 
 /*
 Creates an extended properties instance by merging `properties`.
@@ -64,7 +67,7 @@ Example usage:
 const user_education::HelpBubbleParams::ExtendedProperties
       extended_properties = CreateExtendedProperties(
           CreateExtendedProperties(HelpBubbleId::kTest),
-          CreateExtendedProperties(HelpBubbleStyle::kNudge));
+          CreateExtendedProperties(ui::MODAL_TYPE_SYSTEM));
 */
 template <typename... Properties>
 ASH_EXPORT user_education::HelpBubbleParams::ExtendedProperties
@@ -79,11 +82,25 @@ CreateExtendedProperties(Properties&&... properties) {
 // `user_session` is `nullptr`, `EmptyAccountId()` is returned.
 ASH_EXPORT const AccountId& GetAccountId(const UserSession* user_session);
 
+// Returns help bubble accessible name from the specified `extended_properties`.
+// If the specified `extended_properties` does not contain help bubble
+// accessible name, an absent value is returned.
+ASH_EXPORT std::optional<std::string> GetHelpBubbleAccessibleName(
+    const user_education::HelpBubbleParams::ExtendedProperties&
+        extended_properties);
+
 // Returns help bubble body icon from the specified `external_properties`. If
 // the specified `external_properties` does not contain a help bubble body icon,
 // an absent value is returned.
 ASH_EXPORT std::optional<std::reference_wrapper<const gfx::VectorIcon>>
 GetHelpBubbleBodyIcon(
+    const user_education::HelpBubbleParams::ExtendedProperties&
+        extended_properties);
+
+// Returns help bubble body text from the specified `extended_properties`.
+// If the specified `extended_properties` does not contain help bubble
+// body text, an absent value is returned.
+ASH_EXPORT std::optional<std::string> GetHelpBubbleBodyText(
     const user_education::HelpBubbleParams::ExtendedProperties&
         extended_properties);
 
@@ -94,13 +111,6 @@ ASH_EXPORT HelpBubbleId GetHelpBubbleId(
 
 // Returns modal type from the specified `extended_properties`.
 ASH_EXPORT ui::ModalType GetHelpBubbleModalType(
-    const user_education::HelpBubbleParams::ExtendedProperties&
-        extended_properties);
-
-// Returns help bubble style from the specified `extended_properties`. If the
-// specified `extended_properties` does not contain help bubble style, an
-// absent value is returned.
-ASH_EXPORT std::optional<HelpBubbleStyle> GetHelpBubbleStyle(
     const user_education::HelpBubbleParams::ExtendedProperties&
         extended_properties);
 

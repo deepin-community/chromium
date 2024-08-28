@@ -59,8 +59,7 @@ class MockAutocompleteProviderClient
   }
   scoped_refptr<history::TopSites> GetTopSites() override { return nullptr; }
 
-  MOCK_METHOD0(GetLocalOrSyncableBookmarkModel, bookmarks::BookmarkModel*());
-  MOCK_METHOD0(GetAccountBookmarkModel, bookmarks::BookmarkModel*());
+  MOCK_METHOD0(GetBookmarkModel, bookmarks::BookmarkModel*());
   MOCK_METHOD0(GetInMemoryDatabase, history::URLDatabase*());
   MOCK_METHOD0(GetInMemoryURLIndex, InMemoryURLIndex*());
 
@@ -142,6 +141,8 @@ class MockAutocompleteProviderClient
   MOCK_CONST_METHOD0(IsPersonalizedUrlDataCollectionActive, bool());
   MOCK_CONST_METHOD0(IsAuthenticated, bool());
   MOCK_CONST_METHOD0(IsSyncActive, bool());
+  MOCK_CONST_METHOD0(IsHistoryEmbeddingsEnabled, bool());
+  MOCK_CONST_METHOD0(IsHistoryEmbeddingsSettingVisible, bool());
 
   MOCK_METHOD6(
       Classify,

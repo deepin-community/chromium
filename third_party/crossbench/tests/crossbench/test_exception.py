@@ -4,6 +4,7 @@
 
 import argparse
 import unittest
+from contextlib import contextmanager
 from unittest import mock
 
 from crossbench.exception import (ArgumentTypeMultiException, Entry,
@@ -12,7 +13,39 @@ from crossbench.exception import (ArgumentTypeMultiException, Entry,
 from tests import test_helper
 
 
+class CustomException(Exception):
+  pass
+
+
+class CustomException2(Exception):
+  pass
+
+
+class CustomValueError(ValueError):
+  pass
+
 class ExceptionHandlerTestCase(unittest.TestCase):
+
+  def test_invalid_get_item(self):
+    annotator = ExceptionAnnotator()
+    with self.assertRaises(TypeError):
+      _ = annotator["invalid key"]
+    with self.assertRaises(IndexError):
+      _ = annotator[1]
+
+  def test_getitem(self):
+    annotator = ExceptionAnnotator()
+    with annotator.capture("exception"):
+      raise Exception("AAA")
+    with annotator.capture("exception"):
+      raise Exception("BBB")
+    self.assertEqual(len(annotator), 2)
+    entry_0 = annotator[0]
+    entry_1 = annotator[1]
+    self.assertIsNot(entry_0, entry_1)
+    self.assertIs(annotator[-1], entry_1)
+    with self.assertRaises(IndexError):
+      _ = annotator[2]
 
   def test_annotate(self):
     with self.assertRaises(MultiException) as cm:
@@ -21,8 +54,8 @@ class ExceptionHandlerTestCase(unittest.TestCase):
           raise ValueError("an exception")
     exception: MultiException = cm.exception
     annotator: ExceptionAnnotator = exception.annotator
-    self.assertTrue(len(annotator.exceptions), 1)
-    entry: Entry = annotator.exceptions[0]
+    self.assertTrue(len(annotator), 1)
+    entry: Entry = annotator[0]
     self.assertTupleEqual(entry.info_stack, ("BBB", "AAA"))
     self.assertIsInstance(entry.exception, ValueError)
 
@@ -35,10 +68,40 @@ class ExceptionHandlerTestCase(unittest.TestCase):
     exception: MultiException = cm.exception
     self.assertIsInstance(exception, argparse.ArgumentTypeError)
     annotator: ExceptionAnnotator = exception.annotator
-    self.assertTrue(len(annotator.exceptions), 1)
-    entry: Entry = annotator.exceptions[0]
+    self.assertTrue(len(annotator), 1)
+    entry: Entry = annotator[0]
     self.assertTupleEqual(entry.info_stack, ("BBB", "AAA", "000"))
     self.assertIsInstance(entry.exception, ValueError)
+
+  def test_annotate_argparse_nested(self):
+    with self.assertRaises(ArgumentTypeMultiException) as cm:
+      with annotate_argparsing("BBB"):
+        with annotate_argparsing("AAA"):
+          with annotate_argparsing("000"):
+            raise CustomValueError("an exception")
+    exception: MultiException = cm.exception
+    self.assertIsInstance(exception, argparse.ArgumentTypeError)
+    annotator: ExceptionAnnotator = exception.annotator
+    self.assertTrue(len(annotator), 1)
+    entry: Entry = annotator[0]
+    self.assertListEqual(
+        annotator.matching(CustomValueError), [
+            entry.exception,
+        ])
+    self.assertTupleEqual(entry.info_stack, ("BBB", "AAA", "000"))
+    self.assertIsInstance(entry.exception, ValueError)
+
+  def test_annotate_argparse_pass_through(self):
+    with self.assertRaises(ArgumentTypeMultiException) as cm:
+      with annotate_argparsing("BBB"):
+        with annotate_argparsing("AAA"):
+          with annotate_argparsing("000"):
+            raise argparse.ArgumentTypeError("some arg type error")
+    self.assertEqual(len(cm.exception), 1)
+    exception: argparse.ArgumentTypeError = cm.exception.matching(
+        argparse.ArgumentTypeError)[0]
+    self.assertIsInstance(exception, argparse.ArgumentTypeError)
+    self.assertEqual(str(exception), "some arg type error")
 
   def test_annotate_collecting(self):
     annotator = ExceptionAnnotator()
@@ -49,15 +112,15 @@ class ExceptionHandlerTestCase(unittest.TestCase):
     exception: MultiException = cm.exception
     self.assertIsInstance(exception, MultiException)
     self.assertFalse(annotator.is_success)
-    self.assertTrue(len(annotator.exceptions), 1)
-    entry: Entry = annotator.exceptions[0]
+    self.assertTrue(len(annotator), 1)
+    entry: Entry = annotator[0]
     self.assertTupleEqual(entry.info_stack, ("AAA", "000"))
     self.assertIsInstance(entry.exception, ValueError)
 
   def test_empty(self):
     annotator = ExceptionAnnotator()
     self.assertTrue(annotator.is_success)
-    self.assertListEqual(annotator.exceptions, [])
+    self.assertEqual(len(annotator), 0)
     self.assertListEqual(annotator.to_json(), [])
     with mock.patch("logging.error") as logging_mock:
       annotator.log()
@@ -105,8 +168,8 @@ class ExceptionHandlerTestCase(unittest.TestCase):
         annotator.append(e)
     self.assertEqual(cm.exception, exception)
     self.assertFalse(annotator.is_success)
-    self.assertEqual(len(annotator.exceptions), 1)
-    entry = annotator.exceptions[0]
+    self.assertEqual(len(annotator), 1)
+    entry = annotator[0]
     self.assertTupleEqual(entry.info_stack, ("info 1", "info 2"))
     serialized = annotator.to_json()
     self.assertEqual(len(serialized), 1)
@@ -157,19 +220,19 @@ class ExceptionHandlerTestCase(unittest.TestCase):
     self.assertTrue(annotator_3.is_success)
     self.assertTrue(annotator_4.is_success)
 
-    self.assertEqual(len(annotator_1.exceptions), 1)
-    self.assertEqual(len(annotator_2.exceptions), 1)
+    self.assertEqual(len(annotator_1), 1)
+    self.assertEqual(len(annotator_2), 1)
     annotator_2.extend(annotator_1)
-    self.assertEqual(len(annotator_2.exceptions), 2)
+    self.assertEqual(len(annotator_2), 2)
     self.assertFalse(annotator_1.is_success)
     self.assertFalse(annotator_2.is_success)
 
-    self.assertEqual(len(annotator_1.exceptions), 1)
-    self.assertEqual(len(annotator_3.exceptions), 0)
-    self.assertEqual(len(annotator_4.exceptions), 0)
+    self.assertEqual(len(annotator_1), 1)
+    self.assertEqual(len(annotator_3), 0)
+    self.assertEqual(len(annotator_4), 0)
     annotator_3.extend(annotator_1)
     annotator_3.extend(annotator_4)
-    self.assertEqual(len(annotator_3.exceptions), 1)
+    self.assertEqual(len(annotator_3), 1)
     self.assertFalse(annotator_3.is_success)
     self.assertTrue(annotator_4.is_success)
 
@@ -180,20 +243,88 @@ class ExceptionHandlerTestCase(unittest.TestCase):
     exception_2 = ValueError("error_2")
     with annotator_1.capture("info 1", "info 2", exceptions=(ValueError,)):
       raise exception_1
-    self.assertEqual(len(annotator_1.exceptions), 1)
-    self.assertEqual(len(annotator_2.exceptions), 0)
+    self.assertEqual(len(annotator_1), 1)
+    self.assertEqual(len(annotator_2), 0)
     with annotator_1.info("info 1", "info 2"):
       with annotator_2.capture("info 3", "info 4", exceptions=(ValueError,)):
         raise exception_2
       annotator_1.extend(annotator_2, is_nested=True)
-    self.assertEqual(len(annotator_1.exceptions), 2)
-    self.assertEqual(len(annotator_2.exceptions), 1)
-    self.assertTupleEqual(annotator_1.exceptions[0].info_stack,
-                          ("info 1", "info 2"))
-    self.assertTupleEqual(annotator_1.exceptions[1].info_stack,
+    self.assertEqual(len(annotator_1), 2)
+    self.assertEqual(len(annotator_2), 1)
+    self.assertTupleEqual(annotator_1[0].info_stack, ("info 1", "info 2"))
+    self.assertTupleEqual(annotator_1[1].info_stack,
                           ("info 1", "info 2", "info 3", "info 4"))
-    self.assertTupleEqual(annotator_2.exceptions[0].info_stack,
-                          ("info 3", "info 4"))
+    self.assertTupleEqual(annotator_2[0].info_stack, ("info 3", "info 4"))
+
+  def test_contextmanager(self):
+    annotator = ExceptionAnnotator()
+
+    @contextmanager
+    def context(value):
+      with annotator.capture("entry"):
+        yield value
+
+    with context("custom value") as context_value:
+      raise Exception("custom exception")
+
+    self.assertEqual(context_value, "custom value")
+    self.assertFalse(annotator.is_success)
+    self.assertEqual(len(annotator), 1)
+    self.assertIn("custom exception", str(annotator[0]))
+
+  def test_contextmanager_raise_before_yield_capture(self):
+
+    @contextmanager
+    def context_simple(value):
+      raise RuntimeError("exception before yield")
+
+    did_run = False
+    with self.assertRaises(RuntimeError) as cm:
+      with context_simple("custom value 1"):
+        did_run = True
+        raise Exception("custom exception 1")
+    self.assertFalse(did_run)
+    self.assertIn("exception before yield", str(cm.exception))
+
+    annotator = ExceptionAnnotator()
+
+    @contextmanager
+    def context_capture(value):
+      with annotator.capture("entry"):
+        raise RuntimeError("exception before yield")
+      yield value
+
+    did_run = False
+    with self.assertRaises(CustomException) as cm:
+      with context_capture("custom value 2"):
+        did_run = True
+        raise CustomException("custom exception 2")
+    self.assertTrue(did_run)
+    self.assertIn("custom exception 2", str(cm.exception))
+    self.assertFalse(annotator.is_success)
+    self.assertEqual(len(annotator), 1)
+    self.assertIsInstance(annotator[0].exception, RuntimeError)
+
+  def test_contextmanager_raise_before_yield_annotate(self):
+    annotator = ExceptionAnnotator()
+
+    @contextmanager
+    def context_annotate(value):
+      with annotator.annotate("entry"):
+        raise RuntimeError("exception before yield")
+      yield value
+
+    did_run = False
+    with self.assertRaises(MultiException) as cm:
+      with context_annotate("custom value 3"):
+        did_run = True
+        raise CustomException("custom exception 3")
+    self.assertFalse(did_run)
+    self.assertIn("exception before yield", str(cm.exception))
+    self.assertFalse(annotator.is_success)
+    self.assertEqual(len(annotator), 1)
+    self.assertIsInstance(annotator[0].exception, RuntimeError)
+
 
 
 if __name__ == "__main__":

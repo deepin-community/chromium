@@ -24,7 +24,6 @@
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chromeos/test_util.h"
-#include "chrome/browser/ui/lacros/window_utility.h"
 #include "chrome/browser/ui/passwords/passwords_client_ui_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -208,12 +207,47 @@ IN_PROC_BROWSER_TEST_P(BrowserNonClientFrameViewChromeOSTestNoWebUiTabStrip,
       return window->GetProperty(chromeos::kWindowStateTypeKey) ==
              chromeos::WindowStateType::kMaximized;
     }));
-    // TODO(crbug.com/1466385): Remove waiting for bounds change when the bug is
-    // fixed.
+    // TODO(crbug.com/40276379): Remove waiting for bounds change when the bug
+    // is fixed.
     ASSERT_TRUE(base::test::RunUntil(
         [&]() { return frame_view->bounds() != old_bounds; }));
   }
   EXPECT_EQ(HTCLIENT, frame_view->NonClientHitTest(top_edge));
+}
+
+// Regression test for crbug.com/40945061. Asserts that the content window
+// accepts input from the edge of the browser frame when the browser is
+// maximized.
+IN_PROC_BROWSER_TEST_P(BrowserNonClientFrameViewChromeOSTestNoWebUiTabStrip,
+                       ContentWindowAcceptsEdgeInputsWhenMaximized) {
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  content::WebContents* web_contents = browser_view->GetActiveWebContents();
+  views::Widget* widget = browser_view->GetWidget();
+  const BrowserNonClientFrameViewChromeOS* frame_view =
+      GetFrameViewChromeOS(browser_view);
+
+  // Maximize the widget.
+  EXPECT_FALSE(widget->IsMaximized());
+  const gfx::Rect old_bounds = frame_view->bounds();
+  widget->Maximize();
+  auto* window = widget->GetNativeWindow();
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return window->GetProperty(chromeos::kWindowStateTypeKey) ==
+           chromeos::WindowStateType::kMaximized;
+  }));
+  // TODO(crbug.com/40276379): Remove waiting for bounds change when the bug
+  // is fixed.
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return frame_view->bounds() != old_bounds; }));
+
+  // Assert that input events at the edge of the browser are propagated to the
+  // web contents window.
+  EXPECT_FALSE(web_contents->GetFocusedFrame());
+  ui::test::EventGenerator event_generator(window->GetRootWindow());
+  ASSERT_NO_FATAL_FAILURE(
+      event_generator.GestureTapAt(frame_view->bounds().left_center()));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return !!web_contents->GetFocusedFrame(); }));
 }
 
 using BrowserNonClientFrameViewChromeOSTouchTest =
@@ -247,18 +281,9 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(HTCLIENT, frame_view->NonClientHitTest(top_point));
 }
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-// TODO(crbug.com/1494785): Find out why the test fails and fix it. May require
-// ui_controls for global touch events.
-#define MAYBE_TabletSplitViewSwipeDownFromEdgeOpensWebUiTabStrip \
-  DISABLED_TabletSplitViewSwipeDownFromEdgeOpensWebUiTabStrip
-#else
-#define MAYBE_TabletSplitViewSwipeDownFromEdgeOpensWebUiTabStrip \
-  TabletSplitViewSwipeDownFromEdgeOpensWebUiTabStrip
-#endif
 IN_PROC_BROWSER_TEST_F(
     BrowserNonClientFrameViewChromeOSTouchTestWithWebUiTabStrip,
-    MAYBE_TabletSplitViewSwipeDownFromEdgeOpensWebUiTabStrip) {
+    TabletSplitViewSwipeDownFromEdgeOpensWebUiTabStrip) {
   if (!IsSnapWindowSupported()) {
     GTEST_SKIP() << "Ash is too old.";
   }
@@ -274,9 +299,10 @@ IN_PROC_BROWSER_TEST_F(
   EnterTabletMode();
   SnapWindow(widget->GetNativeWindow(), crosapi::mojom::SnapPosition::kPrimary);
 
-  // A point above the window, but not in the center horizontally, as a swipe
-  // down from the top center will show the chromeos tablet mode multitask menu.
-  gfx::Point edge_point(100, -1);
+  // A point at the top of the window, but not in the center horizontally, as a
+  // swipe down from the top center will show the chromeos tablet mode multitask
+  // menu.
+  gfx::Point edge_point(100, 0);
 
   ASSERT_FALSE(browser_view->webui_tab_strip()->GetVisible());
   aura::Window* window = widget->GetNativeWindow();
@@ -293,7 +319,7 @@ IN_PROC_BROWSER_TEST_F(
 // This test does not make sense for the webUI tabstrip, since the frame is not
 // painted in that case.
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
-// TODO(crbug.com/1466385): Reenable when bug is fixed.
+// TODO(crbug.com/40276379): Reenable when bug is fixed.
 #define MAYBE_NonImmersiveFullscreen DISABLED_NonImmersiveFullscreen
 #else
 #define MAYBE_NonImmersiveFullscreen NonImmersiveFullscreen
@@ -329,7 +355,7 @@ IN_PROC_BROWSER_TEST_P(BrowserNonClientFrameViewChromeOSTestNoWebUiTabStrip,
 
 // Tests that caption buttons are hidden when entering tab fullscreen.
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
-// TODO(crbug.com/1466385): Reenable when bug is fixed.
+// TODO(crbug.com/40276379): Reenable when bug is fixed.
 #define MAYBE_CaptionButtonsHiddenNonImmersiveFullscreen \
   DISABLED_CaptionButtonsHiddenNonImmersiveFullscreen
 #else
@@ -527,8 +553,8 @@ class WebAppNonClientFrameViewChromeOSTest
   // |SetUpWebApp()| must be called after |SetUpOnMainThread()| to make sure
   // the Network Service process has been setup properly.
   void SetUpWebApp() {
-    auto web_app_info = std::make_unique<web_app::WebAppInstallInfo>();
-    web_app_info->start_url = GetAppURL();
+    auto web_app_info =
+        web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(GetAppURL());
     web_app_info->scope = GetAppURL().GetWithoutFilename();
     web_app_info->display_mode = blink::mojom::DisplayMode::kStandalone;
     web_app_info->theme_color = GetThemeColor();
@@ -540,12 +566,7 @@ class WebAppNonClientFrameViewChromeOSTest
     app_browser_ = web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
     navigation_observer.WaitForNavigationFinished();
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
-    {
-      aura::Window* window = app_browser_->window()->GetNativeWindow();
-      std::string id =
-          lacros_window_utility::GetRootWindowUniqueId(window->GetRootWindow());
-      ASSERT_TRUE(browser_test_util::WaitForWindowCreation(id));
-    }
+    ASSERT_TRUE(browser_test_util::WaitForWindowCreation(app_browser_));
 #endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 
     browser_view_ = BrowserView::GetBrowserViewForBrowser(app_browser_);
@@ -593,11 +614,11 @@ class WebAppNonClientFrameViewChromeOSTest
 
   void SimulateClickOnView(views::View* view) {
     const gfx::Point point;
-    ui::MouseEvent event(ui::ET_MOUSE_PRESSED, point, point,
+    ui::MouseEvent event(ui::EventType::kMousePressed, point, point,
                          ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
                          ui::EF_LEFT_MOUSE_BUTTON);
     view->OnMouseEvent(&event);
-    ui::MouseEvent event_rel(ui::ET_MOUSE_RELEASED, point, point,
+    ui::MouseEvent event_rel(ui::EventType::kMouseReleased, point, point,
                              ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
                              ui::EF_LEFT_MOUSE_BUTTON);
     view->OnMouseEvent(&event_rel);
@@ -707,9 +728,9 @@ IN_PROC_BROWSER_TEST_P(WebAppNonClientFrameViewChromeOSTest,
   password_form.username_value = u"test";
   password_form.url = GetAppURL().DeprecatedGetOriginAsURL();
   password_form.match_type = password_manager::PasswordForm::MatchType::kExact;
+  std::vector<password_manager::PasswordForm> forms = {password_form};
   PasswordsClientUIDelegateFromWebContents(web_contents)
-      ->OnPasswordAutofilled({&password_form},
-                             url::Origin::Create(password_form.url), nullptr);
+      ->OnPasswordAutofilled(forms, url::Origin::Create(password_form.url), {});
   chrome::ManagePasswordsForPage(app_browser_);
   ASSERT_TRUE(WaitForVisible(true, manage_passwords_icon));
 }
@@ -726,7 +747,7 @@ IN_PROC_BROWSER_TEST_P(WebAppNonClientFrameViewChromeOSTest, ShowZoomIcon) {
   EXPECT_FALSE(zoom_icon->GetVisible());
   EXPECT_FALSE(ZoomBubbleView::GetZoomBubble());
 
-  zoom_controller->SetZoomLevel(blink::PageZoomFactorToZoomLevel(1.5));
+  zoom_controller->SetZoomLevel(blink::ZoomFactorToZoomLevel(1.5));
   ASSERT_TRUE(WaitForVisible(true, zoom_icon));
   EXPECT_TRUE(ZoomBubbleView::GetZoomBubble());
 }
@@ -817,7 +838,7 @@ IN_PROC_BROWSER_TEST_P(WebAppNonClientFrameViewChromeOSTest,
 
 // Tests the app icon and title are not shown.
 IN_PROC_BROWSER_TEST_P(WebAppNonClientFrameViewChromeOSTest,
-                       IconAndTitleNotShown) {
+                       IconShownAndTitleNotShown) {
   SetUpWebApp();
   auto* browser_view = BrowserView::GetBrowserViewForBrowser(app_browser_);
   EXPECT_FALSE(browser_view->ShouldShowWindowIcon());
@@ -875,9 +896,9 @@ IN_PROC_BROWSER_TEST_P(WebAppNonClientFrameViewChromeOSTest,
 
   // Press the geolocation button.
   geolocation_icon->OnKeyPressed(
-      ui::KeyEvent(ui::ET_KEY_PRESSED, ui::VKEY_SPACE, ui::EF_NONE));
+      ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_SPACE, ui::EF_NONE));
   geolocation_icon->OnKeyReleased(
-      ui::KeyEvent(ui::ET_KEY_RELEASED, ui::VKEY_SPACE, ui::EF_NONE));
+      ui::KeyEvent(ui::EventType::kKeyReleased, ui::VKEY_SPACE, ui::EF_NONE));
   EXPECT_TRUE(geolocation_icon->IsBubbleShowing());
 }
 
@@ -1133,6 +1154,10 @@ IN_PROC_BROWSER_TEST_P(BrowserNonClientFrameViewChromeOSTest,
                        ImmersiveModeTopViewInset) {
   Browser* app_browser =
       CreateBrowserForApp("test_browser_app", browser()->profile());
+  // TODO(neis): Move this into the CreateBrowser* functions.
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  ui_test_utils::CreateAsyncWidgetRequestWaiter(*browser()).Wait();
+#endif
 
   BrowserView* browser_view =
       BrowserView::GetBrowserViewForBrowser(app_browser);
@@ -1202,7 +1227,7 @@ IN_PROC_BROWSER_TEST_P(BrowserNonClientFrameViewChromeOSTest,
 using FloatBrowserNonClientFrameViewChromeOSTest =
     TopChromeMdParamTest<ChromeOSBrowserUITest>;
 
-// TODO(crbug.com/1494785): Port this test to Lacros.
+// TODO(crbug.com/40286309): Port this test to Lacros.
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 IN_PROC_BROWSER_TEST_P(FloatBrowserNonClientFrameViewChromeOSTest,
                        TabletModeMultitaskMenu) {
@@ -1281,7 +1306,7 @@ IN_PROC_BROWSER_TEST_P(FloatBrowserNonClientFrameViewChromeOSTest,
 // Test that for a browser app window, its caption buttons may or may not hide
 // in tablet mode.
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
-// TODO(crbug.com/1505656): Finish porting to Lacros when the bug is fixed.
+// TODO(crbug.com/40946296): Finish porting to Lacros when the bug is fixed.
 #define MAYBE_BrowserAppHeaderVisibilityInTabletModeTest \
   DISABLED_BrowserAppHeaderVisibilityInTabletModeTest
 #else
@@ -1355,9 +1380,22 @@ IN_PROC_BROWSER_TEST_P(FloatBrowserNonClientFrameViewChromeOSTest,
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return size_button->IsMultitaskMenuShown(); }));
 
-  // Pressing accelerator a second time should close the menu.
-  event_generator.PressAndReleaseKeyAndModifierKeys(ui::VKEY_Z,
-                                                    ui::EF_COMMAND_DOWN);
+  // With platform bubble, key event is routed to the platform bubble at ozone
+  // level, so dispatch it to the multitask_menu_widget directly.
+  if (views::test::IsOzoneBubblesUsingPlatformWidgets()) {
+    ui::test::EventGenerator multitask_view_event_generator(
+        size_button->multitask_menu_widget_for_testing()
+            ->GetNativeWindow()
+            ->GetRootWindow());
+    // Pressing accelerator a second time should close the menu.
+    multitask_view_event_generator.PressAndReleaseKeyAndModifierKeys(
+        ui::VKEY_Z, ui::EF_COMMAND_DOWN);
+  } else {
+    // Pressing accelerator a second time should close the menu.
+    event_generator.PressAndReleaseKeyAndModifierKeys(ui::VKEY_Z,
+                                                      ui::EF_COMMAND_DOWN);
+  }
+
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return !size_button->IsMultitaskMenuShown(); }));
 }
@@ -1396,7 +1434,7 @@ IN_PROC_BROWSER_TEST_P(HomeLauncherBrowserNonClientFrameViewChromeOSTest,
   }
 }
 
-// TODO(crbug.com/993974): When the test flake has been addressed, improve
+// TODO(crbug.com/40640473): When the test flake has been addressed, improve
 // performance by consolidating this unit test with
 // |TabletModeBrowserCaptionButtonVisibility|. Do not forget to remove the
 // corresponding |FRIEND_TEST_ALL_PREFIXES| usage from
@@ -1411,7 +1449,7 @@ IN_PROC_BROWSER_TEST_P(HomeLauncherBrowserNonClientFrameViewChromeOSTest,
 }
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
-// TODO(crbug.com/1505656): Finish porting to Lacros when the bug is fixed.
+// TODO(crbug.com/40946296): Finish porting to Lacros when the bug is fixed.
 #define MAYBE_TabletModeAppCaptionButtonVisibility \
   DISABLED_TabletModeAppCaptionButtonVisibility
 #else
@@ -1449,45 +1487,7 @@ IN_PROC_BROWSER_TEST_P(HomeLauncherBrowserNonClientFrameViewChromeOSTest,
   EXPECT_FALSE(immersive_mode_controller->IsEnabled());
 }
 
-namespace {
-
-class TabSearchFrameCaptionButtonTest
-    : public TopChromeMdParamTest<ChromeOSBrowserUITest> {
- public:
-  TabSearchFrameCaptionButtonTest() = default;
-  TabSearchFrameCaptionButtonTest(const TabSearchFrameCaptionButtonTest&) =
-      delete;
-  TabSearchFrameCaptionButtonTest& operator=(
-      const TabSearchFrameCaptionButtonTest&) = delete;
-  ~TabSearchFrameCaptionButtonTest() override = default;
-
-  void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        features::kChromeOSTabSearchCaptionButton);
-    TopChromeMdParamTest<ChromeOSBrowserUITest>::SetUp();
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-}  // namespace
-
-IN_PROC_BROWSER_TEST_P(TabSearchFrameCaptionButtonTest,
-                       TabSearchBubbleHostTest) {
-  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
-  BrowserNonClientFrameViewChromeOS* frame_view =
-      GetFrameViewChromeOS(browser_view);
-  ASSERT_TRUE(browser()->is_type_normal());
-
-  chromeos::FrameCaptionButtonContainerView::TestApi test(
-      frame_view->caption_button_container());
-  EXPECT_TRUE(test.custom_button());
-  EXPECT_EQ(browser_view->GetTabSearchBubbleHost()->button(),
-            test.custom_button());
-}
-
-// TODO(crbug.com/1494785): Port this kiosk test to Lacros?
+// TODO(crbug.com/40286309): Port this kiosk test to Lacros?
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 namespace {
 
@@ -1548,7 +1548,7 @@ IN_PROC_BROWSER_TEST_P(LockedFullscreenBrowserNonClientFrameViewChromeOSTest,
   EXPECT_TRUE(browser_view->GetWidget()->IsFullscreen());
   EXPECT_FALSE(browser_view->immersive_mode_controller()->IsEnabled());
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // TODO(crbug.com/1466385): Enable this assertion once the bug is fixed (at
+  // TODO(crbug.com/40276379): Enable this assertion once the bug is fixed (at
   // the moment PinWindow returns too early).
 #else
   EXPECT_FALSE(IsShelfVisible());
@@ -1714,8 +1714,8 @@ class BrowserNonClientFrameViewAshThemeChangeTest
         }
         const GURL app_url =
             test_server_->GetURL("app.com", "/ssl/google.html");
-        auto web_app_info = std::make_unique<web_app::WebAppInstallInfo>();
-        web_app_info->start_url = app_url;
+        auto web_app_info =
+            web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(app_url);
         web_app_info->scope = app_url.GetWithoutFilename();
         web_app_info->theme_color = SK_ColorWHITE;
         web_app_info->dark_mode_theme_color = SK_ColorBLACK;
@@ -1864,7 +1864,6 @@ INSTANTIATE_TEST_SUITE(BrowserNonClientFrameViewChromeOSTestWithWebUiTabStrip);
 INSTANTIATE_TEST_SUITE(FloatBrowserNonClientFrameViewChromeOSTest);
 INSTANTIATE_TEST_SUITE(HomeLauncherBrowserNonClientFrameViewChromeOSTest);
 INSTANTIATE_TEST_SUITE(LockedFullscreenBrowserNonClientFrameViewChromeOSTest);
-INSTANTIATE_TEST_SUITE(TabSearchFrameCaptionButtonTest);
 INSTANTIATE_TEST_SUITE(WebAppNonClientFrameViewChromeOSTest);
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)

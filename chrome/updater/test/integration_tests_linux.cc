@@ -28,14 +28,15 @@
 #include "chrome/updater/linux/systemd_util.h"
 #include "chrome/updater/persisted_data.h"
 #include "chrome/updater/prefs.h"
+#include "chrome/updater/registration_data.h"
 #include "chrome/updater/service_proxy_factory.h"
 #include "chrome/updater/test/integration_tests_impl.h"
+#include "chrome/updater/test/unit_test_util.h"
 #include "chrome/updater/update_service.h"
 #include "chrome/updater/updater_branding.h"
 #include "chrome/updater/updater_scope.h"
 #include "chrome/updater/util/linux_util.h"
 #include "chrome/updater/util/posix_util.h"
-#include "chrome/updater/util/unit_test_util.h"
 #include "chrome/updater/util/util.h"
 #include "components/crx_file/crx_verifier.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -71,7 +72,7 @@ std::optional<base::FilePath> GetInstalledExecutablePath(UpdaterScope scope) {
   return path->Append(GetExecutableRelativePath());
 }
 
-bool WaitForUpdaterExit(UpdaterScope /*scope*/) {
+bool WaitForUpdaterExit() {
   const std::set<base::FilePath::StringType> process_names =
       GetTestProcessNames();
   return WaitFor(
@@ -148,11 +149,13 @@ void ExpectClean(UpdaterScope scope) {
 void EnterTestMode(const GURL& update_url,
                    const GURL& crash_upload_url,
                    const GURL& device_management_url,
+                   const GURL& app_logo_url,
                    const base::TimeDelta& idle_timeout) {
   ASSERT_TRUE(ExternalConstantsBuilder()
                   .SetUpdateURL({update_url.spec()})
                   .SetCrashUploadURL(crash_upload_url.spec())
                   .SetDeviceManagementURL(device_management_url.spec())
+                  .SetAppLogoURL(app_logo_url.spec())
                   .SetUseCUP(false)
                   .SetInitialDelay(base::Milliseconds(100))
                   .SetServerKeepAliveTime(base::Seconds(2))
@@ -197,6 +200,9 @@ void SetupRealUpdaterLowerVersion(UpdaterScope scope) {
 #elif BUILDFLAG(GOOGLE_CHROME_BRANDING)
   old_updater_path = old_updater_path.AppendASCII("chrome_linux64");
 #endif
+#if BUILDFLAG(CHROMIUM_BRANDING) || BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  old_updater_path = old_updater_path.AppendASCII("cipd");
+#endif
   old_updater_path = old_updater_path.AppendASCII(
       base::StrCat({kExecutableName, kExecutableSuffix}));
 
@@ -219,7 +225,10 @@ void ExpectLegacyUpdaterMigrated(UpdaterScope scope) {
 void InstallApp(UpdaterScope scope,
                 const std::string& app_id,
                 const base::Version& version) {
-  RegisterApp(scope, app_id, version);
+  RegistrationRequest registration;
+  registration.app_id = app_id;
+  registration.version = version;
+  RegisterApp(scope, registration);
 }
 
 void UninstallApp(UpdaterScope scope, const std::string& app_id) {
@@ -239,9 +248,7 @@ base::CommandLine MakeElevated(base::CommandLine command_line) {
   return command_line;
 }
 
-void SetPlatformPolicies(const base::Value::Dict& values) {
-  // TODO(crbug.com/1464354): implement.
-}
+void SetPlatformPolicies(const base::Value::Dict& values) {}
 
 void ExpectAppVersion(UpdaterScope scope,
                       const std::string& app_id,

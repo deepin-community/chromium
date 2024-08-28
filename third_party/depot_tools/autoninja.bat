@@ -25,22 +25,14 @@ if not defined AUTONINJA_BUILD_ID (
 if "%NINJA_SUMMARIZE_BUILD%" == "1" set "NINJA_STATUS=[%%r processes, %%f/%%t @ %%o/s : %%es ] "
 
 :: Execute autoninja.py and pass all arguments to it.
-:: Don't use vpython - it is too slow to start.
-:: Don't use python3 because it doesn't work in git bash on Windows and we
-:: should be consistent between autoninja.bat and the autoninja script used by
-:: git bash.
-
 @call %scriptdir%\vpython3.bat %scriptdir%autoninja.py "%%*"
 @if errorlevel 1 goto buildfailure
 
 :: Use call to invoke python script here, because we use python via python3.bat.
 @if "%NINJA_SUMMARIZE_BUILD%" == "1" call %scriptdir%python-bin\python3.bat %scriptdir%post_build_ninja_summary.py %*
-@call %scriptdir%python-bin\python3.bat %scriptdir%ninjalog_uploader_wrapper.py --cmdline %*
 
 exit /b %ERRORLEVEL%
 :buildfailure
-
-@call %scriptdir%python-bin\python3.bat %scriptdir%ninjalog_uploader_wrapper.py --cmdline %*
 
 :: Return an error code of 1 so that if a developer types:
 :: "autoninja chrome && chrome" then chrome won't run if the build fails.

@@ -9,6 +9,7 @@
 
 #include "base/containers/contains.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/autofill/core/browser/address_data_manager.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/geo/autofill_country.h"
 #include "components/autofill/core/common/autofill_internals/log_message.h"
@@ -77,7 +78,11 @@ ValidateProfileImportRequirements(const AutofillProfile& profile,
                  {ADDRESS_HOME_LINE1, ADDRESS_HOME_STREET_NAME},
                  AddressImportRequirement::kLine1RequirementFulfilled,
                  AddressImportRequirement::kLine1RequirementViolated);
-  ValidateAndLog(country.requires_city(), {ADDRESS_HOME_CITY},
+  std::vector<FieldType> city_types = {ADDRESS_HOME_CITY};
+  if (country.country_code() == "MX") {
+    city_types.push_back(ADDRESS_HOME_ADMIN_LEVEL2);
+  }
+  ValidateAndLog(country.requires_city(), city_types,
                  AddressImportRequirement::kCityRequirementFulfilled,
                  AddressImportRequirement::kCityRequirementViolated);
   ValidateAndLog(country.requires_state(), {ADDRESS_HOME_STATE},
@@ -152,11 +157,11 @@ bool IsMinimumAddress(const AutofillProfile& profile, LogBuffer* log_buffer) {
 }
 
 bool IsEligibleForMigrationToAccount(
-    const PersonalDataManager& personal_data_manager,
+    const AddressDataManager& address_data_manager,
     const AutofillProfile& profile) {
-  return personal_data_manager.IsEligibleForAddressAccountStorage() &&
-         !personal_data_manager.IsProfileMigrationBlocked(profile.guid()) &&
-         personal_data_manager.IsCountryEligibleForAccountStorage(
+  return address_data_manager.IsEligibleForAddressAccountStorage() &&
+         !address_data_manager.IsProfileMigrationBlocked(profile.guid()) &&
+         address_data_manager.IsCountryEligibleForAccountStorage(
              base::UTF16ToUTF8(profile.GetRawInfo(ADDRESS_HOME_COUNTRY)));
 }
 

@@ -29,7 +29,8 @@ DesktopCapturerWrapper::~DesktopCapturerWrapper() {
 }
 
 void DesktopCapturerWrapper::CreateCapturer(
-    const webrtc::DesktopCaptureOptions& options) {
+    const webrtc::DesktopCaptureOptions& options,
+    SourceId id) {
   DCHECK(!capturer_);
 
 #if BUILDFLAG(IS_LINUX)
@@ -42,7 +43,9 @@ void DesktopCapturerWrapper::CreateCapturer(
   capturer_ = webrtc::DesktopCapturer::CreateScreenCapturer(options);
 #endif
 
-  if (!capturer_) {
+  if (capturer_) {
+    capturer_->SelectSource(id);
+  } else {
     LOG(ERROR) << "Failed to initialize screen capturer.";
   }
 }
@@ -127,7 +130,7 @@ void DesktopCapturerWrapper::SetMaxFrameRate(uint32_t max_frame_rate) {
 #if defined(WEBRTC_USE_GIO)
 void DesktopCapturerWrapper::GetMetadataAsync(
     base::OnceCallback<void(webrtc::DesktopCaptureMetadata)> callback) {
-  NOTREACHED() << "Use DesktopCapturerProxy instead!";
+  NOTREACHED_IN_MIGRATION() << "Use DesktopCapturerProxy instead!";
 }
 #endif
 

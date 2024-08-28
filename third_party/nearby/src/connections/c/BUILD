@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("//third_party/lexan/build_defs:lexan.bzl", "lexan")
-load("expand_version_template.bzl", "expand_version_template")
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("//third_party/cpptoolchains/windows_llvm/build_defs:windows.bzl", "windows")
+load("expand_version_template.bzl", "expand_version_template")
 
 package(default_visibility = [
     "//connections:__subpackages__",
@@ -53,7 +53,7 @@ expand_version_template(
     version = varref("VERSION"),
 )
 
-lexan.resource_files(
+windows.resource_files(
     name = "resources",
     rc_files = [
         ":version_expanded",
@@ -100,7 +100,7 @@ cc_library(
 )
 
 # Build with --config=lexan
-lexan.cc_windows_dll(
+windows.cc_windows_dll(
     name = "nearby_connections",
     tags = ["windows-dll"],
     deps = [
@@ -137,13 +137,15 @@ cc_library(
         "//internal/platform:base",
         "//internal/platform:types",
         "//proto:connections_enums_cc_proto",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/types:span",
     ],
 )
 
-lexan.cc_windows_dll(
+windows.cc_windows_dll(
     name = "nc_windows",
     srcs = [],
     compatible_with = ["//buildenv/target:non_prod"],

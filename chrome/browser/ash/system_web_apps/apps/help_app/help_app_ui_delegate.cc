@@ -91,12 +91,19 @@ std::optional<std::string> ChromeHelpAppUIDelegate::OpenFeedbackDialog() {
   // We don't change the default description, or add extra diagnostics so those
   // are empty strings.
   chrome::ShowFeedbackPage(GURL(kChromeUIHelpAppURL), profile,
-                           chrome::kFeedbackSourceHelpApp,
+                           feedback::kFeedbackSourceHelpApp,
                            std::string() /* description_template */,
                            std::string() /* description_placeholder_text */,
                            kHelpAppFeedbackCategoryTag /* category_tag */,
                            std::string() /* extra_diagnostics */);
   return std::nullopt;
+}
+
+void ChromeHelpAppUIDelegate::ShowOnDeviceAppControls() {
+  Profile* profile = Profile::FromWebUI(web_ui_);
+  // The "Apps" section of OS Settings contains app controls.
+  chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
+      profile, chromeos::settings::mojom::kAppsSectionPath);
 }
 
 void ChromeHelpAppUIDelegate::ShowParentalControls() {
@@ -143,12 +150,6 @@ void ChromeHelpAppUIDelegate::LaunchMicrosoft365Setup() {
   }
   ash::cloud_upload::LaunchMicrosoft365Setup(
       profile, web_ui_->GetWebContents()->GetTopLevelNativeWindow());
-}
-
-void ChromeHelpAppUIDelegate::MaybeShowDiscoverNotification() {
-  Profile* profile = Profile::FromWebUI(web_ui_);
-  UserSessionManager::GetInstance()->MaybeShowHelpAppDiscoverNotification(
-      profile);
 }
 
 void ChromeHelpAppUIDelegate::MaybeShowReleaseNotesNotification() {

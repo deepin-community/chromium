@@ -24,6 +24,13 @@ void OnSyncStartingHelperOnModelThread(
   delegate->OnSyncStarting(request, std::move(callback_bound_to_ui_thread));
 }
 
+void HasUnsyncedDataHelperOnModelThread(
+    base::OnceCallback<void(bool)> callback_bound_to_ui_thread,
+    base::WeakPtr<ModelTypeControllerDelegate> delegate) {
+  DCHECK(delegate);
+  delegate->HasUnsyncedData(std::move(callback_bound_to_ui_thread));
+}
+
 void GetAllNodesForDebuggingHelperOnModelThread(
     ProxyModelTypeControllerDelegate::AllNodesCallback
         callback_bound_to_ui_thread,
@@ -74,7 +81,7 @@ void RunModelTask(
   base::WeakPtr<ModelTypeControllerDelegate> delegate = delegate_provider.Run();
   // TODO(mastiz): Migrate away from weak pointers, since there is no actual
   // need, provided that KeyedServices have proper dependencies.
-  // TODO(crbug.com/1523624): switch to CHECK once all data types provide
+  // TODO(crbug.com/41496574): switch to CHECK once all data types provide
   // non-null delegates.
   if (delegate) {
     std::move(task).Run(delegate);
@@ -105,6 +112,14 @@ void ProxyModelTypeControllerDelegate::OnSyncStopping(
     SyncStopMetadataFate metadata_fate) {
   PostTask(FROM_HERE,
            base::BindOnce(&StopSyncHelperOnModelThread, metadata_fate));
+}
+
+void ProxyModelTypeControllerDelegate::HasUnsyncedData(
+    base::OnceCallback<void(bool)> callback) {
+  PostTask(
+      FROM_HERE,
+      base::BindOnce(&HasUnsyncedDataHelperOnModelThread,
+                     base::BindPostTaskToCurrentDefault(std::move(callback))));
 }
 
 void ProxyModelTypeControllerDelegate::GetAllNodesForDebugging(

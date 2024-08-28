@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 import {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
 
-import {Category, PageHandlerFactory, PageHandlerRemote, Status, TenorGifResponse} from './emoji_picker.mojom-webui.js';
+import {Category, HistoryItem, PageHandlerFactory, PageHandlerRemote, Status, TenorGifResponse} from './emoji_picker.mojom-webui.js';
 import {EmojiSearch} from './emoji_search.mojom-webui.js';
 import {NewWindowProxy} from './new_window_proxy.mojom-webui.js';
 import {EmojiVariants, GifSubcategoryData, VisualContent} from './types.js';
@@ -11,10 +11,10 @@ import {EmojiVariants, GifSubcategoryData, VisualContent} from './types.js';
 const HELP_CENTRE_URL = 'https://support.google.com/chrome?p=palette';
 
 export class EmojiPickerApiProxy {
-  handler = new PageHandlerRemote();
-  newWindowProxy = NewWindowProxy.getRemote();
+  private handler = new PageHandlerRemote();
+  private newWindowProxy = NewWindowProxy.getRemote();
   // TODO(b/309343774): Once search is always on, remove function wrapper.
-  searchProxy = () => EmojiSearch.getRemote();
+  private searchProxy = () => EmojiSearch.getRemote();
   static instance: EmojiPickerApiProxy|null = null;
   constructor() {
     const factory = PageHandlerFactory.getRemote();
@@ -106,6 +106,27 @@ export class EmojiPickerApiProxy {
 
   getInitialCategory(): Promise<{category: Category}> {
     return this.handler.getInitialCategory();
+  }
+
+  getInitialQuery(): Promise<{query: string}> {
+    return this.handler.getInitialQuery();
+  }
+
+  updateHistoryInPrefs(category: Category, history: HistoryItem[]): void {
+    this.handler.updateHistoryInPrefs(category, history);
+  }
+
+  updatePreferredVariantsInPrefs(preferredVariants: Record<string, string>):
+      void {
+    this.handler.updatePreferredVariantsInPrefs(
+        Object.keys(preferredVariants).map(base => ({
+                                             'base': base,
+                                             'variant': preferredVariants[base],
+                                           })));
+  }
+
+  getHistoryFromPrefs(category: Category): Promise<{history: HistoryItem[]}> {
+    return this.handler.getHistoryFromPrefs(category);
   }
 
   onUiFullyLoaded(): void {

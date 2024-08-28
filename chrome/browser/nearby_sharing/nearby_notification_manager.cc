@@ -27,7 +27,6 @@
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/image_decoder/image_decoder.h"
-#include "chrome/browser/nearby_sharing/common/nearby_share_enums.h"
 #include "chrome/browser/nearby_sharing/common/nearby_share_features.h"
 #include "chrome/browser/nearby_sharing/common/nearby_share_prefs.h"
 #include "chrome/browser/nearby_sharing/common/nearby_share_resource_getter.h"
@@ -70,12 +69,8 @@ constexpr char kNearbyNotifier[] = "nearby";
 
 std::string CreateNotificationIdForShareTarget(
     const ShareTarget& share_target) {
-  if (base::FeatureList::IsEnabled(features::kNearbySharingSelfShare)) {
     return std::string(kNearbyTransferResultNotificationIdPrefix) +
            share_target.id.ToString();
-  } else {
-    return std::string(kNearbyInProgressNotificationId);
-  }
 }
 
 // Creates a default Nearby Share notification with empty content.
@@ -361,7 +356,7 @@ std::optional<std::u16string> GetReceivedNotificationTextMessage(
 }
 
 ui::ImageModel GetImageFromShareTarget(const ShareTarget& share_target) {
-  // TODO(crbug.com/1102348): Create or get profile picture of |share_target|.
+  // TODO(crbug.com/40138752): Create or get profile picture of |share_target|.
   return ui::ImageModel();
 }
 
@@ -454,7 +449,7 @@ class ConnectionRequestNotificationDelegate
         manager_->RejectTransfer();
         break;
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
     }
   }
@@ -560,7 +555,7 @@ class SuccessNotificationDelegate : public NearbyNotificationDelegate {
             CopyTextToClipboard();
             break;
           default:
-            NOTREACHED();
+            NOTREACHED_IN_MIGRATION();
             break;
         }
         break;
@@ -577,7 +572,7 @@ class SuccessNotificationDelegate : public NearbyNotificationDelegate {
             CopyImageToClipboard();
             break;
           default:
-            NOTREACHED();
+            NOTREACHED_IN_MIGRATION();
             break;
         }
         break;
@@ -688,7 +683,7 @@ class NearbyDeviceTryingToShareNotificationDelegate
             /*did_click_dismiss=*/true);
         break;
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
     }
   }
@@ -726,7 +721,7 @@ class NearbyVisibilityReminderNotificationDelegate
         manager_->OnNearbyVisibilityReminderDismissed();
         break;
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
     }
   }
@@ -759,11 +754,12 @@ bool ShouldShowNearbyDeviceTryingToShareNotification(
 }
 
 bool ShouldShowNearbyVisibilityReminderNotification(PrefService* pref_service) {
-  Visibility visibility = static_cast<Visibility>(
-      pref_service->GetInteger(prefs::kNearbySharingBackgroundVisibilityName));
+  nearby_share::mojom::Visibility visibility =
+      static_cast<nearby_share::mojom::Visibility>(pref_service->GetInteger(
+          prefs::kNearbySharingBackgroundVisibilityName));
 
-  return visibility == Visibility::kAllContacts ||
-         visibility == Visibility::kSelectedContacts;
+  return visibility == nearby_share::mojom::Visibility::kAllContacts ||
+         visibility == nearby_share::mojom::Visibility::kSelectedContacts;
 }
 
 void UpdateNearbyDeviceTryingToShareDismissedTime(PrefService* pref_service) {
@@ -867,16 +863,10 @@ void NearbyNotificationManager::OnTransferUpdate(
         ShowProgress(share_target, transfer_metadata);
       break;
     case TransferMetadata::Status::kAwaitingLocalConfirmation:
-      if (base::FeatureList::IsEnabled(features::kNearbySharingSelfShare)) {
-        // Only incoming transfers are handled via notifications.
-        // Don't show notification for auto-accept self shares.
-        if (share_target.is_incoming && !share_target.CanAutoAccept()) {
-          ShowConnectionRequest(share_target, transfer_metadata);
-        }
-      } else {
-        // Only incoming transfers are handled via notifications.
-        if (share_target.is_incoming)
-          ShowConnectionRequest(share_target, transfer_metadata);
+      // Only incoming transfers are handled via notifications.
+      // Don't show notification for auto-accept self shares.
+      if (share_target.is_incoming && !share_target.CanAutoAccept()) {
+        ShowConnectionRequest(share_target, transfer_metadata);
       }
       break;
     case TransferMetadata::Status::kComplete:
@@ -1122,7 +1112,7 @@ void NearbyNotificationManager::ShowIncomingSuccess(
 
   if (!image.isNull()) {
     notification.set_type(message_center::NOTIFICATION_TYPE_IMAGE);
-    notification.set_image(gfx::Image::CreateFrom1xBitmap(image));
+    notification.SetImage(gfx::Image::CreateFrom1xBitmap(image));
   }
 
   std::vector<message_center::ButtonInfo> notification_actions;

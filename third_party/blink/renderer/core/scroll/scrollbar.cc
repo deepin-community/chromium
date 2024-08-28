@@ -26,24 +26,39 @@
 #include "third_party/blink/renderer/core/scroll/scrollbar.h"
 
 #include <algorithm>
+
 #include "base/feature_list.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/web_gesture_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/input/web_pointer_event.h"
-#include "third_party/blink/public/platform/web_scrollbar_overlay_color_theme.h"
+#include "third_party/blink/public/common/input/web_pointer_properties.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/scroll/scroll_animator_base.h"
 #include "third_party/blink/renderer/core/scroll/scrollable_area.h"
 #include "third_party/blink/renderer/core/scroll/scrollbar_theme.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/text_direction.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
+bool ButtonInteractsWithScrollbar(const WebPointerProperties::Button button) {
+  if (button == WebPointerProperties::Button::kMiddle) {
+    if (RuntimeEnabledFeatures::MiddleClickAutoscrollEnabled()) {
+      return false;
+    }
+
+    // The reason to allow middle mouse button clicks is that the
+    // ShouldCenterOnThumb mode of the scrollbar theme(such as
+    // scroll_theme_aura) uses the middle mouse button.
+    return true;
+  }
+  return button == WebPointerProperties::Button::kLeft;
+}
 
 Scrollbar* Scrollbar::CreateForTesting(ScrollableArea* scrollable_area,
                                        ScrollbarOrientation orientation,
@@ -97,15 +112,12 @@ void Scrollbar::SetFrameRect(const gfx::Rect& frame_rect) {
   if (frame_rect == frame_rect_)
     return;
 
+  if (!UsesNinePatchTrackAndCanSkipRepaint(frame_rect)) {
+    SetNeedsPaintInvalidation(kAllParts);
+  }
   frame_rect_ = frame_rect;
-  SetNeedsPaintInvalidation(kAllParts);
   if (scrollable_area_)
     scrollable_area_->ScrollbarFrameRectChanged();
-}
-
-ScrollbarOverlayColorTheme Scrollbar::GetScrollbarOverlayColorTheme() const {
-  return scrollable_area_ ? scrollable_area_->GetScrollbarOverlayColorTheme()
-                          : kScrollbarOverlayColorThemeDark;
 }
 
 bool Scrollbar::HasTickmarks() const {
@@ -171,6 +183,11 @@ void Scrollbar::SetProportion(int visible_size, int total_size) {
 
   visible_size_ = visible_size;
   total_size_ = total_size;
+
+  if (UsesNinePatchTrackAndCanSkipRepaint(frame_rect_)) {
+    SetNeedsPaintInvalidation(kThumbPart);
+    return;
+  }
 
   SetNeedsPaintInvalidation(kAllParts);
 }
@@ -555,9 +572,9 @@ void Scrollbar::MouseUp(const WebMouseEvent& mouse_event) {
 }
 
 void Scrollbar::MouseDown(const WebMouseEvent& evt) {
-  // Early exit for right click
-  if (evt.button == WebPointerProperties::Button::kRight)
+  if (!ButtonInteractsWithScrollbar(evt.button)) {
     return;
+  }
 
   gfx::Point position = gfx::ToFlooredPoint(evt.PositionInRootFrame());
   SetPressedPart(GetTheme().HitTestRootFramePosition(*this, position),
@@ -738,6 +755,25 @@ bool Scrollbar::IsFluentOverlayScrollbarMinimalMode() const {
          pressed_part_ != kThumbPart;
 }
 
+bool Scrollbar::UsesNinePatchTrackAndCanSkipRepaint(
+    const gfx::Rect& new_frame_rect) const {
+  if (!theme_.UsesNinePatchTrackAndButtonsResource()) {
+    return false;
+  }
+  // If the scrollbar's thickness is being changed, then a new bitmap needs to
+  // be generated to paint the scrollbar arrows appropriately.
+  if ((Orientation() == kHorizontalScrollbar &&
+       new_frame_rect.height() != frame_rect_.height()) ||
+      (Orientation() == kVerticalScrollbar &&
+       new_frame_rect.width() != frame_rect_.width())) {
+    return false;
+  }
+  gfx::Size track_canvas_size =
+      GetTheme().NinePatchTrackAndButtonsCanvasSize(*this);
+  return track_canvas_size.height() < new_frame_rect.height() ||
+         track_canvas_size.width() < new_frame_rect.width();
+}
+
 bool Scrollbar::ShouldParticipateInHitTesting() {
   // Non-overlay scrollbars should always participate in hit testing.
   if (!IsOverlayScrollbar())
@@ -869,7 +905,7 @@ bool Scrollbar::ContainerIsFormControl() const {
 
 EScrollbarWidth Scrollbar::CSSScrollbarWidth() const {
   if (style_source_) {
-    return style_source_->StyleRef().ScrollbarWidth();
+    return style_source_->StyleRef().UsedScrollbarWidth();
   }
   return EScrollbarWidth::kAuto;
 }
@@ -902,12 +938,9 @@ bool Scrollbar::IsOpaque() const {
 }
 
 mojom::blink::ColorScheme Scrollbar::UsedColorScheme() const {
-  return scrollable_area_->UsedColorSchemeScrollbars();
+  return IsOverlayScrollbar()
+             ? scrollable_area_->GetOverlayScrollbarColorScheme()
+             : scrollable_area_->UsedColorSchemeScrollbars();
 }
-
-STATIC_ASSERT_ENUM(kWebScrollbarOverlayColorThemeDark,
-                   kScrollbarOverlayColorThemeDark);
-STATIC_ASSERT_ENUM(kWebScrollbarOverlayColorThemeLight,
-                   kScrollbarOverlayColorThemeLight);
 
 }  // namespace blink

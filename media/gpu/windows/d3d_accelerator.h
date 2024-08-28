@@ -6,11 +6,11 @@
 #define MEDIA_GPU_WINDOWS_D3D_ACCELERATOR_H_
 
 #include <memory>
+#include <string_view>
 
-#include "base/strings/string_piece.h"
-#include "media/gpu/windows/d3d11_com_defs.h"
 #include "media/gpu/windows/d3d11_status.h"
 #include "media/gpu/windows/d3d11_video_decoder_client.h"
+#include "media/gpu/windows/d3d_com_defs.h"
 
 namespace media {
 
@@ -22,12 +22,6 @@ class D3DAccelerator {
   virtual ~D3DAccelerator();
 
  protected:
-  // Record a failure to DVLOG and |media_log_|.
-  void RecordFailure(base::StringPiece reason, D3D11Status::Codes code) const;
-  void RecordFailure(base::StringPiece reason,
-                     D3D11Status::Codes code,
-                     HRESULT hr) const;
-
   void SetVideoDecoderWrapper(
       std::unique_ptr<D3DVideoDecoderWrapper> video_decoder_wrapper);
 

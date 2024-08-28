@@ -2,7 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <poll.h>
+#include <unistd.h>
+
 #include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -12,6 +16,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/functional/bind_front.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "quiche/quic/core/crypto/proof_verifier.h"
@@ -21,22 +26,30 @@
 #include "quiche/quic/core/quic_server_id.h"
 #include "quiche/quic/core/quic_time.h"
 #include "quiche/quic/moqt/moqt_messages.h"
+#include "quiche/quic/moqt/moqt_outgoing_queue.h"
+#include "quiche/quic/moqt/moqt_priority.h"
 #include "quiche/quic/moqt/moqt_session.h"
 #include "quiche/quic/moqt/moqt_track.h"
 #include "quiche/quic/moqt/tools/moqt_client.h"
 #include "quiche/quic/platform/api/quic_default_proof_providers.h"
 #include "quiche/quic/platform/api/quic_socket_address.h"
-#include "quiche/quic/platform/api/quic_thread.h"
 #include "quiche/quic/tools/fake_proof_verifier.h"
+#include "quiche/quic/tools/interactive_cli.h"
 #include "quiche/quic/tools/quic_name_lookup.h"
 #include "quiche/quic/tools/quic_url.h"
 #include "quiche/common/platform/api/quiche_command_line_flags.h"
 #include "quiche/common/platform/api/quiche_export.h"
-#include "quiche/common/quiche_circular_deque.h"
+#include "quiche/common/platform/api/quiche_mem_slice.h"
+#include "quiche/common/quiche_buffer_allocator.h"
+#include "quiche/common/simple_buffer_allocator.h"
 
 DEFINE_QUICHE_COMMAND_LINE_FLAG(
     bool, disable_certificate_verification, false,
     "If true, don't verify the server certificate.");
+
+DEFINE_QUICHE_COMMAND_LINE_FLAG(
+    std::string, output_file, "",
+    "chat messages will stream to a file instead of stdout");
 
 class ChatClient {
  public:
@@ -55,6 +68,12 @@ class ChatClient {
     std::unique_ptr<quic::ProofVerifier> verifier;
     const bool ignore_certificate = quiche::GetQuicheCommandLineFlag(
         FLAGS_disable_certificate_verification);
+    output_filename_ = quiche::GetQuicheCommandLineFlag(FLAGS_output_file);
+    if (!output_filename_.empty()) {
+      output_file_.open(output_filename_);
+      output_file_ << "Chat transcript:\n";
+      output_file_.flush();
+    }
     if (ignore_certificate) {
       verifier = std::make_unique<quic::FakeProofVerifier>();
     } else {
@@ -65,6 +84,12 @@ class ChatClient {
     session_callbacks_.session_established_callback = [this]() {
       std::cout << "Session established\n";
       session_is_open_ = true;
+      if (output_filename_.empty()) {  // Use the CLI.
+        cli_ = std::make_unique<quic::InteractiveCli>(
+            event_loop_.get(),
+            absl::bind_front(&ChatClient::OnTerminalLineInput, this));
+        cli_->PrintLine("Fully connected. Enter '/exit' to exit the chat.\n");
+      }
     };
     session_callbacks_.session_terminated_callback =
         [this](absl::string_view error_message) {
@@ -77,19 +102,41 @@ class ChatClient {
     client_->Connect(path, std::move(session_callbacks_));
   }
 
+  void OnTerminalLineInput(absl::string_view input_message) {
+    if (input_message.empty()) {
+      return;
+    }
+    if (input_message == "/exit") {
+      session_is_open_ = false;
+      return;
+    }
+    quiche::QuicheMemSlice message_slice(quiche::QuicheBuffer::Copy(
+        quiche::SimpleBufferAllocator::Get(), input_message));
+    queue_->AddObject(std::move(message_slice), /*key=*/true);
+  }
+
   bool session_is_open() const { return session_is_open_; }
   bool is_syncing() const {
-    return catalog_group_.has_value() || subscribes_to_make_ > 0 ||
-           !session_->HasSubscribers(my_track_name_);
+    return !catalog_group_.has_value() || subscribes_to_make_ > 0 ||
+           (queue_ != nullptr && queue_->HasSubscribers());
   }
 
   void RunEventLoop() {
-    event_loop_->RunEventLoopOnce(quic::QuicTime::Delta::FromSeconds(5));
+    event_loop_->RunEventLoopOnce(quic::QuicTime::Delta::FromMilliseconds(500));
+  }
+
+  bool has_output_file() { return !output_filename_.empty(); }
+
+  void WriteToFile(absl::string_view user, absl::string_view message) {
+    output_file_ << user << ": " << message << "\n\n";
+    output_file_.flush();
   }
 
   class QUICHE_EXPORT RemoteTrackVisitor : public moqt::RemoteTrack::Visitor {
    public:
-    RemoteTrackVisitor(ChatClient* client) : client_(client) {}
+    RemoteTrackVisitor(ChatClient* client) : client_(client) {
+      cli_ = client->cli_.get();
+    }
 
     void OnReply(const moqt::FullTrackName& full_track_name,
                  std::optional<absl::string_view> reason_phrase) override {
@@ -109,7 +156,8 @@ class ChatClient {
 
     void OnObjectFragment(
         const moqt::FullTrackName& full_track_name, uint64_t group_sequence,
-        uint64_t object_sequence, uint64_t /*object_send_order*/,
+        uint64_t object_sequence, moqt::MoqtPriority /*publisher_priority*/,
+        moqt::MoqtObjectStatus /*status*/,
         moqt::MoqtForwardingPreference /*forwarding_preference*/,
         absl::string_view object, bool end_of_message) override {
       if (!end_of_message) {
@@ -124,11 +172,27 @@ class ChatClient {
         client_->ProcessCatalog(object, this, group_sequence, object_sequence);
         return;
       }
-      // TODO: Message is from another chat participant
+      std::string username = full_track_name.track_namespace;
+      username = username.substr(username.find_last_of('/') + 1);
+      if (!client_->other_users_.contains(username)) {
+        std::cout << "Username " << username << "doesn't exist\n";
+        return;
+      }
+      if (client_->has_output_file()) {
+        client_->WriteToFile(username, object);
+        return;
+      }
+      if (cli_ != nullptr) {
+        std::string full_output = absl::StrCat(username, ": ", object);
+        cli_->PrintLine(full_output);
+      }
     }
+
+    void set_cli(quic::InteractiveCli* cli) { cli_ = cli; }
 
    private:
     ChatClient* client_;
+    quic::InteractiveCli* cli_;
   };
 
   // returns false on error
@@ -138,15 +202,15 @@ class ChatClient {
       std::cout << "Failed to connect.\n";
       return false;
     }
-    // By not sending a visitor, the application will not fulfill subscriptions
-    // to previous objects.
-    session_->AddLocalTrack(my_track_name_, nullptr);
-    moqt::MoqtAnnounceCallback announce_callback =
+    queue_ = std::make_shared<moqt::MoqtOutgoingQueue>(
+        client_->session(), my_track_name_,
+        moqt::MoqtForwardingPreference::kObject);
+    moqt::MoqtOutgoingAnnounceCallback announce_callback =
         [&](absl::string_view track_namespace,
-            std::optional<absl::string_view> message) {
-          if (message.has_value()) {
-            std::cout << "ANNOUNCE rejected, " << *message << "\n";
-            session_->Error(moqt::MoqtError::kGenericError,
+            std::optional<moqt::MoqtAnnounceErrorReason> reason) {
+          if (reason.has_value()) {
+            std::cout << "ANNOUNCE rejected, " << reason->reason_phrase << "\n";
+            session_->Error(moqt::MoqtError::kInternalError,
                             "Local ANNOUNCE rejected");
             return;
           }
@@ -165,41 +229,6 @@ class ChatClient {
     }
     return true;
   }
-
-  class InputHandler : quic::QuicThread {
-   public:
-    explicit InputHandler(ChatClient* client)
-        : quic::QuicThread("InputThread"), client_(client) {}
-
-    void Run() final {
-      while (client_->session_is_open_) {
-        std::string message_to_send;
-        std::cin >> message_to_send;  // Waiting to start input
-        client_->entering_data_ = true;
-        std::cout << "> ";
-        std::cin >> message_to_send;
-        client_->entering_data_ = false;
-        while (!client_->incoming_messages_.empty()) {
-          std::cout << client_->incoming_messages_.front() << "\n";
-          client_->incoming_messages_.pop_front();
-        }
-        if (message_to_send.empty()) {
-          continue;
-        }
-        if (message_to_send == ":exit") {
-          std::cout << "Exiting the app.\n";
-          // TODO: Close the session.
-          client_->session_is_open_ = false;
-          break;
-        }
-        // TODO: Send the message
-        std::cout << client_->username_ << ": " << message_to_send << "\n";
-      }
-    }
-
-   private:
-    ChatClient* client_;
-  };
 
  private:
   moqt::FullTrackName UsernameToTrackName(absl::string_view username) {
@@ -222,7 +251,6 @@ class ChatClient {
     }
     while (std::getline(f, line)) {
       if (!got_version) {
-        // Chat server currently does not send version
         if (line != "version=1") {
           session_->Error(moqt::MoqtError::kProtocolViolation,
                           "Catalog does not begin with version");
@@ -272,9 +300,9 @@ class ChatClient {
         auto new_user = other_users_.emplace(
             std::make_pair(user, ChatUser(to_subscribe, group_sequence)));
         ChatUser& user_record = new_user.first->second;
-        session_->SubscribeRelative(user_record.full_track_name.track_namespace,
-                                    user_record.full_track_name.track_name, 0,
-                                    0, visitor);
+        session_->SubscribeCurrentGroup(
+            user_record.full_track_name.track_namespace,
+            user_record.full_track_name.track_name, visitor);
         subscribes_to_make_++;
       } else {
         if (it->second.from_group == group_sequence) {
@@ -303,9 +331,9 @@ class ChatClient {
   };
 
   // Basic session information
-  std::string chat_id_;
-  std::string username_;
-  moqt::FullTrackName my_track_name_;
+  const std::string chat_id_;
+  const std::string username_;
+  const moqt::FullTrackName my_track_name_;
 
   // General state variables
   std::unique_ptr<quic::QuicEventLoop> event_loop_;
@@ -325,8 +353,15 @@ class ChatClient {
   std::unique_ptr<RemoteTrackVisitor> remote_track_visitor_;
 
   // Handling incoming and outgoing messages
-  quiche::QuicheCircularDeque<std::string> incoming_messages_;
-  bool entering_data_ = false;
+  std::shared_ptr<moqt::MoqtOutgoingQueue> queue_;
+
+  // Used when chat output goes to file.
+  std::ofstream output_file_;
+  std::string output_filename_;
+
+  // Used when there is no output file, and both input and output are in the
+  // terminal.
+  std::unique_ptr<quic::InteractiveCli> cli_;
 };
 
 // A client for MoQT over chat, used for interop testing. See
@@ -356,13 +391,31 @@ int main(int argc, char* argv[]) {
   while (client.is_syncing()) {
     client.RunEventLoop();
   }
-  if (client.session_is_open()) {
-    std::cout << "Fully connected. Press ENTER to begin input of message, "
-              << "ENTER when done.\n";
+  if (!client.session_is_open()) {
+    return 1;  // Something went wrong in connecting.
   }
-  ChatClient::InputHandler input_thread(&client);
+  if (!client.has_output_file()) {
+    while (client.session_is_open()) {
+      client.RunEventLoop();
+    }
+    return 0;
+  }
+  // There is an output file.
+  std::cout << "Fully connected. Messages are in the output file. Exit the "
+            << "session by entering /exit\n";
+  struct pollfd poll_settings = {
+      0,
+      POLLIN,
+      POLLIN,
+  };
   while (client.session_is_open()) {
-    client.RunEventLoop();
+    std::string message_to_send;
+    while (poll(&poll_settings, 1, 0) <= 0) {
+      client.RunEventLoop();
+    }
+    std::getline(std::cin, message_to_send);
+    client.OnTerminalLineInput(message_to_send);
+    client.WriteToFile(username, message_to_send);
   }
   return 0;
 }

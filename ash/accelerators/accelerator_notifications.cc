@@ -23,7 +23,6 @@
 #include "base/containers/contains.h"
 #include "base/strings/string_split.h"
 #include "chromeos/ui/vector_icons/vector_icons.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/message_center/message_center.h"
 
@@ -150,19 +149,14 @@ void NotifyAccessibilityFeatureDisabledByAdmin(
 void ShowAccessibilityNotification(
     int title_id,
     int message_id,
+    const std::u16string& accelerator,
     const std::string& notification_id,
     const NotificationCatalogName& catalog_name) {
-  if (::features::IsAccessibilityAcceleratorNotificationsTimeoutEnabled()) {
-    // Show a notification that times out.
-    CreateAndShowNotification(
-        notification_id, catalog_name, l10n_util::GetStringUTF16(title_id),
-        l10n_util::GetStringUTF16(message_id), kNotificationAccessibilityIcon);
-  } else {
-    // Show a notification that does not time out.
-    CreateAndShowStickyNotification(
-        notification_id, catalog_name, l10n_util::GetStringUTF16(title_id),
-        l10n_util::GetStringUTF16(message_id), kNotificationAccessibilityIcon);
-  }
+  // Show a notification that times out.
+  CreateAndShowNotification(notification_id, catalog_name,
+                            l10n_util::GetStringUTF16(title_id),
+                            l10n_util::GetStringFUTF16(message_id, accelerator),
+                            kNotificationAccessibilityIcon);
 }
 
 void RemoveNotification(const std::string& notification_id) {
@@ -216,9 +210,17 @@ void MaybeShowDeprecatedAcceleratorNotification(const char* notification_id,
 }
 
 void ShowDockedMagnifierNotification() {
+  std::vector<AcceleratorLookup::AcceleratorDetails> details =
+      Shell::Get()->accelerator_lookup()->GetAvailableAcceleratorsForAction(
+          AcceleratorAction::kToggleDockedMagnifier);
+  // This dialog is only shown when docked magnification was enabled from the
+  // accelerator.
+  CHECK(!details.empty());
+  std::u16string accelerator =
+      AcceleratorLookup::GetAcceleratorDetailsText(details[0]);
   ShowAccessibilityNotification(
       IDS_DOCKED_MAGNIFIER_ACCEL_TITLE, IDS_DOCKED_MAGNIFIER_ACCEL_MSG,
-      kDockedMagnifierToggleAccelNotificationId,
+      accelerator, kDockedMagnifierToggleAccelNotificationId,
       NotificationCatalogName::kDockedMagnifierEnabled);
 }
 
@@ -233,9 +235,17 @@ void RemoveDockedMagnifierNotification() {
 }
 
 void ShowFullscreenMagnifierNotification() {
+  std::vector<AcceleratorLookup::AcceleratorDetails> details =
+      Shell::Get()->accelerator_lookup()->GetAvailableAcceleratorsForAction(
+          AcceleratorAction::kToggleFullscreenMagnifier);
+  // This dialog is only shown when fullscreen magnification was enabled from
+  // the accelerator.
+  CHECK(!details.empty());
+  std::u16string accelerator =
+      AcceleratorLookup::GetAcceleratorDetailsText(details[0]);
   ShowAccessibilityNotification(
       IDS_FULLSCREEN_MAGNIFIER_ACCEL_TITLE, IDS_FULLSCREEN_MAGNIFIER_ACCEL_MSG,
-      kFullscreenMagnifierToggleAccelNotificationId,
+      accelerator, kFullscreenMagnifierToggleAccelNotificationId,
       NotificationCatalogName::kFullScreenMagnifierEnabled);
 }
 
@@ -250,8 +260,16 @@ void RemoveFullscreenMagnifierNotification() {
 }
 
 void ShowHighContrastNotification() {
+  std::vector<AcceleratorLookup::AcceleratorDetails> details =
+      Shell::Get()->accelerator_lookup()->GetAvailableAcceleratorsForAction(
+          AcceleratorAction::kToggleHighContrast);
+  // This dialog is only shown when high conrast was enabled from the
+  // accelerator.
+  CHECK(!details.empty());
+  std::u16string accelerator =
+      AcceleratorLookup::GetAcceleratorDetailsText(details[0]);
   ShowAccessibilityNotification(IDS_HIGH_CONTRAST_ACCEL_TITLE,
-                                IDS_HIGH_CONTRAST_ACCEL_MSG,
+                                IDS_HIGH_CONTRAST_ACCEL_MSG, accelerator,
                                 kHighContrastToggleAccelNotificationId,
                                 NotificationCatalogName::kHighContrastEnabled);
 }

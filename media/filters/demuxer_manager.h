@@ -21,11 +21,13 @@
 #include "media/base/pipeline.h"
 #include "media/base/pipeline_status.h"
 #include "media/filters/chunk_demuxer.h"
+#include "net/storage_access_api/status.h"
 #include "url/origin.h"
 
 #if BUILDFLAG(ENABLE_HLS_DEMUXER)
 #include "base/threading/sequence_bound.h"
 #include "media/filters/hls_data_source_provider.h"
+#include "media/filters/hls_media_player_tag_recorder.h"
 #include "url/gurl.h"
 #endif  // BUILDFLAG(ENABLE_HLS_DEMUXER)
 
@@ -120,7 +122,7 @@ class MEDIA_EXPORT DemuxerManager {
                  MediaLog* log,
                  net::SiteForCookies site_for_cookies,
                  url::Origin top_frame_origin,
-                 bool has_storage_access,
+                 net::StorageAccessApiStatus storage_access_api_status,
                  bool enable_instant_source_buffer_gc,
                  std::unique_ptr<Demuxer> demuxer_override);
   ~DemuxerManager();
@@ -165,6 +167,9 @@ class MEDIA_EXPORT DemuxerManager {
   int64_t GetDataSourceMemoryUsage();
   void OnDataSourcePlaybackRateChange(double rate, bool paused);
 
+  // Signal that a demuxer (or renderer) has caused a duration change.
+  void DurationChanged();
+
   bool WouldTaintOrigin() const;
   bool HasDataSource() const;
   bool HasDemuxer() const;
@@ -184,7 +189,8 @@ class MEDIA_EXPORT DemuxerManager {
 #endif  // BUILDFLAG(ENABLE_FFMPEG)
 
 #if BUILDFLAG(ENABLE_HLS_DEMUXER)
-  std::unique_ptr<Demuxer> CreateHlsDemuxer();
+  std::tuple<raw_ptr<DataSourceInfo>, std::unique_ptr<Demuxer>>
+  CreateHlsDemuxer();
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
@@ -224,7 +230,7 @@ class MEDIA_EXPORT DemuxerManager {
   net::SiteForCookies site_for_cookies_;
   url::Origin top_frame_origin_;
 #if BUILDFLAG(IS_ANDROID)
-  bool has_storage_access_;
+  net::StorageAccessApiStatus storage_access_api_status_;
 #endif  // BUILDFLAG(IS_ANDROID)
 
   // When MSE memory pressure based garbage collection is enabled, the
@@ -245,6 +251,18 @@ class MEDIA_EXPORT DemuxerManager {
 
   // Holds whichever demuxer implementation is being used.
   std::unique_ptr<Demuxer> demuxer_;
+
+#if BUILDFLAG(ENABLE_HLS_DEMUXER)
+  // Records stats about HLS playbacks in MediaPlayer.
+  std::unique_ptr<HlsMediaPlayerTagRecorder> media_player_hls_tag_recorder_;
+#endif
+
+  // Refers to the owned object that can query information about a data source.
+  // For most playbacks, this is a raw ptr to `data_source_`, and so it is safe,
+  // since this class also owns that object. For HLS playback, this object is
+  // the HlsManifestDemuxerEngine, owned by `demuxer_`, so again, it is safe to
+  // keep a raw ptr here.
+  raw_ptr<DataSourceInfo> data_source_info_ = nullptr;
 
   // Holds an optional demuxer that can be passed in at time of creation,
   // which becomes the default demuxer to use.

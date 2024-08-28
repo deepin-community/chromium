@@ -18,6 +18,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "components/sync/base/client_tag_hash.h"
+#include "components/sync/base/deletion_origin.h"
 #include "components/sync/base/time.h"
 #include "components/sync/model/data_type_activation_request.h"
 #include "components/sync/model/entity_change.h"
@@ -68,7 +69,8 @@ class LocalSessionWriteBatch : public LocalSessionEventHandlerImpl::WriteBatch {
   void Delete(int tab_node_id) override {
     const std::string storage_key =
         batch_->DeleteLocalTabWithoutUpdatingTracker(tab_node_id);
-    processor_->Delete(storage_key, batch_->GetMetadataChangeList());
+    processor_->Delete(storage_key, syncer::DeletionOrigin::Unspecified(),
+                       batch_->GetMetadataChangeList());
   }
 
   void Put(std::unique_ptr<sync_pb::SessionSpecifics> specifics) override {
@@ -264,15 +266,15 @@ SessionSyncBridge::ApplyIncrementalSyncChanges(
   return std::nullopt;
 }
 
-void SessionSyncBridge::GetData(StorageKeyList storage_keys,
-                                DataCallback callback) {
+std::unique_ptr<syncer::DataBatch> SessionSyncBridge::GetDataForCommit(
+    StorageKeyList storage_keys) {
   DCHECK(syncing_);
-  std::move(callback).Run(store_->GetSessionDataForKeys(storage_keys));
+  return store_->GetSessionDataForKeys(storage_keys);
 }
 
-void SessionSyncBridge::GetAllDataForDebugging(DataCallback callback) {
+std::unique_ptr<syncer::DataBatch> SessionSyncBridge::GetAllDataForDebugging() {
   DCHECK(syncing_);
-  std::move(callback).Run(store_->GetAllSessionData());
+  return store_->GetAllSessionData();
 }
 
 std::string SessionSyncBridge::GetClientTag(
@@ -446,6 +448,7 @@ void SessionSyncBridge::DeleteForeignSessionWithBatch(
   for (const std::string& deleted_storage_key :
        batch->DeleteForeignEntityAndUpdateTracker(header_storage_key)) {
     change_processor()->Delete(deleted_storage_key,
+                               syncer::DeletionOrigin::Unspecified(),
                                batch->GetMetadataChangeList());
   }
 

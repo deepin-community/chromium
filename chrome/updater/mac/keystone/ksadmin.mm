@@ -9,14 +9,14 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/apple/foundation_util.h"
 #include "base/at_exit.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
-#include "base/containers/flat_map.h"
+#include "base/containers/fixed_flat_map.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -50,7 +50,7 @@ namespace updater {
 // base::CommandLine can't be used because it enforces that all switches are
 // lowercase, but ksadmin has case-sensitive switches. This argument parser
 // converts an argv set into a map of switch name to switch value; for example
-// `ksadmin --register --productid com.goog.chrome -v 1.2.3.4 e` to
+// `ksadmin --register --productid=com.goog.chrome -v 1.2.3.4 e` to
 // `{"register": "", "productid": "com.goog.chrome", "v": "1.2.3.4", "e": ""}`.
 std::map<std::string, std::string> ParseCommandLine(int argc,
                                                     const char* argv[]) {
@@ -60,12 +60,27 @@ std::map<std::string, std::string> ParseCommandLine(int argc,
     std::string arg(argv[i]);
     if (base::StartsWith(arg, "--")) {
       key = arg.substr(2);
-      result[key] = "";
+      size_t eq_idx = key.find('=');
+      if (eq_idx == std::string::npos) {
+        result[key] = "";
+      } else {
+        result[key.substr(0, eq_idx)] = key.substr(eq_idx + 1);
+        key = "";
+      }
     } else if (base::StartsWith(arg, "-")) {
       // Multiple short options could be combined together. For example,
       // command `ksadmin -pP com.google.Chrome` should print Chrome ticket.
       // Split the option substring into switches character by character.
       for (const char ch : arg.substr(1)) {
+        if (ch == '=') {
+          size_t eq_idx = arg.find('=', 1);
+          CHECK_NE(eq_idx, std::string::npos)
+              << "after reaching '=' in short option \"" << arg
+              << "\", could not find it. This can't happen.";
+          result[key] = arg.substr(eq_idx + 1);
+          key = "";
+          break;  // do not process value as additional short options
+        }
         key = ch;
         result[key] = "";
       }
@@ -105,7 +120,7 @@ constexpr char kCommandXCPath[] = "xcpath";
 
 bool HasSwitch(const std::string& arg,
                const std::map<std::string, std::string>& switches) {
-  if (base::Contains(switches, arg)) {
+  if (switches.contains(arg)) {
     return true;
   }
   static const base::NoDestructor<
@@ -122,11 +137,11 @@ bool HasSwitch(const std::string& arg,
           {kCommandUserInitiated, {"F"}},
           {kCommandUserStore, {"U"}},
       }};
-  if (!base::Contains(*aliases, arg)) {
+  if (!aliases->contains(arg)) {
     return false;
   }
   for (const auto& alias : aliases->at(arg)) {
-    if (base::Contains(switches, alias)) {
+    if (switches.contains(alias)) {
       return true;
     }
   }
@@ -135,26 +150,26 @@ bool HasSwitch(const std::string& arg,
 
 std::string SwitchValue(const std::string& arg,
                         const std::map<std::string, std::string>& switches) {
-  if (base::Contains(switches, arg)) {
+  if (switches.contains(arg)) {
     return switches.at(arg);
   }
-  static const base::NoDestructor<std::map<std::string, std::string>> aliases{{
-      {kCommandBrandKey, "b"},
-      {kCommandBrandPath, "B"},
-      {kCommandProductId, "P"},
-      {kCommandTag, "g"},
-      {kCommandTagKey, "K"},
-      {kCommandTagPath, "H"},
-      {kCommandVersion, "v"},
-      {kCommandVersionKey, "e"},
-      {kCommandVersionPath, "a"},
-      {kCommandXCPath, "x"},
-  }};
-  if (!base::Contains(*aliases, arg)) {
+  static constexpr auto kAliases =
+      base::MakeFixedFlatMap<std::string_view, std::string_view>(
+          {{kCommandBrandKey, "b"},
+           {kCommandBrandPath, "B"},
+           {kCommandProductId, "P"},
+           {kCommandTag, "g"},
+           {kCommandTagKey, "K"},
+           {kCommandTagPath, "H"},
+           {kCommandVersion, "v"},
+           {kCommandVersionKey, "e"},
+           {kCommandVersionPath, "a"},
+           {kCommandXCPath, "x"}});
+  if (!kAliases.contains(arg)) {
     return "";
   }
-  const std::string& alias = aliases->at(arg);
-  return base::Contains(switches, alias) ? switches.at(alias) : "";
+  const std::string alias{kAliases.at(arg)};
+  return switches.contains(alias) ? switches.at(alias) : "";
 }
 
 std::string KeystoneTicketStorePath(UpdaterScope scope) {
@@ -190,45 +205,6 @@ UpdaterScope Scope(const std::map<std::string, std::string>& switches) {
                : UpdaterScope::kUser;
   }
   return IsSystemShim() ? UpdaterScope::kSystem : UpdaterScope::kUser;
-}
-
-void MaybeInstallUpdater(UpdaterScope scope) {
-  const std::optional<base::FilePath> path = GetUpdaterExecutablePath(scope);
-
-  if (path &&
-      [NSFileManager.defaultManager
-          fileExistsAtPath:base::apple::FilePathToNSString(path.value())]) {
-    return;
-  }
-
-  if (IsSystemInstall(scope) && geteuid() != 0) {
-    VLOG(0) << "Cannot install system updater without root privilege.";
-    return;
-  }
-
-  const std::optional<base::FilePath> setup_path = GetUpdaterExecutablePath(
-      IsSystemShim() ? UpdaterScope::kSystem : UpdaterScope::kUser);
-  if (!setup_path || ![NSFileManager.defaultManager
-                         fileExistsAtPath:base::apple::FilePathToNSString(
-                                              setup_path.value())]) {
-    VLOG(0) << "No existing updater to install from.";
-    return;
-  }
-
-  base::CommandLine install_command(setup_path.value());
-  install_command.AppendSwitch(kInstallSwitch);
-  install_command.AppendSwitch(kEnableLoggingSwitch);
-  install_command.AppendSwitchASCII(kLoggingModuleSwitch,
-                                    kLoggingModuleSwitchValue);
-  if (IsSystemInstall(scope)) {
-    install_command.AppendSwitch(kSystemSwitch);
-  }
-  int exit_code = -1;
-  if (base::LaunchProcess(install_command, {}).WaitForExit(&exit_code)) {
-    VLOG(0) << "Installer returned " << exit_code << ".";
-  } else {
-    VLOG(0) << "Failed to wait for the installer to exit.";
-  }
 }
 
 class UpdateCheckResult : public base::RefCountedThreadSafe<UpdateCheckResult> {
@@ -288,6 +264,10 @@ class KSAdminApp : public App {
   scoped_refptr<UpdateService> ServiceProxy(UpdaterScope scope) const;
   void ChooseService(
       base::OnceCallback<void(UpdaterScope scope)> callback) const;
+  void FinishChoosingServiceWithSystemAppStates(
+      base::OnceCallback<void(UpdaterScope)> callback,
+      const std::vector<updater::UpdateService::AppState>& states) const;
+  void MaybeInstallUpdater(UpdaterScope scope) const;
 
   bool HasSwitch(const std::string& arg) const;
   std::string SwitchValue(const std::string& arg) const;
@@ -316,6 +296,46 @@ scoped_refptr<UpdateService> KSAdminApp::ServiceProxy(
   return IsSystemInstall(scope) ? system_service_proxy_ : user_service_proxy_;
 }
 
+void KSAdminApp::MaybeInstallUpdater(UpdaterScope scope) const {
+  const std::optional<base::FilePath> path = GetUpdaterExecutablePath(scope);
+
+  if (path &&
+      [NSFileManager.defaultManager
+          fileExistsAtPath:base::apple::FilePathToNSString(path.value())]) {
+    return;
+  }
+
+  if (!HasSwitch(kCommandInstall) && !HasSwitch(kCommandRegister)) {
+    return;
+  }
+
+  if (IsSystemInstall(scope) && geteuid() != 0) {
+    VLOG(0) << "Cannot install system updater without root privilege.";
+    return;
+  }
+
+  const std::optional<base::FilePath> setup_path = GetUpdaterExecutablePath(
+      IsSystemShim() ? UpdaterScope::kSystem : UpdaterScope::kUser);
+  if (!setup_path || ![NSFileManager.defaultManager
+                         fileExistsAtPath:base::apple::FilePathToNSString(
+                                              setup_path.value())]) {
+    VLOG(0) << "No existing updater to install from.";
+    return;
+  }
+
+  base::CommandLine install_command(setup_path.value());
+  install_command.AppendSwitch(kInstallSwitch);
+  if (IsSystemInstall(scope)) {
+    install_command.AppendSwitch(kSystemSwitch);
+  }
+  int exit_code = -1;
+  if (base::LaunchProcess(install_command, {}).WaitForExit(&exit_code)) {
+    VLOG(0) << "Installer returned " << exit_code << ".";
+  } else {
+    VLOG(0) << "Failed to wait for the installer to exit.";
+  }
+}
+
 void KSAdminApp::ChooseService(
     base::OnceCallback<void(UpdaterScope)> callback) const {
   // Choose updater in the following order:
@@ -341,7 +361,7 @@ void KSAdminApp::ChooseService(
   } else {
     const std::string app_id = SwitchValue(kCommandProductId);
     if (app_id.empty()) {
-      scope = std::make_optional(UpdaterScope::kSystem);
+      scope = std::make_optional(UpdaterScope::kUser);
     }
   }
 
@@ -349,21 +369,23 @@ void KSAdminApp::ChooseService(
     MaybeInstallUpdater(scope.value());
     std::move(callback).Run(scope.value());
   } else {
-    system_service_proxy_->GetAppStates(base::BindOnce(
-        [](const std::string& app_id,
-           base::OnceCallback<void(UpdaterScope scope)> callback,
-           const std::vector<updater::UpdateService::AppState>& states) {
-          for (const updater::UpdateService::AppState& state : states) {
-            if (base::EqualsCaseInsensitiveASCII(app_id, state.app_id)) {
-              return std::move(callback).Run(UpdaterScope::kSystem);
-            }
-          }
-
-          MaybeInstallUpdater(UpdaterScope::kUser);
-          std::move(callback).Run(UpdaterScope::kUser);
-        },
-        SwitchValue(kCommandProductId), std::move(callback)));
+    system_service_proxy_->GetAppStates(
+        base::BindOnce(&KSAdminApp::FinishChoosingServiceWithSystemAppStates,
+                       this, std::move(callback)));
   }
+}
+
+void KSAdminApp::FinishChoosingServiceWithSystemAppStates(
+    base::OnceCallback<void(UpdaterScope)> callback,
+    const std::vector<updater::UpdateService::AppState>& states) const {
+  std::string app_id = SwitchValue(kCommandProductId);
+  for (const updater::UpdateService::AppState& state : states) {
+    if (base::EqualsCaseInsensitiveASCII(app_id, state.app_id)) {
+      return std::move(callback).Run(UpdaterScope::kSystem);
+    }
+  }
+  MaybeInstallUpdater(UpdaterScope::kUser);
+  std::move(callback).Run(UpdaterScope::kUser);
 }
 
 void KSAdminApp::PrintUsage(const std::string& error_message) {
@@ -740,7 +762,7 @@ int KSAdminAppMain(int argc, const char* argv[]) {
   base::CommandLine::Init(argc, argv);
   std::map<std::string, std::string> command_line =
       ParseCommandLine(argc, argv);
-  updater::InitLogging(Scope(command_line));
+  updater::InitLogging(geteuid() ? UpdaterScope::kUser : Scope(command_line));
   InitializeThreadPool("keystone");
   const base::ScopedClosureRunner shutdown_thread_pool(
       base::BindOnce([] { base::ThreadPoolInstance::Get()->Shutdown(); }));

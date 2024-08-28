@@ -2,7 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/core/timing/window_performance.h"
+
 #include <cstdint>
 
 #include "base/numerics/safe_conversions.h"
@@ -12,9 +18,11 @@
 #include "base/test/trace_event_analyzer.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "components/viz/common/frame_timing_details.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/responsiveness_metrics/user_interaction_latency.h"
+#include "third_party/blink/public/mojom/page/page_visibility_state.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_keyboard_event_init.h"
@@ -84,7 +92,10 @@ class WindowPerformanceTest : public testing::Test,
   void SimulatePaint() { performance_->OnPaintFinished(); }
   void SimulateResolvePresentationPromise(uint64_t presentation_index,
                                           base::TimeTicks timestamp) {
-    performance_->OnPresentationPromiseResolved(presentation_index, timestamp);
+    viz::FrameTimingDetails presentation_details;
+    presentation_details.presentation_feedback.timestamp = timestamp;
+    performance_->OnPresentationPromiseResolved(presentation_index,
+                                                presentation_details);
   }
 
   // Only use this function if you don't care about the time difference between
@@ -104,7 +115,8 @@ class WindowPerformanceTest : public testing::Test,
       base::TimeTicks event_timestamp = base::TimeTicks(),
       base::TimeTicks presentation_timestamp = base::TimeTicks()) {
     ResponsivenessMetrics::EventTimestamps event_timestamps = {
-        event_timestamp, presentation_timestamp};
+        event_timestamp, base::TimeTicks(), base::TimeTicks(),
+        presentation_timestamp};
     performance_->SetInteractionIdAndRecordLatency(entry, key_code, pointer_id,
                                                    event_timestamps);
   }
@@ -148,6 +160,11 @@ class WindowPerformanceTest : public testing::Test,
         LocalDOMWindow::From(GetScriptState()));
   }
 
+  HeapDeque<Member<WindowPerformance::EventData>>*
+  GetWindowPerformanceEventsData() {
+    return &performance_->events_data_;
+  }
+
   LocalFrame* GetFrame() const { return &page_holder_->GetFrame(); }
 
   LocalDOMWindow* GetWindow() const { return GetFrame()->DomWindow(); }
@@ -187,7 +204,7 @@ class WindowPerformanceTest : public testing::Test,
   }
 
   void PageVisibilityChanged(base::TimeTicks timestamp) {
-    performance_->last_visibility_change_timestamp_ = timestamp;
+    performance_->PageVisibilityChangedWithTimestamp(timestamp);
   }
 
   test::TaskEnvironment task_environment_;
@@ -266,8 +283,7 @@ TEST(PerformanceLifetimeTest, SurviveContextSwitch) {
 
   // Simulate changing the document while keeping the window.
   std::unique_ptr<WebNavigationParams> params =
-      WebNavigationParams::CreateWithHTMLBufferForTesting(
-          SharedBuffer::Create(), url);
+      WebNavigationParams::CreateWithEmptyHTMLForTesting(url);
   MockPolicyContainerHost mock_policy_container_host;
   params->policy_container = std::make_unique<WebPolicyContainer>(
       WebPolicyContainerPolicies(),
@@ -431,6 +447,55 @@ TEST_P(WindowPerformanceTest, MultipleEventsThenPresent) {
       num_events,
       performance_->getBufferedEntriesByType(performance_entry_names::kEvent)
           .size());
+}
+
+// Test the case where commit finish timestamps are recorded on all pending
+// EventTimings.
+TEST_P(WindowPerformanceTest,
+       CommitFinishTimeRecordedOnAllPendingEventTimings) {
+  size_t num_events = 3;
+  for (size_t i = 0; i < num_events; ++i) {
+    base::TimeTicks start_time = GetTimeOrigin() + base::Seconds(i);
+    base::TimeTicks processing_start = start_time + base::Milliseconds(100);
+    base::TimeTicks processing_end = start_time + base::Milliseconds(200);
+    RegisterPointerEvent(event_type_names::kClick, start_time, processing_start,
+                         processing_end, 4);
+  }
+  auto* events_data = GetWindowPerformanceEventsData();
+  EXPECT_EQ(events_data->size(), 3u);
+  for (const auto event_data : *events_data) {
+    EXPECT_EQ(event_data->GetEventTiming()->unsafeCommitFinishTimestamp(),
+              base::TimeTicks());
+  }
+  base::TimeTicks commit_finish_time = GetTimeOrigin() + base::Seconds(2);
+  performance_->SetCommitFinishTimeStampForPendingEvents(commit_finish_time);
+  for (const auto event_data : *events_data) {
+    EXPECT_EQ(event_data->GetEventTiming()->unsafeCommitFinishTimestamp(),
+              commit_finish_time);
+  }
+}
+
+// Test the case where a new commit finish timestamps does not affect previous
+// EventTiming who has already seen a commit finish.
+TEST_P(WindowPerformanceTest, NewCommitNotOverwritePreviousEventTimings) {
+  base::TimeTicks start_time = GetTimeOrigin() + base::Seconds(1);
+  base::TimeTicks processing_start = start_time + base::Milliseconds(100);
+  base::TimeTicks processing_end = start_time + base::Milliseconds(200);
+  RegisterPointerEvent(event_type_names::kClick, start_time, processing_start,
+                       processing_end, 4);
+  base::TimeTicks commit_finish_time = GetTimeOrigin() + base::Seconds(2);
+  performance_->SetCommitFinishTimeStampForPendingEvents(commit_finish_time);
+  auto* events_data = GetWindowPerformanceEventsData();
+  EXPECT_EQ(events_data->size(), 1u);
+  EXPECT_EQ(events_data->at(0)->GetEventTiming()->unsafeCommitFinishTimestamp(),
+            commit_finish_time);
+  // Set a new commit finish timestamp.
+  base::TimeTicks commit_finish_time_1 = commit_finish_time + base::Seconds(1);
+  performance_->SetCommitFinishTimeStampForPendingEvents(commit_finish_time_1);
+  EXPECT_EQ(events_data->at(0)->GetEventTiming()->unsafeCommitFinishTimestamp(),
+            commit_finish_time);
+  EXPECT_NE(events_data->at(0)->GetEventTiming()->unsafeCommitFinishTimestamp(),
+            commit_finish_time_1);
 }
 
 // Test for existence of 'first-input' given different types of first events.
@@ -891,9 +956,6 @@ TEST_P(WindowPerformanceTest, TapOrClick) {
 }
 
 TEST_P(WindowPerformanceTest, PageVisibilityChanged) {
-  // The page visibility gets changed.
-  PageVisibilityChanged(GetTimeStamp(18));
-
   // Pointerdown
   base::TimeTicks pointerdown_timestamp = GetTimeOrigin();
   base::TimeTicks processing_start_pointerdown = GetTimeStamp(1);
@@ -909,21 +971,24 @@ TEST_P(WindowPerformanceTest, PageVisibilityChanged) {
   base::TimeTicks pointerup_timestamp = GetTimeStamp(3);
   base::TimeTicks processing_start_pointerup = GetTimeStamp(5);
   base::TimeTicks processing_end_pointerup = GetTimeStamp(6);
-  base::TimeTicks presentation_time_pointerup = GetTimeStamp(20);
   RegisterPointerEvent(event_type_names::kPointerup, pointerup_timestamp,
                        processing_start_pointerup, processing_end_pointerup,
                        pointer_id);
-  SimulatePaintAndResolvePresentationPromise(presentation_time_pointerup);
-
   // Click
   base::TimeTicks click_timestamp = GetTimeStamp(13);
   base::TimeTicks processing_start_click = GetTimeStamp(15);
   base::TimeTicks processing_end_click = GetTimeStamp(16);
-  base::TimeTicks presentation_time_click = GetTimeStamp(20);
+  base::TimeTicks presentation_time_pointerup_and_click = GetTimeStamp(20);
   RegisterPointerEvent(event_type_names::kClick, click_timestamp,
                        processing_start_click, processing_end_click,
                        pointer_id);
-  SimulatePaintAndResolvePresentationPromise(presentation_time_click);
+
+  performance_->GetPage()->SetVisibilityState(
+      mojom::blink::PageVisibilityState::kHidden, true);
+  PageVisibilityChanged(GetTimeStamp(18));
+
+  SimulatePaintAndResolvePresentationPromise(
+      presentation_time_pointerup_and_click);
 
   // Flush UKM logging mojo request.
   RunPendingTasks();
@@ -934,15 +999,16 @@ TEST_P(WindowPerformanceTest, PageVisibilityChanged) {
   EXPECT_EQ(1u, entries.size());
   const ukm::mojom::UkmEntry* ukm_entry = entries[0];
   // The event duration of pointerdown is 5ms, all the way to presentation.
-  // Because the page visibility was changed after pointerup & click were
-  // created, the event durations fall back to processingEnd.  That means
-  // they are become 3ms duration each. So the max duration is 5ms.
+  // The event duration of pointerup is processingEnd 6 - event
+  // creation time 3 = 3.
+  // The event duration of click is page visibility change time 16 - 13 = 3.
+  // So the max duration should be 5 ms.
   GetUkmRecorder()->ExpectEntryMetric(
       ukm_entry,
       ukm::builders::Responsiveness_UserInteraction::kMaxEventDurationName, 5);
-  // Because there is overlap with pointerdown and pointerup, the
-  // the non overlapping event duration for pointerup is only 1ms (not 3ms),
-  // So the total non-overlapping total is 5 + 1 + 3 = 9ms.
+  // The total duration should be 9ms, which is the sum of time from time 0 of
+  // pointer down creation time to the processingEnd of pointer up 6ms +
+  // duration of click which is 16-13 = 3ms.
   GetUkmRecorder()->ExpectEntryMetric(
       ukm_entry,
       ukm::builders::Responsiveness_UserInteraction::kTotalEventDurationName,
@@ -950,6 +1016,8 @@ TEST_P(WindowPerformanceTest, PageVisibilityChanged) {
   GetUkmRecorder()->ExpectEntryMetric(
       ukm_entry,
       ukm::builders::Responsiveness_UserInteraction::kInteractionTypeName, 1);
+
+  EXPECT_EQ(1ul, performance_->interactionCount());
 }
 
 TEST_P(WindowPerformanceTest, Drag) {
@@ -1152,7 +1220,6 @@ TEST_P(WindowPerformanceTest, ArtificialPointerupOrClick) {
 }
 #endif  // BUILDFLAG(IS_MAC)
 
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
 // The trace_analyzer does not work on platforms on which the migration of
 // tracing into Perfetto has not completed.
 TEST_P(WindowPerformanceTest, PerformanceMarkTraceEvent) {
@@ -1189,7 +1256,6 @@ TEST_P(WindowPerformanceTest, PerformanceMarkTraceEvent) {
   std::string* navigation_id = arg_dict.FindString("navigationId");
   ASSERT_TRUE(navigation_id);
 }
-#endif  // BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
 
 TEST_P(WindowPerformanceTest, ElementTimingTraceEvent) {
   using trace_analyzer::Query;

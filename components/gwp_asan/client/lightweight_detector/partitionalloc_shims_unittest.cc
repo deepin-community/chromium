@@ -4,8 +4,8 @@
 
 #include "components/gwp_asan/client/lightweight_detector/partitionalloc_shims.h"
 
+#include "base/allocator/partition_allocator/src/partition_alloc/buildflags.h"
 #include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_buildflags.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/multiprocess_test.h"
@@ -18,8 +18,9 @@
 
 // PartitionAlloc (and hence hooking) are disabled with sanitizers that replace
 // allocation routines.
-#if !defined(MEMORY_TOOL_REPLACES_ALLOCATOR) && \
-    BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT)
+#if !defined(MEMORY_TOOL_REPLACES_ALLOCATOR) &&    \
+    PA_BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT) && \
+    PA_BUILDFLAG(USE_RAW_PTR_BACKUP_REF_IMPL)
 
 // These tests install global PartitionAlloc hooks so they are not safe to run
 // in multi-threaded contexts. Instead they're implemented as multi-process
@@ -84,4 +85,5 @@ TEST_F(PartitionAllocShimsTest, Basic) {
 }  // namespace gwp_asan::internal::lud
 
 #endif  // !defined(MEMORY_TOOL_REPLACES_ALLOCATOR) &&
-        // BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT)
+        // PA_BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT) &&
+        // PA_BUILDFLAG(USE_RAW_PTR_BACKUP_REF_IMPL)

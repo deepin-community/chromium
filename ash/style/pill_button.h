@@ -178,7 +178,8 @@ class ASH_EXPORT PillButton : public views::LabelButton {
   ~PillButton() override;
 
   // views::LabelButton:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   int GetHeightForWidth(int width) const override;
   gfx::Insets GetInsets() const override;
   void UpdateBackgroundColor() override;
@@ -207,6 +208,8 @@ class ASH_EXPORT PillButton : public views::LabelButton {
   // enables the background blur, it will use `BlurredBackgroundShield` as the
   // background which is performance consuming so only use it as needed.
   void SetEnableBackgroundBlur(bool enable);
+
+  void SetTextWithStringId(int message_id);
 
  private:
   // Initializes the button layout, focus ring and background according to the
@@ -251,6 +254,7 @@ VIEW_BUILDER_PROPERTY(const SkColor, IconColor)
 VIEW_BUILDER_PROPERTY(ui::ColorId, IconColorId)
 VIEW_BUILDER_PROPERTY(PillButton::Type, PillButtonType)
 VIEW_BUILDER_PROPERTY(bool, EnableBackgroundBlur)
+VIEW_BUILDER_PROPERTY(int, TextWithStringId)
 END_VIEW_BUILDER
 
 }  // namespace ash

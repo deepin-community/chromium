@@ -48,8 +48,9 @@ RecentDriveSource::CallContext::CallContext(CallContext&& context)
 
 RecentDriveSource::CallContext::~CallContext() = default;
 
-RecentDriveSource::RecentDriveSource(Profile* profile, size_t max_files)
-    : profile_(profile), max_files_(max_files) {
+RecentDriveSource::RecentDriveSource(Profile* profile)
+    : RecentSource(extensions::api::file_manager_private::VolumeType::kDrive),
+      profile_(profile) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 }
 
@@ -83,7 +84,7 @@ std::vector<std::string> RecentDriveSource::CreateTypeFilters(
   return type_filters;
 }
 
-void RecentDriveSource::GetRecentFiles(Params params,
+void RecentDriveSource::GetRecentFiles(const Params& params,
                                        GetRecentFilesCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
@@ -100,7 +101,7 @@ void RecentDriveSource::GetRecentFiles(Params params,
   }
 
   auto query_params = drivefs::mojom::QueryParameters::New();
-  query_params->page_size = max_files_;
+  query_params->page_size = params.max_files();
   query_params->query_source =
       drivefs::mojom::QueryParameters::QuerySource::kLocalOnly;
   query_params->sort_field =
@@ -137,7 +138,7 @@ std::vector<RecentFile> RecentDriveSource::Stop(const int32_t call_id) {
   return files;
 }
 
-void RecentDriveSource::OnComplete(int32_t call_id) {
+void RecentDriveSource::OnComplete(const int32_t call_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   CallContext* context = context_map_.Lookup(call_id);
   if (context == nullptr) {

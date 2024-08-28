@@ -7,13 +7,13 @@
 // LICENSE file in the root directory of this source tree.
 
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <utility>
 
 #include <gtest/gtest.h>
-
-#include <xnnpack/config.h>
-#include <xnnpack/params.h>
-
+#include "xnnpack.h"
+#include "xnnpack/config.h"
 #include "average-pooling-operator-tester.h"
 
 static std::pair<size_t, size_t> SmallPoolSize(size_t max_elements) {

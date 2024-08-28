@@ -162,6 +162,8 @@ component("metafile") {
       "emf_win.cc",
       "emf_win.h",
     ]
+
+    libs = [ "xpsprint.lib" ]
   }
 }
 
@@ -202,7 +204,6 @@ component("printing") {
   deps = [
     "//base",
     "//base:i18n",
-    "//base/third_party/dynamic_annotations",
     "//build:chromeos_buildflags",
     "//printing/mojom",
     "//skia",
@@ -268,6 +269,7 @@ component("printing") {
       "printing_context_system_dialog_win.h",
       "printing_context_win.cc",
       "printing_context_win.h",
+      "windows_types.h",
     ]
 
     deps += [ "//printing/backend" ]
@@ -403,6 +405,7 @@ test("printing_unittests") {
 
   if (is_win) {
     sources += [
+      "backend/print_backend_win_unittest.cc",
       "backend/win_helper_unittest.cc",
       "backend/xps_utils_win_unittest.cc",
       "emf_win_unittest.cc",

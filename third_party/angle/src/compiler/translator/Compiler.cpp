@@ -41,6 +41,7 @@
 #include "compiler/translator/tree_ops/InitializeVariables.h"
 #include "compiler/translator/tree_ops/MonomorphizeUnsupportedFunctions.h"
 #include "compiler/translator/tree_ops/PruneEmptyCases.h"
+#include "compiler/translator/tree_ops/PruneInfiniteLoops.h"
 #include "compiler/translator/tree_ops/PruneNoOps.h"
 #include "compiler/translator/tree_ops/RemoveArrayLengthMethod.h"
 #include "compiler/translator/tree_ops/RemoveDynamicIndexing.h"
@@ -49,6 +50,7 @@
 #include "compiler/translator/tree_ops/RescopeGlobalVariables.h"
 #include "compiler/translator/tree_ops/RewritePixelLocalStorage.h"
 #include "compiler/translator/tree_ops/SeparateDeclarations.h"
+#include "compiler/translator/tree_ops/SeparateStructFromFunctionDeclarations.h"
 #include "compiler/translator/tree_ops/SimplifyLoopConditions.h"
 #include "compiler/translator/tree_ops/SplitSequenceOperator.h"
 #include "compiler/translator/tree_ops/glsl/RegenerateStructNames.h"
@@ -245,7 +247,7 @@ class [[nodiscard]] TScopedPoolAllocator
     ~TScopedPoolAllocator()
     {
         SetGlobalPoolAllocator(nullptr);
-        mAllocator->pop();
+        mAllocator->pop(angle::PoolAllocator::ReleaseStrategy::All);
     }
 
   private:
@@ -560,8 +562,10 @@ bool TCompiler::checkShaderVersion(TParseContext *parseContext)
             }
             else if (mShaderVersion == 310)
             {
-                if (!parseContext->checkCanUseExtension(sh::TSourceLoc(),
-                                                        TExtension::EXT_tessellation_shader))
+                if (!parseContext->checkCanUseOneOfExtensions(
+                        sh::TSourceLoc(),
+                        std::array<TExtension, 2u>{{TExtension::EXT_tessellation_shader,
+                                                    TExtension::OES_tessellation_shader}}))
                 {
                     return false;
                 }
@@ -755,6 +759,14 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
     // Desktop GLSL shaders don't have precision, so don't expect them to be specified.
     mValidateASTOptions.validatePrecision = !IsDesktopGLSpec(mShaderSpec);
 
+    // Disallow expressions deemed too complex.
+    // This needs to be checked before other functions that will traverse the AST
+    // to prevent potential stack overflow crashes.
+    if (compileOptions.limitExpressionComplexity && !limitExpressionComplexity(root))
+    {
+        return false;
+    }
+
     if (!validateAST(root))
     {
         return false;
@@ -762,7 +774,7 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
 
     // For now, rewrite pixel local storage before collecting variables or any operations on images.
     //
-    // TODO(anglebug.com/7279):
+    // TODO(anglebug.com/40096838):
     //   Should this actually run after collecting variables?
     //   Do we need more introspection?
     //   Do we want to hide rewritten shader image uniforms from glGetActiveUniform?
@@ -776,12 +788,6 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
             mDiagnostics.globalError("internal compiler error translating pixel local storage");
             return false;
         }
-    }
-
-    // Disallow expressions deemed too complex.
-    if (compileOptions.limitExpressionComplexity && !limitExpressionComplexity(root))
-    {
-        return false;
     }
 
     if (shouldRunLoopAndIndexingValidation(compileOptions) &&
@@ -814,19 +820,13 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         parseContext.isExtensionEnabled(TExtension::APPLE_clip_distance))
     {
         bool isClipDistanceUsed = false;
-        if (!ValidateClipCullDistance(
-                root, &mDiagnostics, mResources.MaxCullDistances,
-                mResources.MaxCombinedClipAndCullDistances, &mClipDistanceSize, &mCullDistanceSize,
-                &mClipDistanceRedeclared, &mCullDistanceRedeclared, &isClipDistanceUsed))
+        if (!ValidateClipCullDistance(this, root, &mDiagnostics,
+                                      mResources.MaxCombinedClipAndCullDistances,
+                                      &mClipDistanceSize, &mCullDistanceSize, &isClipDistanceUsed))
         {
             return false;
         }
         mMetadataFlags[MetadataFlags::HasClipDistance] = isClipDistanceUsed;
-
-        if (!resizeClipAndCullDistanceBuiltins(root))
-        {
-            return false;
-        }
     }
 
     // Validate no barrier() after return before prunning it in |PruneNoOps()| below.
@@ -878,6 +878,11 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         return false;
     }
 
+    if (!SeparateStructFromFunctionDeclarations(*this, *root))
+    {
+        return false;
+    }
+
     // Create the function DAG and check there is no recursion
     if (!initCallDag(root))
     {
@@ -915,8 +920,8 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         return false;
     }
 
-    // anglebug.com/7484: The ESSL spec has a bug with images as function arguments. The recommended
-    // workaround is to inline functions that accept image arguments.
+    // anglebug.com/42265954: The ESSL spec has a bug with images as function arguments. The
+    // recommended workaround is to inline functions that accept image arguments.
     if (mShaderVersion >= 310 && !MonomorphizeUnsupportedFunctions(
                                      this, root, &mSymbolTable, compileOptions,
                                      UnsupportedFunctionArgsBitSet{UnsupportedFunctionArgs::Image}))
@@ -1036,9 +1041,18 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
 
     // Note that separate declarations need to be run before other AST transformations that
     // generate new statements from expressions.
-    if (!SeparateDeclarations(this, root, &getSymbolTable()))
+    if (!SeparateDeclarations(*this, *root))
     {
         return false;
+    }
+
+    // Attempt to reject shaders with infinite loops in WebGL contexts.
+    if (IsWebGLBasedSpec(mShaderSpec))
+    {
+        if (!PruneInfiniteLoops(this, root, &mSymbolTable))
+        {
+            return false;
+        }
     }
 
     if (compileOptions.rescopeGlobalVariables)
@@ -1058,6 +1072,11 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
     }
 
     if (!RemoveArrayLengthMethod(this, root))
+    {
+        return false;
+    }
+    // Fold the expressions again, because |RemoveArrayLengthMethod| can introduce new constants.
+    if (!FoldExpressions(this, root, &mDiagnostics))
     {
         return false;
     }
@@ -1250,39 +1269,6 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
     return true;
 }
 
-bool TCompiler::resizeClipAndCullDistanceBuiltins(TIntermBlock *root)
-{
-    auto resizeVariable = [=](const ImmutableString &name, uint32_t size, uint32_t maxSize) {
-        // Skip if the variable is not used or implicitly has the maximum size
-        if (size == 0 || size == maxSize)
-            return true;
-        ASSERT(size < maxSize);
-        const TVariable *builtInVar =
-            static_cast<const TVariable *>(mSymbolTable.findBuiltIn(name, getShaderVersion()));
-        TType *resizedType = new TType(builtInVar->getType());
-        resizedType->setArraySize(0, size);
-
-        TVariable *resizedVar =
-            new TVariable(&mSymbolTable, name, resizedType, SymbolType::BuiltIn);
-
-        return ReplaceVariable(this, root, builtInVar, resizedVar);
-    };
-
-    if (!mClipDistanceRedeclared && !resizeVariable(ImmutableString("gl_ClipDistance"),
-                                                    mClipDistanceSize, mResources.MaxClipDistances))
-    {
-        return false;
-    }
-
-    if (!mCullDistanceRedeclared && !resizeVariable(ImmutableString("gl_CullDistance"),
-                                                    mCullDistanceSize, mResources.MaxCullDistances))
-    {
-        return false;
-    }
-
-    return true;
-}
-
 bool TCompiler::postParseChecks(const TParseContext &parseContext)
 {
     std::stringstream errorMessage;
@@ -1424,6 +1410,7 @@ void TCompiler::setResourceString()
         << ":EXT_draw_buffers:" << mResources.EXT_draw_buffers
         << ":FragmentPrecisionHigh:" << mResources.FragmentPrecisionHigh
         << ":MaxExpressionComplexity:" << mResources.MaxExpressionComplexity
+        << ":MaxStatementDepth:" << mResources.MaxStatementDepth
         << ":MaxCallStackDepth:" << mResources.MaxCallStackDepth
         << ":MaxFunctionParameters:" << mResources.MaxFunctionParameters
         << ":EXT_blend_func_extended:" << mResources.EXT_blend_func_extended
@@ -1462,6 +1449,7 @@ void TCompiler::setResourceString()
         << ":OES_shader_multisample_interpolation:" << mResources.OES_shader_multisample_interpolation
         << ":OES_shader_image_atomic:" << mResources.OES_shader_image_atomic
         << ":EXT_tessellation_shader:" << mResources.EXT_tessellation_shader
+        << ":OES_tessellation_shader:" << mResources.OES_tessellation_shader
         << ":OES_texture_buffer:" << mResources.OES_texture_buffer
         << ":EXT_texture_buffer:" << mResources.EXT_texture_buffer
         << ":OES_sample_variables:" << mResources.OES_sample_variables
@@ -1565,10 +1553,8 @@ void TCompiler::clearResults()
 
     mNumViews = -1;
 
-    mClipDistanceSize       = 0;
-    mCullDistanceSize       = 0;
-    mClipDistanceRedeclared = false;
-    mCullDistanceRedeclared = false;
+    mClipDistanceSize = 0;
+    mCullDistanceSize = 0;
 
     mGeometryShaderInputPrimitiveType  = EptUndefined;
     mGeometryShaderOutputPrimitiveType = EptUndefined;

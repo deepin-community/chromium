@@ -4,7 +4,12 @@
 
 #include "chrome/browser/ash/login/ui/login_display_host_common.h"
 
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/login_accelerators.h"
@@ -18,9 +23,10 @@
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/ash/app_mode/kiosk_app_types.h"
 #include "chrome/browser/ash/app_mode/kiosk_chrome_app_manager.h"
+#include "chrome/browser/ash/app_mode/kiosk_controller.h"
+#include "chrome/browser/ash/app_mode/kiosk_launch_state.h"
 #include "chrome/browser/ash/attestation/attestation_ca_client.h"
 #include "chrome/browser/ash/language_preferences.h"
-#include "chrome/browser/ash/login/app_mode/kiosk_launch_controller.h"
 #include "chrome/browser/ash/login/choobe_flow_controller.h"
 #include "chrome/browser/ash/login/existing_user_controller.h"
 #include "chrome/browser/ash/login/lock_screen_utils.h"
@@ -52,6 +58,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/chrome_device_id_helper.h"
 #include "chrome/browser/ui/ash/auth/cryptohome_pin_engine.h"
+#include "chrome/browser/ui/ash/system_tray_client_impl.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/webui/ash/diagnostics_dialog.h"
 #include "chrome/browser/ui/webui/ash/login/family_link_notice_screen_handler.h"
@@ -69,6 +76,7 @@
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/attestation/attestation_flow_adaptive.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/login/auth/auth_performer.h"
 #include "chromeos/ash/components/osauth/public/auth_session_storage.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
@@ -146,7 +154,7 @@ void SetGaiaInputMethods(const AccountId& account_id) {
 int ErrorToMessageId(SigninError error) {
   switch (error) {
     case SigninError::kCaptivePortalError:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return 0;
     case SigninError::kGoogleAccountNotAllowed:
       return IDS_LOGIN_ERROR_GOOGLE_ACCOUNT_NOT_ALLOWED;
@@ -172,12 +180,6 @@ int ErrorToMessageId(SigninError error) {
       return IDS_LOGIN_FATAL_ERROR_NO_AUTH_TOKEN;
     case SigninError::kFailedToFetchSamlRedirect:
       return IDS_FAILED_TO_FETCH_SAML_REDIRECT;
-    case SigninError::kActiveDirectoryNetworkProblem:
-      return IDS_AD_AUTH_NETWORK_ERROR;
-    case SigninError::kActiveDirectoryNotSupportedEncryption:
-      return IDS_AD_AUTH_NOT_SUPPORTED_ENCRYPTION;
-    case SigninError::kActiveDirectoryUnknownError:
-      return IDS_AD_AUTH_UNKNOWN_ERROR;
   }
 }
 
@@ -198,8 +200,8 @@ class AccessibilityManagerWrapper
   AccessibilityManagerWrapper& operator=(AccessibilityManagerWrapper&) = delete;
   ~AccessibilityManagerWrapper() override = default;
 
-  bool IsSpokenFeedbackEnabled() const override {
-    return ash::AccessibilityManager::Get()->IsSpokenFeedbackEnabled();
+  bool AllowQRCodeUX() const override {
+    return ash::AccessibilityManager::Get()->AllowQRCodeUX();
   }
 };
 
@@ -272,10 +274,6 @@ void LoginDisplayHostCommon::FinalizeImmediately() {
   delete this;
 }
 
-KioskLaunchController* LoginDisplayHostCommon::GetKioskLaunchController() {
-  return kiosk_launch_controller_.get();
-}
-
 void LoginDisplayHostCommon::StartUserAdding(
     base::OnceClosure completion_callback) {
   LoginDisplayHost::StartUserAdding(std::move(completion_callback));
@@ -306,7 +304,7 @@ void LoginDisplayHostCommon::StartSignInScreen() {
 
   // Enable status area after starting sign-in screen, as it may depend on the
   // UI being visible.
-  SetStatusAreaVisible(true);
+  SystemTrayClientImpl::Get()->SetPrimaryTrayVisible(/*visible=*/true);
 }
 
 void LoginDisplayHostCommon::StartKiosk(const KioskAppId& kiosk_app_id,
@@ -316,7 +314,7 @@ void LoginDisplayHostCommon::StartKiosk(const KioskAppId& kiosk_app_id,
 
   SetKioskLaunchStateCrashKey(KioskLaunchState::kAttemptToLaunch);
 
-  SetStatusAreaVisible(false);
+  SystemTrayClientImpl::Get()->SetPrimaryTrayVisible(/*visible=*/false);
 
   // Wait for the `CrosSettings` to become either trusted or permanently
   // untrusted.
@@ -332,7 +330,7 @@ void LoginDisplayHostCommon::StartKiosk(const KioskAppId& kiosk_app_id,
     // If the `CrosSettings` are permanently untrusted, refuse to launch a
     // single-app kiosk mode session.
     LOG(ERROR) << "Login >> Refusing to launch single-app kiosk mode.";
-    SetStatusAreaVisible(true);
+    SystemTrayClientImpl::Get()->SetPrimaryTrayVisible(/*visible=*/true);
     return;
   }
 
@@ -386,15 +384,11 @@ void LoginDisplayHostCommon::StartKiosk(const KioskAppId& kiosk_app_id,
           ? extensions::mojom::FeatureSessionType::kAutolaunchedKiosk
           : extensions::mojom::FeatureSessionType::kKiosk);
 
-  kiosk_launch_controller_ =
-      std::make_unique<KioskLaunchController>(GetOobeUI());
-  kiosk_launch_controller_->Start(kiosk_app_id, is_auto_launch);
+  KioskController::Get().StartSession(kiosk_app_id, is_auto_launch, this);
 }
 
 void LoginDisplayHostCommon::AttemptShowEnableConsumerKioskScreen() {
-  policy::BrowserPolicyConnectorAsh* connector =
-      g_browser_process->platform_part()->browser_policy_connector_ash();
-  if (!connector->IsDeviceEnterpriseManaged() &&
+  if (!ash::InstallAttributes::Get()->IsEnterpriseManaged() &&
       KioskChromeAppManager::IsConsumerKioskEnabled()) {
     ShowEnableConsumerKioskScreen();
   }
@@ -455,18 +449,6 @@ void LoginDisplayHostCommon::CancelPasswordChangedFlow() {
   OnCancelPasswordChangedFlow();
 }
 
-void LoginDisplayHostCommon::MigrateUserData(const std::string& old_password) {
-  if (GetExistingUserController()) {
-    GetExistingUserController()->MigrateUserData(old_password);
-  }
-}
-
-void LoginDisplayHostCommon::ResyncUserData() {
-  if (GetExistingUserController()) {
-    GetExistingUserController()->ResyncUserData();
-  }
-}
-
 bool LoginDisplayHostCommon::HandleAccelerator(LoginAcceleratorAction action) {
   if (action == LoginAcceleratorAction::kShowFeedback) {
     login_feedback_ = std::make_unique<LoginFeedback>(
@@ -485,12 +467,11 @@ bool LoginDisplayHostCommon::HandleAccelerator(LoginAcceleratorAction action) {
     return true;
   }
 
-  if (kiosk_launch_controller_ &&
-      kiosk_launch_controller_->HandleAccelerator(action)) {
+  if (KioskController::Get().HandleAccelerator(action)) {
     return true;
   }
 
-  // This path should only handle screen-specific acceletators, so we do not
+  // This path should only handle screen-specific accelerators, so we do not
   // need to create WebUI here.
   if (IsWizardControllerCreated() &&
       GetWizardController()->HandleAccelerator(action)) {
@@ -778,6 +759,10 @@ void LoginDisplayHostCommon::Cleanup() {
   app_terminating_subscription_ = {};
   BrowserList::RemoveObserver(this);
   login_ui_pref_controller_.reset();
+
+  // Cancel kiosk session start since kiosk holds a pointer to `this` during
+  // the start procedure.
+  KioskController::Get().CancelSessionStart();
 }
 
 void LoginDisplayHostCommon::OnAppTerminating() {

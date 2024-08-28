@@ -57,6 +57,7 @@ using ::testing::DoAll;
 using ::testing::Return;
 using ::testing::ReturnPointee;
 using ::testing::SetArgPointee;
+using ::webrtc::IceCandidateType;
 
 static const SocketAddress kLocalAddr1("11.11.11.11", 0);
 static const SocketAddress kLocalAddr2("22.22.22.22", 0);
@@ -365,9 +366,13 @@ class TurnPortTest : public ::testing::Test,
   void CreateUdpPort() { CreateUdpPort(kLocalAddr2); }
 
   void CreateUdpPort(const SocketAddress& address) {
-    udp_port_ = UDPPort::Create(&main_, socket_factory(), MakeNetwork(address),
-                                0, 0, kIceUfrag2, kIcePwd2, false,
-                                absl::nullopt, &field_trials_);
+    udp_port_ = UDPPort::Create({.network_thread = &main_,
+                                 .socket_factory = socket_factory(),
+                                 .network = MakeNetwork(address),
+                                 .ice_username_fragment = kIceUfrag2,
+                                 .ice_password = kIcePwd2,
+                                 .field_trials = &field_trials_},
+                                0, 0, false, absl::nullopt);
     // UDP port will be controlled.
     udp_port_->SetIceRole(ICEROLE_CONTROLLED);
     udp_port_->SetIceTiebreaker(kTiebreakerDefault);
@@ -864,7 +869,7 @@ class TurnPortTest : public ::testing::Test,
 
 TEST_F(TurnPortTest, TestTurnPortType) {
   CreateTurnPort(kTurnUsername, kTurnPassword, kTurnUdpProtoAddr);
-  EXPECT_EQ(cricket::RELAY_PORT_TYPE, turn_port_->Type());
+  EXPECT_EQ(IceCandidateType::kRelay, turn_port_->Type());
 }
 
 // Tests that the URL of the servers can be correctly reconstructed when
@@ -1513,11 +1518,12 @@ TEST_F(TurnPortTest, TestChannelBindGetErrorResponse) {
   ASSERT_TRUE(conn2 != nullptr);
   conn1->Ping(0);
   EXPECT_TRUE_SIMULATED_WAIT(conn1->writable(), kSimulatedRtt * 2, fake_clock_);
-  // TODO(deadbeef): SetEntryChannelId should not be a public method.
-  // Instead we should set an option on the fake TURN server to force it to
-  // send a channel bind errors.
-  ASSERT_TRUE(
-      turn_port_->SetEntryChannelId(udp_port_->Candidates()[0].address(), -1));
+  // TODO(bugs.webrtc.org/345518625): SetEntryChannelIdForTesting should not be
+  // a public method. Instead we should set an option on the fake TURN server to
+  // force it to send a channel bind errors.
+  int illegal_channel_id = kMaxTurnChannelNumber + 1u;
+  ASSERT_TRUE(turn_port_->SetEntryChannelIdForTesting(
+      udp_port_->Candidates()[0].address(), illegal_channel_id));
 
   std::string data = "ABC";
   conn1->Send(data.data(), data.length(), options);
@@ -1529,6 +1535,8 @@ TEST_F(TurnPortTest, TestChannelBindGetErrorResponse) {
 
   conn2->RegisterReceivedPacketCallback(
       [&](Connection* connection, const rtc::ReceivedPacket& packet) {
+        // TODO(bugs.webrtc.org/345518625): Verify that the packet was
+        // received unchanneled, not channeled.
         udp_packets_.push_back(
             rtc::Buffer(packet.payload().data(), packet.payload().size()));
       });
@@ -1598,7 +1606,8 @@ TEST_F(TurnPortTest, TestCandidateAddressFamilyMatch) {
 
   // Create an IPv4 candidate. It will match the TURN candidate.
   Candidate remote_candidate(ICE_CANDIDATE_COMPONENT_RTP, "udp", kLocalAddr2, 0,
-                             "", "", "local", 0, kCandidateFoundation);
+                             "", "", IceCandidateType::kHost, 0,
+                             kCandidateFoundation);
   remote_candidate.set_address(kLocalAddr2);
   Connection* conn =
       turn_port_->CreateConnection(remote_candidate, Port::ORIGIN_MESSAGE);

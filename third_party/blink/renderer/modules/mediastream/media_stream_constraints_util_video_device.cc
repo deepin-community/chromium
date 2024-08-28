@@ -10,7 +10,6 @@
 #include <utility>
 
 #include "base/containers/contains.h"
-#include "base/feature_list.h"
 #include "base/strings/stringprintf.h"
 #include "media/base/limits.h"
 #include "media/base/video_types.h"
@@ -116,8 +115,9 @@ double NumericRangeSupportFitness(
     bool constraint_supported) {
   DCHECK(!range.IsEmpty());
 
-  if (constraint_present && !constraint_supported)
+  if (constraint_present && !constraint_supported) {
     return 1.0;
+  }
 
   return NumericRangeSetFitness(constraint, range);
 }
@@ -151,8 +151,9 @@ double NumericRangeNativeFitness(const NumericConstraint& constraint,
 // Based on https://w3c.github.io/mediacapture-main/#dfn-fitness-distance.
 double OptionalBoolFitness(const std::optional<bool>& value,
                            const BooleanConstraint& constraint) {
-  if (!constraint.HasIdeal())
+  if (!constraint.HasIdeal()) {
     return 0.0;
+  }
 
   return value && value == constraint.Ideal() ? 0.0 : 1.0;
 }
@@ -161,8 +162,9 @@ double OptionalBoolFitness(const std::optional<bool>& value,
 // name of |constraint|.
 void UpdateFailedConstraintName(const BaseConstraint& constraint,
                                 const char** failed_constraint_name) {
-  if (failed_constraint_name)
+  if (failed_constraint_name) {
     *failed_constraint_name = constraint.GetName();
+  }
 }
 
 // The CandidateFormat class keeps track of the effect of constraint sets on
@@ -243,13 +245,15 @@ class CandidateFormat {
   // Accessors that return the minimum and maximum frame rates supported by
   // this format, subject to applied constraints.
   double MaxFrameRate() const {
-    if (MaxFrameRateConstraint())
+    if (MaxFrameRateConstraint()) {
       return std::min(*MaxFrameRateConstraint(), NativeFrameRate());
+    }
     return NativeFrameRate();
   }
   double MinFrameRate() const {
-    if (MinFrameRateConstraint())
+    if (MinFrameRateConstraint()) {
       return std::max(*MinFrameRateConstraint(), kMinDeviceCaptureFrameRate);
+    }
     return kMinDeviceCaptureFrameRate;
   }
 
@@ -476,8 +480,9 @@ class CandidateFormat {
 bool FacingModeSatisfiesConstraint(mojom::blink::FacingMode value,
                                    const StringConstraint& constraint) {
   WebString string_value = ToWebString(value);
-  if (string_value.IsNull())
+  if (string_value.IsNull()) {
     return constraint.Exact().empty();
+  }
 
   return constraint.Matches(string_value);
 }
@@ -530,12 +535,15 @@ class PTZDeviceState {
 
   const char* FailedConstraintName() const {
     MediaTrackConstraintSetPlatform dummy;
-    if (pan_set_.IsEmpty())
+    if (pan_set_.IsEmpty()) {
       return dummy.pan.GetName();
-    if (tilt_set_.IsEmpty())
+    }
+    if (tilt_set_.IsEmpty()) {
       return dummy.tilt.GetName();
-    if (zoom_set_.IsEmpty())
+    }
+    if (zoom_set_.IsEmpty()) {
       return dummy.zoom.GetName();
+    }
 
     // No failed constraint.
     return nullptr;
@@ -778,11 +786,13 @@ bool OptionalBoolSatisfiesConstraint(
     const std::optional<bool>& value,
     const BooleanConstraint& constraint,
     const char** failed_constraint_name = nullptr) {
-  if (!constraint.HasExact())
+  if (!constraint.HasExact()) {
     return true;
+  }
 
-  if (value && *value == constraint.Exact())
+  if (value && *value == constraint.Exact()) {
     return true;
+  }
 
   UpdateFailedConstraintName(constraint, failed_constraint_name);
   return false;
@@ -905,42 +915,6 @@ VideoDeviceCaptureCapabilities::~VideoDeviceCaptureCapabilities() = default;
 VideoDeviceCaptureCapabilities& VideoDeviceCaptureCapabilities::operator=(
     VideoDeviceCaptureCapabilities&& other) = default;
 
-// Enables debug logging of capabilities processing when picking a video.
-// TODO(crbug.com/1275617): Remove this and calls once investigation is
-// complete.
-BASE_FEATURE(kMediaStreamCapabilitiesDebugLogging,
-             "MediaStreamCapabilitiesDebugLogging",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// TODO(crbug.com/1275617): Remove this and calls once investigation is
-// complete.
-void MaybeLogDebugInfo(const std::string& message) {
-  if (base::FeatureList::IsEnabled(kMediaStreamCapabilitiesDebugLogging)) {
-    blink::WebRtcLogMessage("SelectSettingsVideoDeviceCapture(): " + message);
-  }
-}
-
-// TODO(crbug.com/1275617): Remove this and calls once investigation is
-// complete.
-void MaybeLogDeviceCapabilities(
-    const Vector<VideoInputDeviceCapabilities>& device_capabilities) {
-  if (base::FeatureList::IsEnabled(kMediaStreamCapabilitiesDebugLogging)) {
-    std::string devices_string;
-    for (auto& device : device_capabilities) {
-      std::string formats_string;
-      for (auto& format : device.formats) {
-        formats_string += media::VideoCaptureFormat::ToString(format);
-      }
-      devices_string += base::StringPrintf(
-          "{device_id:%s, formats:[%s], facing_mode:%s},",
-          device.device_id.Utf8().c_str(), formats_string.c_str(),
-          ToWebString(device.facing_mode).Utf8().c_str());
-    }
-    MaybeLogDebugInfo(
-        base::StringPrintf("Received devices %s", devices_string.c_str()));
-  }
-}
-
 VideoCaptureSettings SelectSettingsVideoDeviceCapture(
     const VideoDeviceCaptureCapabilities& capabilities,
     const MediaConstraints& constraints,
@@ -952,11 +926,6 @@ VideoCaptureSettings SelectSettingsVideoDeviceCapture(
   DCHECK_GE(default_frame_rate, 0.0);
   // This function works only if infinity is defined for the double type.
   static_assert(std::numeric_limits<double>::has_infinity, "Requires infinity");
-
-  // TODO(crbug.com/1275617): Remove once investigation is complete.
-  MaybeLogDebugInfo(base::StringPrintf("Media constraints %s",
-                                       constraints.ToString().Utf8().c_str()));
-  MaybeLogDeviceCapabilities(capabilities.device_capabilities);
 
   // A distance vector contains:
   // a) For each advanced constraint set, a 0/Infinity value indicating if the
@@ -979,9 +948,6 @@ VideoCaptureSettings SelectSettingsVideoDeviceCapture(
   for (auto& device : capabilities.device_capabilities) {
     if (!DeviceSatisfiesConstraintSet(device, constraints.Basic(),
                                       &failed_constraint_name)) {
-      MaybeLogDebugInfo(base::StringPrintf(
-          "Device %s rejected due to constraint %s",
-          device.device_id.Utf8().c_str(), failed_constraint_name));
       continue;
     }
 
@@ -991,9 +957,6 @@ VideoCaptureSettings SelectSettingsVideoDeviceCapture(
                 constraints.Basic(), &failed_constraint_name)) {
       image_capture_device_state.ApplyResult(*image_capture_device_result);
     } else {
-      MaybeLogDebugInfo(base::StringPrintf(
-          "Device %s rejected due to constraint %s",
-          device.device_id.Utf8().c_str(), failed_constraint_name));
       continue;
     }
 
@@ -1011,11 +974,6 @@ VideoCaptureSettings SelectSettingsVideoDeviceCapture(
                   constraints.Basic(), &failed_constraint_name)) {
         candidate_format.ApplyResult(*candidate_format_result);
       } else {
-        MaybeLogDebugInfo(base::StringPrintf(
-            "Device %s format %s rejected due to constraint %s",
-            device.device_id.Utf8().c_str(),
-            media::VideoCaptureFormat::ToString(format).c_str(),
-            failed_constraint_name));
         continue;
       }
 
@@ -1098,15 +1056,42 @@ VideoCaptureSettings SelectSettingsVideoDeviceCapture(
   }
 
   if (!result.HasValue()) {
-    MaybeLogDebugInfo(base::StringPrintf(
-        "No matching devices. Returning with failed constraint name %s",
-        failed_constraint_name));
     return VideoCaptureSettings(failed_constraint_name);
   }
 
-  MaybeLogDebugInfo(base::StringPrintf("Returning best matching result %s",
-                                       failed_constraint_name));
   return result;
+}
+
+base::expected<Vector<VideoCaptureSettings>, std::string>
+SelectEligibleSettingsVideoDeviceCapture(
+    const VideoDeviceCaptureCapabilities& capabilities,
+    const MediaConstraints& constraints,
+    int default_width,
+    int default_height,
+    double default_frame_rate) {
+  Vector<VideoCaptureSettings> settings;
+  std::string failed_constraint_name;
+  for (const auto& device : capabilities.device_capabilities) {
+    VideoDeviceCaptureCapabilities device_capabilities;
+    device_capabilities.device_capabilities.emplace_back(
+        device.device_id, device.group_id, device.control_support,
+        device.formats, device.facing_mode);
+    device_capabilities.noise_reduction_capabilities =
+        capabilities.noise_reduction_capabilities;
+    const auto device_settings = SelectSettingsVideoDeviceCapture(
+        device_capabilities, constraints, default_width, default_height,
+        default_frame_rate);
+    if (device_settings.HasValue()) {
+      settings.push_back(device_settings);
+    } else {
+      failed_constraint_name = device_settings.failed_constraint_name();
+    }
+  }
+
+  if (settings.empty()) {
+    return base::unexpected(failed_constraint_name);
+  }
+  return settings;
 }
 
 }  // namespace blink

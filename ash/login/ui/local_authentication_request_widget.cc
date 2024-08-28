@@ -78,6 +78,9 @@ void LocalAuthenticationRequestWidget::Show(
     std::unique_ptr<UserContext> user_context) {
   CHECK(!g_instance);
 
+  const auto& auth_factors = user_context->GetAuthFactorsData();
+  CHECK(auth_factors.FindLocalPasswordFactor());
+
   g_instance = new LocalAuthenticationRequestWidget(
       std::move(local_authentication_callback), title, description, delegate,
       std::move(user_context));
@@ -126,12 +129,11 @@ LocalAuthenticationRequestWidget::LocalAuthenticationRequestWidget(
     LocalAuthenticationRequestView::Delegate* delegate,
     std::unique_ptr<UserContext> user_context)
     : local_authentication_callback_(std::move(local_authentication_callback)) {
-  views::Widget::InitParams widget_params;
   // Using window frameless to be able to get focus on the view input fields,
   // which does not work with popup type.
-  widget_params.type = views::Widget::InitParams::TYPE_WINDOW_FRAMELESS;
-  widget_params.ownership =
-      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  views::Widget::InitParams widget_params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   widget_params.opacity =
       views::Widget::InitParams::WindowOpacity::kTranslucent;
   widget_params.accept_events = true;

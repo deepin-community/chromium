@@ -9,8 +9,14 @@ export {AnnotationTool} from './annotation_tool.js';
 // </if>
 export {Bookmark} from './bookmark_type.js';
 export {BrowserApi, ZoomBehavior} from './browser_api.js';
+// <if expr="enable_pdf_ink2">
+export {AnnotationBrush, AnnotationBrushType} from './constants.js';
+// </if>
 export {Attachment, FittingType, Point, Rect, SaveRequestType} from './constants.js';
 export {PluginController} from './controller.js';
+// <if expr="enable_pdf_ink2">
+export {PluginControllerEventType} from './controller.js';
+// </if>
 export {ViewerAttachmentBarElement} from './elements/viewer-attachment-bar.js';
 export {ViewerAttachmentElement} from './elements/viewer-attachment.js';
 export {ChangePageAndXyDetail, ChangePageDetail, ChangePageOrigin, ChangeZoomDetail, NavigateDetail, ViewerBookmarkElement} from './elements/viewer-bookmark.js';
@@ -23,6 +29,9 @@ export {ViewerPageSelectorElement} from './elements/viewer-page-selector.js';
 export {ViewerPasswordDialogElement} from './elements/viewer-password-dialog.js';
 export {ViewerPdfSidenavElement} from './elements/viewer-pdf-sidenav.js';
 export {ViewerPropertiesDialogElement} from './elements/viewer-properties-dialog.js';
+// <if expr="enable_pdf_ink2">
+export {ViewerSidePanelElement} from './elements/viewer-side-panel.js';
+// </if>
 export {ViewerThumbnailBarElement} from './elements/viewer-thumbnail-bar.js';
 export {PAINTED_ATTRIBUTE, ViewerThumbnailElement} from './elements/viewer-thumbnail.js';
 // <if expr="enable_ink">
@@ -39,5 +48,4 @@ export {PdfViewerBaseElement} from './pdf_viewer_base.js';
 export {shouldIgnoreKeyEvents} from './pdf_viewer_utils.js';
 export {SwipeDetector, SwipeDirection} from './swipe_detector.js';
 export {DocumentDimensions, LayoutOptions, PAGE_SHADOW, Viewport} from './viewport.js';
-export {ViewportInterface, ViewportScroller} from './viewport_scroller.js';
 export {ZoomManager} from './zoom_manager.js';

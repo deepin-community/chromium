@@ -31,9 +31,8 @@
 #include "extensions/browser/guest_view/web_view/web_view_renderer_state.h"
 #include "extensions/browser/l10n_file_util.h"
 #include "extensions/browser/network_permissions_updater.h"
-#include "extensions/browser/process_manager.h"
-#include "extensions/browser/process_manager_factory.h"
-#include "extensions/browser/service_worker_task_queue.h"
+#include "extensions/browser/service_worker/service_worker_task_queue.h"
+#include "extensions/browser/user_script_world_configuration_manager.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/extension_l10n_util.h"
 #include "extensions/common/extension_set.h"
@@ -212,10 +211,11 @@ void RendererStartupHelper::InitializeProcess(
         *ext, true /* include tab permissions*/, renderer_context));
     extension_process_map_[ext->id()].insert(process);
 
-    // Each extension needs to know its user script world configuration.
-    mojom::UserScriptWorldInfoPtr info =
-        util::GetUserScriptWorldInfo(ext->id(), browser_context_);
-    renderer->UpdateUserScriptWorld(std::move(info));
+    // Each extension needs to know its user script world configurations.
+    std::vector<mojom::UserScriptWorldInfoPtr> worlds_info =
+        UserScriptWorldConfigurationManager::Get(browser_context_)
+            ->GetAllUserScriptWorlds(ext->id());
+    renderer->UpdateUserScriptWorlds(std::move(worlds_info));
   }
 
   // Activate pending extensions.
@@ -255,8 +255,8 @@ void RendererStartupHelper::ActivateExtensionInProcess(
   // debug crbug.com/528026.
   if (!base::Contains(extension_process_map_, extension.id())) {
 #if DCHECK_IS_ON()
-    NOTREACHED() << "Extension " << extension.id()
-                 << " activated before loading";
+    NOTREACHED_IN_MIGRATION()
+        << "Extension " << extension.id() << " activated before loading";
 #else
     base::debug::DumpWithoutCrashing();
     return;
@@ -362,10 +362,11 @@ void RendererStartupHelper::OnDeveloperModeChanged(bool in_developer_mode) {
 
 void RendererStartupHelper::SetUserScriptWorldProperties(
     const Extension& extension,
+    std::optional<std::string> world_id,
     std::optional<std::string> csp,
     bool enable_messaging) {
   mojom::UserScriptWorldInfoPtr info = mojom::UserScriptWorldInfo::New(
-      extension.id(), std::move(csp), enable_messaging);
+      extension.id(), std::move(world_id), std::move(csp), enable_messaging);
   for (auto& process_entry : process_mojo_map_) {
     content::RenderProcessHost* process = process_entry.first;
     mojom::Renderer* renderer = GetRenderer(process);
@@ -378,7 +379,28 @@ void RendererStartupHelper::SetUserScriptWorldProperties(
       continue;
     }
 
-    renderer->UpdateUserScriptWorld(info.Clone());
+    std::vector<mojom::UserScriptWorldInfoPtr> worlds_info;
+    worlds_info.push_back(info.Clone());
+    renderer->UpdateUserScriptWorlds(std::move(worlds_info));
+  }
+}
+
+void RendererStartupHelper::ClearUserScriptWorldProperties(
+    const Extension& extension,
+    const std::optional<std::string>& world_id) {
+  for (auto& process_entry : process_mojo_map_) {
+    content::RenderProcessHost* process = process_entry.first;
+    mojom::Renderer* renderer = GetRenderer(process);
+    if (!renderer) {
+      continue;
+    }
+
+    if (!util::IsExtensionVisibleToContext(extension,
+                                           process->GetBrowserContext())) {
+      continue;
+    }
+
+    renderer->ClearUserScriptWorldConfig(extension.id(), world_id);
   }
 }
 
@@ -470,49 +492,6 @@ void RendererStartupHelper::BindForRenderer(
                                           std::move(receiver), process_id);
 }
 
-void RendererStartupHelper::WakeEventPage(const ExtensionId& extension_id,
-                                          WakeEventPageCallback callback) {
-  auto* browser_context = GetRendererBrowserContext();
-  if (!browser_context) {
-    std::move(callback).Run(false);
-    return;
-  }
-
-  const Extension* extension = ExtensionRegistry::Get(browser_context)
-                                   ->enabled_extensions()
-                                   .GetByID(extension_id);
-  if (!extension) {
-    // Don't kill the renderer, it might just be some context which hasn't
-    // caught up to extension having been uninstalled.
-    std::move(callback).Run(false);
-    return;
-  }
-
-  ProcessManager* process_manager = ProcessManager::Get(browser_context);
-
-  if (BackgroundInfo::HasLazyBackgroundPage(extension)) {
-    // Wake the event page if it's asleep, or immediately repond with success
-    // if it's already awake.
-    if (process_manager->IsEventPageSuspended(extension_id)) {
-      process_manager->WakeEventPage(extension_id, std::move(callback));
-    } else {
-      std::move(callback).Run(true);
-    }
-    return;
-  }
-
-  if (BackgroundInfo::HasPersistentBackgroundPage(extension)) {
-    // No point in trying to wake a persistent background page. If it's open,
-    // immediately return and call it a success. If it's closed, fail.
-    std::move(callback).Run(process_manager->GetBackgroundHostForExtension(
-                                extension_id) != nullptr);
-    return;
-  }
-
-  // The extension has no background page, so there is nothing to wake.
-  std::move(callback).Run(false);
-}
-
 void RendererStartupHelper::GetMessageBundle(
     const ExtensionId& extension_id,
     GetMessageBundleCallback callback) {
@@ -552,7 +531,8 @@ void RendererStartupHelper::GetMessageBundle(
     const Extension* imported_extension =
         extension_set.GetByID(import.extension_id);
     if (!imported_extension) {
-      NOTREACHED() << "Missing shared module " << import.extension_id;
+      NOTREACHED_IN_MIGRATION()
+          << "Missing shared module " << import.extension_id;
       continue;
     }
     paths_to_load.push_back(imported_extension->path());
@@ -599,9 +579,7 @@ RendererStartupHelperFactory* RendererStartupHelperFactory::GetInstance() {
 RendererStartupHelperFactory::RendererStartupHelperFactory()
     : BrowserContextKeyedServiceFactory(
           "RendererStartupHelper",
-          BrowserContextDependencyManager::GetInstance()) {
-  DependsOn(ProcessManagerFactory::GetInstance());
-}
+          BrowserContextDependencyManager::GetInstance()) {}
 
 RendererStartupHelperFactory::~RendererStartupHelperFactory() = default;
 

@@ -83,7 +83,7 @@ int g_shutdown_num_processes_slow;
 const char* ToShutdownTypeString(ShutdownType type) {
   switch (type) {
     case ShutdownType::kNotValid:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
     case ShutdownType::kWindowClose:
       return "close";
@@ -130,7 +130,7 @@ void OnShutdownStarting(ShutdownType type) {
   DCHECK(!g_shutdown_started);
   g_shutdown_started = new base::Time(base::Time::Now());
 
-  // TODO(https://crbug.com/1071664): Check if this should also be enabled for
+  // TODO(crbug.com/40685224): Check if this should also be enabled for
   // coverage builds.
 #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO)
   // Wait for all the child processes to dump their profiling data without
@@ -184,7 +184,7 @@ bool ShutdownPreThreadsStop() {
   // consider putting it in BrowserProcessImpl::EndSession.
   metrics::MetricsService* metrics = g_browser_process->metrics_service();
   if (metrics) {
-    // TODO(crbug/1338797): LogCleanShutdown() is called earlier on in
+    // TODO(crbug.com/40849295): LogCleanShutdown() is called earlier on in
     // shutdown. See whether this call can be removed.
     metrics->LogCleanShutdown();
   }
@@ -267,7 +267,8 @@ void ShutdownPostThreadsStop(RestartMode restart_mode) {
   NukeDeletedProfilesFromDisk();
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-  ash::BootTimesRecorder::Get()->AddLogoutTimeMarker("BrowserDeleted", true);
+  ash::BootTimesRecorder::Get()->AddLogoutTimeMarker("BrowserDeleted",
+                                                     /*send_to_uma=*/false);
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -290,7 +291,7 @@ void ShutdownPostThreadsStop(RestartMode restart_mode) {
 
     switch (restart_mode) {
       case RestartMode::kNoRestart:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
 
       case RestartMode::kRestartInBackground:

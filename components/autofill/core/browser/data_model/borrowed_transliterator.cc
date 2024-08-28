@@ -4,6 +4,8 @@
 
 #include "components/autofill/core/browser/data_model/borrowed_transliterator.h"
 
+#include <string_view>
+
 #include "base/logging.h"
 #include "base/no_destructor.h"
 
@@ -28,8 +30,7 @@ base::Lock& BorrowedTransliterator::GetLock() {
 }
 
 // static
-std::unique_ptr<icu::Transliterator>&
-BorrowedTransliterator::GetTransliterator() {
+icu::Transliterator* BorrowedTransliterator::GetTransliterator() {
   static base::NoDestructor<std::unique_ptr<icu::Transliterator>> instance([] {
     UErrorCode status = U_ZERO_ERROR;
     UParseError parse_error;
@@ -59,11 +60,11 @@ BorrowedTransliterator::GetTransliterator() {
     }
     return transliterator;
   }());
-  return *instance;
+  return instance->get();
 }
 
 std::u16string RemoveDiacriticsAndConvertToLowerCase(
-    base::StringPiece16 value) {
+    std::u16string_view value) {
   icu::UnicodeString result = icu::UnicodeString(value.data(), value.length());
   BorrowedTransliterator().Transliterate(&result);
   return base::i18n::UnicodeStringToString16(result);

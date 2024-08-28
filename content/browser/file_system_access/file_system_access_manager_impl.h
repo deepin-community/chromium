@@ -40,9 +40,9 @@
 #include "storage/browser/file_system/file_system_operation_runner.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_access_handle_host.mojom.h"
-#include "third_party/blink/public/mojom/file_system_access/file_system_access_capacity_allocation_host.mojom.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_data_transfer_token.mojom.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_file_delegate_host.mojom.h"
+#include "third_party/blink/public/mojom/file_system_access/file_system_access_file_modification_host.mojom.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_file_writer.mojom.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_manager.mojom.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_observer_host.mojom.h"
@@ -125,10 +125,14 @@ class CONTENT_EXPORT FileSystemAccessManagerImpl
   void GetSandboxedFileSystem(
       const BindingContext& binding_context,
       const std::optional<storage::BucketLocator>& bucket,
+      const std::vector<std::string>& directory_path_components,
       GetSandboxedFileSystemCallback callback);
 
   // blink::mojom::FileSystemAccessManager:
   void GetSandboxedFileSystem(GetSandboxedFileSystemCallback callback) override;
+  void GetSandboxedFileSystemForDevtools(
+      const std::vector<std::string>& directory_path_components,
+      GetSandboxedFileSystemCallback callback) override;
   void ChooseEntries(blink::mojom::FilePickerOptionsPtr options,
                      ChooseEntriesCallback callback) override;
   void GetFileHandleFromToken(
@@ -269,9 +273,8 @@ class CONTENT_EXPORT FileSystemAccessManagerImpl
       const storage::FileSystemURL& url,
       mojo::PendingReceiver<blink::mojom::FileSystemAccessFileDelegateHost>
           file_delegate_receiver,
-      mojo::PendingReceiver<
-          blink::mojom::FileSystemAccessCapacityAllocationHost>
-          capacity_allocation_host_receiver,
+      mojo::PendingReceiver<blink::mojom::FileSystemAccessFileModificationHost>
+          file_modification_host_receiver,
       int64_t file_size,
       scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
       base::ScopedClosureRunner on_close_callback);
@@ -362,11 +365,18 @@ class CONTENT_EXPORT FileSystemAccessManagerImpl
   // remove a token that doesn't exist.
   void RemoveDataTransferToken(const base::UnguessableToken& token);
 
-  SharedHandleState GetSharedHandleStateForPath(
+  // This method may only be called on local and external file paths. Paths in a
+  // sandboxed file system should use the variant below.
+  //
+  // TODO(crbug.com/40198034): Consolidate these methods once the relationships
+  // of permission grants between handles are better specified.
+  SharedHandleState GetSharedHandleStateForNonSandboxedPath(
       const base::FilePath& path,
       const blink::StorageKey& storage_key,
       FileSystemAccessPermissionContext::HandleType handle_type,
       FileSystemAccessPermissionContext::UserAction user_action);
+  // Same as above, but for paths in a sandboxed file system.
+  SharedHandleState GetSharedHandleStateForSandboxedPath();
 
   // Return a stable unique ID of the FileSystemHandle in UUID version 4 format.
   base::Uuid GetUniqueId(const FileSystemAccessFileHandleImpl& file);
@@ -465,11 +475,18 @@ class CONTENT_EXPORT FileSystemAccessManagerImpl
                                    base::FilePath default_directory,
                                    ChooseEntriesCallback callback,
                                    bool default_directory_exists);
-  void DidOpenSandboxedFileSystem(const BindingContext& binding_context,
-                                  GetSandboxedFileSystemCallback callback,
-                                  const storage::FileSystemURL& root,
-                                  const std::string& filesystem_name,
-                                  base::File::Error result);
+  void DidOpenSandboxedFileSystem(
+      const BindingContext& binding_context,
+      GetSandboxedFileSystemCallback callback,
+      const storage::FileSystemURL& root,
+      const std::string& filesystem_name,
+      base::File::Error result,
+      const std::vector<std::string>& directory_path_components);
+  void DidResolveUrlAfterOpeningSandboxedFileSystem(
+      const BindingContext& binding_context,
+      GetSandboxedFileSystemCallback callback,
+      const storage::FileSystemURL& url,
+      base::File::Error result);
 
   void DidChooseEntries(const BindingContext& binding_context,
                         const FileSystemChooser::Options& options,
@@ -486,14 +503,23 @@ class CONTENT_EXPORT FileSystemAccessManagerImpl
       ChooseEntriesCallback callback,
       std::vector<FileSystemChooser::ResultEntry> entries,
       FileSystemAccessPermissionContext::SensitiveEntryResult result);
-  void DidCreateAndTruncateSaveFile(const BindingContext& binding_context,
-                                    const FileSystemChooser::ResultEntry& entry,
-                                    const storage::FileSystemURL& url,
-                                    ChooseEntriesCallback callback,
-                                    bool success);
+  void OnCheckPathsAgainstEnterprisePolicy(
+      const BindingContext& binding_context,
+      const FileSystemChooser::Options& options,
+      const std::string& starting_directory_id,
+      bool request_directory_write_access,
+      ChooseEntriesCallback callback,
+      std::vector<FileSystemAccessPermissionContext::PathInfo> entries);
+
+  void DidCreateAndTruncateSaveFile(
+      const BindingContext& binding_context,
+      const FileSystemAccessPermissionContext::PathInfo& entry,
+      const storage::FileSystemURL& url,
+      ChooseEntriesCallback callback,
+      bool success);
   void DidChooseDirectory(
       const BindingContext& binding_context,
-      const FileSystemChooser::ResultEntry& entry,
+      const FileSystemAccessPermissionContext::PathInfo& entry,
       ChooseEntriesCallback callback,
       const SharedHandleState& shared_handle_state,
       FileSystemAccessPermissionGrant::PermissionRequestOutcome outcome);
@@ -528,7 +554,7 @@ class CONTENT_EXPORT FileSystemAccessManagerImpl
       mojo::PendingReceiver<blink::mojom::FileSystemAccessTransferToken> token,
       const storage::FileSystemURL& url);
 
-  // FileSystemAccessCapacityAllocationHosts may reserve too much capacity
+  // FileSystemAccessFileModificationHosts may reserve too much capacity
   // from the quota system. This function determines the file's actual size
   // and corrects its capacity usage in the quota system.
   void CleanupAccessHandleCapacityAllocation(const storage::FileSystemURL& url,
@@ -651,7 +677,7 @@ class CONTENT_EXPORT FileSystemAccessManagerImpl
            std::unique_ptr<FileSystemAccessDataTransferTokenImpl>>
       data_transfer_tokens_ GUARDED_BY_CONTEXT(sequence_checker_);
 
-  // TODO(https://crbug.com/1342961): This is a temporary hack to put something
+  // TODO(crbug.com/40852050): This is a temporary hack to put something
   // that works behind a flag. Persist handle IDs such that they're stable
   // across browsing sessions.
   std::map<storage::FileSystemURL,

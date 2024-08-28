@@ -18,6 +18,14 @@
 #include "chrome/updater/test/server.h"
 #include "chrome/updater/update_service.h"
 
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
+#include <wrl/client.h>
+
+#include "chrome/updater/app/server/win/updater_legacy_idl.h"
+#endif
+
 class GURL;
 
 namespace base {
@@ -28,6 +36,7 @@ class Version;
 
 namespace updater {
 enum class UpdaterScope;
+struct RegistrationRequest;
 }  // namespace updater
 
 namespace wireless_android_enterprise_devicemanagement {
@@ -96,6 +105,12 @@ void CleanProcesses();
 // Verifies that test processes are not running.
 void ExpectCleanProcesses();
 
+// Prints the provided file to stdout.
+void PrintFile(const base::FilePath& file);
+
+// Returns all the updater log files found in %TMP%.
+std::vector<base::FilePath> GetUpdaterLogFilesInTmp();
+
 // Prints the updater.log file to stdout.
 void PrintLog(UpdaterScope scope);
 
@@ -113,6 +128,7 @@ void ExpectClean(UpdaterScope scope);
 void EnterTestMode(const GURL& update_url,
                    const GURL& crash_upload_url,
                    const GURL& device_management_url,
+                   const GURL& app_logo_url,
                    const base::TimeDelta& idle_timeout);
 
 // Takes the updater our of the test mode by deleting the external constants
@@ -130,17 +146,18 @@ void SetPlatformPolicies(const base::Value::Dict& values);
 void SetMachineManaged(bool is_managed_device);
 
 // Expects to find no crashes. If there are any crashes, causes the test to
-// fail. Copies any crashes found to the isolate directory.
+// fail. Copies any crashes found to the isolate directory. In system scope,
+// this checks for crashes from both the system and the user updaters.
 void ExpectNoCrashes(UpdaterScope scope);
 
 // Copies the logs to a location where they can be retrieved by ResultDB.
-void CopyLog(const base::FilePath& src_dir);
+void CopyLog(const base::FilePath& src_dir, const std::string& infix);
 
 // Expects that the updater is installed on the system.
 void ExpectInstalled(UpdaterScope scope);
 
 // Installs the updater.
-void Install(UpdaterScope scope);
+void Install(UpdaterScope scope, const base::Value::List& switches);
 
 // Installs the updater and an app via the command line.
 void InstallUpdaterAndApp(UpdaterScope scope,
@@ -148,7 +165,8 @@ void InstallUpdaterAndApp(UpdaterScope scope,
                           bool is_silent_install,
                           const std::string& tag,
                           const std::string& child_window_text_to_find,
-                          bool always_launch_cmd);
+                          bool always_launch_cmd,
+                          bool verify_app_logo_loaded);
 
 // Expects that the updater is installed on the system and the specified
 // version is active.
@@ -265,15 +283,19 @@ void ExpectAppTag(UpdaterScope scope,
                   const std::string& app_id,
                   const std::string& tag);
 
+void SetAppTag(UpdaterScope scope,
+               const std::string& app_id,
+               const std::string& tag);
+
 void ExpectAppVersion(UpdaterScope scope,
                       const std::string& app_id,
                       const base::Version& version);
 
-void RegisterApp(UpdaterScope scope,
-                 const std::string& app_id,
-                 const base::Version& version);
+void RegisterApp(UpdaterScope scope, const RegistrationRequest& registration);
+void RegisterAppByValue(UpdaterScope scope,
+                        const base::Value::Dict& registration_data);
 
-[[nodiscard]] bool WaitForUpdaterExit(UpdaterScope scope);
+[[nodiscard]] bool WaitForUpdaterExit();
 
 #if BUILDFLAG(IS_WIN)
 void ExpectInterfacesRegistered(UpdaterScope scope);
@@ -291,6 +313,11 @@ void ExpectLegacyAppCommandWebSucceeds(UpdaterScope scope,
                                        const std::string& command_id,
                                        const base::Value::List& parameters,
                                        int expected_exit_code);
+void ExpectPolicyStatusValues(
+    Microsoft::WRL::ComPtr<IPolicyStatusValue> policy_status_value,
+    const std::wstring& expected_source,
+    const std::wstring& expected_value,
+    VARIANT_BOOL expected_has_conflict);
 void ExpectLegacyPolicyStatusSucceeds(UpdaterScope scope);
 
 // Calls a function defined in test/service/win/rpc_client.py.
@@ -309,7 +336,19 @@ int CountDirectoryFiles(const base::FilePath& dir);
 
 void ExpectSelfUpdateSequence(UpdaterScope scope, ScopedServer* test_server);
 
-void ExpectPing(UpdaterScope scope, ScopedServer* test_server, int event_type);
+void ExpectPing(UpdaterScope scope,
+                ScopedServer* test_server,
+                int event_type,
+                std::optional<GURL> target_url);
+
+void ExpectAppCommandPing(UpdaterScope scope,
+                          ScopedServer* test_server,
+                          const std::string& appid,
+                          const std::string& appcommandid,
+                          int errorcode,
+                          int eventresult,
+                          int event_type,
+                          const base::Version& version);
 
 void ExpectUpdateCheckRequest(UpdaterScope scope, ScopedServer* test_server);
 
@@ -363,7 +402,8 @@ void RunFakeLegacyUpdater(UpdaterScope scope);
 
 // Dismiss the installation completion dialog, then wait for the process
 // exit.
-void CloseInstallCompleteDialog(const std::wstring& child_window_text_to_find);
+void CloseInstallCompleteDialog(const std::wstring& child_window_text_to_find,
+                                bool verify_app_logo_loaded = false);
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_MAC)
@@ -417,9 +457,21 @@ void ExpectDeviceManagementPolicyFetchRequest(
     ScopedServer* test_server,
     const std::string& dm_token,
     const ::wireless_android_enterprise_devicemanagement::
+        OmahaSettingsClientProto& omaha_settings,
+    bool first_request = true,
+    bool rotate_public_key = false,
+    std::optional<GURL> target_url = std::nullopt);
+void ExpectDeviceManagementPolicyFetchWithNewPublicKeyRequest(
+    ScopedServer* test_server,
+    const std::string& dm_token,
+    const ::wireless_android_enterprise_devicemanagement::
         OmahaSettingsClientProto& omaha_settings);
+void ExpectDeviceManagementTokenDeletionRequest(ScopedServer* test_server,
+                                                const std::string& dm_token,
+                                                bool invalidate_token);
 void ExpectDeviceManagementPolicyValidationRequest(ScopedServer* test_server,
                                                    const std::string& dm_token);
+void ExpectProxyPacScriptRequest(ScopedServer* test_server);
 
 }  // namespace updater::test
 

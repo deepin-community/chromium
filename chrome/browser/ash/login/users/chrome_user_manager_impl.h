@@ -19,38 +19,23 @@
 #include "chrome/browser/ash/login/users/affiliation.h"
 #include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/policy/core/device_local_account_policy_service.h"
+#include "chrome/browser/ash/policy/external_data/cloud_external_data_policy_observer.h"
 #include "chrome/browser/ash/policy/handlers/minimum_version_policy_handler.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_manager_observer.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chromeos/ash/components/login/auth/mount_performer.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/account_id/account_id.h"
-#include "components/session_manager/core/session_manager.h"
-#include "components/session_manager/core/session_manager_observer.h"
-#include "components/user_manager/multi_user/multi_user_sign_in_policy_controller.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager_base.h"
 
-class PrefRegistrySimple;
-
-namespace policy {
-class CloudExternalDataPolicyHandler;
-}  // namespace policy
-
-namespace user_prefs {
-class PrefRegistrySyncable;
-}  // namespace user_prefs
-
 namespace ash {
-
-class SessionLengthLimiter;
 
 // Chrome specific implementation of the UserManager.
 class ChromeUserManagerImpl
     : public user_manager::UserManagerBase,
-      public session_manager::SessionManagerObserver,
       public DeviceSettingsService::Observer,
       public policy::DeviceLocalAccountPolicyService::Observer,
       public policy::MinimumVersionPolicyHandler::Observer,
@@ -65,39 +50,8 @@ class ChromeUserManagerImpl
   // Creates ChromeUserManagerImpl instance.
   static std::unique_ptr<ChromeUserManagerImpl> CreateChromeUserManager();
 
-  // Registers user manager preferences.
-  static void RegisterPrefs(PrefRegistrySimple* registry);
-  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
-
   // UserManager implementation:
   void Shutdown() override;
-  user_manager::UserList GetUsersAllowedForMultiProfile() const override;
-  user_manager::UserList GetUnlockUsers() const override;
-  void SaveUserOAuthStatus(
-      const AccountId& account_id,
-      user_manager::User::OAuthTokenStatus oauth_token_status) override;
-  void SaveUserDisplayName(const AccountId& account_id,
-                           const std::u16string& display_name) override;
-  bool CanCurrentUserLock() const override;
-  bool IsGuestSessionAllowed() const override;
-  bool IsGaiaUserAllowed(const user_manager::User& user) const override;
-  bool IsUserAllowed(const user_manager::User& user) const override;
-  void AsyncRemoveCryptohome(const AccountId& account_id) const override;
-  bool IsDeprecatedSupervisedAccountId(
-      const AccountId& account_id) const override;
-  void ScheduleResolveLocale(const std::string& locale,
-                             base::OnceClosure on_resolved_callback,
-                             std::string* out_resolved_locale) const override;
-  bool IsValidDefaultUserImageId(int image_index) const override;
-  user_manager::MultiUserSignInPolicyController*
-  GetMultiUserSignInPolicyController() override;
-  bool IsEnterpriseManaged() const override;
-  void SetUserAffiliation(
-      const AccountId& account_id,
-      const base::flat_set<std::string>& user_affiliation_ids) override;
-
-  // session_manager::SessionManagerObserver:
-  void OnUserProfileLoaded(const AccountId& account_id) override;
 
   // DeviceSettingsService::Observer:
   void OwnershipStatusChanged() override;
@@ -107,9 +61,6 @@ class ChromeUserManagerImpl
   void OnDeviceLocalAccountsChanged() override;
 
   void StopPolicyObserverForTesting();
-  SessionLengthLimiter* GetSessionLengthLimiterForTesting() {
-    return session_length_limiter_.get();
-  }
 
   // policy::MinimumVersionPolicyHandler::Observer:
   void OnMinimumVersionStateChanged() override;
@@ -123,26 +74,7 @@ class ChromeUserManagerImpl
   void OnProfileWillBeDestroyed(Profile* profile) override;
 
  protected:
-  const std::string& GetApplicationLocale() const override;
-  void LoadDeviceLocalAccounts(std::set<AccountId>* users_set) override;
-  void NotifyOnLogin() override;
-  void NotifyUserAddedToSession(const user_manager::User* added_user,
-                                bool user_switch_pending) override;
-  void PerformPostUserLoggedInActions(bool browser_restart) override;
   void RemoveNonCryptohomeData(const AccountId& account_id) override;
-  void RemoveUserInternal(const AccountId& account_id,
-                          user_manager::UserRemovalReason reason) override;
-  bool IsDeviceLocalAccountMarkedForRemoval(
-      const AccountId& account_id) const override;
-  void GuestUserLoggedIn() override;
-  void KioskAppLoggedIn(user_manager::User* user) override;
-  void PublicAccountUserLoggedIn(user_manager::User* user) override;
-  void RegularUserLoggedIn(const AccountId& account_id,
-                           const user_manager::UserType user_type) override;
-  void RegularUserLoggedInAsEphemeral(
-      const AccountId& account_id,
-      const user_manager::UserType user_type) override;
-  bool IsEphemeralAccountIdByPolicy(const AccountId& account_id) const override;
 
  private:
   friend class UserManagerTest;
@@ -183,39 +115,11 @@ class ChromeUserManagerImpl
   // Update the number of users.
   void UpdateNumberOfUsers();
 
-  // Starts (or stops) automatic timezone refresh on geolocation,
-  // depending on user preferences.
-  void UpdateUserTimeZoneRefresher(Profile* profile);
-
-  // Creates a user for the given device local account.
-  std::unique_ptr<user_manager::User> CreateUserFromDeviceLocalAccount(
-      const AccountId& account_id,
-      const policy::DeviceLocalAccount::Type type) const;
-
   void UpdateOwnerId();
-
-  // Remove non cryptohome data associated with the given `account_id` after
-  // having removed all external data (such as wallpapers and avatars)
-  // associated with that `account_id`, this function is guarded by a latch
-  // `remove_non_cryptohome_data_latch_` that ensures that all external data is
-  // removed prior to clearing prefs for `account_id`, as the removal of certain
-  // external data depends on prefs.
-  void RemoveNonCryptohomeDataPostExternalDataRemoval(
-      const AccountId& account_id);
-
-  // Interface to the signed settings store.
-  raw_ptr<CrosSettings> cros_settings_;
 
   // Interface to device-local account definitions and associated policy.
   raw_ptr<policy::DeviceLocalAccountPolicyService>
       device_local_account_policy_service_;
-
-  base::ScopedObservation<session_manager::SessionManager,
-                          session_manager::SessionManagerObserver>
-      session_observation_{this};
-
-  // Session length limiter.
-  std::unique_ptr<SessionLengthLimiter> session_length_limiter_;
 
   // Cros settings change subscriptions.
   base::CallbackListSubscription allow_guest_subscription_;
@@ -226,11 +130,8 @@ class ChromeUserManagerImpl
   base::CallbackListSubscription ephemeral_users_enabled_subscription_;
   base::CallbackListSubscription local_accounts_subscription_;
 
-  user_manager::MultiUserSignInPolicyController
-      multi_user_sign_in_policy_controller_;
-
-  std::vector<std::unique_ptr<policy::CloudExternalDataPolicyHandler>>
-      cloud_external_data_policy_handlers_;
+  std::vector<std::unique_ptr<policy::CloudExternalDataPolicyObserver>>
+      cloud_external_data_policy_observers_;
 
   base::ScopedObservation<ProfileManager, ProfileManagerObserver>
       profile_manager_observation_{this};
@@ -240,8 +141,6 @@ class ChromeUserManagerImpl
       profile_observations_;
 
   base::RepeatingClosure remove_non_cryptohome_data_barrier_;
-
-  std::unique_ptr<MountPerformer> mount_performer_;
 
   base::WeakPtrFactory<ChromeUserManagerImpl> weak_factory_{this};
 };

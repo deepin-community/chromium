@@ -10,7 +10,6 @@ import android.os.SystemClock;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.CommandLine;
-import org.chromium.base.FeatureList;
 import org.chromium.base.lifetime.Destroyable;
 import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.base.supplier.Supplier;
@@ -27,7 +26,7 @@ import org.chromium.ui.util.TokenHolder;
 public class BrowserStateBrowserControlsVisibilityDelegate extends BrowserControlsVisibilityDelegate
         implements Destroyable {
     /** Minimum duration (in milliseconds) that the controls are shown when requested. */
-    @VisibleForTesting static final long MINIMUM_SHOW_DURATION_MS = 3000;
+    @VisibleForTesting public static final long MINIMUM_SHOW_DURATION_MS = 3000;
 
     private static boolean sDisableOverridesForTesting;
 
@@ -115,10 +114,8 @@ public class BrowserStateBrowserControlsVisibilityDelegate extends BrowserContro
             // there wasn't any significant change to the screen. They should unlock as soon as the
             // capture logic thinks it's safe to do so. Long term this can probably be removed for
             // all.
-            boolean useSuppression =
-                    (FeatureList.isInitialized()
-                            && ChromeFeatureList.isEnabled(
-                                    ChromeFeatureList.SUPPRESS_TOOLBAR_CAPTURES));
+            boolean useSuppression = ChromeFeatureList.sSuppressionToolbarCaptures.isEnabled();
+
             if (!useSuppression) {
                 ensureControlsVisibleForMinDuration();
             }
@@ -129,7 +126,8 @@ public class BrowserStateBrowserControlsVisibilityDelegate extends BrowserContro
     private @BrowserControlsState int calculateVisibilityConstraints() {
         if (mPersistentFullscreenMode.get()) {
             return BrowserControlsState.HIDDEN;
-        } else if (mTokenHolder.hasTokens() && !sDisableOverridesForTesting) {
+        } else if (ChromeFeatureList.sToolbarScrollAblation.isEnabled()
+                || (mTokenHolder.hasTokens() && !sDisableOverridesForTesting)) {
             return BrowserControlsState.SHOWN;
         }
         return BrowserControlsState.BOTH;

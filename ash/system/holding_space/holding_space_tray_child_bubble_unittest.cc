@@ -47,7 +47,8 @@ class HoldingSpaceTrayChildBubbleTestBase : public HoldingSpaceAshTestBase {
     // NOTE: The `widget_` is needed so that the `child_bubble_` added to it
     // below will receive prod-like `OnThemeChanged()` events when attached.
     widget_ = std::make_unique<views::Widget>();
-    widget_->Init(views::Widget::InitParams{});
+    widget_->Init(views::Widget::InitParams{
+        views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET});
 
     // View delegate.
     view_delegate_ = std::make_unique<HoldingSpaceViewDelegate>(
@@ -241,7 +242,7 @@ TEST_P(HoldingSpaceTrayChildBubbleRefreshTest, HasExpectedBubbleTreatment) {
     // Corner radius.
     EXPECT_TRUE(layer->is_fast_rounded_corner());
     EXPECT_EQ(layer->rounded_corner_radii(),
-              gfx::RoundedCornersF(kBubbleCornerRadius));
+              gfx::RoundedCornersF(GetBubbleCornerRadius()));
   }
 }
 

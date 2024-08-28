@@ -13,7 +13,7 @@
 namespace content {
 
 KeyboardEventProcessingResult RenderWidgetHostDelegate::PreHandleKeyboardEvent(
-    const NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   return KeyboardEventProcessingResult::NOT_HANDLED;
 }
 
@@ -28,7 +28,12 @@ bool RenderWidgetHostDelegate::HandleWheelEvent(
 }
 
 bool RenderWidgetHostDelegate::HandleKeyboardEvent(
-    const NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
+  return false;
+}
+
+bool RenderWidgetHostDelegate::ShouldIgnoreWebInputEvents(
+    const blink::WebInputEvent& event) {
   return false;
 }
 
@@ -57,7 +62,7 @@ BrowserAccessibilityManager*
 
 // If a delegate does not override this, the RenderWidgetHostView will
 // assume it is the sole platform event consumer.
-RenderWidgetHostInputEventRouter*
+input::RenderWidgetHostInputEventRouter*
 RenderWidgetHostDelegate::GetInputEventRouter() {
   return nullptr;
 }
@@ -90,7 +95,7 @@ ui::WindowShowState RenderWidgetHostDelegate::GetWindowShowState() {
   return ui::WindowShowState::SHOW_STATE_DEFAULT;
 }
 
-DevicePostureProviderImpl*
+blink::mojom::DevicePostureProvider*
 RenderWidgetHostDelegate::GetDevicePostureProvider() {
   return nullptr;
 }
@@ -144,6 +149,11 @@ bool RenderWidgetHostDelegate::IsWidgetForPrimaryMainFrame(
   return false;
 }
 
+gfx::mojom::DelegatedInkPointRenderer*
+RenderWidgetHostDelegate::GetDelegatedInkRenderer(ui::Compositor* compositor) {
+  return nullptr;
+}
+
 ukm::SourceId RenderWidgetHostDelegate::GetCurrentPageUkmSourceId() {
   return ukm::kInvalidSourceId;
 }
@@ -152,12 +162,17 @@ bool RenderWidgetHostDelegate::IsShowingContextMenuOnPage() const {
   return false;
 }
 
-bool RenderWidgetHostDelegate::IsPortal() {
-  return false;
-}
-
 int RenderWidgetHostDelegate::GetVirtualKeyboardResizeHeight() {
   return 0;
+}
+
+bool RenderWidgetHostDelegate::ShouldDoLearning() {
+  return true;
+}
+
+std::optional<double> RenderWidgetHostDelegate::AdjustedChildZoom(
+    const RenderWidgetHostViewChildFrame* render_widget) {
+  return std::nullopt;
 }
 
 }  // namespace content

@@ -55,13 +55,15 @@ enum class LanguageCode {
   kTrTr = 26,
   kZhCn = 27,
   kZhTw = 28,
-  // TODO(evliu): Add Chrome LC Support for languages 29-33.
+  // TODO(evliu): Add Chrome LC Support for languages below.
   kDaDk = 29,
   kFrCa = 30,
   kNbNo = 31,
   kNlNl = 32,
   kSvSe = 33,
-  kMaxValue = kSvSe,
+  kRuRu = 34,
+  kViVn = 35,
+  kMaxValue = kViVn,
 };
 
 // Describes all metadata needed to dynamically install SODA language pack
@@ -148,6 +150,12 @@ constexpr SodaLanguagePackComponentConfig kLanguageComponentConfigs[] = {
      {0x3f, 0xa6, 0xc9, 0x44, 0x13, 0x6a, 0xbe, 0xb8, 0xc2, 0xd2, 0x30,
       0xa0, 0x71, 0x0e, 0xab, 0xfc, 0xfc, 0x5d, 0x74, 0x62, 0xd8, 0x50,
       0x67, 0x90, 0x61, 0x81, 0x21, 0xd9, 0xf8, 0x74, 0x6d, 0x1c}},
+    {LanguageCode::kRuRu,
+     "ru-RU",
+     prefs::kSodaRuRuConfigPath,
+     {0xd9, 0xcd, 0x1f, 0x88, 0xbe, 0xa7, 0xe1, 0xe5, 0x62, 0x8b, 0xe1,
+      0x3c, 0xf6, 0x3a, 0x54, 0x5e, 0x38, 0xb4, 0x79, 0x2b, 0x56, 0xc5,
+      0x61, 0x3b, 0xc1, 0x97, 0xb6, 0x91, 0x16, 0x98, 0xa3, 0xb6}},
     {LanguageCode::kThTh,
      "th-TH",
      prefs::kSodaThThConfigPath,
@@ -160,6 +168,12 @@ constexpr SodaLanguagePackComponentConfig kLanguageComponentConfigs[] = {
      {0x85, 0x02, 0x59, 0xd8, 0x1f, 0xba, 0x8d, 0x23, 0x42, 0xfa, 0xa4,
       0x3c, 0x4a, 0x65, 0x4e, 0x09, 0xfa, 0xb0, 0x22, 0x2d, 0x31, 0x85,
       0xdb, 0xb2, 0x04, 0x42, 0x22, 0x6f, 0x4b, 0x86, 0xb9, 0xff}},
+    {LanguageCode::kViVn,
+     "vi-VN",
+     prefs::kSodaViVnConfigPath,
+     {0x1f, 0xd2, 0xae, 0x98, 0x67, 0x68, 0x1b, 0x4b, 0x31, 0xe5, 0x39,
+      0xc5, 0x38, 0xf5, 0x48, 0x0a, 0xa8, 0xb6, 0xf6, 0xcc, 0x2f, 0x7d,
+      0xe8, 0x49, 0x35, 0x5e, 0xa8, 0xb9, 0x13, 0x9f, 0x32, 0x3c}},
     {LanguageCode::kZhCn,
      "cmn-Hans-CN",
      prefs::kSodaZhCnConfigPath,
@@ -250,16 +264,22 @@ const std::u16string GetLanguageDisplayName(const std::string& language_name,
 // metric string for the language code.
 const std::string GetInstallationSuccessTimeMetricForLanguagePack(
     const LanguageCode& language_code);
+const std::string GetInstallationSuccessTimeMetricForLanguage(
+    const std::string& language);
 
 // Returns the `SodaInstaller.Language.{language}.InstallationFailureTime` uma
 // metric string for the language code.
 const std::string GetInstallationFailureTimeMetricForLanguagePack(
     const LanguageCode& language_code);
+const std::string GetInstallationFailureTimeMetricForLanguage(
+    const std::string& language);
 
 // Returns the `SodaInstaller.Language.{language}.InstallationResult` uma
 // metric string for the language code..
 const std::string GetInstallationResultMetricForLanguagePack(
     const LanguageCode& language_code);
+const std::string GetInstallationResultMetricForLanguage(
+    const std::string& language);
 
 // Gets a list of locales enabled by the Finch flag.
 std::vector<std::string> GetLiveCaptionEnabledLanguages();

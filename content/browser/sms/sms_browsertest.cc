@@ -55,7 +55,6 @@ class SmsBrowserTest : public ContentBrowserTest {
   ~SmsBrowserTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(
         switches::kEnableExperimentalWebPlatformFeatures);
     command_line->AppendSwitchASCII(switches::kWebOtpBackend,
@@ -210,7 +209,7 @@ class SmsBrowserTest : public ContentBrowserTest {
 
 }  // namespace
 
-// TODO(crbug.com/1514411): Flaky on Win Debug
+// TODO(crbug.com/41486967): Flaky on Win Debug
 #if BUILDFLAG(IS_WIN) && !defined(NDEBUG)
 #define MAYBE_Receive DISABLED_Receive
 #else
@@ -633,7 +632,7 @@ IN_PROC_BROWSER_TEST_F(SmsBrowserTest, DISABLED_TwoTabsDifferentOrigin) {
   ExpectOutcomeUKM(url2, blink::WebOTPServiceOutcome::kSuccess);
 }
 
-// TODO(crbug.com/1514411): Flaky on Win Debug
+// TODO(crbug.com/41486967): Flaky on Win Debug
 #if BUILDFLAG(IS_WIN) && !defined(NDEBUG)
 #define MAYBE_SmsReceivedAfterTabIsClosed DISABLED_SmsReceivedAfterTabIsClosed
 #else

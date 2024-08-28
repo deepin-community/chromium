@@ -10,17 +10,16 @@
 
 #include "content/browser/accessibility/browser_accessibility_manager.h"
 #include "content/common/content_export.h"
-#include "third_party/blink/public/mojom/render_accessibility.mojom-forward.h"
 
 namespace ui {
 
 class MotionEventAndroid;
+class AXPlatformTreeManagerDelegate;
 
 }  // namespace ui
 
 namespace content {
 
-class WebAXPlatformTreeManagerDelegate;
 
 // A Java counterpart will be generated for this enum.
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.content.browser.accessibility
@@ -46,10 +45,18 @@ class WebContentsAccessibilityAndroid;
 class CONTENT_EXPORT BrowserAccessibilityManagerAndroid
     : public BrowserAccessibilityManager {
  public:
+  // Creates the platform-specific BrowserAccessibilityManager.
+  static BrowserAccessibilityManager* Create(
+      const ui::AXTreeUpdate& initial_tree,
+      ui::AXPlatformTreeManagerDelegate* delegate);
+
+  static BrowserAccessibilityManager* Create(
+      ui::AXPlatformTreeManagerDelegate* delegate);
+
   BrowserAccessibilityManagerAndroid(
       const ui::AXTreeUpdate& initial_tree,
       base::WeakPtr<WebContentsAccessibilityAndroid> web_contents_accessibility,
-      WebAXPlatformTreeManagerDelegate* delegate);
+      ui::AXPlatformTreeManagerDelegate* delegate);
 
   BrowserAccessibilityManagerAndroid(
       const BrowserAccessibilityManagerAndroid&) = delete;
@@ -94,7 +101,7 @@ class CONTENT_EXPORT BrowserAccessibilityManagerAndroid
   // BrowserAccessibilityManager overrides.
   BrowserAccessibility* GetFocus() const override;
   void SendLocationChangeEvents(
-      const std::vector<blink::mojom::LocationChangesPtr>& changes) override;
+      const std::vector<ui::AXLocationChanges>& changes) override;
   ui::AXNode* RetargetForEvents(ui::AXNode* node,
                                 RetargetEventType type) const override;
   void FireBlinkEvent(ax::mojom::Event event_type,
@@ -102,6 +109,13 @@ class CONTENT_EXPORT BrowserAccessibilityManagerAndroid
                       int action_request_id) override;
   void FireGeneratedEvent(ui::AXEventGenerator::Event event_type,
                           const ui::AXNode* node) override;
+
+  void FireAriaNotificationEvent(
+      BrowserAccessibility* node,
+      const std::string& announcement,
+      const std::string& notification_id,
+      ax::mojom::AriaNotificationInterrupt interrupt_property,
+      ax::mojom::AriaNotificationPriority priority_property) override;
 
   void FireLocationChanged(BrowserAccessibility* node);
 
@@ -126,6 +140,12 @@ class CONTENT_EXPORT BrowserAccessibilityManagerAndroid
   void ClearNodeInfoCacheForGivenId(int32_t unique_id);
 
   std::u16string GenerateAccessibilityNodeInfoString(int32_t unique_id);
+
+  std::vector<std::string> GetMetadataForTree() const;
+
+ protected:
+  std::unique_ptr<BrowserAccessibility> CreateBrowserAccessibility(
+      ui::AXNode* node) override;
 
  private:
   // AXTreeObserver overrides.

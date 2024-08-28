@@ -2,12 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ash/clipboard/clipboard_history.h"
+
 #include <iterator>
 #include <list>
 #include <memory>
+#include <string_view>
 #include <tuple>
 
-#include "ash/clipboard/clipboard_history.h"
 #include "ash/clipboard/clipboard_history_controller_impl.h"
 #include "ash/clipboard/clipboard_history_item.h"
 #include "ash/clipboard/clipboard_history_menu_model_adapter.h"
@@ -24,7 +26,6 @@
 #include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/repeating_test_future.h"
 #include "base/test/scoped_feature_list.h"
@@ -65,6 +66,7 @@
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/controls/menu/menu_config.h"
 #include "ui/views/controls/menu/menu_item_view.h"
@@ -122,20 +124,19 @@ class ClipboardDataWaiter : public ui::ClipboardObserver {
     return clipboard_data == nullptr || *clipboard_data == *clipboard_data_;
   }
 
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of, #constexpr-ctor-field-initializer
+  // RAW_PTR_EXCLUSION: #addr-of
   RAW_PTR_EXCLUSION const ui::ClipboardData* clipboard_data_ = nullptr;
   std::unique_ptr<base::RunLoop> run_loop_;
 };
 
 // Helpers ---------------------------------------------------------------------
 
-std::unique_ptr<views::Widget> CreateTestWidget() {
+std::unique_ptr<views::Widget> CreateTestWidget(
+    views::Widget::InitParams::Ownership ownership) {
   auto widget = std::make_unique<views::Widget>();
 
-  views::Widget::InitParams params;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-  params.type = views::Widget::InitParams::TYPE_WINDOW_FRAMELESS;
+  views::Widget::InitParams params(
+      ownership, views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   widget->Init(std::move(params));
 
   return widget;
@@ -253,7 +254,7 @@ class ClipboardHistoryBrowserTest : public ash::LoginManagerTest {
         l10n_util::GetStringUTF16(
             IDS_CLIPBOARD_HISTORY_DELETE_BUTTON_HOVER_TEXT));
     EXPECT_EQ(
-        delete_button->GetAccessibleName(),
+        delete_button->GetViewAccessibility().GetCachedName(),
         l10n_util::GetStringFUTF16(IDS_CLIPBOARD_HISTORY_DELETE_ITEM_TEXT,
                                    GetClipboardItemAt(index).display_text()));
     GetEventGenerator()->ClickLeftButton();
@@ -746,7 +747,7 @@ class ClipboardHistoryPasteTypeBrowserTest
 
   // Waits for a paste event to propagate to the web contents and confirms that
   // the expected `text` is pasted, formatted according to `paste_plain_text`.
-  void WaitForWebContentsPaste(base::StringPiece text, bool paste_plain_text) {
+  void WaitForWebContentsPaste(std::string_view text, bool paste_plain_text) {
     // The web contents will update its page title once it receives a paste
     // event.
     std::ignore =
@@ -1127,9 +1128,10 @@ class ClipboardHistoryTextfieldBrowserTest
     CloseAllBrowsers();
 
     // Create a widget containing a single, focusable textfield.
-    widget_ = CreateTestWidget();
+    widget_ =
+        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
     textfield_ = widget_->SetContentsView(std::make_unique<views::Textfield>());
-    textfield_->SetAccessibleName(u"Textfield");
+    textfield_->GetViewAccessibility().SetName(u"Textfield");
     textfield_->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
 
     // Show the widget.
@@ -1363,10 +1365,10 @@ class FakeDataTransferPolicyController
       content::RenderFrameHost* rfh,
       base::OnceCallback<void(bool)> callback) override {}
 
-  void DropIfAllowed(
-      const ui::OSExchangeData* drag_data,
-      base::optional_ref<const ui::DataTransferEndpoint> data_dst,
-      base::OnceClosure drop_cb) override {}
+  void DropIfAllowed(std::optional<ui::DataTransferEndpoint> data_src,
+                     std::optional<ui::DataTransferEndpoint> data_dst,
+                     std::optional<std::vector<ui::FileInfo>> filenames,
+                     base::OnceClosure drop_cb) override {}
 
  private:
   const GURL allowed_url_;
@@ -1552,8 +1554,10 @@ IN_PROC_BROWSER_TEST_P(ClipboardHistoryRefreshAshBrowserTest,
 
 // Checks that launching the standalone clipboard history menu from a render
 // view's context menu works as expected.
+// TODO(crbug.com/333463820): Flaky test. Re-enable once the root cause is
+// identified.
 IN_PROC_BROWSER_TEST_P(ClipboardHistoryRefreshAshBrowserTest,
-                       LaunchStandaloneMenuFromRenderViewContextMenu) {
+                       DISABLED_LaunchStandaloneMenuFromRenderViewContextMenu) {
   // Write some clipboard data.
   SetClipboardText("A");
   SetClipboardText("B");
@@ -1818,7 +1822,7 @@ class ClipboardHistoryUrlTitleFetcherBrowserTest
   }
 
  protected:
-  GURL GetTestUrl(base::StringPiece base_name) {
+  GURL GetTestUrl(std::string_view base_name) {
     return ui_test_utils::GetTestUrl(
         base::FilePath(base::FilePath::kCurrentDirectory),
         base::FilePath(base_name));

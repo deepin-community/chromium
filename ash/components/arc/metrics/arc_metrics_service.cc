@@ -47,10 +47,6 @@ constexpr base::TimeDelta kUmaMinTime = base::Milliseconds(1);
 constexpr base::TimeDelta kUmaMaxTime = base::Seconds(60);
 constexpr int kUmaNumBuckets = 50;
 constexpr int kUmaPriAbiMigMaxFailedAttempts = 10;
-constexpr int kUmaFixupDirectoriesCountMin = 0;
-constexpr int kUmaFixupDirectoriesCountMax = 5000000;
-constexpr int kUmaFixupAppsCountMin = 0;
-constexpr int kUmaFixupAppsCountMax = 10000;
 
 constexpr base::TimeDelta kRequestProcessListPeriod = base::Minutes(5);
 constexpr char kArcProcessNamePrefix[] = "org.chromium.arc.";
@@ -87,21 +83,7 @@ std::string BootTypeToString(mojom::BootType boot_type) {
     case mojom::BootType::REGULAR_BOOT:
       return ".RegularBoot";
   }
-  DUMP_WILL_BE_NOTREACHED_NORETURN();
-  return "";
-}
-
-const char* LowLatencyStylusLibraryTypeToString(
-    mojom::LowLatencyStylusLibraryType library_type) {
-  switch (library_type) {
-    case mojom::LowLatencyStylusLibraryType::kUnsupported:
-      break;
-    case mojom::LowLatencyStylusLibraryType::kCPU:
-      return ".CPU";
-    case mojom::LowLatencyStylusLibraryType::kGPU:
-      return ".GPU";
-  }
-  NOTREACHED();
+  DUMP_WILL_BE_NOTREACHED();
   return "";
 }
 
@@ -112,7 +94,7 @@ const char* DnsQueryToString(mojom::ArcDnsQuery query) {
     case mojom::ArcDnsQuery::ANDROID_API_HOST_NAME:
       return "AndroidApi";
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return "";
 }
 
@@ -141,7 +123,7 @@ const char* WaylandTimingEventToString(mojom::WaylandTimingEvent event) {
     case mojom::WaylandTimingEvent::kZcrVsyncTimingUpdate:
       return ".ZcrVsyncTimingUpdate";
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return "";
 }
 struct LoadAverageHistogram {
@@ -216,7 +198,7 @@ ArcMetricsService::~ArcMetricsService() {
 
   ui::GamepadProviderOzone::GetInstance()->RemoveGamepadObserver(this);
   // If WMHelper is already destroyed, do nothing.
-  // TODO(crbug.com/748380): Fix shutdown order.
+  // TODO(crbug.com/40531599): Fix shutdown order.
   if (exo::WMHelper::HasInstance())
     exo::WMHelper::GetInstance()->RemoveActivationObserver(this);
   arc_bridge_service_->process()->RemoveObserver(&process_observer_);
@@ -591,11 +573,6 @@ void ArcMetricsService::ReportDnsQueryResult(mojom::ArcDnsQuery query,
   base::UmaHistogramBoolean(metric_name, success);
 }
 
-void ArcMetricsService::ReportImageCopyPasteCompatActionDeprecated(
-    mojom::ArcImageCopyPasteCompatAction action_type) {
-  // Intentionally no-op. This metric was deprecated.
-}
-
 void ArcMetricsService::NotifyLowMemoryKill() {
   for (auto& obs : app_kill_observers_)
     obs.OnArcLowMemoryKill();
@@ -678,12 +655,6 @@ void ArcMetricsService::ReportArcSystemHealthUpgrade(base::TimeDelta duration,
                             packages_deleted);
 }
 
-void ArcMetricsService::ReportClipboardDragDropEvent(
-    mojom::ArcClipboardDragDropEvent event_type) {
-  // This method is deprecated.
-  // TODO(yhanada): Remove this once all callers are removed.
-}
-
 void ArcMetricsService::ReportAnr(mojom::AnrPtr anr) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
@@ -697,8 +668,7 @@ void ArcMetricsService::ReportAnr(mojom::AnrPtr anr) {
 
 void ArcMetricsService::ReportLowLatencyStylusLibApiUsage(
     mojom::LowLatencyStylusLibApiId api_id) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  UMA_HISTOGRAM_ENUMERATION("Arc.LowLatencyStylusLibraryApisCounter", api_id);
+  // Deprecated: This will be removed once all callers are removed.
 }
 
 void ArcMetricsService::ReportVpnServiceBuilderCompatApiUsage(
@@ -710,37 +680,7 @@ void ArcMetricsService::ReportVpnServiceBuilderCompatApiUsage(
 
 void ArcMetricsService::ReportLowLatencyStylusLibPredictionTarget(
     mojom::LowLatencyStylusLibPredictionTargetPtr prediction_target) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  base::UmaHistogramCounts100(
-      base::StrCat(
-          {"Arc.LowLatencyStylusLibrary.PredictionTarget",
-           LowLatencyStylusLibraryTypeToString(prediction_target->type)}),
-      prediction_target->target);
-}
-
-void ArcMetricsService::ReportEntireFixupMetrics(base::TimeDelta duration,
-                                                 uint32_t number_of_directories,
-                                                 uint32_t number_of_failures) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  base::UmaHistogramLongTimes("Arc.Fixup.Entire.Duration", duration);
-  base::UmaHistogramCustomCounts("Arc.Fixup.Entire.Directories",
-                                 number_of_directories,
-                                 kUmaFixupDirectoriesCountMin,
-                                 kUmaFixupDirectoriesCountMax, kUmaNumBuckets);
-  base::UmaHistogramCustomCounts("Arc.Fixup.Entire.Failures",
-                                 number_of_failures, kUmaFixupAppsCountMin,
-                                 kUmaFixupAppsCountMax, kUmaNumBuckets);
-}
-
-void ArcMetricsService::ReportPerAppFixupMetrics(
-    base::TimeDelta duration,
-    uint32_t number_of_directories) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  base::UmaHistogramLongTimes("Arc.Fixup.PerApp.Duration", duration);
-  base::UmaHistogramCustomCounts("Arc.Fixup.PerApp.Directories",
-                                 number_of_directories,
-                                 kUmaFixupDirectoriesCountMin,
-                                 kUmaFixupDirectoriesCountMax, kUmaNumBuckets);
+  // Deprecated: This will be removed once all callers are removed.
 }
 
 void ArcMetricsService::ReportMainAccountHashMigrationMetrics(
@@ -829,12 +769,12 @@ void ArcMetricsService::ReportWebViewProcessStarted() {
 
 void ArcMetricsService::ReportNewQosSocketCount(int count) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  base::UmaHistogramCounts100000("Arc.Qos.NewQosSocketCount", count);
+  base::UmaHistogramCounts100000("Arc.Net.Qos.NewQosSocketCount", count);
 }
 
 void ArcMetricsService::ReportQosSocketPercentage(int perc) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  base::UmaHistogramCounts100("Arc.Qos.QosSocketPercentage", perc);
+  base::UmaHistogramCounts100("Arc.Net.Qos.QosSocketPercentage", perc);
 }
 
 void ArcMetricsService::ReportArcKeyMintError(mojom::ArcKeyMintError error) {
@@ -850,6 +790,17 @@ void ArcMetricsService::ReportDragResizeLatency(
                                   /*minimum=*/base::Milliseconds(1),
                                   /*maximum=*/base::Seconds(3), 100);
   }
+}
+
+void ArcMetricsService::ReportAppErrorDialogType(
+    mojom::AppErrorDialogType type) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  base::UmaHistogramEnumeration("Arc.WM.AppErrorDialog.Type", type);
+}
+
+void ArcMetricsService::ReportApkCacheHit(bool hit) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  base::UmaHistogramBoolean("Arc.AppInstall.CacheHit", hit);
 }
 
 void ArcMetricsService::OnWindowActivated(

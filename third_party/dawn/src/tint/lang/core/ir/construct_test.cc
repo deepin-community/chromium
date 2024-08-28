@@ -28,7 +28,6 @@
 #include "src/tint/lang/core/ir/construct.h"
 
 #include "gmock/gmock.h"
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/core/ir/ir_helper_test.h"
 
 namespace tint::core::ir {
@@ -36,6 +35,7 @@ namespace {
 
 using namespace tint::core::number_suffixes;  // NOLINT
 using IR_ConstructTest = IRTestHelper;
+using IR_ConstructDeathTest = IR_ConstructTest;
 
 TEST_F(IR_ConstructTest, Usage) {
     auto* arg1 = b.Constant(true);
@@ -56,14 +56,14 @@ TEST_F(IR_ConstructTest, Result) {
     EXPECT_EQ(c, c->Result(0)->Instruction());
 }
 
-TEST_F(IR_ConstructTest, Fail_NullType) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(IR_ConstructDeathTest, Fail_NullType) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             Module mod;
             Builder b{mod};
             b.Construct(nullptr);
         },
-        "");
+        "internal compiler error");
 }
 
 TEST_F(IR_ConstructTest, Clone) {

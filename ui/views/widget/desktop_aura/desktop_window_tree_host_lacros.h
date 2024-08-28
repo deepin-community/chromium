@@ -18,7 +18,7 @@
 #include "ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h"
 
 namespace ui {
-class WaylandExtension;
+class WaylandToplevelExtension;
 class DeskExtension;
 class PinnedModeExtension;
 }  // namespace ui
@@ -45,8 +45,8 @@ class VIEWS_EXPORT DesktopWindowTreeHostLacros
 
   ~DesktopWindowTreeHostLacros() override;
 
-  ui::WaylandExtension* GetWaylandExtension();
-  const ui::WaylandExtension* GetWaylandExtension() const;
+  ui::WaylandToplevelExtension* GetWaylandToplevelExtension();
+  const ui::WaylandToplevelExtension* GetWaylandToplevelExtension() const;
 
   ui::DeskExtension* GetDeskExtension();
   const ui::DeskExtension* GetDeskExtension() const;
@@ -61,9 +61,8 @@ class VIEWS_EXPORT DesktopWindowTreeHostLacros
 
   // PlatformWindowDelegate:
   void OnClosed() override;
-  void OnWindowStateChanged(
-      ui::PlatformWindowState old_window_show_state,
-      ui::PlatformWindowState new_window_show_state) override;
+  void OnWindowStateChanged(ui::PlatformWindowState old_state,
+                            ui::PlatformWindowState new_state) override;
   void OnFullscreenTypeChanged(ui::PlatformFullscreenType old_type,
                                ui::PlatformFullscreenType new_type) override;
   void OnOverviewModeChanged(bool in_overview) override;

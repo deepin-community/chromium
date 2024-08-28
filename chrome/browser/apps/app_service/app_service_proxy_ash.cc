@@ -12,12 +12,12 @@
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/not_fatal_until.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/task_traits.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_factory.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_util.h"
-#include "chrome/browser/apps/app_service/app_install/app_install_service_ash.h"
-#include "chrome/browser/apps/app_service/browser_app_instance_registry.h"
-#include "chrome/browser/apps/app_service/browser_app_instance_tracker.h"
+#include "chrome/browser/apps/app_service/app_install/app_install_service.h"
 #include "chrome/browser/apps/app_service/instance_registry_updater.h"
 #include "chrome/browser/apps/app_service/metrics/app_platform_metrics.h"
 #include "chrome/browser/apps/app_service/metrics/app_platform_metrics_service.h"
@@ -26,11 +26,12 @@
 #include "chrome/browser/apps/app_service/promise_apps/promise_app_registry_cache.h"
 #include "chrome/browser/apps/app_service/promise_apps/promise_app_service.h"
 #include "chrome/browser/apps/app_service/publishers/app_publisher.h"
-#include "chrome/browser/apps/app_service/publishers/browser_shortcuts_crosapi_publisher.h"
 #include "chrome/browser/apps/app_service/publishers/shortcut_publisher.h"
 #include "chrome/browser/apps/app_service/publishers/standalone_browser_apps.h"
 #include "chrome/browser/apps/app_service/shortcut_removal_dialog.h"
 #include "chrome/browser/apps/app_service/uninstall_dialog.h"
+#include "chrome/browser/apps/browser_instance/browser_app_instance_registry.h"
+#include "chrome/browser/apps/browser_instance/browser_app_instance_tracker.h"
 #include "chrome/browser/ash/app_restore/full_restore_service.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_time_limit_interface.h"
 #include "chrome/browser/ash/crosapi/browser_util.h"
@@ -38,10 +39,6 @@
 #include "chrome/browser/ash/policy/dlp/dlp_files_controller_ash.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
-#include "chrome/browser/ui/ash/shelf/shelf_spinner_controller.h"
-#include "chrome/browser/ui/ash/shelf/shelf_spinner_item_controller.h"
-#include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/grit/browser_resources.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
@@ -62,6 +59,7 @@
 #include "components/services/app_service/public/cpp/types_util.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
+#include "content/public/browser/browser_thread.h"
 #include "extensions/grit/extensions_browser_resources.h"
 
 namespace {
@@ -93,7 +91,7 @@ AppServiceProxyAsh::AppServiceProxyAsh(Profile* profile)
                                   IconCache::GarbageCollectionPolicy::kEager),
       icon_reader_(profile),
       icon_writer_(profile) {
-  if (web_app::IsWebAppsCrosapiEnabled()) {
+  if (crosapi::browser_util::IsLacrosEnabled()) {
     browser_app_instance_tracker_ =
         std::make_unique<apps::BrowserAppInstanceTracker>(profile_,
                                                           app_registry_cache_);
@@ -136,19 +134,6 @@ void AppServiceProxyAsh::Initialize() {
     return;
   }
 
-  if (base::FeatureList::IsEnabled(kAppServiceStorage)) {
-    on_ready_ = std::make_unique<base::OneShotEvent>();
-
-    // After reading the app info data from the AppStorage file, call
-    // OnAppsReady to init `publisher_host_` and other OnApps tasks to prevent
-    // AppStorage overwriting the `fresh` apps from publishers during the system
-    // init phase.
-    app_storage_ = std::make_unique<apps::AppStorage>(
-        profile_->GetPath(), app_registry_cache_,
-        base::BindOnce(&AppServiceProxyAsh::OnAppsReady,
-                       weak_ptr_factory_.GetWeakPtr()));
-  }
-
   const user_manager::User* user =
       ash::ProfileHelper::Get()->GetUserByProfile(profile_);
   if (user) {
@@ -180,13 +165,10 @@ void AppServiceProxyAsh::Initialize() {
     app_registry_cache_observer_.Observe(cache);
   }
 
-  if (!base::FeatureList::IsEnabled(kAppServiceStorage)) {
-    publisher_host_ = std::make_unique<PublisherHost>(this);
-  }
+  publisher_host_ = std::make_unique<PublisherHost>(this);
 
   if (crosapi::browser_util::IsLacrosEnabled() &&
-      ash::ProfileHelper::IsPrimaryProfile(profile_) &&
-      web_app::IsWebAppsCrosapiEnabled()) {
+      ash::ProfileHelper::IsPrimaryProfile(profile_)) {
     auto* browser_manager = crosapi::BrowserManager::Get();
     // In unit tests, it is possible that the browser manager is not created.
     if (browser_manager) {
@@ -210,8 +192,7 @@ void AppServiceProxyAsh::Initialize() {
   if (chromeos::features::IsCrosWebAppShortcutUiUpdateEnabled()) {
     shortcut_registry_cache_ = std::make_unique<apps::ShortcutRegistryCache>();
   }
-  app_install_service_ =
-      std::make_unique<apps::AppInstallServiceAsh>(*profile_);
+  app_install_service_ = AppInstallService::Create(*profile_);
 }
 
 apps::InstanceRegistry& AppServiceProxyAsh::InstanceRegistry() {
@@ -240,12 +221,6 @@ AppServiceProxyAsh::BrowserAppInstanceRegistry() {
   return browser_app_instance_registry_.get();
 }
 
-apps::BrowserShortcutsCrosapiPublisher*
-AppServiceProxyAsh::BrowserShortcutsCrosapiPublisher() {
-  return publisher_host_ ? publisher_host_->BrowserShortcutsCrosapiPublisher()
-                         : nullptr;
-}
-
 apps::StandaloneBrowserApps* AppServiceProxyAsh::StandaloneBrowserApps() {
   return publisher_host_ ? publisher_host_->StandaloneBrowserApps() : nullptr;
 }
@@ -268,11 +243,6 @@ void AppServiceProxyAsh::RegisterCrosApiSubScriber(
   }
 }
 
-void AppServiceProxyAsh::RegisterPublisher(AppType app_type,
-                                           AppPublisher* publisher) {
-  AppServiceProxyBase::RegisterPublisher(app_type, publisher);
-}
-
 void AppServiceProxyAsh::SetPublisherUnavailable(AppType app_type) {
   UnregisterPublisher(app_type);
 
@@ -282,27 +252,9 @@ void AppServiceProxyAsh::SetPublisherUnavailable(AppType app_type) {
   OnApps(std::vector<AppPtr>{}, app_type, /*should_notify_initialized=*/true);
 }
 
-void AppServiceProxyAsh::Uninstall(const std::string& app_id,
-                                   UninstallSource uninstall_source,
-                                   gfx::NativeWindow parent_window) {
-  UninstallImpl(app_id, uninstall_source, parent_window, base::DoNothing());
-}
-
 void AppServiceProxyAsh::OnApps(std::vector<AppPtr> deltas,
                                 AppType app_type,
                                 bool should_notify_initialized) {
-  if (base::FeatureList::IsEnabled(kAppServiceStorage) && !is_on_apps_ready_) {
-    // Add the OnApps request to `pending_on_apps_requests_`, and wait for the
-    // AppStorage file reading finished to execute the OnApps request.
-    //
-    // We don't queue these on the OneShotEvent to guarantee that these requests
-    // are loaded in AppRegistryCache following the requested sequence before
-    // any queued events are posted.
-    pending_on_apps_requests_.push_back(std::make_unique<OnAppsRequest>(
-        std::move(deltas), app_type, should_notify_initialized));
-    return;
-  }
-
   // Delete app icon folders for uninstalled apps or the icon updated app.
   std::vector<std::string> app_ids;
   for (const auto& delta : deltas) {
@@ -364,10 +316,12 @@ void AppServiceProxyAsh::OnApps(std::vector<AppPtr> deltas,
 
   AppServiceProxyBase::OnApps(std::move(deltas), app_type,
                               should_notify_initialized);
+}
 
-  if (should_notify_initialized) {
-    LaunchFromPendingRequests(app_type);
-  }
+void AppServiceProxyAsh::Uninstall(const std::string& app_id,
+                                   UninstallSource uninstall_source,
+                                   gfx::NativeWindow parent_window) {
+  UninstallImpl(app_id, uninstall_source, parent_window, base::DoNothing());
 }
 
 void AppServiceProxyAsh::PauseApps(
@@ -416,6 +370,42 @@ void AppServiceProxyAsh::UnpauseApps(const std::set<std::string>& app_ids) {
     auto* publisher = GetPublisher(app_type);
     if (publisher) {
       publisher->UnpauseApp(app_id);
+    }
+  }
+}
+
+void AppServiceProxyAsh::BlockApps(const std::set<std::string>& app_ids,
+                                   bool show_block_dialog) {
+  for (auto& app_id : app_ids) {
+    auto app_type = app_registry_cache_.GetAppType(app_id);
+    if (app_type == AppType::kUnknown) {
+      continue;
+    }
+
+    auto* publisher = GetPublisher(app_type);
+    if (publisher) {
+      publisher->BlockApp(app_id);
+    }
+
+    if (show_block_dialog) {
+      app_registry_cache_.ForOneApp(app_id, [](const apps::AppUpdate& update) {
+        AppServiceProxyAsh::CreateLocalBlockDialog(update.Name());
+      });
+    }
+  }
+}
+
+void AppServiceProxyAsh::UnblockApps(const std::set<std::string>& app_ids) {
+  for (auto& app_id : app_ids) {
+    auto app_type = app_registry_cache_.GetAppType(app_id);
+    if (app_type == AppType::kUnknown) {
+      continue;
+    }
+
+    pending_pause_requests_.MaybeRemoveApp(app_id);
+    auto* publisher = GetPublisher(app_type);
+    if (publisher) {
+      publisher->UnblockApp(app_id);
     }
   }
 }
@@ -609,9 +599,9 @@ void AppServiceProxyAsh::LaunchShortcut(const ShortcutId& id,
   }
   shortcut_publisher->LaunchShortcut(host_app_id, local_id, display_id);
 
-  // TODO(crbug.com/1412708): Add new launch source for shortcut and record
+  // TODO(crbug.com/40255408): Add new launch source for shortcut and record
   // metrics.
-  // TODO(crbug.com/1412708): Add callback to make launch async to support
+  // TODO(crbug.com/40255408): Add callback to make launch async to support
   // Lacros.
 }
 
@@ -841,7 +831,7 @@ void AppServiceProxyAsh::OnUninstallDialogClosed(
 
   DCHECK(uninstall_dialog);
   auto it = uninstall_dialogs_.find(app_id);
-  DCHECK(it != uninstall_dialogs_.end());
+  CHECK(it != uninstall_dialogs_.end(), base::NotFatalUntil::M130);
   uninstall_dialogs_.erase(it);
 }
 
@@ -899,38 +889,33 @@ void AppServiceProxyAsh::OnPreferredAppsChanged(
   crosapi_subscriber_->OnPreferredAppsChanged(std::move(changes));
 }
 
-void AppServiceProxyAsh::OnPublisherNotReadyForLaunch(
-    const std::string& app_id,
-    std::unique_ptr<LaunchParams> launch_request) {
-  if (!base::FeatureList::IsEnabled(kAppServiceStorage)) {
-    AppServiceProxyBase::OnPublisherNotReadyForLaunch(
-        app_id, std::move(launch_request));
-    return;
-  }
-
-  // Save the launch request to launch the app later.
-  launch_requests_[app_id].push_back(std::move(launch_request));
-
-  auto* chrome_controller = ChromeShelfController::instance();
-  if (chrome_controller) {
-    // Add spinner to the app icon.
-    chrome_controller->GetShelfSpinnerController()->AddSpinnerToShelf(
-        app_id, std::make_unique<ShelfSpinnerItemController>(app_id));
-  }
-}
-
 bool AppServiceProxyAsh::MaybeShowLaunchPreventionDialog(
     const apps::AppUpdate& update) {
   if (update.AppId() == app_constants::kChromeAppId) {
     return false;
   }
 
-  // Return true, and load the icon for the app block dialog when the app
+  // Return true and load the icon for the app block dialog when the app
   // is blocked by policy.
   if (update.Readiness() == apps::Readiness::kDisabledByPolicy) {
     LoadIconForDialog(
         update, base::BindOnce(&AppServiceProxyAsh::OnLoadIconForBlockDialog,
                                weak_ptr_factory_.GetWeakPtr(), update.Name()));
+    return true;
+  }
+
+  // Return true and load the icon for the app local block dialog when the app
+  // is blocked by local settings.
+  if (update.Readiness() == apps::Readiness::kDisabledByLocalSettings) {
+    AppServiceProxyAsh::CreateLocalBlockDialog(update.Name());
+
+    // For browser tests, call the dialog created callback to stop the run loop.
+    if (!dialog_created_callback_.is_null()) {
+      // Post task to the UI thread so local block dialog matches the
+      // asynchronicity of the other dialogs.
+      content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
+          ->PostTask(FROM_HERE, std::move(dialog_created_callback_));
+    }
     return true;
   }
 
@@ -944,7 +929,7 @@ bool AppServiceProxyAsh::MaybeShowLaunchPreventionDialog(
     auto time_limit =
         app_limit->GetTimeLimitForApp(update.AppId(), update.AppType());
     if (!time_limit.has_value()) {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return true;
     }
     PauseData pause_data;
@@ -1070,44 +1055,11 @@ void AppServiceProxyAsh::OnAppUpdate(const apps::AppUpdate& update) {
        !apps_util::IsInstalled(update.Readiness()))) {
     pending_pause_requests_.MaybeRemoveApp(update.AppId());
   }
-
-  if (apps_util::IsInstalled(update.Readiness())) {
-    return;
-  }
-
-  auto it = launch_requests_.find(update.AppId());
-  if (it == launch_requests_.end()) {
-    return;
-  }
-
-  // If the app is uninstalled, close the spinner for the icon, and remove the
-  // launch requests for the app.
-  auto* chrome_controller = ChromeShelfController::instance();
-  if (chrome_controller) {
-    chrome_controller->GetShelfSpinnerController()->CloseSpinner(
-        update.AppId());
-  }
-  launch_requests_.erase(it);
 }
 
 void AppServiceProxyAsh::OnAppRegistryCacheWillBeDestroyed(
     apps::AppRegistryCache* cache) {
   app_registry_cache_observer_.Reset();
-}
-
-void AppServiceProxyAsh::OnAppsReady() {
-  is_on_apps_ready_ = true;
-
-  // Read and execute OnApps requests from `pending_on_apps_requests_`.
-  for (auto& request : pending_on_apps_requests_) {
-    OnApps(std::move(request->deltas_), request->app_type_,
-           request->should_notify_initialized_);
-  }
-  pending_on_apps_requests_.clear();
-
-  publisher_host_ = std::make_unique<PublisherHost>(this);
-  CHECK(on_ready_);
-  on_ready_->Signal();
 }
 
 void AppServiceProxyAsh::RecordAppPlatformMetrics(
@@ -1121,8 +1073,8 @@ void AppServiceProxyAsh::RecordAppPlatformMetrics(
 
 void AppServiceProxyAsh::InitAppPlatformMetrics() {
   if (app_platform_metrics_service_) {
-    app_platform_metrics_service_->Start(app_registry_cache_,
-                                         instance_registry_);
+    app_platform_metrics_service_->Start(
+        app_registry_cache_, instance_registry_, app_capability_access_cache_);
   }
 }
 
@@ -1194,52 +1146,6 @@ void AppServiceProxyAsh::LaunchAppWithIntentIfAllowed(
   AppServiceProxyBase::LaunchAppWithIntent(
       app_id, event_flags, std::move(intent), std::move(launch_source),
       std::move(window_info), std::move(callback));
-}
-
-void AppServiceProxyAsh::LaunchFromPendingRequests(AppType app_type) {
-  for (auto it = launch_requests_.begin(); it != launch_requests_.end();) {
-    const std::string& app_id = it->first;
-    if (app_registry_cache_.GetAppType(app_id) != app_type) {
-      ++it;
-      continue;
-    }
-
-    // Close the spinner for the app icon.
-    auto* chrome_controller = ChromeShelfController::instance();
-    if (chrome_controller) {
-      chrome_controller->GetShelfSpinnerController()->CloseSpinner(app_id);
-    }
-
-    // Check the saved launch requests for `app_type`, and launch the app.
-    for (auto& launch_request : it->second) {
-      if (launch_request->params_.has_value()) {
-        LaunchAppWithParams(std::move(launch_request->params_.value()),
-                            std::move(launch_request->call_back_));
-        continue;
-      }
-
-      if (launch_request->intent_) {
-        LaunchAppWithIntent(app_id, launch_request->event_flags_,
-                            std::move(launch_request->intent_),
-                            launch_request->launch_source_,
-                            std::move(launch_request->window_info_),
-                            std::move(launch_request->call_back_));
-        continue;
-      }
-
-      if (!launch_request->file_paths_.empty()) {
-        LaunchAppWithFiles(app_id, launch_request->event_flags_,
-                           launch_request->launch_source_,
-                           std::move(launch_request->file_paths_));
-        continue;
-      }
-
-      Launch(app_id, launch_request->event_flags_,
-             launch_request->launch_source_,
-             std::move(launch_request->window_info_));
-    }
-    it = launch_requests_.erase(it);
-  }
 }
 
 bool AppServiceProxyAsh::ShouldReadIcons(AppType app_type) {

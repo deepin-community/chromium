@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -133,12 +134,13 @@ bool WebSocket::Send(const std::string& message) {
   header.final = true;
   header.masked = true;
   header.payload_length = message.length();
-  int header_size = net::GetWebSocketFrameHeaderSize(header);
+  size_t header_size = net::GetWebSocketFrameHeaderSize(header);
   net::WebSocketMaskingKey masking_key = net::GenerateWebSocketMaskingKey();
   std::string header_str;
   header_str.resize(header_size);
-  CHECK_EQ(header_size, net::WriteWebSocketFrameHeader(
-      header, &masking_key, &header_str[0], header_str.length()));
+  CHECK_EQ(header_size,
+           base::checked_cast<size_t>(net::WriteWebSocketFrameHeader(
+               header, &masking_key, &header_str[0], header_str.length())));
 
   std::string masked_message = message;
   net::MaskWebSocketFramePayload(
@@ -285,7 +287,7 @@ void WebSocket::OnReadDuringHandshake(const char* data, int len) {
       base::Base64Encode(base::SHA1HashString(sec_key_ + kMagicKey));
   auto headers = base::MakeRefCounted<net::HttpResponseHeaders>(
       net::HttpUtil::AssembleRawHeaders(
-          base::StringPiece(handshake_response_.data(), headers_end)));
+          std::string_view(handshake_response_.data(), headers_end)));
   if (headers->response_code() != 101 ||
       !headers->HasHeaderValue("Upgrade", "WebSocket") ||
       !headers->HasHeaderValue("Connection", "Upgrade") ||

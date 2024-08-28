@@ -49,19 +49,38 @@
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
+#include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/html/fenced_frame/html_fenced_frame_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_field_set_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_legend_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
 #include "third_party/blink/renderer/core/html/html_body_element.h"
+#include "third_party/blink/renderer/core/html/html_br_element.h"
 #include "third_party/blink/renderer/core/html/html_dialog_element.h"
+#include "third_party/blink/renderer/core/html/html_frame_element.h"
+#include "third_party/blink/renderer/core/html/html_frame_set_element.h"
+#include "third_party/blink/renderer/core/html/html_html_element.h"
 #include "third_party/blink/renderer/core/html/html_iframe_element.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
+#include "third_party/blink/renderer/core/html/html_marquee_element.h"
+#include "third_party/blink/renderer/core/html/html_meter_element.h"
+#include "third_party/blink/renderer/core/html/html_olist_element.h"
 #include "third_party/blink/renderer/core/html/html_plugin_element.h"
+#include "third_party/blink/renderer/core/html/html_progress_element.h"
+#include "third_party/blink/renderer/core/html/html_script_element.h"
+#include "third_party/blink/renderer/core/html/html_span_element.h"
+#include "third_party/blink/renderer/core/html/html_style_element.h"
 #include "third_party/blink/renderer/core/html/html_table_cell_element.h"
+#include "third_party/blink/renderer/core/html/html_table_element.h"
+#include "third_party/blink/renderer/core/html/html_ulist_element.h"
+#include "third_party/blink/renderer/core/html/html_wbr_element.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
+#include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/layout/layout_text_combine.h"
 #include "third_party/blink/renderer/core/layout/layout_theme.h"
 #include "third_party/blink/renderer/core/layout/list/list_marker.h"
@@ -69,7 +88,12 @@
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/core/style/style_intrinsic_length.h"
+#include "third_party/blink/renderer/core/svg/svg_foreign_object_element.h"
+#include "third_party/blink/renderer/core/svg/svg_g_element.h"
 #include "third_party/blink/renderer/core/svg/svg_svg_element.h"
+#include "third_party/blink/renderer/core/svg/svg_text_element.h"
+#include "third_party/blink/renderer/core/svg/svg_tspan_element.h"
+#include "third_party/blink/renderer/core/svg/svg_use_element.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/geometry/length.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
@@ -93,7 +117,7 @@ TouchAction AdjustTouchActionForElement(TouchAction touch_action,
                                         Element* element) {
   Element* document_element = element->GetDocument().documentElement();
   bool scrolls_overflow = builder.ScrollsOverflow();
-  if (element && element == element->GetDocument().FirstBodyElement()) {
+  if (element == element->GetDocument().FirstBodyElement()) {
     // Body scrolls overflow if html root overflow is not visible or the
     // propagation of overflow is stopped by containment.
     if (parent_style.IsOverflowVisibleAlongBothAxes()) {
@@ -103,8 +127,8 @@ TouchAction AdjustTouchActionForElement(TouchAction touch_action,
       }
     }
   }
-  bool is_child_document = element && element == document_element &&
-                           element->GetDocument().LocalOwner();
+  bool is_child_document =
+      element == document_element && element->GetDocument().LocalOwner();
   if (scrolls_overflow || is_child_document) {
     return touch_action | TouchAction::kPan |
            TouchAction::kInternalPanXScrolls |
@@ -203,10 +227,10 @@ static EDisplay EquivalentBlockDisplay(EDisplay display) {
     case EDisplay::kRubyText:
       return EDisplay::kBlock;
     case EDisplay::kNone:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return display;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return EDisplay::kBlock;
 }
 
@@ -260,10 +284,10 @@ static EDisplay EquivalentInlineDisplay(EDisplay display) {
       return display;
 
     case EDisplay::kNone:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return display;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return EDisplay::kBlock;
 }
 
@@ -292,13 +316,10 @@ static bool IsAtMediaUAShadowBoundary(const Element* element) {
 // to manually stop text-decorations to apply to text inside media controls.
 static bool StopPropagateTextDecorations(const ComputedStyleBuilder& builder,
                                          const Element* element) {
-  const bool is_ruby_text = RuntimeEnabledFeatures::CssDisplayRubyEnabled()
-                                ? (builder.Display() == EDisplay::kRubyText)
-                                : IsA<HTMLRTElement>(element);
   return builder.IsDisplayReplacedType() ||
          IsAtMediaUAShadowBoundary(element) || builder.IsFloating() ||
          builder.HasOutOfFlowPosition() || IsOutermostSVGElement(element) ||
-         is_ruby_text;
+         builder.Display() == EDisplay::kRubyText;
 }
 
 static bool LayoutParentStyleForcesZIndexToCreateStackingContext(
@@ -390,7 +411,8 @@ static void AdjustStyleForMarker(ComputedStyleBuilder& builder,
     return;
   }
 
-  if (parent_style.MarkerShouldBeInside(parent_element)) {
+  if (parent_style.MarkerShouldBeInside(parent_element,
+                                        builder.GetDisplayStyle())) {
     Document& document = parent_element.GetDocument();
     auto margins =
         ListMarker::InlineMarginsForInside(document, builder, parent_style);
@@ -467,15 +489,6 @@ static void AdjustStyleForHTMLElement(ComputedStyleBuilder& builder,
     // comes from user intervention. crbug.com/1285327
     builder.SetEffectiveZoom(
         element.GetDocument().GetStyleResolver().InitialZoom());
-  }
-
-  if (IsA<HTMLRTElement>(element) &&
-      !RuntimeEnabledFeatures::CssDisplayRubyEnabled()) {
-    // Ruby text does not support float or position. This might change with
-    // evolution of the specification.
-    builder.SetPosition(EPosition::kStatic);
-    builder.SetFloating(EFloat::kNone);
-    return;
   }
 
   if (IsA<HTMLLegendElement>(element) &&
@@ -628,12 +641,32 @@ static void AdjustStyleForDisplay(ComputedStyleBuilder& builder,
 
   // We need to avoid to inlinify children of a <fieldset>, which creates a
   // dedicated LayoutObject and it assumes only block children.
-  if (RuntimeEnabledFeatures::RubyInlinifyEnabled() &&
-      layout_parent_style.InlinifiesChildren() &&
-      !builder.HasOutOfFlowPosition() && !builder.IsFloating() &&
+  if (layout_parent_style.InlinifiesChildren() &&
+      !builder.HasOutOfFlowPosition() &&
       !(element && IsA<HTMLFieldSetElement>(element->parentNode()))) {
-    builder.SetIsInInlinifyingDisplay();
-    builder.SetDisplay(EquivalentInlineDisplay(builder.Display()));
+    if (RuntimeEnabledFeatures::RubyLineBreakableEnabled() &&
+        builder.IsFloating()) {
+      builder.SetFloating(EFloat::kNone);
+      if (document) {
+        document->AddConsoleMessage(
+            MakeGarbageCollected<ConsoleMessage>(
+                ConsoleMessage::Source::kRendering,
+                ConsoleMessage::Level::kInfo,
+                "`float` property is not supported correctly inside an element "
+                "with `display: ruby` or `display: ruby-text`."),
+            true);
+      }
+    }
+    if (!builder.IsFloating()) {
+      builder.SetIsInInlinifyingDisplay();
+      builder.SetDisplay(EquivalentInlineDisplay(builder.Display()));
+    }
+  }
+
+  // TODO(332396355): Remove temporary blockifing of ::scroll-marker pseudo
+  // elements.
+  if (builder.StyleType() == kPseudoIdScrollMarker) {
+    builder.SetDisplay(EquivalentBlockDisplay(builder.Display()));
   }
 
   if (builder.Display() == EDisplay::kBlock) {
@@ -708,7 +741,12 @@ void StyleAdjuster::AdjustEffectiveTouchAction(
     bool is_svg_root) {
   TouchAction inherited_action = parent_style.EffectiveTouchAction();
 
-  bool is_replaced_canvas = element && IsA<HTMLCanvasElement>(element) &&
+  if (!element) {
+    builder.SetEffectiveTouchAction(TouchAction::kAuto & inherited_action);
+    return;
+  }
+
+  bool is_replaced_canvas = IsA<HTMLCanvasElement>(element) &&
                             element->GetExecutionContext() &&
                             element->GetExecutionContext()->CanExecuteScripts(
                                 kNotAboutToExecuteScript);
@@ -718,7 +756,7 @@ void StyleAdjuster::AdjustEffectiveTouchAction(
         IsA<HTMLImageElement>(element) || is_replaced_canvas);
   bool is_table_row_or_column = builder.IsDisplayTableRowOrColumnType();
   bool is_layout_object_needed =
-      element && element->LayoutObjectIsNeeded(builder.GetDisplayStyle());
+      element->LayoutObjectIsNeeded(builder.GetDisplayStyle());
 
   TouchAction element_touch_action = TouchAction::kAuto;
   // Touch actions are only supported by elements that support both the CSS
@@ -740,11 +778,6 @@ void StyleAdjuster::AdjustEffectiveTouchAction(
     if ((element_touch_action & TouchAction::kPan) != TouchAction::kNone) {
       element_touch_action |= TouchAction::kInternalNotWritable;
     }
-  }
-
-  if (!element) {
-    builder.SetEffectiveTouchAction(element_touch_action & inherited_action);
-    return;
   }
 
   bool is_child_document = element == element->GetDocument().documentElement();
@@ -840,7 +873,7 @@ static void AdjustStyleForInert(ComputedStyleBuilder& builder,
 }
 
 void StyleAdjuster::AdjustForForcedColorsMode(ComputedStyleBuilder& builder,
-                                              Element* element) {
+                                              Document& document) {
   if (!builder.InForcedColorsMode() ||
       builder.ForcedColorAdjust() != EForcedColorAdjust::kAuto) {
     return;
@@ -859,14 +892,12 @@ void StyleAdjuster::AdjustForForcedColorsMode(ComputedStyleBuilder& builder,
   }
 
   mojom::blink::ColorScheme color_scheme = mojom::blink::ColorScheme::kLight;
-  if (element &&
-      element->GetDocument().GetStyleEngine().GetPreferredColorScheme() ==
-          mojom::blink::PreferredColorScheme::kDark) {
+  if (document.GetStyleEngine().GetPreferredColorScheme() ==
+      mojom::blink::PreferredColorScheme::kDark) {
     color_scheme = mojom::blink::ColorScheme::kDark;
   }
   const ui::ColorProvider* color_provider =
-      element ? element->GetDocument().GetColorProviderForPainting(color_scheme)
-              : nullptr;
+      document.GetColorProviderForPainting(color_scheme);
 
   // Re-resolve some internal forced color properties whose initial
   // values are system colors. This is necessary to ensure we get
@@ -889,24 +920,6 @@ void StyleAdjuster::AdjustForForcedColorsMode(ComputedStyleBuilder& builder,
   }
 }
 
-void StyleAdjuster::AdjustForPrefersDefaultScrollbarStyles(
-    Element* element,
-    ComputedStyleBuilder& builder) {
-  if (!element) {
-    return;
-  }
-
-  Settings* settings = element->GetDocument().GetSettings();
-  if (!settings || !settings->GetPrefersDefaultScrollbarStyles()) {
-    return;
-  }
-
-  builder.SetScrollbarWidth(
-      ComputedStyleInitialValues::InitialScrollbarWidth());
-  builder.SetScrollbarColor(
-      ComputedStyleInitialValues::InitialScrollbarColor());
-}
-
 void StyleAdjuster::AdjustForSVGTextElement(ComputedStyleBuilder& builder) {
   builder.SetColumnGap(ComputedStyleInitialValues::InitialColumnGap());
   builder.SetColumnWidthInternal(
@@ -914,7 +927,7 @@ void StyleAdjuster::AdjustForSVGTextElement(ComputedStyleBuilder& builder) {
   builder.SetColumnRuleStyle(
       ComputedStyleInitialValues::InitialColumnRuleStyle());
   builder.SetColumnRuleWidthInternal(
-      LayoutUnit(ComputedStyleInitialValues::InitialColumnRuleWidth()));
+      ComputedStyleInitialValues::InitialColumnRuleWidth());
   builder.SetColumnRuleColor(
       ComputedStyleInitialValues::InitialColumnRuleColor());
   builder.SetInternalVisitedColumnRuleColor(
@@ -1084,7 +1097,7 @@ void StyleAdjuster::AdjustComputedStyle(StyleResolverState& state,
 
   // A subset of CSS properties should be forced at computed value time:
   // https://drafts.csswg.org/css-color-adjust-1/#forced-colors-properties.
-  AdjustForForcedColorsMode(builder, element);
+  AdjustForForcedColorsMode(builder, state.GetDocument());
 
   // Let the theme also have a crack at adjusting the style.
   LayoutTheme::GetTheme().AdjustStyle(element, builder);
@@ -1198,9 +1211,10 @@ void StyleAdjuster::AdjustComputedStyle(StyleResolverState& state,
     element->AdjustStyle(base::PassKey<StyleAdjuster>(), builder);
   }
 
-  if (element &&
+  // We need to use styled element here to ensure coverage for pseudo-elements.
+  if (state.GetStyledElement() &&
       ViewTransitionUtils::IsViewTransitionElementExcludingRootFromSupplement(
-          *element)) {
+          *state.GetStyledElement())) {
     builder.SetElementIsViewTransitionParticipant();
   }
 
@@ -1208,10 +1222,6 @@ void StyleAdjuster::AdjustComputedStyle(StyleResolverState& state,
           CSSContentVisibilityImpliesContainIntrinsicSizeAutoEnabled() &&
       builder.ContentVisibility() == EContentVisibility::kAuto) {
     builder.SetContainIntrinsicSizeAuto();
-  }
-
-  if (RuntimeEnabledFeatures::PreferDefaultScrollbarStylesEnabled()) {
-    AdjustForPrefersDefaultScrollbarStyles(element, builder);
   }
 }
 

@@ -45,7 +45,7 @@
 
 namespace dawn::native::d3d12 {
 
-PhysicalDevice::PhysicalDevice(Backend* backend, ComPtr<IDXGIAdapter3> hardwareAdapter)
+PhysicalDevice::PhysicalDevice(Backend* backend, ComPtr<IDXGIAdapter4> hardwareAdapter)
     : Base(backend, std::move(hardwareAdapter), wgpu::BackendType::D3D12) {}
 
 PhysicalDevice::~PhysicalDevice() {
@@ -59,6 +59,15 @@ bool PhysicalDevice::SupportsExternalImages() const {
 
 bool PhysicalDevice::SupportsFeatureLevel(FeatureLevel) const {
     return true;
+}
+
+uint32_t PhysicalDevice::GetAppliedShaderModelUnderToggles(const TogglesState& toggles) const {
+    uint32_t appliedShaderModel = GetDeviceInfo().highestSupportedShaderModel;
+    if ((appliedShaderModel >= 66) &&
+        toggles.IsEnabled(Toggle::D3D12DontUseShaderModel66OrHigher)) {
+        appliedShaderModel = 65;
+    }
+    return appliedShaderModel;
 }
 
 const D3D12DeviceInfo& PhysicalDevice::GetDeviceInfo() const {
@@ -92,21 +101,6 @@ MaybeError PhysicalDevice::InitializeImpl() {
     // overwrite it here.
     if (mAdapterType == wgpu::AdapterType::DiscreteGPU && mDeviceInfo.isUMA) {
         mAdapterType = wgpu::AdapterType::IntegratedGPU;
-    }
-
-    if (GetInstance()->IsAdapterBlocklistEnabled()) {
-#if DAWN_PLATFORM_IS(I386)
-        DAWN_INVALID_IF(
-            mDeviceInfo.shaderModel >= 60,
-            "D3D12 x86 SM6.0+ adapter is blocklisted. See https://crbug.com/tint/1753.");
-
-        DAWN_INVALID_IF(
-            gpu_info::IsNvidia(mVendorId),
-            "D3D12 NVIDIA x86 adapter is blocklisted. See https://crbug.com/dawn/1196.");
-#elif DAWN_PLATFORM_IS(ARM)
-        return DAWN_VALIDATION_ERROR(
-            "D3D12 on ARM CPU is blocklisted. See https://crbug.com/dawn/884.");
-#endif
     }
     return {};
 }
@@ -142,25 +136,40 @@ void PhysicalDevice::InitializeSupportedFeaturesImpl() {
     EnableFeature(Feature::SurfaceCapabilities);
     EnableFeature(Feature::Float32Filterable);
     EnableFeature(Feature::DualSourceBlending);
+    EnableFeature(Feature::Unorm16TextureFormats);
+    EnableFeature(Feature::Snorm16TextureFormats);
     EnableFeature(Feature::Norm16TextureFormats);
     EnableFeature(Feature::AdapterPropertiesMemoryHeaps);
     EnableFeature(Feature::AdapterPropertiesD3D);
     EnableFeature(Feature::MultiPlanarRenderTargets);
+    EnableFeature(Feature::R8UnormStorage);
+    EnableFeature(Feature::SharedBufferMemoryD3D12Resource);
+    EnableFeature(Feature::ShaderModuleCompilationOptions);
+    EnableFeature(Feature::StaticSamplers);
 
     if (AreTimestampQueriesSupported()) {
         EnableFeature(Feature::TimestampQuery);
         EnableFeature(Feature::ChromiumExperimentalTimestampQueryInsidePasses);
     }
 
-    // ShaderF16 features require DXC version being 1.4 or higher
+    // ShaderF16 features require DXC version being 1.4 or higher, shader model supporting 6.2 or
+    // higher, and native supporting F16 shader ops.
+    bool shaderF16Enabled = false;
     if (GetBackend()->IsDXCAvailableAndVersionAtLeast(1, 4, 1, 4) &&
-        mDeviceInfo.supportsShaderF16) {
+        mDeviceInfo.highestSupportedShaderModel >= 62 && mDeviceInfo.supportsNative16BitShaderOps) {
         EnableFeature(Feature::ShaderF16);
+        shaderF16Enabled = true;
     }
 
     // ChromiumExperimentalSubgroups requires SM >= 6.0 and capabilities flags.
     if (GetBackend()->IsDXCAvailable() && mDeviceInfo.supportsWaveOps) {
+        // TODO(349125474): Remove deprecated ChromiumExperimentalSubgroups.
         EnableFeature(Feature::ChromiumExperimentalSubgroups);
+        EnableFeature(Feature::Subgroups);
+        // D3D12 devices that support both native f16 and wave ops can support subgroups-f16.
+        if (shaderF16Enabled) {
+            EnableFeature(Feature::SubgroupsF16);
+        }
     }
 
     D3D12_FEATURE_DATA_FORMAT_SUPPORT bgra8unormFormatInfo = {};
@@ -380,17 +389,46 @@ MaybeError PhysicalDevice::InitializeSupportedLimitsImpl(CombinedLimits* limits)
 FeatureValidationResult PhysicalDevice::ValidateFeatureSupportedWithTogglesImpl(
     wgpu::FeatureName feature,
     const TogglesState& toggles) const {
-    // The feature `shader-f16` requires DXC 1.4 or higher. Note that DXC version is checked in
-    // InitializeSupportedFeaturesImpl.
-    if (feature == wgpu::FeatureName::ShaderF16 && !toggles.IsEnabled(Toggle::UseDXC)) {
-        return FeatureValidationResult(absl::StrFormat(
-            "Feature %s requires DXC for D3D12.", GetInstance()->GetFeatureInfo(feature)->name));
+    // Toggle states of adapters and devices can change whether DXC is used and which shader model
+    // version is applied. Validate features that requires DXC and/or specific shader model
+    // version here.
+    if (!toggles.IsEnabled(Toggle::UseDXC)) {
+        // Disable features that require DXC. Note that required DXC version for each feature is
+        // checked in InitializeSupportedFeaturesImpl.
+        switch (feature) {
+            case wgpu::FeatureName::ShaderF16:
+            case wgpu::FeatureName::Subgroups:
+            case wgpu::FeatureName::SubgroupsF16:
+            // TODO(349125474): Remove deprecated ChromiumExperimentalSubgroups.
+            case wgpu::FeatureName::ChromiumExperimentalSubgroups:
+                return FeatureValidationResult(
+                    absl::StrFormat("Feature %s requires DXC for D3D12.", feature));
+            default:
+                break;
+        }
     }
+    // Validate applied shader version.
+    switch (feature) {
+        // The feature `shader-f16` and `subgroups-f16` requires using shader model 6.2 or higher.
+        case wgpu::FeatureName::ShaderF16:
+        case wgpu::FeatureName::SubgroupsF16: {
+            if (!(GetAppliedShaderModelUnderToggles(toggles) >= 62)) {
+                return FeatureValidationResult(absl::StrFormat(
+                    "Feature %s requires shader model 6.2 or higher for D3D12.", feature));
+            }
+            break;
+        }
+        default:
+            break;
+    }
+
     return {};
 }
 
 MaybeError PhysicalDevice::InitializeDebugLayerFilters() {
-    if (!GetInstance()->IsBackendValidationEnabled()) {
+    // If the debug layer is not installed, return immediately.
+    ComPtr<ID3D12InfoQueue> infoQueue;
+    if (FAILED(mD3d12Device.As(&infoQueue))) {
         return {};
     }
 
@@ -470,10 +508,6 @@ MaybeError PhysicalDevice::InitializeDebugLayerFilters() {
     filter.DenyList.NumIDs = ARRAYSIZE(denyIds);
     filter.DenyList.pIDList = denyIds;
 
-    ComPtr<ID3D12InfoQueue> infoQueue;
-    DAWN_TRY(CheckHRESULT(mD3d12Device.As(&infoQueue),
-                          "D3D12 QueryInterface ID3D12Device to ID3D12InfoQueue"));
-
     // To avoid flooding the console, a storage-filter is also used to
     // prevent messages from getting logged.
     DAWN_TRY(
@@ -486,10 +520,6 @@ MaybeError PhysicalDevice::InitializeDebugLayerFilters() {
 }
 
 void PhysicalDevice::CleanUpDebugLayerFilters() {
-    if (!GetInstance()->IsBackendValidationEnabled()) {
-        return;
-    }
-
     // The device may not exist if this adapter failed to initialize.
     if (mD3d12Device == nullptr) {
         return;
@@ -505,16 +535,16 @@ void PhysicalDevice::CleanUpDebugLayerFilters() {
     infoQueue->PopStorageFilter();
 }
 
-void PhysicalDevice::SetupBackendAdapterToggles(TogglesState* adapterToggles) const {
+void PhysicalDevice::SetupBackendAdapterToggles(dawn::platform::Platform* platform,
+                                                TogglesState* adapterToggles) const {
     // Check for use_dxc toggle
 #ifdef DAWN_USE_BUILT_DXC
     // Default to using DXC. If shader model < 6.0, though, we must use FXC.
-    if (GetDeviceInfo().shaderModel <= 60) {
+    if (GetDeviceInfo().highestSupportedShaderModel < 60) {
         adapterToggles->ForceSet(Toggle::UseDXC, false);
     }
 
-    bool useDxc =
-        GetInstance()->GetPlatform()->IsFeatureEnabled(dawn::platform::Features::kWebGPUUseDXC);
+    bool useDxc = platform->IsFeatureEnabled(dawn::platform::Features::kWebGPUUseDXC);
     adapterToggles->Default(Toggle::UseDXC, useDxc);
 #else
     // Default to using FXC
@@ -523,9 +553,33 @@ void PhysicalDevice::SetupBackendAdapterToggles(TogglesState* adapterToggles) co
     }
     adapterToggles->Default(Toggle::UseDXC, false);
 #endif
+
+    uint32_t deviceId = GetDeviceId();
+    uint32_t vendorId = GetVendorId();
+
+    // On Intel Gen12 GPU, using shader model 6.6 will cause unexpected result when
+    // adding/subtracting I32/U32 vector/scalar with vector/scalar in constant initialized array.
+    // See https://crbug.com/tint/2189 and https://crbug.com/dawn/2470 for more information.
+    if (gpu_info::IsIntelGen12HP(vendorId, deviceId) ||
+        gpu_info::IsIntelGen12LP(vendorId, deviceId)) {
+        adapterToggles->Default(Toggle::D3D12DontUseShaderModel66OrHigher, true);
+    }
+
+    // Workaround for textureDimensions() produces incorrect results with shader model 6.6 on Intel
+    // D3D driver > 27.20.100.8935 and < 27.20.100.9684 on Intel Gen9, Gen9.5 and Gen11 GPUs.
+    // See https://crbug.com/dawn/2448 for more information.
+    if (gpu_info::IsIntelGen9(vendorId, deviceId) || gpu_info::IsIntelGen11(vendorId, deviceId)) {
+        if (gpu_info::CompareWindowsDriverVersion(vendorId, GetDriverVersion(),
+                                                  {27, 20, 100, 8935}) == 1 &&
+            gpu_info::CompareWindowsDriverVersion(vendorId, GetDriverVersion(),
+                                                  {27, 20, 100, 9684}) == -1) {
+            adapterToggles->ForceSet(Toggle::D3D12DontUseShaderModel66OrHigher, true);
+        }
+    }
 }
 
-void PhysicalDevice::SetupBackendDeviceToggles(TogglesState* deviceToggles) const {
+void PhysicalDevice::SetupBackendDeviceToggles(dawn::platform::Platform* platform,
+                                               TogglesState* deviceToggles) const {
     const bool useResourceHeapTier2 = (GetDeviceInfo().resourceHeapTier >= 2);
     deviceToggles->Default(Toggle::UseD3D12ResourceHeapTier2, useResourceHeapTier2);
     deviceToggles->Default(Toggle::UseD3D12RenderPass, GetDeviceInfo().supportsRenderPass);
@@ -577,13 +631,17 @@ void PhysicalDevice::SetupBackendDeviceToggles(TogglesState* deviceToggles) cons
     deviceToggles->Default(Toggle::D3D12CreateNotZeroedHeap,
                            GetDeviceInfo().supportsHeapFlagCreateNotZeroed);
 
-    if (!GetDeviceInfo().supportsPacked4x8IntegerDotProduct ||
+    // Native support of packed 4x8 integer dot product required shader model 6.4 or higher, and
+    // DXC 1.4 or higher.
+    if (!(GetAppliedShaderModelUnderToggles(*deviceToggles) >= 64) ||
         !deviceToggles->IsEnabled(Toggle::UseDXC) ||
         !GetBackend()->IsDXCAvailableAndVersionAtLeast(1, 4, 1, 4)) {
         deviceToggles->ForceSet(Toggle::PolyFillPacked4x8DotProduct, true);
     }
 
-    if (!GetDeviceInfo().supportsPackUnpack4x8Intrinsics ||
+    // Native support of pack/unpack 4x8 intrinsics required shader model 6.6 or higher, and
+    // DXC 1.4 or higher.
+    if (!(GetAppliedShaderModelUnderToggles(*deviceToggles) >= 66) ||
         !deviceToggles->IsEnabled(Toggle::UseDXC) ||
         !GetBackend()->IsDXCAvailableAndVersionAtLeast(1, 6, 1, 6)) {
         deviceToggles->ForceSet(Toggle::D3D12PolyFillPackUnpack4x8, true);
@@ -710,13 +768,31 @@ void PhysicalDevice::SetupBackendDeviceToggles(TogglesState* deviceToggles) cons
     if (gpu_info::IsIntel(vendorId) && !deviceToggles->IsEnabled(Toggle::UseDXC)) {
         deviceToggles->Default(Toggle::D3D12PolyfillReflectVec2F32, true);
     }
+
+    // Currently this workaround is needed on old Intel drivers and newer version of Windows 11.
+    // See http://crbug.com/dawn/2308 for more information.
+    if (gpu_info::IsIntel(vendorId)) {
+        constexpr uint64_t kAffectedMinimumWindowsBuildNumber = 25957u;
+        const gpu_info::DriverVersion kAffectedMaximumDriverVersion = {27, 20, 100, 9664};
+        if (GetBackend()->GetFunctions()->GetWindowsBuildNumber() >=
+                kAffectedMinimumWindowsBuildNumber &&
+            gpu_info::CompareWindowsDriverVersion(vendorId, GetDriverVersion(),
+                                                  kAffectedMaximumDriverVersion) <= 0) {
+            deviceToggles->Default(Toggle::DisableResourceSuballocation, true);
+        }
+    }
+
+    if (gpu_info::IsNvidia(vendorId)) {
+        deviceToggles->Default(Toggle::D3D12ForceStencilComponentReplicateSwizzle, true);
+    }
 }
 
 ResultOrError<Ref<DeviceBase>> PhysicalDevice::CreateDeviceImpl(
     AdapterBase* adapter,
     const UnpackedPtr<DeviceDescriptor>& descriptor,
-    const TogglesState& deviceToggles) {
-    return Device::Create(adapter, descriptor, deviceToggles);
+    const TogglesState& deviceToggles,
+    Ref<DeviceBase::DeviceLostEvent>&& lostEvent) {
+    return Device::Create(adapter, descriptor, deviceToggles, std::move(lostEvent));
 }
 
 // Resets the backend device and creates a new one. If any D3D12 objects belonging to the
@@ -767,7 +843,8 @@ void PhysicalDevice::PopulateBackendProperties(UnpackedPtr<AdapterProperties>& p
         }
     }
     if (auto* d3dProperties = properties.Get<AdapterPropertiesD3D>()) {
-        d3dProperties->shaderModel = GetDeviceInfo().shaderModel;
+        // Report highest supported shader model version, instead of actual applied version.
+        d3dProperties->shaderModel = GetDeviceInfo().highestSupportedShaderModel;
     }
 }
 

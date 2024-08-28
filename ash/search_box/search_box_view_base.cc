@@ -89,7 +89,7 @@ void SetupLabelView(views::Label* label,
                     gfx::Insets border_insets,
                     ui::ColorId color_id) {
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  label->GetViewAccessibility().OverrideIsIgnored(true);
+  label->GetViewAccessibility().SetIsIgnored(true);
   label->SetBackgroundColor(SK_ColorTRANSPARENT);
   label->SetAutoColorReadabilityEnabled(false);
   label->SetEnabledColorId(color_id);
@@ -213,7 +213,8 @@ class SearchBoxTextfield : public views::Textfield {
   ~SearchBoxTextfield() override = default;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override {
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
     // Overridden so the BoxLayoutView 'text_container_' can properly layout
     // the search box and ghost text.
     const std::u16string& text = GetText();
@@ -243,16 +244,16 @@ class SearchBoxTextfield : public views::Textfield {
     // alert, so we ignored the search box in those cases. Now reset the flag
     // here.
     auto& accessibility = GetViewAccessibility();
-    if (accessibility.IsIgnored()) {
-      accessibility.OverrideIsIgnored(false);
+    if (accessibility.GetIsIgnored()) {
+      accessibility.SetIsIgnored(false);
       NotifyAccessibilityEvent(ax::mojom::Event::kTreeChanged, true);
     }
   }
 
   void OnGestureEvent(ui::GestureEvent* event) override {
     switch (event->type()) {
-      case ui::ET_GESTURE_LONG_PRESS:
-      case ui::ET_GESTURE_LONG_TAP:
+      case ui::EventType::kGestureLongPress:
+      case ui::EventType::kGestureLongTap:
         // Prevent Long Press from being handled at all, if inactive
         if (!search_box_view_->is_search_box_active()) {
           event->SetHandled();
@@ -514,7 +515,7 @@ views::ImageButton* SearchBoxViewBase::CreateFilterButton(
   filter_button_ = filter_and_close_button_container_->AddChildView(
       std::make_unique<SearchBoxImageButton>(button_callback));
   filter_button_->GetViewAccessibility().SetRole(ax::mojom::Role::kPopUpButton);
-  filter_button_->GetViewAccessibility().OverrideHasPopup(
+  filter_button_->GetViewAccessibility().SetHasPopup(
       ax::mojom::HasPopup::kMenu);
   return filter_button_;
 }
@@ -627,8 +628,10 @@ void SearchBoxViewBase::SetSearchBoxActive(bool active,
 
   UpdateSearchBoxBorder();
   // Keep the current keyboard visibility if the user already started typing.
-  if (event_type != ui::ET_KEY_PRESSED && event_type != ui::ET_KEY_RELEASED)
+  if (event_type != ui::EventType::kKeyPressed &&
+      event_type != ui::EventType::kKeyReleased) {
     UpdateKeyboardVisibility();
+  }
   UpdateButtonsVisibility();
   OnSearchBoxActiveChanged(active);
 
@@ -645,13 +648,18 @@ bool SearchBoxViewBase::OnTextfieldEvent(ui::EventType type) {
   return true;
 }
 
-gfx::Size SearchBoxViewBase::CalculatePreferredSize() const {
-  const int iph_height =
-      iph_view_tracker_.view()
-          ? iph_view_tracker_.view()->GetPreferredSize().height()
-          : 0;
+gfx::Size SearchBoxViewBase::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  views::SizeBounds content_available_size(available_size);
+  gfx::Insets insets = GetInsets();
+  content_available_size.Enlarge(-insets.width(), -insets.height());
+  const int iph_height = iph_view_tracker_.view()
+                             ? iph_view_tracker_.view()
+                                   ->GetPreferredSize(content_available_size)
+                                   .height()
+                             : 0;
   return gfx::Size(kSearchBoxPreferredWidth,
-                   kSearchBoxPreferredHeight + iph_height);
+                   kSearchBoxPreferredHeight + insets.height() + iph_height);
 }
 
 void SearchBoxViewBase::OnEnabledChanged() {
@@ -808,7 +816,7 @@ void SearchBoxViewBase::ContentsChanged(views::Textfield* sender,
   search_box_->RequestFocus();
   HandleQueryChange(new_contents, /*initiated_by_user=*/true);
   if (!new_contents.empty())
-    SetSearchBoxActive(true, ui::ET_KEY_PRESSED);
+    SetSearchBoxActive(true, ui::EventType::kKeyPressed);
   UpdateButtonsVisibility();
 }
 
@@ -840,8 +848,8 @@ void SearchBoxViewBase::SetShowAssistantButton(bool show) {
 }
 
 void SearchBoxViewBase::HandleSearchBoxEvent(ui::LocatedEvent* located_event) {
-  if (located_event->type() == ui::ET_MOUSE_PRESSED ||
-      located_event->type() == ui::ET_GESTURE_TAP) {
+  if (located_event->type() == ui::EventType::kMousePressed ||
+      located_event->type() == ui::EventType::kGestureTap) {
     const bool event_is_in_searchbox_bounds =
         GetBoundsInScreen().Contains(located_event->root_location());
     if (!event_is_in_searchbox_bounds)

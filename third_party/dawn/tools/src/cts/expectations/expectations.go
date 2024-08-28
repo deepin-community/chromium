@@ -147,6 +147,13 @@ func (c Content) String() string {
 	return sb.String()
 }
 
+// Format sorts each chunk of the Content in place.
+func (c *Content) Format() {
+	for _, chunk := range c.Chunks {
+		chunk.Expectations.Sort()
+	}
+}
+
 // IsCommentOnly returns true if the Chunk contains comments and no expectations.
 func (c Chunk) IsCommentOnly() bool {
 	return len(c.Comments) > 0 && len(c.Expectations) == 0
@@ -188,23 +195,21 @@ func (e Expectation) Clone() Expectation {
 //	 1 if a should come after b
 //	 0 if a and b are identical
 //
-// Note: Only comparing bug, query, and tags (in that order).
-func (a Expectation) Compare(b Expectation) int {
-	switch strings.Compare(a.Bug, b.Bug) {
+// Note: Only comparing bug, tags, and query (in that order).
+func (e Expectation) Compare(b Expectation) int {
+	switch strings.Compare(e.Bug, b.Bug) {
 	case -1:
 		return -1
 	case 1:
 		return 1
 	}
-	switch strings.Compare(a.Query, b.Query) {
+	switch strings.Compare(result.TagsToString(e.Tags), result.TagsToString(b.Tags)) {
 	case -1:
 		return -1
 	case 1:
 		return 1
 	}
-	aTag := result.TagsToString(a.Tags)
-	bTag := result.TagsToString(b.Tags)
-	switch strings.Compare(aTag, bTag) {
+	switch strings.Compare(e.Query, b.Query) {
 	case -1:
 		return -1
 	case 1:
@@ -213,6 +218,7 @@ func (a Expectation) Compare(b Expectation) int {
 	return 0
 }
 
-func (l Expectations) Sort() {
-	sort.Slice(l, func(i, j int) bool { return l[i].Compare(l[j]) < 0 })
+// Sort sorts the expectations in-place
+func (e Expectations) Sort() {
+	sort.Slice(e, func(i, j int) bool { return e[i].Compare(e[j]) < 0 })
 }

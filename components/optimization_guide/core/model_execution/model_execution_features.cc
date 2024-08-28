@@ -8,6 +8,8 @@
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/notreached.h"
+#include "components/optimization_guide/core/model_execution/feature_keys.h"
+#include "components/optimization_guide/core/optimization_guide_features.h"
 
 namespace optimization_guide {
 namespace features {
@@ -23,17 +25,28 @@ BASE_FEATURE(kTabOrganizationSettingsVisibility,
 BASE_FEATURE(kWallpaperSearchSettingsVisibility,
              "WallpaperSearchSettingsVisibility",
              base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kHistorySearchSettingsVisibility,
+             "HistorySearchSettingsVisibility",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+const base::FeatureParam<std::string> kPerformanceClassListForHistorySearch(
+    &kHistorySearchSettingsVisibility,
+    "PerformanceClassListForHistorySearch",
+    "*");
 
 // Graduation features.
-BASE_FEATURE(kComposeGraduatedFromSettings,
+
+// Note: ComposeGraduated is enabled by default because the feature is
+// country-restricted at runtime.
+BASE_FEATURE(kComposeGraduated,
              "ComposeGraduated",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-BASE_FEATURE(kTabOrganizationGraduatedFromSettings,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kTabOrganizationGraduated,
              "TabOrganizationGraduated",
              base::FEATURE_DISABLED_BY_DEFAULT);
-BASE_FEATURE(kWallpaperSearchGraduatedFromSettings,
+BASE_FEATURE(kWallpaperSearchGraduated,
              "WallpaperSearchGraduated",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kExperimentalAIIPHPromoRampUp,
              "ExperimentalAIIPHPromoRampUp",
@@ -43,27 +56,35 @@ BASE_FEATURE(kModelExecutionCapabilityDisable,
              "ModelExecutionCapabilityDisable",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-bool IsGraduatedFeature(proto::ModelExecutionFeature feature) {
+BASE_FEATURE(kModelAdaptationCompose,
+             "ModelAdaptationCompose",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kOnDeviceModelTestFeature,
+             "OnDeviceModelTestFeature",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kOnDeviceModelPromptApiFeature,
+             "OnDeviceModelPromptApiFeature",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsGraduatedFeature(UserVisibleFeatureKey feature) {
   bool is_graduated = false;
   switch (feature) {
     // Actual features.
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_COMPOSE:
-      is_graduated =
-          base::FeatureList::IsEnabled(kComposeGraduatedFromSettings);
+    case UserVisibleFeatureKey::kCompose:
+      is_graduated = base::FeatureList::IsEnabled(kComposeGraduated);
       break;
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION:
-      is_graduated =
-          base::FeatureList::IsEnabled(kTabOrganizationGraduatedFromSettings);
+    case UserVisibleFeatureKey::kTabOrganization:
+      is_graduated = base::FeatureList::IsEnabled(kTabOrganizationGraduated);
       break;
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH:
-      is_graduated =
-          base::FeatureList::IsEnabled(kWallpaperSearchGraduatedFromSettings);
+    case UserVisibleFeatureKey::kWallpaperSearch:
+      is_graduated = base::FeatureList::IsEnabled(kWallpaperSearchGraduated);
       break;
-    // Non-features.
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST:
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UNSPECIFIED:
-      NOTREACHED();
-      return false;
+    case UserVisibleFeatureKey::kHistorySearch:
+      // History search is currently planned to always be opt-in.
+      is_graduated = false;
+      break;
   }
   DCHECK(!is_graduated ||
          !base::FeatureList::IsEnabled(
@@ -74,45 +95,111 @@ bool IsGraduatedFeature(proto::ModelExecutionFeature feature) {
 }
 
 const base::Feature* GetFeatureToUseToCheckSettingsVisibility(
-    proto::ModelExecutionFeature feature) {
+    UserVisibleFeatureKey feature) {
   switch (feature) {
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_COMPOSE:
+    case UserVisibleFeatureKey::kCompose:
       return &kComposeSettingsVisibility;
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION:
+    case UserVisibleFeatureKey::kTabOrganization:
       return &kTabOrganizationSettingsVisibility;
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH:
+    case UserVisibleFeatureKey::kWallpaperSearch:
       return &kWallpaperSearchSettingsVisibility;
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST:
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UNSPECIFIED:
-      NOTREACHED();
-      return nullptr;
+    case UserVisibleFeatureKey::kHistorySearch:
+      return &kHistorySearchSettingsVisibility;
   }
 }
 
-base::flat_set<proto::ModelExecutionFeature>
-GetAllowedFeaturesForUnsignedUser() {
-  std::vector<proto::ModelExecutionFeature> allowed_features;
-  for (int i = proto::ModelExecutionFeature_MIN;
-       i <= proto::ModelExecutionFeature_MAX; ++i) {
-    proto::ModelExecutionFeature model_execution_feature =
-        static_cast<proto::ModelExecutionFeature>(i);
-    if (model_execution_feature ==
-        proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UNSPECIFIED) {
-      continue;
-    }
-    if (model_execution_feature ==
-        proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST) {
-      continue;
-    }
-    const auto* feature =
-        GetFeatureToUseToCheckSettingsVisibility(model_execution_feature);
+base::flat_set<UserVisibleFeatureKey> GetAllowedFeaturesForUnsignedUser() {
+  std::vector<UserVisibleFeatureKey> allowed_features;
+  for (auto key : kAllUserVisibleFeatureKeys) {
+    const auto* feature = GetFeatureToUseToCheckSettingsVisibility(key);
     if (GetFieldTrialParamByFeatureAsBool(*feature, "allow_unsigned_user",
                                           false)) {
-      allowed_features.push_back(model_execution_feature);
+      allowed_features.push_back(key);
     }
   }
   return allowed_features;
 }
+
+bool ShouldEnableFeatureWhenMainToggleOn(UserVisibleFeatureKey feature) {
+  const auto* visibility_feature =
+      GetFeatureToUseToCheckSettingsVisibility(feature);
+  return (GetFieldTrialParamByFeatureAsBool(
+      *visibility_feature, "enable_feature_when_main_toggle_on", true));
+}
+
+// LINT.IfChange(IsOnDeviceModelEnabled)
+//
+// On-device supported features should return true.
+// `GetOnDeviceFeatureRecentlyUsedPref` should return a valid pref for each
+// on-device feature.
+bool IsOnDeviceModelEnabled(ModelBasedCapabilityKey feature) {
+  switch (feature) {
+    case ModelBasedCapabilityKey::kCompose:
+      return base::FeatureList::IsEnabled(
+          optimization_guide::features::kOptimizationGuideComposeOnDeviceEval);
+    case ModelBasedCapabilityKey::kTest:
+      return base::FeatureList::IsEnabled(kOnDeviceModelTestFeature);
+    case ModelBasedCapabilityKey::kTabOrganization:
+    case ModelBasedCapabilityKey::kWallpaperSearch:
+    case ModelBasedCapabilityKey::kTextSafety:
+      return false;
+    case ModelBasedCapabilityKey::kHistorySearch:
+    case ModelBasedCapabilityKey::kPromptApi:
+      return true;
+  }
+}
+// LINT.ThenChange(model_execution_prefs.cc:GetOnDeviceFeatureRecentlyUsedPref,
+//                 IsOnDeviceModelAdaptationEnabled,
+//                 GetOptimizationTargetForModelAdaptation)
+
+// LINT.IfChange(IsOnDeviceModelAdaptationEnabled)
+//
+// On-device model adaptation features should return true.
+// `GetOptimizationTargetForModelAdaptation` should return a valid optimization
+// target for each on-device model adaptation feature, that will be used to
+// download the adaptation model.
+bool IsOnDeviceModelAdaptationEnabled(ModelBasedCapabilityKey feature) {
+  switch (feature) {
+    case ModelBasedCapabilityKey::kCompose:
+      return base::FeatureList::IsEnabled(kModelAdaptationCompose);
+    case ModelBasedCapabilityKey::kTest:
+      return base::GetFieldTrialParamByFeatureAsBool(
+          kOnDeviceModelTestFeature, "enable_adaptation", false);
+    case ModelBasedCapabilityKey::kPromptApi:
+      return base::GetFieldTrialParamByFeatureAsBool(
+          kOnDeviceModelPromptApiFeature, "enable_adaptation", false);
+    case ModelBasedCapabilityKey::kHistorySearch:
+      // TODO(crbug.com/325108985): Update to true once we onboard the model.
+      return false;
+    case ModelBasedCapabilityKey::kTabOrganization:
+    case ModelBasedCapabilityKey::kWallpaperSearch:
+    case ModelBasedCapabilityKey::kTextSafety:
+      return false;
+  }
+}
+// LINT.ThenChange(IsOnDeviceModelEnabled)
+
+// LINT.IfChange(GetOptimizationTargetForModelAdaptation)
+proto::OptimizationTarget GetOptimizationTargetForModelAdaptation(
+    ModelBasedCapabilityKey feature) {
+  switch (feature) {
+    case ModelBasedCapabilityKey::kCompose:
+      return proto::OPTIMIZATION_TARGET_COMPOSE;
+    case ModelBasedCapabilityKey::kTest:
+      return proto::OPTIMIZATION_TARGET_MODEL_VALIDATION;
+    // TODO(crbug.com/325108985): Update once we onboard the model.
+    case ModelBasedCapabilityKey::kHistorySearch:
+      NOTREACHED_IN_MIGRATION();
+      break;
+    case ModelBasedCapabilityKey::kPromptApi:
+    case ModelBasedCapabilityKey::kTabOrganization:
+    case ModelBasedCapabilityKey::kWallpaperSearch:
+    case ModelBasedCapabilityKey::kTextSafety:
+      NOTREACHED_IN_MIGRATION();
+  }
+  return proto::OPTIMIZATION_TARGET_UNKNOWN;
+}
+// LINT.ThenChange(IsOnDeviceModelEnabled)
 
 }  // namespace internal
 

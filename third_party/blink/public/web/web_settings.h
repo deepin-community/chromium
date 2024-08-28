@@ -141,6 +141,8 @@ class WebSettings {
                                     UScriptCode = USCRIPT_COMMON) = 0;
   virtual void SetMathFontFamily(const WebString&,
                                  UScriptCode = USCRIPT_COMMON) = 0;
+  // Osaka font should be represented as "Osaka", not "Osaka-Mono" in the
+  // first argument.
   virtual void SetFixedFontFamily(const WebString&,
                                   UScriptCode = USCRIPT_COMMON) = 0;
   virtual void SetNetworkQuietTimeout(double timeout) = 0;
@@ -268,11 +270,14 @@ class WebSettings {
   virtual void SetLazyLoadingImageMarginPx3G(int) = 0;
   virtual void SetLazyLoadingImageMarginPx4G(int) = 0;
   virtual void SetForceDarkModeEnabled(bool) = 0;
+  virtual void SetInForcedColors(bool) = 0;
+  virtual void SetIsForcedColorsDisabled(bool) = 0;
+  virtual void SetPreferredRootScrollbarColorScheme(
+      blink::mojom::PreferredColorScheme) = 0;
   virtual void SetPreferredColorScheme(blink::mojom::PreferredColorScheme) = 0;
   virtual void SetPreferredContrast(mojom::PreferredContrast) = 0;
   virtual void SetNavigationControls(NavigationControls) = 0;
   virtual void SetAriaModalPrunesAXTree(bool) = 0;
-  virtual void SetUseAXMenuList(bool) = 0;
   virtual void SetSelectionClipboardBufferAvailable(bool) = 0;
   virtual void SetAccessibilityIncludeSvgGElement(bool) = 0;
   virtual void SetWebXRImmersiveArAllowed(bool) = 0;

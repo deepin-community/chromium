@@ -124,6 +124,11 @@ class EnrollmentScreen
                           weak_ptr_factory_.GetWeakPtr());
   }
 
+  void set_tpm_updater_for_testing(
+      base::RepeatingClosure tpm_updater_for_testing) {
+    tpm_updater_ = std::move(tpm_updater_for_testing);
+  }
+
   // Changes network state. Useful for simulating network issues in tests.
   void SetNetworkStateForTesting(const NetworkState* state);
 
@@ -139,8 +144,7 @@ class EnrollmentScreen
   ScreenExitCallback* exit_callback() { return &exit_callback_; }
 
  private:
-  friend class EnrollmentScreenUnitTest;
-  friend class AutomaticReenrollmentScreenUnitTest;
+  friend class EnrollmentScreenBaseTest;
   friend class test::EnrollmentHelperMixin;
 
   FRIEND_TEST_ALL_PREFIXES(AttestationAuthEnrollmentScreenTest, TestCancel);
@@ -156,6 +160,7 @@ class EnrollmentScreen
   enum Auth {
     AUTH_ATTESTATION,
     AUTH_OAUTH,
+    AUTH_ENROLLMENT_TOKEN,
   };
 
   // Updates view GAIA flow type which is used to modify visual appearance
@@ -191,6 +196,8 @@ class EnrollmentScreen
 
   // Do attestation based enrollment.
   void AuthenticateUsingAttestation();
+
+  void AuthenticateUsingEnrollmentToken();
 
   // Shows the interactive screen. Resets auth then shows the signin screen.
   void ShowInteractiveScreen();
@@ -249,12 +256,16 @@ class EnrollmentScreen
   raw_ptr<ErrorScreen> error_screen_ = nullptr;
   ScreenExitCallback exit_callback_;
   std::optional<TpmStatusCallback> tpm_ownership_callback_for_testing_;
-  policy::EnrollmentConfig config_;
-  policy::EnrollmentConfig enrollment_config_;
-  policy::LicenseType license_type_to_use_ = policy::LicenseType::kEnterprise;
+  // Evaluates device policy TPMFirmwareUpdateSettings and updates the TPM if
+  // the policy is set to "auto-update vulnerable TPM firmware at enrollment".
+  base::RepeatingClosure tpm_updater_;
+  policy::EnrollmentConfig prescribed_config_;
+  policy::EnrollmentConfig effective_config_;
   ErrorScreensHistogramHelper histogram_helper_;
 
   // 'Current' and 'Next' authentication mechanisms to be used.
+  // TODO(b/332529631): Consider moving these values and the corresponding enum
+  // to EnrollmentConfig.
   Auth current_auth_ = AUTH_OAUTH;
   Auth next_auth_ = AUTH_OAUTH;
 
@@ -267,9 +278,6 @@ class EnrollmentScreen
   int install_state_retries_ = 0;
   // Timer for install attribute to resolve.
   base::OneShotTimer wait_state_timer_;
-
-  // Whether the ongoing flow belongs to an enterprise rollback.
-  bool is_rollback_flow_ = false;
 
   // Network state informer used to keep signin screen up.
   scoped_refptr<NetworkStateInformer> network_state_informer_;

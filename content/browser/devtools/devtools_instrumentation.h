@@ -68,7 +68,6 @@ class FrameTreeNode;
 class NavigationHandle;
 class NavigationRequest;
 class NavigationThrottle;
-class Portal;
 class RenderFrameHostImpl;
 class RenderProcessHost;
 class SharedWorkerHost;
@@ -246,6 +245,7 @@ void OnInterestGroupAuctionNetworkRequestCreated(
     const std::vector<std::string>& devtools_auction_ids);
 
 bool ShouldBypassCSP(const NavigationRequest& nav_request);
+bool ShouldBypassCertificateErrors();
 
 void ApplyNetworkOverridesForDownload(
     RenderFrameHostImpl* rfh,
@@ -266,6 +266,8 @@ void WillInitiatePrerender(FrameTree& frame_tree);
 void DidActivatePrerender(const NavigationRequest& nav_request,
                           const std::optional<base::UnguessableToken>&
                               initiator_devtools_navigation_token);
+
+void DidUpdatePolicyContainerHost(FrameTreeNode* ftn);
 
 void DidUpdatePrefetchStatus(
     FrameTreeNode* ftn,
@@ -360,12 +362,6 @@ bool HandleCertificateError(WebContents* web_contents,
                             const GURL& request_url,
                             CertErrorCallback callback);
 
-void PortalAttached(RenderFrameHostImpl* render_frame_host_impl);
-void PortalDetached(RenderFrameHostImpl* render_frame_host_impl);
-// This receives the _old_ portal being activated just before actual
-// tab contents is swapped by the embedder.
-void PortalActivated(Portal& portal);
-
 void FencedFrameCreated(
     base::SafeRef<RenderFrameHostImpl> owner_render_frame_host,
     FencedFrame* fenced_frame);
@@ -376,7 +372,8 @@ void ReportCookieIssue(
     const GURL& url,
     const net::SiteForCookies& site_for_cookies,
     blink::mojom::CookieOperation operation,
-    const std::optional<std::string>& devtools_request_id);
+    const std::optional<std::string>& devtools_request_id,
+    const std::optional<std::string>& devtools_issue_id);
 
 // This function works similar to RenderFrameHostImpl::AddInspectorIssue, in
 // that it reports an InspectorIssue to DevTools clients. The difference is that
@@ -475,7 +472,8 @@ void DidCloseFedCmDialog(RenderFrameHost& render_frame_host);
 // `FencedFrameReporter`.
 void OnFencedFrameReportRequestSent(int initiator_frame_tree_node_id,
                                     const std::string& devtools_request_id,
-                                    network::ResourceRequest& request);
+                                    network::ResourceRequest& request,
+                                    const std::string& event_data);
 void OnFencedFrameReportResponseReceived(
     int initiator_frame_tree_node_id,
     const std::string& devtools_request_id,

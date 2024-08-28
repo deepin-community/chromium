@@ -19,6 +19,7 @@
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/link.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/layout_provider.h"
@@ -68,15 +69,17 @@ ForceInstalledDeprecatedAppsDialogView::ForceInstalledDeprecatedAppsDialogView(
       l10n_util::GetStringUTF16(IDS_DEPRECATED_APPS_LEARN_MORE)));
   learn_more->SetCallback(base::BindRepeating(
       [](content::WebContents* web_contents, const ui::Event& event) {
-        web_contents->OpenURL(content::OpenURLParams(
-            GURL(chrome::kChromeAppsDeprecationLearnMoreURL),
-            content::Referrer(),
-            ui::DispositionFromEventFlags(
-                event.flags(), WindowOpenDisposition::NEW_FOREGROUND_TAB),
-            ui::PAGE_TRANSITION_LINK, /*is_renderer_initiated=*/false));
+        web_contents->OpenURL(
+            content::OpenURLParams(
+                GURL(chrome::kChromeAppsDeprecationLearnMoreURL),
+                content::Referrer(),
+                ui::DispositionFromEventFlags(
+                    event.flags(), WindowOpenDisposition::NEW_FOREGROUND_TAB),
+                ui::PAGE_TRANSITION_LINK, /*is_renderer_initiated=*/false),
+            /*navigation_handle_callback=*/{});
       },
       web_contents));
-  learn_more->SetAccessibleName(
+  learn_more->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_DEPRECATED_APPS_LEARN_MORE_AX_LABEL));
   learn_more->SetHorizontalAlignment(gfx::ALIGN_LEFT);
 }

@@ -33,7 +33,7 @@ for the complete command-line used in the current instance.
 
 ## Windows
 
-1.  Exit any running-instance of Chrome.
+1.  Exit any running-instance of Chrome (e.g., navigate to `chrome://quit`).
 2.  Right click on your "Chrome" shortcut.
 3.  Choose properties.
 4.  At the end of your "Target:" line add the command-line switch. For
@@ -47,7 +47,7 @@ for the complete command-line used in the current instance.
 
 ## macOS
 
-1.  Quit any running instance of Chrome.
+1.  Quit any running instance of Chrome (by navigating to `chrome://quit`).
 2.  Run your favorite Terminal application.
 3.  In the terminal, run commands like below (replacing
             "--remote-debugging-port=9222" with any other command-line switch you
@@ -61,7 +61,7 @@ for the complete command-line used in the current instance.
 
 ## Linux
 
-1.  Quit any running instance of Chrome.
+1.  Quit any running instance of Chrome (e.g., navigate to `chrome://quit`).
 2.  Run your favorite terminal emulator.
 3.  In the terminal, run commands like below (replacing
             "--remote-debugging-port=9222" with any other command-line switch you
@@ -161,7 +161,7 @@ tree](https://chromium.googlesource.com/chromium/src/+/HEAD/android_webview/docs
 
 1.  Put the device into [dev mode, disable rootfs verification, and
             bring up a command
-            prompt](https://chromium.googlesource.com/chromiumos/docs/+/HEAD/developer_mode.md).
+            prompt](/chromium-os/developer-library/guides/device/developer-mode/).
 2.  Modify /etc/chrome_dev.conf (read the comments in the file for more
             details).
 3.  Restart the UI via:

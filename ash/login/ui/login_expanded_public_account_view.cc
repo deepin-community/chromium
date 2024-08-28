@@ -39,6 +39,7 @@
 #include "ui/compositor/layer.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/text_constants.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/image_view.h"
@@ -125,13 +126,13 @@ class LoginExpandedPublicAccountEventHandler : public ui::EventHandler {
  private:
   // ui::EventHandler:
   void OnMouseEvent(ui::MouseEvent* event) override {
-    if (event->type() == ui::ET_MOUSE_PRESSED) {
+    if (event->type() == ui::EventType::kMousePressed) {
       view_->ProcessPressedEvent(event->AsLocatedEvent());
     }
   }
   void OnGestureEvent(ui::GestureEvent* event) override {
-    if ((event->type() == ui::ET_GESTURE_TAP ||
-         event->type() == ui::ET_GESTURE_TAP_DOWN)) {
+    if ((event->type() == ui::EventType::kGestureTap ||
+         event->type() == ui::EventType::kGestureTapDown)) {
       view_->ProcessPressedEvent(event->AsLocatedEvent());
     }
   }
@@ -149,7 +150,7 @@ class SelectionButtonView : public LoginButton {
  public:
   SelectionButtonView(PressedCallback callback, const std::u16string& text)
       : LoginButton(std::move(callback)) {
-    SetAccessibleName(text);
+    GetViewAccessibility().SetName(text);
     SetPaintToLayer();
     layer()->SetFillsBoundsOpaquely(false);
     SetFocusBehavior(FocusBehavior::ALWAYS);
@@ -232,7 +233,7 @@ class SelectionButtonView : public LoginButton {
     label_->SetEnabledColorId(color_id);
   }
   void SetText(const std::u16string& text) {
-    SetAccessibleName(text);
+    GetViewAccessibility().SetName(text);
     label_->SetText(text);
     DeprecatedLayoutImmediately();
   }
@@ -300,7 +301,7 @@ class MonitoringWarningView : public NonAccessibleView {
 
   ~MonitoringWarningView() override = default;
 
-  // TODO(crbug/682266): MonitoringWarningview is effectively laid out as
+  // TODO(crbug.com/41295639): MonitoringWarningview is effectively laid out as
   // BoxLayout with kSpacingBetweenMonitoringWarningIconAndLabelDp spacing
   // between its two child views. However, horizontal BoxLayout and FlexLayout
   // do not handle views that override GetHeightForWidth well, so it's
@@ -464,6 +465,11 @@ class RightPaneView : public NonAccessibleView {
 
   ~RightPaneView() override = default;
 
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
+    return GetLayoutManager()->GetPreferredSize(this, available_size);
+  }
+
   void UpdateForUser(const LoginUserInfo& user) {
     DCHECK_EQ(user.basic_user_info.type,
               user_manager::UserType::kPublicAccount);
@@ -503,7 +509,7 @@ class RightPaneView : public NonAccessibleView {
 
   void PopulateLanguageItems(const std::vector<LocaleItem>& locales) {
     language_items_.clear();
-    int selected_language_index = 0;
+    std::optional<int> selected_language_index = std::nullopt;
     for (const auto& locale : locales) {
       PublicAccountMenuView::Item item;
       if (locale.group_name) {
@@ -542,7 +548,7 @@ class RightPaneView : public NonAccessibleView {
   void PopulateKeyboardItems(
       const std::vector<InputMethodItem>& keyboard_layouts) {
     keyboard_items_.clear();
-    int selected_keyboard_index = 0;
+    std::optional<int> selected_keyboard_index = std::nullopt;
     for (const auto& keyboard : keyboard_layouts) {
       PublicAccountMenuView::Item item;
       item.title = keyboard.title;
@@ -585,10 +591,12 @@ class RightPaneView : public NonAccessibleView {
   }
 
   void Login() {
-    // TODO(crbug.com/984021) change to LaunchSamlPublicSession which would
+    // TODO(crbug.com/40636049) change to LaunchSamlPublicSession which would
     // take |selected_language_item_value_| and |selected_keyboard_item_value_|
     // too.
     if (current_user_.public_account_info->using_saml) {
+      // TODO(b/333882432): Remove this log after the bug fixed.
+      LOG(WARNING) << "b/333882432: RightPaneView::Login";
       Shell::Get()->login_screen_controller()->ShowGaiaSignin(
           current_user_.basic_user_info.account_id);
     } else {
@@ -809,7 +817,7 @@ LoginExpandedPublicAccountView::LoginExpandedPublicAccountView(
   submit_button_ = AddChildView(std::make_unique<ArrowButtonView>(
       base::BindRepeating(&RightPaneView::Login, base::Unretained(right_pane_)),
       kArrowButtonSizeDp));
-  submit_button_->SetAccessibleName(l10n_util::GetStringUTF16(
+  submit_button_->GetViewAccessibility().SetName(l10n_util::GetStringUTF16(
       IDS_ASH_LOGIN_PUBLIC_ACCOUNT_LOG_IN_BUTTON_ACCESSIBLE_NAME));
   if (chromeos::features::IsJellyrollEnabled()) {
     submit_button_->SetBackgroundColorId(
@@ -944,7 +952,7 @@ void LoginExpandedPublicAccountView::Layout(PassKey) {
 }
 
 void LoginExpandedPublicAccountView::OnKeyEvent(ui::KeyEvent* event) {
-  if (!GetVisible() || event->type() != ui::ET_KEY_PRESSED) {
+  if (!GetVisible() || event->type() != ui::EventType::kKeyPressed) {
     return;
   }
 

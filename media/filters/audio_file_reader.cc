@@ -20,6 +20,7 @@
 #include "media/base/media_switches.h"
 #include "media/ffmpeg/ffmpeg_common.h"
 #include "media/ffmpeg/ffmpeg_decoding_loop.h"
+#include "media/ffmpeg/scoped_av_packet.h"
 #include "media/formats/mpeg/mpeg1_audio_stream_parser.h"
 
 namespace media {
@@ -160,11 +161,11 @@ int AudioFileReader::Read(
       base::BindRepeating(&AudioFileReader::OnNewFrame, base::Unretained(this),
                           &total_frames, decoded_audio_packets);
 
-  AVPacket packet;
+  auto packet = ScopedAVPacket::Allocate();
   int packets_read = 0;
-  while (packets_read++ < packets_to_read && ReadPacket(&packet)) {
-    const auto status = decode_loop.DecodePacket(&packet, frame_ready_cb);
-    av_packet_unref(&packet);
+  while (packets_read++ < packets_to_read && ReadPacket(packet.get())) {
+    const auto status = decode_loop.DecodePacket(packet.get(), frame_ready_cb);
+    av_packet_unref(packet.get());
 
     if (status != FFmpegDecodingLoop::DecodeStatus::kOkay)
       break;
@@ -329,8 +330,8 @@ bool AudioFileReader::OnNewFrame(
             reinterpret_cast<const int32_t*>(frame->data[0]), frames_read);
         break;
       default:
-        NOTREACHED() << "Unsupported bytes per sample encountered: "
-                     << bytes_per_sample;
+        NOTREACHED_IN_MIGRATION()
+            << "Unsupported bytes per sample encountered: " << bytes_per_sample;
         audio_bus->ZeroFrames(frames_read);
     }
   }

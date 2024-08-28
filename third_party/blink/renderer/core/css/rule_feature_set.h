@@ -266,7 +266,8 @@ class CORE_EXPORT RuleFeatureSet {
   enum PositionType { kSubject, kAncestor };
   InvalidationSet* InvalidationSetForSimpleSelector(const CSSSelector&,
                                                     InvalidationType,
-                                                    PositionType);
+                                                    PositionType,
+                                                    bool is_nth_child);
 
   // Inserts the given value as a key for self-invalidation.
   // Return true if the insertion was successful. (It may fail because
@@ -298,7 +299,6 @@ class CORE_EXPORT RuleFeatureSet {
 
     bool uses_first_line_rules = false;
     bool uses_window_inactive_selector = false;
-    bool needs_full_recalc_for_rule_set_invalidation = false;
     unsigned max_direct_adjacent_selectors = 0;
     bool invalidates_parts = false;
     // If we have a selector on the form :nth-child(... of :has(S)), any element
@@ -327,26 +327,36 @@ class CORE_EXPORT RuleFeatureSet {
 
   InvalidationSet& EnsureClassInvalidationSet(const AtomicString& class_name,
                                               InvalidationType,
-                                              PositionType);
+                                              PositionType,
+                                              bool in_nth_child);
   InvalidationSet& EnsureAttributeInvalidationSet(
       const AtomicString& attribute_name,
       InvalidationType,
-      PositionType);
+      PositionType,
+      bool in_nth_child);
   InvalidationSet& EnsureIdInvalidationSet(const AtomicString& id,
                                            InvalidationType,
-                                           PositionType);
+                                           PositionType,
+                                           bool in_nth_child);
   InvalidationSet& EnsurePseudoInvalidationSet(CSSSelector::PseudoType,
                                                InvalidationType,
-                                               PositionType);
+                                               PositionType,
+                                               bool in_nth_child);
   SiblingInvalidationSet& EnsureUniversalSiblingInvalidationSet();
   NthSiblingInvalidationSet& EnsureNthInvalidationSet();
-  DescendantInvalidationSet& EnsurePartInvalidationSet();
 
   void UpdateInvalidationSets(const CSSSelector&, const StyleScope*);
 
+  // This class is used during collection of features from a given selector;
+  // it collects a subset of referenced classes, IDs etc. from the subject
+  // of the selector (see e.g. ExtractInvalidationSetFeaturesFromCompound()).
+  // It is heavily used during feature set construction (i.e., initial style
+  // calculation) but not stored except for the stack, which is why it is
+  // fine to have inline sizes on the vectors.
   struct InvalidationSetFeatures {
-    DISALLOW_NEW();
+    STACK_ALLOCATED();
 
+   public:
     void Merge(const InvalidationSetFeatures& other);
     bool HasFeatures() const;
     bool HasIdClassOrAttribute() const;
@@ -393,11 +403,11 @@ class CORE_EXPORT RuleFeatureSet {
              tag_names.size() + emitted_tag_names.size();
     }
 
-    Vector<AtomicString> classes;
-    Vector<AtomicString> attributes;
-    Vector<AtomicString> ids;
-    Vector<AtomicString> tag_names;
-    Vector<AtomicString> emitted_tag_names;
+    Vector<AtomicString, 4> classes;
+    Vector<AtomicString, 4> attributes;
+    Vector<AtomicString, 4> ids;
+    Vector<AtomicString, 4> tag_names;
+    Vector<AtomicString, 4> emitted_tag_names;
     unsigned max_direct_adjacent_selectors = 0;
 
     // descendant_features_depth is used while adding features for logical
@@ -800,16 +810,19 @@ class CORE_EXPORT RuleFeatureSet {
   static InvalidationSet& EnsureMutableInvalidationSet(
       InvalidationType type,
       PositionType position,
+      bool in_nth_child,
       scoped_refptr<InvalidationSet>& invalidation_set);
 
   static InvalidationSet& EnsureInvalidationSet(InvalidationSetMap&,
                                                 const AtomicString& key,
                                                 InvalidationType,
-                                                PositionType);
+                                                PositionType,
+                                                bool in_nth_child);
   static InvalidationSet& EnsureInvalidationSet(PseudoTypeInvalidationSetMap&,
                                                 CSSSelector::PseudoType key,
                                                 InvalidationType,
-                                                PositionType);
+                                                PositionType,
+                                                bool in_nth_child);
 
   // Adds an InvalidationSet to this RuleFeatureSet, combining with any
   // data that may already be there. (That data may come from a previous

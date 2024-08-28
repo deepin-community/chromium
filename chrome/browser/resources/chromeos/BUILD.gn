@@ -34,8 +34,7 @@ group("resources") {
     "kerberos:resources",
     "launcher_internals:resources",
     "lock_screen_reauth:resources",
-    "login:conditional_resources",
-    "login:unconditional_resources",
+    "login:resources",
     "mako:resources",
     "manage_mirrorsync:resources",
     "multidevice_internals:resources",
@@ -47,6 +46,7 @@ group("resources") {
     "seal:resources",
     "sensor_info:resources",
     "set_time_dialog:resources",
+    "skyvault:resources",
     "supervision:resources",
     "vc_tray_tester:resources",
   ]

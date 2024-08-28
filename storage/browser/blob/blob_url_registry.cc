@@ -30,8 +30,6 @@ BlobUrlRegistry::~BlobUrlRegistry() {
 void BlobUrlRegistry::AddReceiver(
     const blink::StorageKey& storage_key,
     mojo::PendingAssociatedReceiver<blink::mojom::BlobURLStore> receiver) {
-  DCHECK(
-      base::FeatureList::IsEnabled(net::features::kSupportPartitionedBlobUrl));
   mojo::ReceiverId receiver_id = frame_receivers_.Add(
       std::make_unique<storage::BlobURLStoreImpl>(storage_key, AsWeakPtr()),
       std::move(receiver));
@@ -45,8 +43,6 @@ void BlobUrlRegistry::AddReceiver(
     const blink::StorageKey& storage_key,
     mojo::PendingReceiver<blink::mojom::BlobURLStore> receiver,
     BlobURLValidityCheckBehavior validity_check_behavior) {
-  DCHECK(
-      base::FeatureList::IsEnabled(net::features::kSupportPartitionedBlobUrl));
   worker_receivers_.Add(std::make_unique<storage::BlobURLStoreImpl>(
                             storage_key, AsWeakPtr(), validity_check_behavior),
                         std::move(receiver));
@@ -56,7 +52,7 @@ bool BlobUrlRegistry::AddUrlMapping(
     const GURL& blob_url,
     mojo::PendingRemote<blink::mojom::Blob> blob,
     const blink::StorageKey& storage_key,
-    // TODO(https://crbug.com/1224926): Remove these once experiment is over.
+    // TODO(crbug.com/40775506): Remove these once experiment is over.
     const base::UnguessableToken& unsafe_agent_cluster_id,
     const std::optional<net::SchemefulSite>& unsafe_top_level_site) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -80,10 +76,8 @@ bool BlobUrlRegistry::RemoveUrlMapping(const GURL& blob_url,
   if (blob_it == url_to_blob_.end()) {
     return false;
   }
-  if (base::FeatureList::IsEnabled(net::features::kSupportPartitionedBlobUrl)) {
-    if (url_to_storage_key_.at(blob_url) != storage_key) {
-      return false;
-    }
+  if (url_to_storage_key_.at(blob_url) != storage_key) {
+    return false;
   }
   url_to_blob_.erase(blob_it);
   url_to_unsafe_agent_cluster_id_.erase(blob_url);
@@ -95,16 +89,10 @@ bool BlobUrlRegistry::RemoveUrlMapping(const GURL& blob_url,
 bool BlobUrlRegistry::IsUrlMapped(const GURL& blob_url,
                                   const blink::StorageKey& storage_key) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (base::FeatureList::IsEnabled(net::features::kSupportPartitionedBlobUrl)) {
-    if (base::Contains(url_to_blob_, blob_url) &&
-        base::Contains(url_to_storage_key_, blob_url) &&
-        url_to_storage_key_.at(blob_url) == storage_key) {
-      return true;
-    }
-  } else {
-    if (base::Contains(url_to_blob_, blob_url)) {
-      return true;
-    }
+  if (base::Contains(url_to_blob_, blob_url) &&
+      base::Contains(url_to_storage_key_, blob_url) &&
+      url_to_storage_key_.at(blob_url) == storage_key) {
+    return true;
   }
   if (fallback_) {
     return fallback_->IsUrlMapped(blob_url, storage_key);
@@ -112,7 +100,7 @@ bool BlobUrlRegistry::IsUrlMapped(const GURL& blob_url,
   return false;
 }
 
-// TODO(https://crbug.com/1224926): Remove this once experiment is over.
+// TODO(crbug.com/40775506): Remove this once experiment is over.
 std::optional<base::UnguessableToken> BlobUrlRegistry::GetUnsafeAgentClusterID(
     const GURL& blob_url) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -181,8 +169,6 @@ bool BlobUrlRegistry::GetTokenMapping(
 // static
 void BlobUrlRegistry::SetURLStoreCreationHookForTesting(
     URLStoreCreationHook* hook) {
-  DCHECK(
-      base::FeatureList::IsEnabled(net::features::kSupportPartitionedBlobUrl));
   g_url_store_creation_hook = hook;
 }
 

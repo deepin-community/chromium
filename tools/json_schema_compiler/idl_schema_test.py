@@ -188,6 +188,10 @@ class IdlSchemaTest(unittest.TestCase):
                        'items': {'$ref': 'idl_other_namespace.SomeType'}},
                       getReturns(schema, 'function30'))
 
+  def testIgnoresAdditionalPropertiesOnType(self):
+    self.assertTrue(getType(self.idl_basics, 'IgnoreAdditionalPropertiesType')
+                        ['ignoreAdditionalProperties'])
+
   def testChromeOSPlatformsNamespace(self):
     schema = idl_schema.Load('test/idl_namespace_chromeos.idl')[0]
     self.assertEqual('idl_namespace_chromeos', schema['namespace'])
@@ -509,15 +513,23 @@ class IdlSchemaTest(unittest.TestCase):
 
   def testManifestKeys(self):
     schema = self.idl_basics
-    self.assertEqual(
-        OrderedDict([('key_str',
-                      OrderedDict([('description', 'String manifest key.'),
-                                   ('jsexterns', None), ('name', 'key_str'),
-                                   ('type', 'string')])),
-                     ('key_ref',
+    # Test a smattering of the manifest key generation. We don't make this
+    # exhaustive so we don't have to update it each time we add a new key in the
+    # test file.
+    manifest_keys = schema.get('manifest_keys')
+    self.assertEqual(manifest_keys['key_str'],
+                     OrderedDict([('description', 'String manifest key.'),
+                                  ('jsexterns', None), ('name', 'key_str'),
+                                  ('type', 'string')]))
+    self.assertEqual(manifest_keys['key_ref'],
                       OrderedDict([('name', 'key_ref'),
-                                   ('$ref', 'MyType2')]))]),
-        schema.get('manifest_keys'))
+                                   ('$ref', 'MyType2')])),
+    self.assertEqual(manifest_keys['choice_with_arrays'],
+                      OrderedDict([('name', 'choice_with_arrays'),
+                                   ('$ref', 'ChoiceWithArraysType')])),
+    self.assertEqual(manifest_keys['choice_with_optional'],
+                      OrderedDict([('name', 'choice_with_optional'),
+                                   ('$ref', 'ChoiceWithOptionalType')]))
 
   def testNoManifestKeys(self):
     schema = idl_schema.Load('test/idl_properties.idl')[0]

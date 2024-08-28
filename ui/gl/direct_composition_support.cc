@@ -27,6 +27,8 @@ bool g_overlay_caps_valid = false;
 bool g_supports_overlays = false;
 // Whether the GPU can support hardware overlays or not.
 bool g_supports_hardware_overlays = false;
+// Whether video processor auto HDR is supported.
+bool g_supports_vp_auto_hdr = false;
 // Whether the DecodeSwapChain is disabled or not.
 bool g_disable_decode_swap_chain = false;
 // Whether to force the nv12 overlay support.
@@ -50,6 +52,11 @@ bool SupportsHardwareOverlays() {
   return g_supports_hardware_overlays;
 }
 
+bool SupportsVideoProcessorAutoHDR() {
+  base::AutoLock auto_lock(GetOverlayLock());
+  return g_supports_vp_auto_hdr;
+}
+
 void SetSupportsOverlays(bool support) {
   base::AutoLock auto_lock(GetOverlayLock());
   g_supports_overlays = support;
@@ -58,6 +65,11 @@ void SetSupportsOverlays(bool support) {
 void SetSupportsHardwareOverlays(bool support) {
   base::AutoLock auto_lock(GetOverlayLock());
   g_supports_hardware_overlays = support;
+}
+
+void SetSupportsVideoProcessorAutoHDR(bool support) {
+  base::AutoLock auto_lock(GetOverlayLock());
+  g_supports_vp_auto_hdr = support;
 }
 
 bool SupportsSoftwareOverlays() {
@@ -127,6 +139,7 @@ UINT g_nv12_overlay_support_flags = 0;
 UINT g_yuy2_overlay_support_flags = 0;
 UINT g_bgra8_overlay_support_flags = 0;
 UINT g_rgb10a2_overlay_support_flags = 0;
+UINT g_p010_overlay_support_flags = 0;
 
 // When this is set, if NV12 or YUY2 overlays are supported, set BGRA8 overlays
 // as supported as well.
@@ -147,12 +160,14 @@ bool g_check_ycbcr_studio_g22_left_p709_for_nv12_support = false;
 void SetOverlaySupportFlagsForFormats(UINT nv12_flags,
                                       UINT yuy2_flags,
                                       UINT bgra8_flags,
-                                      UINT rgb10a2_flags) {
+                                      UINT rgb10a2_flags,
+                                      UINT p010_flags) {
   base::AutoLock auto_lock(GetOverlayLock());
   g_nv12_overlay_support_flags = nv12_flags;
   g_yuy2_overlay_support_flags = yuy2_flags;
   g_bgra8_overlay_support_flags = bgra8_flags;
   g_rgb10a2_overlay_support_flags = rgb10a2_flags;
+  g_p010_overlay_support_flags = p010_flags;
 }
 
 bool FlagsSupportsOverlays(UINT flags) {
@@ -167,7 +182,8 @@ void GetGpuDriverOverlayInfo(bool* supports_overlays,
                              UINT* nv12_overlay_support_flags,
                              UINT* yuy2_overlay_support_flags,
                              UINT* bgra8_overlay_support_flags,
-                             UINT* rgb10a2_overlay_support_flags) {
+                             UINT* rgb10a2_overlay_support_flags,
+                             UINT* p010_overlay_support_flags) {
   // Initialization
   *supports_overlays = false;
   *supports_hardware_overlays = false;
@@ -177,6 +193,7 @@ void GetGpuDriverOverlayInfo(bool* supports_overlays,
   *yuy2_overlay_support_flags = 0;
   *bgra8_overlay_support_flags = 0;
   *rgb10a2_overlay_support_flags = 0;
+  *p010_overlay_support_flags = 0;
 
   // Check for DirectComposition support first to prevent likely crashes.
   if (!DirectCompositionSupported())
@@ -233,6 +250,8 @@ void GetGpuDriverOverlayInfo(bool* supports_overlays,
     output3->CheckOverlaySupport(DXGI_FORMAT_R10G10B10A2_UNORM,
                                  d3d11_device.Get(),
                                  rgb10a2_overlay_support_flags);
+    output3->CheckOverlaySupport(DXGI_FORMAT_P010, d3d11_device.Get(),
+                                 p010_overlay_support_flags);
     if (FlagsSupportsOverlays(*nv12_overlay_support_flags)) {
       // NV12 format is preferred if it's supported.
       *overlay_format_used = DXGI_FORMAT_NV12;
@@ -297,6 +316,7 @@ void GetGpuDriverOverlayInfo(bool* supports_overlays,
   *yuy2_overlay_support_flags = 0;
   *bgra8_overlay_support_flags = 0;
   *rgb10a2_overlay_support_flags = 0;
+  *p010_overlay_support_flags = 0;
 
   // Software overlays always use NV12 because it's slightly more efficient and
   // YUY2 was only used because Skylake doesn't support NV12 hardware overlays.
@@ -316,12 +336,13 @@ void UpdateOverlaySupport() {
   UINT yuy2_overlay_support_flags = 0;
   UINT bgra8_overlay_support_flags = 0;
   UINT rgb10a2_overlay_support_flags = 0;
+  UINT p010_overlay_support_flags = 0;
 
   GetGpuDriverOverlayInfo(
       &supports_overlays, &supports_hardware_overlays, &overlay_format_used,
       &overlay_format_used_hdr, &nv12_overlay_support_flags,
       &yuy2_overlay_support_flags, &bgra8_overlay_support_flags,
-      &rgb10a2_overlay_support_flags);
+      &rgb10a2_overlay_support_flags, &p010_overlay_support_flags);
 
   if (g_force_nv12_overlay_support) {
     supports_overlays = true;
@@ -361,7 +382,8 @@ void UpdateOverlaySupport() {
   SetSupportsHardwareOverlays(supports_hardware_overlays);
   SetOverlaySupportFlagsForFormats(
       nv12_overlay_support_flags, yuy2_overlay_support_flags,
-      bgra8_overlay_support_flags, rgb10a2_overlay_support_flags);
+      bgra8_overlay_support_flags, rgb10a2_overlay_support_flags,
+      p010_overlay_support_flags);
   g_overlay_format_used = overlay_format_used;
   g_overlay_format_used_hdr = overlay_format_used_hdr;
 }
@@ -451,6 +473,106 @@ void UpdateMonitorInfo() {
   UMA_HISTOGRAM_BOOLEAN("GPU.Output.HDR", g_system_hdr_enabled);
 }
 
+// Update video processor auto HDR feature support status.
+// Must be called on GpuMain thread.
+void UpdateVideoProcessorAutoHDRSupport() {
+  if (GetGlWorkarounds().disable_vp_auto_hdr) {
+    SetSupportsVideoProcessorAutoHDR(false);
+    return;
+  }
+
+  if (!base::FeatureList::IsEnabled(features::kNvidiaVpTrueHDR)) {
+    SetSupportsVideoProcessorAutoHDR(false);
+    return;
+  }
+
+  Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device = g_d3d11_device;
+  if (!d3d11_device) {
+    DLOG(ERROR) << "Failed to get device";
+    SetSupportsVideoProcessorAutoHDR(false);
+    return;
+  }
+
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3d11_context;
+  // D3D11 immediate context isn't allowed to be accessed simultaneously on two
+  // threads, and all other callers are using this on the GpuMain thread, so
+  // this function must be called on GpuMain thread.
+  d3d11_device->GetImmediateContext(&d3d11_context);
+  if (!d3d11_context) {
+    DLOG(ERROR) << "Failed to get context";
+    SetSupportsVideoProcessorAutoHDR(false);
+    return;
+  }
+
+  Microsoft::WRL::ComPtr<ID3D11VideoContext> d3d11_video_context;
+  if (FAILED(d3d11_context.As(&d3d11_video_context))) {
+    DLOG(ERROR) << "Failed to retrieve video context";
+    SetSupportsVideoProcessorAutoHDR(false);
+    return;
+  }
+
+  Microsoft::WRL::ComPtr<ID3D11VideoDevice> d3d11_video_device;
+  if (FAILED(d3d11_device.As(&d3d11_video_device))) {
+    DLOG(ERROR) << "Failed to retrieve video device";
+    SetSupportsVideoProcessorAutoHDR(false);
+    return;
+  }
+
+  D3D11_VIDEO_PROCESSOR_CONTENT_DESC desc;
+  desc.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
+  desc.InputFrameRate.Numerator = 60;
+  desc.InputFrameRate.Denominator = 1;
+  desc.InputWidth = 1920;
+  desc.InputHeight = 1080;
+  desc.OutputFrameRate.Numerator = 60;
+  desc.OutputFrameRate.Denominator = 1;
+  desc.OutputWidth = 1920;
+  desc.OutputHeight = 1080;
+  desc.Usage = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
+
+  Microsoft::WRL::ComPtr<ID3D11VideoProcessorEnumerator> d3d11_video_enumerator;
+  if (FAILED(d3d11_video_device->CreateVideoProcessorEnumerator(
+          &desc, &d3d11_video_enumerator))) {
+    DLOG(ERROR) << "Failed to create video processor enumerator";
+    SetSupportsVideoProcessorAutoHDR(false);
+    return;
+  }
+
+  Microsoft::WRL::ComPtr<ID3D11VideoProcessor> d3d11_video_processor;
+  if (FAILED(d3d11_video_device->CreateVideoProcessor(
+          d3d11_video_enumerator.Get(), 0, &d3d11_video_processor))) {
+    DLOG(ERROR) << "Failed to create video processor";
+    SetSupportsVideoProcessorAutoHDR(false);
+    return;
+  }
+
+  constexpr GUID kNvidiaTrueHDRInterfaceGUID = {
+      0xfdd62bb4,
+      0x620b,
+      0x4fd7,
+      {0x9a, 0xb3, 0x1e, 0x59, 0xd0, 0xd5, 0x44, 0xb3}};
+
+  UINT driver_supports_true_hdr = 0;
+  HRESULT hr = d3d11_video_context->VideoProcessorGetStreamExtension(
+      d3d11_video_processor.Get(), 0, &kNvidiaTrueHDRInterfaceGUID,
+      sizeof(driver_supports_true_hdr), &driver_supports_true_hdr);
+  if (FAILED(hr)) {
+    DLOG(ERROR) << "Failed to get stream extension with error 0x" << std::hex
+                << hr;
+    SetSupportsVideoProcessorAutoHDR(false);
+    return;
+  }
+
+  d3d11_video_processor.Reset();
+  d3d11_video_enumerator.Reset();
+  d3d11_video_context.Reset();
+  d3d11_video_device.Reset();
+  d3d11_context.Reset();
+  d3d11_device.Reset();
+
+  SetSupportsVideoProcessorAutoHDR(driver_supports_true_hdr == 1);
+}
+
 }  // namespace
 
 void InitializeDirectComposition(
@@ -509,6 +631,8 @@ void InitializeDirectComposition(
   DCHECK(g_dcomp_device);
 
   g_d3d11_device = d3d11_device.Detach();
+
+  UpdateVideoProcessorAutoHDRSupport();
 }
 
 void ShutdownDirectComposition() {
@@ -584,6 +708,10 @@ bool DirectCompositionScaledOverlaysSupported() {
   }
 }
 
+bool VideoProcessorAutoHDRSupported() {
+  return SupportsVideoProcessorAutoHDR();
+}
+
 bool CheckVideoProcessorFormatSupport(DXGI_FORMAT dxgi_format) {
   Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device = g_d3d11_device;
   if (!d3d11_device) {
@@ -657,8 +785,11 @@ UINT GetDirectCompositionOverlaySupportFlags(DXGI_FORMAT format) {
     case DXGI_FORMAT_R10G10B10A2_UNORM:
       support_flag = g_rgb10a2_overlay_support_flags;
       break;
+    case DXGI_FORMAT_P010:
+      support_flag = g_p010_overlay_support_flags;
+      break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   return support_flag;
@@ -701,10 +832,12 @@ void SetDirectCompositionScaledOverlaysSupportedForTesting(bool supported) {
     g_nv12_overlay_support_flags |= DXGI_OVERLAY_SUPPORT_FLAG_SCALING;
     g_yuy2_overlay_support_flags |= DXGI_OVERLAY_SUPPORT_FLAG_SCALING;
     g_rgb10a2_overlay_support_flags |= DXGI_OVERLAY_SUPPORT_FLAG_SCALING;
+    g_p010_overlay_support_flags |= DXGI_OVERLAY_SUPPORT_FLAG_SCALING;
   } else {
     g_nv12_overlay_support_flags &= ~DXGI_OVERLAY_SUPPORT_FLAG_SCALING;
     g_yuy2_overlay_support_flags &= ~DXGI_OVERLAY_SUPPORT_FLAG_SCALING;
     g_rgb10a2_overlay_support_flags &= ~DXGI_OVERLAY_SUPPORT_FLAG_SCALING;
+    g_p010_overlay_support_flags &= ~DXGI_OVERLAY_SUPPORT_FLAG_SCALING;
   }
   g_disable_sw_overlays = !supported;
   SetSupportsHardwareOverlays(supported);
@@ -863,6 +996,7 @@ void DirectCompositionOverlayCapsMonitor::OnGpuSwitched(
 void DirectCompositionOverlayCapsMonitor::OnDisplayAdded() {
   SetOverlayCapsValid(false);
   UpdateOverlaySupport();
+  UpdateVideoProcessorAutoHDRSupport();
   UpdateMonitorInfo();
 
   NotifyOverlayCapsChanged();
@@ -872,6 +1006,7 @@ void DirectCompositionOverlayCapsMonitor::OnDisplayAdded() {
 void DirectCompositionOverlayCapsMonitor::OnDisplayRemoved() {
   SetOverlayCapsValid(false);
   UpdateOverlaySupport();
+  UpdateVideoProcessorAutoHDRSupport();
   UpdateMonitorInfo();
 
   NotifyOverlayCapsChanged();

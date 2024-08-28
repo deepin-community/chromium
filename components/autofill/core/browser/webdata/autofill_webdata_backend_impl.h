@@ -74,6 +74,7 @@ class AutofillWebDataBackendImpl
   void NotifyOfCreditCardChanged(const CreditCardChange& change) override;
   void NotifyOfIbanChanged(const IbanChange& change) override;
   void NotifyOnAutofillChangedBySync(syncer::ModelType model_type) override;
+  void NotifyOnServerCvcChanged(const ServerCvcChange& change) override;
   void CommitChanges() override;
 
   // Returns a SupportsUserData object that may be used to store data accessible
@@ -103,10 +104,9 @@ class AutofillWebDataBackendImpl
       WebDatabase* db);
 
   // Removes form elements recorded for Autocomplete from the database.
-  WebDatabase::State RemoveFormElementsAddedBetween(
-      const base::Time& delete_begin,
-      const base::Time& delete_end,
-      WebDatabase* db);
+  WebDatabase::State RemoveFormElementsAddedBetween(base::Time delete_begin,
+                                                    base::Time delete_end,
+                                                    WebDatabase* db);
 
   // Removes the Form-value |value| which has been entered in form input fields
   // named |name| from the database.
@@ -137,8 +137,8 @@ class AutofillWebDataBackendImpl
   // value, the interval between creation date and last usage is entirely
   // contained between [|begin|, |end|).
   std::unique_ptr<WDTypedResult> GetCountOfValuesContainedBetween(
-      const base::Time& begin,
-      const base::Time& end,
+      base::Time begin,
+      base::Time end,
       WebDatabase* db);
 
   // Updates autocomplete entries in the web database.
@@ -162,10 +162,6 @@ class AutofillWebDataBackendImpl
   // Removes a credit card from the web database. Valid only for local cards.
   WebDatabase::State RemoveCreditCard(const std::string& guid, WebDatabase* db);
 
-  // Adds a full server credit card to the web database.
-  WebDatabase::State AddFullServerCreditCard(const CreditCard& credit_card,
-                                             WebDatabase* db);
-
   // Returns a vector of local/server credit cards from the web database.
   std::unique_ptr<WDTypedResult> GetCreditCards(WebDatabase* db);
   std::unique_ptr<WDTypedResult> GetServerCreditCards(WebDatabase* db);
@@ -186,14 +182,6 @@ class AutofillWebDataBackendImpl
   // Updates the given `iban`'s metadata in the web database.
   WebDatabase::State UpdateServerIbanMetadata(const Iban& iban,
                                               WebDatabase* db);
-
-  // Server credit cards can be masked (only last 4 digits stored) or unmasked
-  // (all data stored). These toggle between the two states.
-  WebDatabase::State UnmaskServerCreditCard(const CreditCard& card,
-                                            const std::u16string& full_number,
-                                            WebDatabase* db);
-  WebDatabase::State MaskServerCreditCard(const std::string& id,
-                                          WebDatabase* db);
 
   WebDatabase::State UpdateServerCardMetadata(const CreditCard& credit_card,
                                               WebDatabase* db);
@@ -227,21 +215,30 @@ class AutofillWebDataBackendImpl
   // Returns all Credit Card Benefits from the database.
   std::unique_ptr<WDTypedResult> GetCreditCardBenefits(WebDatabase* db);
 
+  // Returns a vector of masked bank accounts from the web database.
+  std::unique_ptr<WDTypedResult> GetMaskedBankAccounts(WebDatabase* db);
+
   WebDatabase::State ClearAllServerData(WebDatabase* db);
-  WebDatabase::State ClearAllLocalData(WebDatabase* db);
 
   // Removes Autofill records from the database. Valid only for local cards and
   // kLocalOrSyncable profiles.
-  WebDatabase::State RemoveAutofillDataModifiedBetween(
-      const base::Time& delete_begin,
-      const base::Time& delete_end,
-      WebDatabase* db);
+  WebDatabase::State RemoveAutofillDataModifiedBetween(base::Time delete_begin,
+                                                       base::Time delete_end,
+                                                       WebDatabase* db);
 
   // Removes origin URLs associated with local credit cards from the database.
   // Autofill profiles don't store an origin, so this doesn't apply to them.
-  WebDatabase::State RemoveOriginURLsModifiedBetween(
-      const base::Time& delete_begin,
-      const base::Time& delete_end,
+  WebDatabase::State RemoveOriginURLsModifiedBetween(base::Time delete_begin,
+                                                     base::Time delete_end,
+                                                     WebDatabase* db);
+
+  // Clears all the credit card benefits from the database.
+  WebDatabase::State ClearAllCreditCardBenefits(WebDatabase* db);
+
+  // Adds a server credit card to the web database. Used only in tests - in
+  // production, server cards are set directly from Chrome Sync code.
+  WebDatabase::State AddServerCreditCardForTesting(
+      const CreditCard& credit_card,
       WebDatabase* db);
 
  protected:

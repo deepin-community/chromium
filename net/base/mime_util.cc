@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "net/base/mime_util.h"
 
 #include <algorithm>
@@ -244,7 +249,7 @@ static const char* FindMimeType(const MimeInfo (&mappings)[num_mappings],
     const char* extensions = mapping.extensions;
     for (;;) {
       size_t end_pos = strcspn(extensions, ",");
-      // The length check is required to prevent the StringPiece below from
+      // The length check is required to prevent the std::string_view below from
       // including uninitialized memory if ext is longer than extensions.
       if (end_pos == ext.size() &&
           base::EqualsCaseInsensitiveASCII(

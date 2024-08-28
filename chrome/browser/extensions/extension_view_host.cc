@@ -4,7 +4,6 @@
 
 #include "chrome/browser/extensions/extension_view_host.h"
 
-#include "base/strings/string_piece.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/browser_extension_window_controller.h"
 #include "chrome/browser/extensions/extension_view.h"
@@ -81,7 +80,7 @@ Browser* ExtensionViewHost::GetBrowser() {
 
 bool ExtensionViewHost::UnhandledKeyboardEvent(
     content::WebContents* source,
-    const content::NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   return view_->HandleKeyboardEvent(source, event);
 }
 
@@ -116,7 +115,9 @@ bool ExtensionViewHost::IsBackgroundPage() const {
 
 content::WebContents* ExtensionViewHost::OpenURLFromTab(
     content::WebContents* source,
-    const content::OpenURLParams& params) {
+    const content::OpenURLParams& params,
+    base::OnceCallback<void(content::NavigationHandle&)>
+        navigation_handle_callback) {
   // Allowlist the dispositions we will allow to be opened.
   switch (params.disposition) {
     case WindowOpenDisposition::SINGLETON_TAB:
@@ -128,7 +129,9 @@ content::WebContents* ExtensionViewHost::OpenURLFromTab(
     case WindowOpenDisposition::OFF_THE_RECORD: {
       // Only allow these from hosts that are bound to a browser (e.g. popups).
       // Otherwise they are not driven by a user gesture.
-      return GetBrowser() ? GetBrowser()->OpenURL(params) : nullptr;
+      return GetBrowser() ? GetBrowser()->OpenURL(
+                                params, std::move(navigation_handle_callback))
+                          : nullptr;
     }
     default:
       return nullptr;
@@ -146,7 +149,7 @@ bool ExtensionViewHost::ShouldAllowRendererInitiatedCrossProcessNavigation(
 content::KeyboardEventProcessingResult
 ExtensionViewHost::PreHandleKeyboardEvent(
     content::WebContents* source,
-    const content::NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   if (IsEscapeInPopup(event))
     return content::KeyboardEventProcessingResult::NOT_HANDLED_IS_SHORTCUT;
 
@@ -157,7 +160,7 @@ ExtensionViewHost::PreHandleKeyboardEvent(
 
 bool ExtensionViewHost::HandleKeyboardEvent(
     content::WebContents* source,
-    const content::NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   if (IsEscapeInPopup(event)) {
     Close();
     return true;
@@ -263,10 +266,9 @@ void ExtensionViewHost::OnExtensionHostDocumentElementAvailable(
 }
 
 bool ExtensionViewHost::IsEscapeInPopup(
-    const content::NativeWebKeyboardEvent& event) const {
+    const input::NativeWebKeyboardEvent& event) const {
   return extension_host_type() == mojom::ViewType::kExtensionPopup &&
-         event.GetType() ==
-             content::NativeWebKeyboardEvent::Type::kRawKeyDown &&
+         event.GetType() == input::NativeWebKeyboardEvent::Type::kRawKeyDown &&
          event.windows_key_code == ui::VKEY_ESCAPE;
 }
 

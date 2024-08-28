@@ -729,7 +729,7 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseManagerBrowserTest,
   EXPECT_TRUE(BrowserList::GetInstance()->empty());
 }
 
-// TODO(crbug/713201):
+// TODO(crbug.com/41314042):
 // BrowserCloseManagerBrowserTest.AddBeforeUnloadDuringClosing flaky on Mac.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_AddBeforeUnloadDuringClosing DISABLED_AddBeforeUnloadDuringClosing
@@ -825,7 +825,7 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseManagerBrowserTest,
       browser2->tab_strip_model()->GetWebContentsAt(1)->GetLastCommittedURL());
 }
 
-// TODO(https://crbug.com/1461936): This test is failing on Linux.
+// TODO(crbug.com/40921700): This test is failing on Linux.
 #if BUILDFLAG(IS_LINUX)
 #define MAYBE_TestCloseTabDuringShutdown DISABLED_TestCloseTabDuringShutdown
 #else
@@ -1044,7 +1044,7 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseManagerBrowserTest,
 // browser is opened and closed. While there are active downloads, closing the
 // incognito window shouldn't block on the active downloads which belong to the
 // parent profile.
-// TODO(https://crbug.com/844019): Fix the notification expectation around the
+// TODO(crbug.com/40576829): Fix the notification expectation around the
 // call to AttemptClose.
 IN_PROC_BROWSER_TEST_F(BrowserCloseManagerBrowserTest,
                        DISABLED_TestWithOffTheRecordWindowAndRegularDownload) {
@@ -1106,6 +1106,7 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseManagerBrowserTest,
   Profile* other_profile_ptr = other_profile.get();
   profile_manager->RegisterTestingProfile(std::move(other_profile), true);
   Browser* other_profile_browser = CreateBrowser(other_profile_ptr);
+  ui_test_utils::WaitUntilBrowserBecomeActive(other_profile_browser);
 
   ASSERT_NO_FATAL_FAILURE(CreateStalledDownload(browser()));
   {
@@ -1116,11 +1117,14 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseManagerBrowserTest,
   // When the shutdown is cancelled, the downloads page should be opened in a
   // browser for that profile. Because there are no browsers for that profile, a
   // new browser should be opened.
+  ui_test_utils::BrowserChangeObserver new_browser_observer(
+      nullptr, ui_test_utils::BrowserChangeObserver::ChangeType::kAdded);
   TestBrowserCloseManager::AttemptClose(
       TestBrowserCloseManager::USER_CHOICE_USER_CANCELS_CLOSE);
-  EXPECT_FALSE(browser_shutdown::IsTryingToQuit());
-  Browser* opened_browser = BrowserList::GetInstance()->GetLastActive();
+  Browser* opened_browser = new_browser_observer.Wait();
   ASSERT_TRUE(opened_browser);
+  ui_test_utils::WaitUntilBrowserBecomeActive(opened_browser);
+  EXPECT_FALSE(browser_shutdown::IsTryingToQuit());
   EXPECT_NE(other_profile_ptr, opened_browser->profile());
   EXPECT_EQ(GURL(chrome::kChromeUIDownloadsURL),
             opened_browser->tab_strip_model()

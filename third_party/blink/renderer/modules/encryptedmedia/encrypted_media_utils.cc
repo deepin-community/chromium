@@ -47,7 +47,7 @@ String EncryptedMediaUtils::ConvertFromInitDataType(
       return String();
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return String();
 }
 
@@ -73,11 +73,11 @@ String EncryptedMediaUtils::ConvertFromSessionType(
       return kPersistentLicense;
     case WebEncryptedMediaSessionType::kUnknown:
       // Unexpected session type from Chromium.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return String();
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return String();
 }
 
@@ -101,8 +101,29 @@ String EncryptedMediaUtils::ConvertKeyStatusToString(
       return "internal-error";
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return "internal-error";
+}
+
+// static
+V8MediaKeyStatus EncryptedMediaUtils::ConvertKeyStatusToEnum(
+    const WebEncryptedMediaKeyInformation::KeyStatus status) {
+  switch (status) {
+    case WebEncryptedMediaKeyInformation::KeyStatus::kUsable:
+      return V8MediaKeyStatus(V8MediaKeyStatus::Enum::kUsable);
+    case WebEncryptedMediaKeyInformation::KeyStatus::kExpired:
+      return V8MediaKeyStatus(V8MediaKeyStatus::Enum::kExpired);
+    case WebEncryptedMediaKeyInformation::KeyStatus::kReleased:
+      return V8MediaKeyStatus(V8MediaKeyStatus::Enum::kReleased);
+    case WebEncryptedMediaKeyInformation::KeyStatus::kOutputRestricted:
+      return V8MediaKeyStatus(V8MediaKeyStatus::Enum::kOutputRestricted);
+    case WebEncryptedMediaKeyInformation::KeyStatus::kOutputDownscaled:
+      return V8MediaKeyStatus(V8MediaKeyStatus::Enum::kOutputDownscaled);
+    case WebEncryptedMediaKeyInformation::KeyStatus::kStatusPending:
+      return V8MediaKeyStatus(V8MediaKeyStatus::Enum::kStatusPending);
+    case WebEncryptedMediaKeyInformation::KeyStatus::kInternalError:
+      return V8MediaKeyStatus(V8MediaKeyStatus::Enum::kInternalError);
+  }
 }
 
 // static
@@ -115,7 +136,7 @@ EncryptedMediaUtils::ConvertToMediaKeysRequirement(const String& requirement) {
   if (requirement == "not-allowed")
     return WebMediaKeySystemConfiguration::Requirement::kNotAllowed;
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return WebMediaKeySystemConfiguration::Requirement::kOptional;
 }
 
@@ -131,47 +152,8 @@ String EncryptedMediaUtils::ConvertMediaKeysRequirementToString(
       return "not-allowed";
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return "not-allowed";
-}
-
-// static
-const char* EncryptedMediaUtils::GetInterfaceName(EmeApiType type) {
-  switch (type) {
-    case EmeApiType::kCreateMediaKeys:
-      return "MediaKeySystemAccess";
-    case EmeApiType::kSetServerCertificate:
-    case EmeApiType::kGetStatusForPolicy:
-      return "MediaKeys";
-    case EmeApiType::kGenerateRequest:
-    case EmeApiType::kLoad:
-    case EmeApiType::kUpdate:
-    case EmeApiType::kClose:
-    case EmeApiType::kRemove:
-      return "MediaKeySession";
-  }
-}
-
-// static
-const char* EncryptedMediaUtils::GetPropertyName(EmeApiType type) {
-  switch (type) {
-    case EmeApiType::kCreateMediaKeys:
-      return "createMediaKeys";
-    case EmeApiType::kSetServerCertificate:
-      return "setServerCertificate";
-    case EmeApiType::kGetStatusForPolicy:
-      return "getStatusForPolicy";
-    case EmeApiType::kGenerateRequest:
-      return "generateRequest";
-    case EmeApiType::kLoad:
-      return "load";
-    case EmeApiType::kUpdate:
-      return "update";
-    case EmeApiType::kClose:
-      return "close";
-    case EmeApiType::kRemove:
-      return "remove";
-  }
 }
 
 WebEncryptedMediaClient*

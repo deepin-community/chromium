@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -48,7 +49,7 @@ void GetResource(const std::string& id,
   CHECK(base::ReadFileToString(path, &contents)) << path.value();
 
   base::RefCountedString* ref_contents = new base::RefCountedString;
-  ref_contents->data() = contents;
+  ref_contents->as_string() = contents;
   std::move(callback).Run(ref_contents);
 }
 
@@ -218,10 +219,14 @@ void AddUntrustedDataSource(
         case network::mojom::CrossOriginOpenerPolicyValue::
             kSameOriginAllowPopups:
         case network::mojom::CrossOriginOpenerPolicyValue::kRestrictProperties:
+          NOTREACHED() << "COOP:restrict-properties is not supported in WebUI";
         case network::mojom::CrossOriginOpenerPolicyValue::
             kRestrictPropertiesPlusCoep:
-          NOTIMPLEMENTED();
-          break;
+          NOTREACHED()
+              << "COOP:restrict-properties-plus-coep is not supported in WebUI";
+        case network::mojom::CrossOriginOpenerPolicyValue::kNoopenerAllowPopups:
+          NOTREACHED()
+              << "COOP:noopener-allow-popups is not supported in WebUI";
       }
     }
   }
@@ -233,7 +238,7 @@ GURL GetChromeUntrustedUIURL(const std::string& host_and_path) {
               url::kStandardSchemeSeparator + host_and_path);
 }
 
-TestWebUIConfig::TestWebUIConfig(base::StringPiece host)
+TestWebUIConfig::TestWebUIConfig(std::string_view host)
     : WebUIConfig(content::kChromeUIScheme, host) {}
 
 std::unique_ptr<WebUIController> TestWebUIConfig::CreateWebUIController(

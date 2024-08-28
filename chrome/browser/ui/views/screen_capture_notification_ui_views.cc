@@ -232,9 +232,10 @@ gfx::NativeViewId ScreenCaptureNotificationUIViews::OnStarted(
 
   views::Widget* widget = new views::Widget;
 
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.delegate = this;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.remove_standard_frame = true;
   params.z_order = ui::ZOrderLevel::kFloatingUIElement;
@@ -313,7 +314,11 @@ void ScreenCaptureNotificationUIViews::OnViewBoundsChanged(
 
 void ScreenCaptureNotificationUIViews::NotifySourceChange() {
   if (!source_callback_.is_null())
-    source_callback_.Run(content::DesktopMediaID());
+    // CSC is only supported for tab-capture, so setting it to `false` is the
+    // correct behavior so long as we don't support cross-surface-type
+    // switching.
+    source_callback_.Run(content::DesktopMediaID(),
+                         /*captured_surface_control_active=*/false);
 }
 
 void ScreenCaptureNotificationUIViews::NotifyStopped() {

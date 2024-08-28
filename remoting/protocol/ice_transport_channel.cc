@@ -20,6 +20,7 @@
 #include "third_party/webrtc/p2p/base/p2p_transport_channel.h"
 #include "third_party/webrtc/p2p/base/packet_transport_internal.h"
 #include "third_party/webrtc/p2p/base/port.h"
+#include "third_party/webrtc/rtc_base/crypto_random.h"
 
 namespace remoting::protocol {
 
@@ -160,7 +161,7 @@ void IceTransportChannel::AddRemoteCandidate(
   // candidates. It's also necessary to discard remote relay candidates.
   bool relay_allowed = (transport_context_->network_settings().flags &
                         NetworkSettings::NAT_TRAVERSAL_RELAY) != 0;
-  if (!relay_allowed && candidate.type() == cricket::RELAY_PORT_TYPE) {
+  if (!relay_allowed && candidate.is_relay()) {
     return;
   }
 

@@ -20,12 +20,18 @@
  * Boston, MA 02110-1301, USA.
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 #include <locale.h>
 #include <stdarg.h>
 
 #include <algorithm>
+#include <string_view>
 
 #include "base/functional/callback.h"
 #include "base/logging.h"
@@ -500,7 +506,7 @@ String String::FromUTF8(const LChar* string) {
   return FromUTF8(string, strlen(reinterpret_cast<const char*>(string)));
 }
 
-String String::FromUTF8(base::StringPiece s) {
+String String::FromUTF8(std::string_view s) {
   return FromUTF8(reinterpret_cast<const LChar*>(s.data()), s.size());
 }
 

@@ -150,6 +150,12 @@ chromium-metrics-reviews@google.com.
   </int>
 </enum>
 
+<enum name="LinkPreviewUsage">
+  <int value="0" label="Not used"/>
+  <int value="1" label="Used but not promited"/>
+  <int value="2" label="Used and promoted"/>
+</enum>
+
 <enum name="MhtmlLoadResult">
   <int value="0" label="Success">Archive loaded successfully</int>
   <int value="1" label="Empty file">
@@ -164,6 +170,68 @@ chromium-metrics-reviews@google.com.
   <int value="4" label="Missing main resource">
     Failed to load archive because it had no main resource
   </int>
+</enum>
+
+<!-- LINT.IfChange(NavigationAbandonReasonEnum) -->
+
+<enum name="NavigationAbandonReasonEnum">
+  <int value="0" label="kFrameRemoved"/>
+  <int value="1" label="kExplicitCancellation"/>
+  <int value="2" label="kInternalCancellation"/>
+  <int value="3" label="kRenderProcessGone"/>
+  <int value="4" label="kNeverStarted"/>
+  <int value="5" label="kFailedSecurityCheck"/>
+  <int value="6" label="kOther"/>
+  <int value="7" label="kHidden"/>
+  <int value="8" label="kErrorPage"/>
+  <int value="9" label="kAppBackgrounded"/>
+  <int value="10" label="kNewReloadNavigation"/>
+  <int value="11" label="kNewHistoryNavigation"/>
+  <int value="12" label="kNewOtherNavigationBrowserInitiated"/>
+  <int value="13" label="kNewOtherNavigationRendererInitiated"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/page_load_metrics/browser/observers/abandoned_page_load_metrics_observer.h:AbandonReason) -->
+
+<!-- LINT.IfChange(NavigationMilestoneEnum) -->
+
+<enum name="NavigationMilestoneEnum2">
+  <int value="0" label="kNavigationStart"/>
+  <int value="1" label="kLoaderStart"/>
+  <int value="2" label="kFirstRedirectedRequestStart"/>
+  <int value="3" label="kFirstRedirectResponseStart"/>
+  <int value="4" label="kFirstRedirectResponseLoaderCallback"/>
+  <int value="5" label="kNonRedirectedRequestStart"/>
+  <int value="6" label="kNonRedirectResponseStart"/>
+  <int value="7" label="kNonRedirectResponseLoaderCallback"/>
+  <int value="8" label="kCommitSent"/>
+  <int value="9" label="kCommitReceived"/>
+  <int value="10" label="kDidCommit"/>
+  <int value="11" label="kParseStart"/>
+  <int value="12" label="kFirstContentfulPaint"/>
+  <int value="13" label="kDOMContentLoaded"/>
+  <int value="14" label="kLoadEventStarted"/>
+  <int value="15" label="kLargestContentfulPaint"/>
+  <int value="16" label="kAFTStart"/>
+  <int value="17" label="kAFTEnd"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/page_load_metrics/browser/observers/abandoned_page_load_metrics_observer.h:NavigationMilestone) -->
+
+<enum name="OriginTrialStatusChange">
+  <int value="0"
+      label="kDisabled: Origin-specific origin trial token was disabled (i.e.
+             removed from the top-level site's partition)"/>
+  <int value="1"
+      label="kDisabled_MatchesSubdomains: Subdomain-matching origin trial
+             token was disabled (i.e. removed from the top-level site's
+             partition)"/>
+  <int value="2"
+      label="kEnabled: Origin-specific token was used to enable the origin
+             trial"/>
+  <int value="3"
+      label="kEnabled_MatchesSubdomains: Subdomain-matching token was used to
+             enable the origin trial"/>
 </enum>
 
 <enum name="PageActionCTREvent">
@@ -185,8 +253,8 @@ chromium-metrics-reviews@google.com.
   <int value="10" label="Price Tracking"/>
   <int value="11" label="PWA Install"/>
   <int value="12" label="QR Code Generator"/>
-  <int value="13" label="Reader Mode"/>
-  <int value="14" label="Save Autofill Address"/>
+  <int value="13" label="(Deprecated) Reader Mode"/>
+  <int value="14" label="Autofill Address"/>
   <int value="15" label="Save Card"/>
   <int value="16" label="Send Tab to Self"/>
   <int value="17" label="Sharing Hub"/>
@@ -199,6 +267,9 @@ chromium-metrics-reviews@google.com.
   <int value="24" label="Save IBAN"/>
   <int value="25" label="Mandatory Reauth"/>
   <int value="26" label="Price Insights"/>
+  <int value="27" label="Read Anything"/>
+  <int value="28" label="Product Specifications"/>
+  <int value="29" label="Lens Overlay"/>
 </enum>
 
 <enum name="PageActionPageEvent">
@@ -366,6 +437,10 @@ chromium-metrics-reviews@google.com.
       label="kAllowBy3PCDMetadataSourceGovEduTld: Allowed by government and
              education TLD entries within the 3PCD metadata grants content
              settings (Global Allowlist)."/>
+  <int value="19" label="kAllowByScheme: Allowed by the top-level scheme."/>
+  <int value="20"
+      label="kAllowByTrackingProtectionException: Allowed by explicit
+             tracking protection content setting."/>
 </enum>
 
 </enums>

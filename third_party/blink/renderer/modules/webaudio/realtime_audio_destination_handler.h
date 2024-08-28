@@ -10,8 +10,10 @@
 
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "third_party/blink/public/platform/web_audio_latency_hint.h"
 #include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
+#include "third_party/blink/renderer/modules/webaudio/audio_context.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_destination_node.h"
 #include "third_party/blink/renderer/platform/audio/audio_callback_metric_reporter.h"
 #include "third_party/blink/renderer/platform/audio/audio_destination.h"
@@ -23,10 +25,8 @@ class ExceptionState;
 class WebAudioLatencyHint;
 class WebAudioSinkDescriptor;
 
-class RealtimeAudioDestinationHandler final
-    : public AudioDestinationHandler,
-      public AudioIOCallback,
-      public base::SupportsWeakPtr<RealtimeAudioDestinationHandler> {
+class RealtimeAudioDestinationHandler final : public AudioDestinationHandler,
+                                              public AudioIOCallback {
  public:
   static scoped_refptr<RealtimeAudioDestinationHandler> Create(
       AudioNode&,
@@ -37,12 +37,13 @@ class RealtimeAudioDestinationHandler final
 
   // For AudioHandler.
   void Dispose() override;
+  AudioContext* Context() const override;
   void Initialize() override;
   void Uninitialize() override;
   void SetChannelCount(unsigned, ExceptionState&) override;
-  double LatencyTime() const override { return 0; }
+  bool RequiresTailProcessing() const override { return false; }
   double TailTime() const override { return 0; }
-  bool RequiresTailProcessing() const final { return false; }
+  double LatencyTime() const override { return 0; }
 
   // For AudioDestinationHandler.
   void StartRendering() override;
@@ -50,9 +51,9 @@ class RealtimeAudioDestinationHandler final
   void Pause() override;
   void Resume() override;
   void RestartRendering() override;
-  uint32_t MaxChannelCount() const override;
-  double SampleRate() const override;
   void PrepareTaskRunnerForWorklet() override;
+  double SampleRate() const override;
+  uint32_t MaxChannelCount() const override;
 
   // For AudioIOCallback. This is invoked by the platform audio destination to
   // get the next render quantum into `destination_bus` and update
@@ -60,7 +61,13 @@ class RealtimeAudioDestinationHandler final
   void Render(AudioBus* destination_bus,
               uint32_t number_of_frames,
               const AudioIOPosition& output_position,
-              const AudioCallbackMetric& metric) final;
+              const AudioCallbackMetric& metric,
+              base::TimeDelta playout_delay,
+              const media::AudioGlitchInfo& glitch_info) override;
+
+  // For AudioIOCallback. This is invoked by AudioDestination to notify when
+  // an error has occurred in the audio infra.
+  void OnRenderError() override;
 
   // Returns a hardware callback buffer size from audio infra.
   uint32_t GetCallbackBufferSize() const;
@@ -68,12 +75,11 @@ class RealtimeAudioDestinationHandler final
   // Returns a given frames-per-buffer size from audio infra.
   int GetFramesPerBuffer() const;
 
+  base::TimeDelta GetPlatformBufferDuration() const;
+
   bool IsPullingAudioGraphAllowed() const {
     return allow_pulling_audio_graph_.load(std::memory_order_acquire);
   }
-
-  // Sets the detect silence flag for the platform destination.
-  void SetDetectSilence(bool detect_silence);
 
   // Sets the identifier for a new output device. Note that this will recreate
   // a new platform destination with the specified sink device. It also invokes
@@ -81,11 +87,17 @@ class RealtimeAudioDestinationHandler final
   void SetSinkDescriptor(const WebAudioSinkDescriptor& sink_descriptor,
                          media::OutputDeviceStatusCB callback);
 
+  // Methods for unit tests.
+  void invoke_onrendererror_from_platform_for_testing();
+
  private:
   explicit RealtimeAudioDestinationHandler(AudioNode&,
                                            const WebAudioSinkDescriptor&,
                                            const WebAudioLatencyHint&,
                                            std::optional<float> sample_rate);
+
+  // Sets the detect silence flag for the platform destination.
+  void SetDetectSilence(bool detect_silence);
 
   void CreatePlatformDestination();
   void StartPlatformDestination();
@@ -133,6 +145,8 @@ class RealtimeAudioDestinationHandler final
   // Represents the current condition of silence detection. By default, the
   // silence detection is active.
   bool is_detecting_silence_ = true;
+
+  base::WeakPtrFactory<RealtimeAudioDestinationHandler> weak_ptr_factory_{this};
 };
 
 }  // namespace blink

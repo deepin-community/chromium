@@ -195,6 +195,57 @@ void HTMLDialogElement::close(const String& return_value,
   }
 }
 
+bool HTMLDialogElement::IsValidCommand(HTMLElement& invoker,
+                                       CommandEventType command) {
+  return HTMLElement::IsValidCommand(invoker, command) ||
+         command == CommandEventType::kShowModal ||
+         command == CommandEventType::kClose;
+}
+
+bool HTMLDialogElement::HandleCommandInternal(HTMLElement& invoker,
+                                              CommandEventType command) {
+  CHECK(IsValidCommand(invoker, command));
+
+  if (HTMLElement::HandleCommandInternal(invoker, command)) {
+    return true;
+  }
+
+  // Dialog actions conflict with popovers. We should avoid trying do anything
+  // with a dialog that is an open popover.
+  if (HasPopoverAttribute() && popoverOpen()) {
+    AddConsoleMessage(mojom::blink::ConsoleMessageSource::kOther,
+                      mojom::blink::ConsoleMessageLevel::kError,
+                      "Dialog invokeactions are ignored on open popovers.");
+    return false;
+  }
+
+  bool open = FastHasAttribute(html_names::kOpenAttr);
+
+  if (command == CommandEventType::kClose) {
+    if (open) {
+      close();
+      return true;
+    } else {
+      AddConsoleMessage(
+          mojom::blink::ConsoleMessageSource::kOther,
+          mojom::blink::ConsoleMessageLevel::kWarning,
+          "A closing invokeaction attempted to close an already closed Dialog");
+    }
+  } else if (command == CommandEventType::kShowModal) {
+    if (isConnected() && !open) {
+      showModal(ASSERT_NO_EXCEPTION);
+      return true;
+    } else {
+      AddConsoleMessage(
+          mojom::blink::ConsoleMessageSource::kOther,
+          mojom::blink::ConsoleMessageLevel::kWarning,
+          "An invokeaction attempted to open an already open Dialog as modal");
+    }
+  }
+
+  return false;
+}
+
 void HTMLDialogElement::SetIsModal(bool is_modal) {
   if (is_modal != is_modal_)
     PseudoStateChanged(CSSSelector::kPseudoModal);
@@ -230,7 +281,6 @@ void HTMLDialogElement::show(ExceptionState& exception_state) {
   // element should hide all open popovers.
   auto* hide_until = HTMLElement::TopLayerElementPopoverAncestor(
       *this, TopLayerElementType::kDialog);
-  DCHECK(RuntimeEnabledFeatures::NestedTopLayerSupportEnabled() || !hide_until);
   HTMLElement::HideAllPopoversUntil(
       hide_until, GetDocument(), HidePopoverFocusBehavior::kNone,
       HidePopoverTransitionBehavior::kFireEventsAndWaitForTransitions);
@@ -334,7 +384,6 @@ void HTMLDialogElement::showModal(ExceptionState& exception_state) {
   // element should hide all open popovers.
   auto* hide_until = HTMLElement::TopLayerElementPopoverAncestor(
       *this, TopLayerElementType::kDialog);
-  DCHECK(RuntimeEnabledFeatures::NestedTopLayerSupportEnabled() || !hide_until);
   HTMLElement::HideAllPopoversUntil(
       hide_until, document, HidePopoverFocusBehavior::kNone,
       HidePopoverTransitionBehavior::kFireEventsAndWaitForTransitions);
@@ -364,7 +413,9 @@ void HTMLDialogElement::CloseWatcherFiredCancel(Event* close_watcher_event) {
     return;
   // https://wicg.github.io/close-watcher/#patch-dialog cancelAction
 
-  Event* dialog_event = Event::CreateCancelable(event_type_names::kCancel);
+  Event* dialog_event = close_watcher_event->cancelable()
+                            ? Event::CreateCancelable(event_type_names::kCancel)
+                            : Event::Create(event_type_names::kCancel);
   DispatchEvent(*dialog_event);
   if (dialog_event->defaultPrevented())
     close_watcher_event->preventDefault();

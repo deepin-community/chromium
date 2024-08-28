@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_ATTRIBUTION_REPORTING_PARSING_UTILS_H_
 #define COMPONENTS_ATTRIBUTION_REPORTING_PARSING_UTILS_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <concepts>
@@ -13,9 +14,9 @@
 #include <string_view>
 
 #include "base/component_export.h"
+#include "base/containers/flat_set.h"
 #include "base/types/expected.h"
 #include "base/values.h"
-#include "components/attribution_reporting/source_registration_error.mojom-forward.h"
 #include "third_party/abseil-cpp/absl/numeric/int128.h"
 
 namespace base {
@@ -24,14 +25,15 @@ class TimeDelta;
 
 namespace attribution_reporting {
 
-enum class AggregationKeyPieceError {
-  kWrongType,
-  kWrongFormat,
+class SuitableOrigin;
+
+struct ParseError {
+  friend bool operator==(ParseError, ParseError) = default;
 };
 
 COMPONENT_EXPORT(ATTRIBUTION_REPORTING)
-base::expected<absl::uint128, AggregationKeyPieceError>
-ParseAggregationKeyPiece(const base::Value&);
+base::expected<absl::uint128, ParseError> ParseAggregationKeyPiece(
+    const base::Value&);
 
 COMPONENT_EXPORT(ATTRIBUTION_REPORTING)
 std::string HexEncodeAggregationKey(absl::uint128);
@@ -44,10 +46,6 @@ template <typename T>
 constexpr T ValueOrZero(std::optional<T> value) {
   return value.value_or(0);
 }
-
-struct ParseError {
-  friend bool operator==(ParseError, ParseError) = default;
-};
 
 COMPONENT_EXPORT(ATTRIBUTION_REPORTING)
 base::expected<std::optional<uint64_t>, ParseError> ParseUint64(
@@ -73,9 +71,11 @@ std::optional<uint64_t> ParseDebugKey(const base::Value::Dict& dict);
 base::expected<std::optional<uint64_t>, ParseError> ParseDeduplicationKey(
     const base::Value::Dict&);
 
-base::expected<base::TimeDelta, mojom::SourceRegistrationError>
-ParseLegacyDuration(const base::Value& value,
-                    mojom::SourceRegistrationError error);
+base::expected<base::TimeDelta, ParseError> ParseLegacyDuration(
+    const base::Value&);
+
+base::expected<std::optional<SuitableOrigin>, ParseError>
+ParseAggregationCoordinator(const base::Value::Dict&);
 
 void SerializeUint64(base::Value::Dict&, std::string_view key, uint64_t value);
 
@@ -94,12 +94,24 @@ void SerializeTimeDeltaInSeconds(base::Value::Dict& dict,
                                  std::string_view key,
                                  base::TimeDelta value);
 
-base::expected<uint32_t, mojom::SourceRegistrationError> ParseUint32(
-    const base::Value&,
-    mojom::SourceRegistrationError wrong_type_error,
-    mojom::SourceRegistrationError out_of_range_error);
+COMPONENT_EXPORT(ATTRIBUTION_REPORTING)
+base::expected<uint32_t, ParseError> ParseUint32(const base::Value&);
+
+COMPONENT_EXPORT(ATTRIBUTION_REPORTING)
+base::expected<uint32_t, ParseError> ParsePositiveUint32(const base::Value&);
 
 base::Value Uint32ToJson(uint32_t);
+
+enum class StringSetError {
+  kWrongType,
+  kStringTooLong,
+  kSetTooLong,
+};
+
+base::expected<base::flat_set<std::string>, StringSetError> ExtractStringSet(
+    base::Value::List,
+    size_t max_string_size,
+    size_t max_set_size);
 
 }  // namespace attribution_reporting
 

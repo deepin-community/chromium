@@ -40,15 +40,16 @@ BASE_DECLARE_FEATURE(kEnforceFullDelegation);
 // GPay app and the browser for dynamic updates on shipping and payment data.
 BASE_DECLARE_FEATURE(kGPayAppDynamicUpdate);
 
+// If enabled, the network and issuer icons (if present) will be inlined in the
+// title of the SecurePaymentConfirmation transaction UX. Requires that the
+// kSecurePaymentConfirmationNetworkAndIssuerIcons feature is also enabled.
+BASE_DECLARE_FEATURE(kSecurePaymentConfirmationInlineNetworkAndIssuerIcons);
+
 // Used to control whether SecurePaymentConfirmation is able to rely on OS-level
 // credential store APIs, or if it can only rely on the user-profile database.
 BASE_DECLARE_FEATURE(kSecurePaymentConfirmationUseCredentialStoreAPIs);
 
 #if !BUILDFLAG(IS_ANDROID)
-// Desktop only, if enabled PaymentHandler will use the new minimal header UX.
-// See https://crbug.com/1385136.
-BASE_DECLARE_FEATURE(kPaymentHandlerMinimalHeaderUX);
-
 // Desktop only, if enabled the Task Manager will show the PaymentHandler
 // window.
 BASE_DECLARE_FEATURE(kPaymentHandlerWindowInTaskManager);

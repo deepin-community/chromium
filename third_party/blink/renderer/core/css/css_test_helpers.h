@@ -51,6 +51,7 @@ class TestStyleSheet {
 };
 
 CSSStyleSheet* CreateStyleSheet(Document& document);
+RuleSet* CreateRuleSet(Document& document, String text);
 
 // Create a PropertyRegistration with the given name. An initial value must
 // be provided when the syntax is not "*".
@@ -81,7 +82,7 @@ void DeclareProperty(Document& document,
                      const std::optional<String>& initial_value,
                      bool is_inherited);
 
-scoped_refptr<CSSVariableData> CreateVariableData(String);
+CSSVariableData* CreateVariableData(String);
 const CSSValue* CreateCustomIdent(const char*);
 const CSSValue* ParseLonghand(Document& document,
                               const CSSProperty&,

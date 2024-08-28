@@ -14,7 +14,6 @@
 #include "base/unguessable_token.h"
 #include "components/safe_browsing/core/browser/db/hit_report.h"
 #include "components/safe_browsing/core/common/proto/realtimeapi.pb.h"
-#include "components/safe_browsing/core/common/safebrowsing_constants.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "url/gurl.h"
 
@@ -49,7 +48,7 @@ struct UnsafeResource {
 
   using UrlCheckCallback = base::RepeatingCallback<void(UrlCheckResult)>;
 
-  // TODO(crbug.com/1073315): These are content/ specific ids that need to be
+  // TODO(crbug.com/40686246): These are content/ specific ids that need to be
   // plumbed through this struct.
   // Equivalent to GlobalRenderFrameHostId.
   using RenderProcessId = int;
@@ -84,15 +83,12 @@ struct UnsafeResource {
   GURL navigation_url;
   GURL referrer_url;
   std::vector<GURL> redirect_urls;
-  bool is_subresource;
-  bool is_subframe;
   safe_browsing::SBThreatType threat_type;
   safe_browsing::ThreatMetadata threat_metadata;
   safe_browsing::RTLookupResponse rt_lookup_response;
-  network::mojom::RequestDestination request_destination;
   UrlCheckCallback callback;  // This is called back on |callback_sequence|.
   scoped_refptr<base::SequencedTaskRunner> callback_sequence;
-  // TODO(crbug.com/1073315): |weak_web_state| is only used on iOS, and
+  // TODO(crbug.com/40686246): |weak_web_state| is only used on iOS, and
   // |render_process_id|, |render_frame_id|, and |frame_tree_node_id| are used
   // on all other platforms. This struct should be refactored to use only the
   // common functionality can be shared across platforms.
@@ -116,9 +112,6 @@ struct UnsafeResource {
   // If true, this UnsafeResource is created because of the Delayed Warnings
   // experiment.
   bool is_delayed_warning;
-
-  // If false, skip sending Safe Browsing telemetry reports. Default to true.
-  bool should_send_reports;
 
   // If true, this UnsafeResource is created by a check that doesn't delay
   // navigation to complete. If false, it can either be the UnsafeResource is

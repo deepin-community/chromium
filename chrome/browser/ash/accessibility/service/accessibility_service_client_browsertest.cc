@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ash/accessibility/service/accessibility_service_client.h"
+
 #include <optional>
 
 #include "ash/accessibility/accessibility_controller.h"
@@ -23,7 +25,6 @@
 #include "base/test/bind.h"
 #include "chrome/browser/accessibility/service/accessibility_service_router_factory.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
-#include "chrome/browser/ash/accessibility/service/accessibility_service_client.h"
 #include "chrome/browser/ash/accessibility/service/automation_client_impl.h"
 #include "chrome/browser/ash/accessibility/service/fake_accessibility_service.h"
 #include "chrome/browser/ash/accessibility/service/speech_recognition_impl.h"
@@ -373,12 +374,12 @@ class AccessibilityServiceClientTest : public InProcessBrowserTest {
       client->automation_client_->Disable();
   }
 
-  // TODO(crbug.com/1493545): Toggle features on AccessibilityManager for client
-  // test.
+  // TODO(crbug.com/40936728): Toggle features on AccessibilityManager for
+  // client test.
   void TurnOnAccessibilityService(AssistiveTechnologyType type) {
     switch (type) {
       case ax::mojom::AssistiveTechnologyType::kUnknown:
-        NOTREACHED() << "Unknown AT type";
+        NOTREACHED_IN_MIGRATION() << "Unknown AT type";
         break;
       case ax::mojom::AssistiveTechnologyType::kChromeVox:
         Client()->SetChromeVoxEnabled(true);
@@ -1468,7 +1469,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityServiceClientTest,
         }
 
         ui::KeyEvent* press_event = test_event_handler.key_events[0].get();
-        EXPECT_EQ(press_event->type(), ui::ET_KEY_PRESSED);
+        EXPECT_EQ(press_event->type(), ui::EventType::kKeyPressed);
         EXPECT_EQ(press_event->code(), ui::DomCode::US_P);
         EXPECT_FALSE(press_event->IsAltDown());
         EXPECT_FALSE(press_event->IsCommandDown());
@@ -1476,7 +1477,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityServiceClientTest,
         EXPECT_FALSE(press_event->IsShiftDown());
 
         ui::KeyEvent* release_event = test_event_handler.key_events[1].get();
-        EXPECT_EQ(release_event->type(), ui::ET_KEY_RELEASED);
+        EXPECT_EQ(release_event->type(), ui::EventType::kKeyReleased);
         EXPECT_EQ(release_event->code(), ui::DomCode::US_P);
         EXPECT_FALSE(release_event->IsAltDown());
         EXPECT_FALSE(release_event->IsCommandDown());
@@ -1535,7 +1536,7 @@ IN_PROC_BROWSER_TEST_F(
         }
 
         ui::KeyEvent* press_event = test_event_handler.key_events[0].get();
-        EXPECT_EQ(press_event->type(), ui::ET_KEY_PRESSED);
+        EXPECT_EQ(press_event->type(), ui::EventType::kKeyPressed);
         EXPECT_EQ(press_event->code(), ui::DomCode::US_S);
         EXPECT_TRUE(press_event->IsAltDown());
         EXPECT_TRUE(press_event->IsCommandDown());
@@ -1543,7 +1544,7 @@ IN_PROC_BROWSER_TEST_F(
         EXPECT_TRUE(press_event->IsShiftDown());
 
         ui::KeyEvent* release_event = test_event_handler.key_events[1].get();
-        EXPECT_EQ(release_event->type(), ui::ET_KEY_RELEASED);
+        EXPECT_EQ(release_event->type(), ui::EventType::kKeyReleased);
         EXPECT_EQ(release_event->code(), ui::DomCode::US_S);
         EXPECT_TRUE(release_event->IsAltDown());
         EXPECT_TRUE(release_event->IsCommandDown());
@@ -1576,7 +1577,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityServiceClientTest,
   TestEventHandler test_event_handler(base::BindLambdaForTesting([&]() {
     ASSERT_NE(0u, test_event_handler.mouse_events.size());
     ui::MouseEvent* mouse_event = test_event_handler.mouse_events.back().get();
-    EXPECT_EQ(mouse_event->type(), ui::ET_MOUSE_PRESSED);
+    EXPECT_EQ(mouse_event->type(), ui::EventType::kMousePressed);
     EXPECT_FALSE(mouse_event->flags() & ui::EF_TOUCH_ACCESSIBILITY);
     EXPECT_TRUE(mouse_event->IsOnlyLeftMouseButton());
     waiter.Quit();
@@ -1602,7 +1603,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityServiceClientTest,
   TestEventHandler test_event_handler(base::BindLambdaForTesting([&]() {
     ASSERT_NE(0u, test_event_handler.mouse_events.size());
     ui::MouseEvent* mouse_event = test_event_handler.mouse_events.back().get();
-    EXPECT_EQ(mouse_event->type(), ui::ET_MOUSE_RELEASED);
+    EXPECT_EQ(mouse_event->type(), ui::EventType::kMouseReleased);
     EXPECT_FALSE(mouse_event->flags() & ui::EF_TOUCH_ACCESSIBILITY);
     EXPECT_EQ(mouse_event->button_flags(), ui::EF_MIDDLE_MOUSE_BUTTON);
     waiter.Quit();
@@ -1628,7 +1629,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityServiceClientTest,
   TestEventHandler test_event_handler(base::BindLambdaForTesting([&]() {
     ASSERT_NE(0u, test_event_handler.mouse_events.size());
     ui::MouseEvent* mouse_event = test_event_handler.mouse_events.back().get();
-    EXPECT_EQ(mouse_event->type(), ui::ET_MOUSE_DRAGGED);
+    EXPECT_EQ(mouse_event->type(), ui::EventType::kMouseDragged);
     EXPECT_TRUE(mouse_event->flags() & ui::EF_TOUCH_ACCESSIBILITY);
     EXPECT_EQ(mouse_event->button_flags(), ui::EF_RIGHT_MOUSE_BUTTON);
     waiter.Quit();
@@ -1653,11 +1654,11 @@ IN_PROC_BROWSER_TEST_F(AccessibilityServiceClientTest,
     ASSERT_NE(0u, test_event_handler.mouse_events.size());
     ui::MouseEvent* mouse_event = test_event_handler.mouse_events.back().get();
     // We may see an enter event fired before the actual move event.
-    if (mouse_event->type() == ui::ET_MOUSE_ENTERED) {
+    if (mouse_event->type() == ui::EventType::kMouseEntered) {
       return;
     }
 
-    EXPECT_EQ(mouse_event->type(), ui::ET_MOUSE_MOVED);
+    EXPECT_EQ(mouse_event->type(), ui::EventType::kMouseMoved);
     EXPECT_FALSE(mouse_event->flags() & ui::EF_TOUCH_ACCESSIBILITY);
     EXPECT_EQ(mouse_event->button_flags(), 0);
     waiter.Quit();
@@ -1682,7 +1683,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityServiceClientTest,
   TestEventHandler test_event_handler(base::BindLambdaForTesting([&]() {
     ASSERT_NE(0u, test_event_handler.mouse_events.size());
     ui::MouseEvent* mouse_event = test_event_handler.mouse_events.back().get();
-    EXPECT_EQ(mouse_event->type(), ui::ET_MOUSE_ENTERED);
+    EXPECT_EQ(mouse_event->type(), ui::EventType::kMouseEntered);
     EXPECT_FALSE(mouse_event->flags() & ui::EF_TOUCH_ACCESSIBILITY);
     EXPECT_EQ(mouse_event->button_flags(), ui::EF_BACK_MOUSE_BUTTON);
     waiter.Quit();
@@ -1707,7 +1708,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityServiceClientTest,
   TestEventHandler test_event_handler(base::BindLambdaForTesting([&]() {
     ASSERT_NE(0u, test_event_handler.mouse_events.size());
     ui::MouseEvent* mouse_event = test_event_handler.mouse_events.back().get();
-    EXPECT_EQ(mouse_event->type(), ui::ET_MOUSE_EXITED);
+    EXPECT_EQ(mouse_event->type(), ui::EventType::kMouseExited);
     EXPECT_FALSE(mouse_event->flags() & ui::EF_TOUCH_ACCESSIBILITY);
     EXPECT_EQ(mouse_event->button_flags(), ui::EF_FORWARD_MOUSE_BUTTON);
     waiter.Quit();

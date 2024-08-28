@@ -15,6 +15,7 @@
 #include "ui/aura/window.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
@@ -47,7 +48,8 @@ class CandidateViewTest : public views::ViewsTestBase {
     views::ViewsTestBase::SetUp();
 
     views::Widget::InitParams init_params(
-        CreateParams(views::Widget::InitParams::TYPE_WINDOW));
+        CreateParams(views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+                     views::Widget::InitParams::TYPE_WINDOW));
 
     init_params.delegate = new views::WidgetDelegateView();
 
@@ -180,7 +182,7 @@ TEST_F(CandidateViewTest, SetEntryChangesAccessibleName) {
   ui::CandidateWindow::Entry entry;
   entry.value = u"Candidate";
   view->SetEntry(entry);
-  EXPECT_EQ(u"Candidate", view->GetAccessibleName());
+  EXPECT_EQ(u"Candidate", view->GetViewAccessibility().GetCachedName());
 }
 
 TEST_F(CandidateViewTest, SetEntryNotifiesAccessibilityEvent) {
@@ -204,7 +206,8 @@ TEST_F(CandidateViewTest, GetAccessibleNodeData) {
   view->SetEntry(entry);
 
   ui::AXNodeData data;
-  static_cast<views::View*>(view)->GetAccessibleNodeData(&data);
+  static_cast<views::View*>(view)->GetViewAccessibility().GetAccessibleNodeData(
+      &data);
 
   EXPECT_EQ(ax::mojom::Role::kImeCandidate, data.role);
   EXPECT_EQ("Candidate",

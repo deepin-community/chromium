@@ -5,6 +5,7 @@
 #include "chrome/browser/ash/bruschetta/bruschetta_network_context.h"
 
 #include <stdint.h>
+
 #include <memory>
 #include <optional>
 #include <vector>
@@ -151,10 +152,9 @@ void BruschettaNetworkContext::OnCertificateRequested(
                       ->CreateClientCertStore();
   }
   cert_store_->GetClientCerts(
-      *cert_info.get(),
-      base::BindOnce(&BruschettaNetworkContext::OnGotClientCerts,
-                     weak_ptr_factory_.GetWeakPtr(), cert_info,
-                     std::move(cert_responder_remote)));
+      cert_info, base::BindOnce(&BruschettaNetworkContext::OnGotClientCerts,
+                                weak_ptr_factory_.GetWeakPtr(), cert_info,
+                                std::move(cert_responder_remote)));
 }
 
 void BruschettaNetworkContext::OnGotClientCerts(
@@ -215,7 +215,7 @@ void BruschettaNetworkContext::ContinueWithCertificate(
 
 void BruschettaNetworkContext::OnAuthRequired(
     const std::optional<base::UnguessableToken>& window_id,
-    uint32_t request_id,
+    int32_t request_id,
     const GURL& url,
     bool first_auth_attempt,
     const net::AuthChallengeInfo& auth_info,
@@ -269,5 +269,8 @@ void BruschettaNetworkContext::Clone(
         observer) {
   url_loader_observers_.Add(this, std::move(observer));
 }
+
+void BruschettaNetworkContext::OnWebSocketConnectedToPrivateNetwork(
+    network::mojom::IPAddressSpace ip_address_space) {}
 
 }  // namespace bruschetta

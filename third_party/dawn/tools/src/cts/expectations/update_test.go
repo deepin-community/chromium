@@ -67,8 +67,115 @@ func TestUpdate(t *testing.T) {
 		{ //////////////////////////////////////////////////////////////////////
 			name: "no results found",
 			expectations: `
+# ##ROLLER_MUTABLE##
 crbug.com/a/123 a:missing,test,result:* [ Failure ]
 crbug.com/a/123 [ tag ] another:missing,test,result:* [ Failure ]
+some:other,test:* [ Failure ]
+`,
+			results: result.List{
+				result.Result{
+					Query:  Q("some:other,test:*"),
+					Tags:   result.NewTags("os-a", "gpu-a"),
+					Status: result.Failure,
+				},
+				result.Result{
+					Query:  Q("some:other,test:*"),
+					Tags:   result.NewTags("os-b", "gpu-b"),
+					Status: result.Failure,
+				},
+			},
+			updated: `
+# ##ROLLER_MUTABLE##
+some:other,test:* [ Failure ]
+crbug.com/a/123 a:missing,test,result:* [ Failure ]
+crbug.com/a/123 [ tag ] another:missing,test,result:* [ Failure ]
+`,
+			diagnostics: expectations.Diagnostics{
+				{
+					Severity: expectations.Note,
+					Line:     headerLines + 3,
+					Message:  "no results found for query 'a:missing,test,result:*'",
+				},
+				{
+					Severity: expectations.Note,
+					Line:     headerLines + 4,
+					Message:  "no results found for query 'another:missing,test,result:*' with tags [tag]",
+				},
+			},
+		},
+		{ //////////////////////////////////////////////////////////////////////
+			name: "no results found immutable",
+			expectations: `
+crbug.com/a/123 a:missing,test,result:* [ Failure ]
+
+some:other,test:* [ Failure ]
+`,
+			results: result.List{
+				result.Result{
+					Query:  Q("some:other,test:*"),
+					Tags:   result.NewTags("os-a", "gpu-a"),
+					Status: result.Failure,
+				},
+				result.Result{
+					Query:  Q("some:other,test:*"),
+					Tags:   result.NewTags("os-b", "gpu-b"),
+					Status: result.Failure,
+				},
+			},
+			updated: `
+crbug.com/a/123 a:missing,test,result:* [ Failure ]
+
+some:other,test:* [ Failure ]
+`,
+			diagnostics: expectations.Diagnostics{
+				{
+					Severity: expectations.Note,
+					Line:     headerLines + 2,
+					Message:  "no results found for query 'a:missing,test,result:*'",
+				},
+			},
+		},
+		{ //////////////////////////////////////////////////////////////////////
+			name: "unknown test",
+			expectations: `
+# ##ROLLER_MUTABLE##
+crbug.com/a/123 an:unknown,test:* [ Failure ]
+crbug.com/a/123 [ tag ] another:unknown:test [ Failure ]
+
+some:other,test:* [ Failure ]
+`,
+			results: result.List{
+				result.Result{
+					Query:  Q("some:other,test:*"),
+					Tags:   result.NewTags("os-a", "gpu-a"),
+					Status: result.Failure,
+				},
+				result.Result{
+					Query:  Q("some:other,test:*"),
+					Tags:   result.NewTags("os-b", "gpu-b"),
+					Status: result.Failure,
+				},
+			},
+			updated: `
+some:other,test:* [ Failure ]
+`,
+			diagnostics: expectations.Diagnostics{
+				{
+					Severity: expectations.Warning,
+					Line:     headerLines + 3,
+					Message:  "no tests exist with query 'an:unknown,test:*' - removing",
+				},
+				{
+					Severity: expectations.Warning,
+					Line:     headerLines + 4,
+					Message:  "no tests exist with query 'another:unknown:test' - removing",
+				},
+			},
+		},
+		{ //////////////////////////////////////////////////////////////////////
+			name: "unknown test found in immutable chunk",
+			expectations: `
+crbug.com/a/123 an:unknown,test:* [ Failure ]
 
 some:other,test:* [ Failure ]
 `,
@@ -91,48 +198,88 @@ some:other,test:* [ Failure ]
 				{
 					Severity: expectations.Warning,
 					Line:     headerLines + 2,
-					Message:  "no results found for 'a:missing,test,result:*'",
-				},
-				{
-					Severity: expectations.Warning,
-					Line:     headerLines + 3,
-					Message:  "no results found for 'another:missing,test,result:*' with tags [tag]",
-				},
-			},
-		},
-		{ //////////////////////////////////////////////////////////////////////
-			name: "no results found KEEP",
-			expectations: `
-# KEEP
-crbug.com/a/123 a:missing,test,result:* [ Failure ]
-
-some:other,test:* [ Failure ]
-`,
-			results: result.List{
-				result.Result{
-					Query:  Q("some:other,test:*"),
-					Tags:   result.NewTags("os-a", "gpu-a"),
-					Status: result.Failure,
-				},
-				result.Result{
-					Query:  Q("some:other,test:*"),
-					Tags:   result.NewTags("os-b", "gpu-b"),
-					Status: result.Failure,
-				},
-			},
-			updated: `
-some:other,test:* [ Failure ]
-`,
-			diagnostics: expectations.Diagnostics{
-				{
-					Severity: expectations.Warning,
-					Line:     headerLines + 3,
-					Message:  "no results found for 'a:missing,test,result:*'",
+					Message:  "no tests exist with query 'an:unknown,test:*' - removing",
 				},
 			},
 		},
 		{ //////////////////////////////////////////////////////////////////////
 			name: "simple expectation with tags",
+			expectations: `
+# ##ROLLER_MUTABLE##
+[ os-a ] a:b,c:* [ Failure ]
+[ gpu-b ] a:b,c:* [ Failure ]
+`,
+			results: result.List{
+				result.Result{
+					Query:  Q("a:b,c:d:e"),
+					Tags:   result.NewTags("os-a", "os-c", "gpu-b"),
+					Status: result.Failure,
+				},
+			},
+			updated: `
+# ##ROLLER_MUTABLE##
+a:b,c:* [ Failure ]
+`,
+			diagnostics: expectations.Diagnostics{
+				{
+					Severity: expectations.Note,
+					Line:     headerLines + 4,
+					Message:  "expectation is fully covered by previous expectations",
+				},
+			},
+		},
+		{ //////////////////////////////////////////////////////////////////////
+			name: "simple expectation with tags new flakes implicitly mutable",
+			expectations: `
+################################################################################
+# New flakes. Please triage - will be discarded/regenerated by the next roll:
+# ##ROLLER_DISCARD_AND_REWRITE##
+################################################################################
+[ os-a ] a:b,c:* [ RetryOnFailure ]
+[ gpu-b ] a:b,c:* [ RetryOnFailure ]
+`,
+			results: result.List{
+				result.Result{
+					Query:  Q("a:b,c:d:e"),
+					Tags:   result.NewTags("os-a", "os-c", "gpu-b"),
+					Status: result.RetryOnFailure,
+				},
+			},
+			updated: `
+################################################################################
+# New flakes. Please triage - will be discarded/regenerated by the next roll:
+# ##ROLLER_DISCARD_AND_REWRITE##
+################################################################################
+crbug.com/dawn/0000 a:* [ RetryOnFailure ]
+`,
+		},
+		{ //////////////////////////////////////////////////////////////////////
+			name: "simple expectation with tags new failures implicitly mutable",
+			expectations: `
+################################################################################
+# New failures. Please triage - will be discarded/regenerated by the next roll:
+# ##ROLLER_DISCARD_AND_REWRITE##
+################################################################################
+[ os-a ] a:b,c:* [ Failure ]
+[ gpu-b ] a:b,c:* [ Failure ]
+`,
+			results: result.List{
+				result.Result{
+					Query:  Q("a:b,c:d:e"),
+					Tags:   result.NewTags("os-a", "os-c", "gpu-b"),
+					Status: result.Failure,
+				},
+			},
+			updated: `
+################################################################################
+# New failures. Please triage - will be discarded/regenerated by the next roll:
+# ##ROLLER_DISCARD_AND_REWRITE##
+################################################################################
+crbug.com/dawn/0000 a:* [ Failure ]
+`,
+		},
+		{ //////////////////////////////////////////////////////////////////////
+			name: "simple expectation with tags immutable",
 			expectations: `
 [ os-a ] a:b,c:* [ Failure ]
 [ gpu-b ] a:b,c:* [ Failure ]
@@ -145,19 +292,14 @@ some:other,test:* [ Failure ]
 				},
 			},
 			updated: `
-a:b,c:* [ Failure ]
+[ gpu-b ] a:b,c:* [ Failure ]
+[ os-a ] a:b,c:* [ Failure ]
 `,
-			diagnostics: expectations.Diagnostics{
-				{
-					Severity: expectations.Note,
-					Line:     headerLines + 3,
-					Message:  "expectation is fully covered by previous expectations",
-				},
-			},
 		},
 		{ //////////////////////////////////////////////////////////////////////
 			name: "expectation test now passes",
 			expectations: `
+# ##ROLLER_MUTABLE##
 crbug.com/a/123 [ gpu-a os-a ] a:b,c:* [ Failure ]
 crbug.com/a/123 [ gpu-b os-b ] a:b,c:* [ Failure ]
 `,
@@ -174,12 +316,13 @@ crbug.com/a/123 [ gpu-b os-b ] a:b,c:* [ Failure ]
 				},
 			},
 			updated: `
+# ##ROLLER_MUTABLE##
 crbug.com/a/123 [ os-b ] a:b,c:* [ Failure ]
 `,
 			diagnostics: expectations.Diagnostics{
 				{
 					Severity: expectations.Note,
-					Line:     headerLines + 3,
+					Line:     headerLines + 4,
 					Message:  "expectation is fully covered by previous expectations",
 				},
 			},
@@ -187,6 +330,7 @@ crbug.com/a/123 [ os-b ] a:b,c:* [ Failure ]
 		{ //////////////////////////////////////////////////////////////////////
 			name: "expectation case now passes",
 			expectations: `
+# ##ROLLER_MUTABLE##
 crbug.com/a/123 [ gpu-a os-a ] a:b,c:d:* [ Failure ]
 crbug.com/a/123 [ gpu-b os-b ] a:b,c:d:* [ Failure ]
 `,
@@ -203,12 +347,13 @@ crbug.com/a/123 [ gpu-b os-b ] a:b,c:d:* [ Failure ]
 				},
 			},
 			updated: `
+# ##ROLLER_MUTABLE##
 crbug.com/a/123 [ os-b ] a:b,c:d:* [ Failure ]
 `,
 			diagnostics: expectations.Diagnostics{
 				{
 					Severity: expectations.Note,
-					Line:     headerLines + 3,
+					Line:     headerLines + 4,
 					Message:  "expectation is fully covered by previous expectations",
 				},
 			},
@@ -257,9 +402,8 @@ crbug.com/a/123 [ gpu-c os-a ] a:b,c:d:* [ Failure ]
 `,
 		},
 		{ //////////////////////////////////////////////////////////////////////
-			name: "expectation case now passes KEEP - single",
+			name: "expectation case now passes immutable - single",
 			expectations: `
-# KEEP
 crbug.com/a/123 [ gpu-a os-a ] a:b,c:d:* [ Failure ]
 crbug.com/a/123 [ gpu-b os-b ] a:b,c:d:* [ Failure ]
 `,
@@ -276,22 +420,20 @@ crbug.com/a/123 [ gpu-b os-b ] a:b,c:d:* [ Failure ]
 				},
 			},
 			updated: `
-# KEEP
 crbug.com/a/123 [ gpu-a os-a ] a:b,c:d:* [ Failure ]
 crbug.com/a/123 [ gpu-b os-b ] a:b,c:d:* [ Failure ]
 `,
 			diagnostics: expectations.Diagnostics{
 				{
 					Severity: expectations.Note,
-					Line:     headerLines + 3,
+					Line:     headerLines + 2,
 					Message:  "test now passes",
 				},
 			},
 		},
 		{ //////////////////////////////////////////////////////////////////////
-			name: "expectation case now passes KEEP - multiple",
+			name: "expectation case now passes immutable - multiple",
 			expectations: `
-# KEEP
 crbug.com/a/123 a:b,c:d:* [ Failure ]
 `,
 			results: result.List{
@@ -301,13 +443,12 @@ crbug.com/a/123 a:b,c:d:* [ Failure ]
 				result.Result{Query: Q("a:b,c:d:d"), Status: result.Pass},
 			},
 			updated: `
-# KEEP
 crbug.com/a/123 a:b,c:d:* [ Failure ]
 `,
 			diagnostics: expectations.Diagnostics{
 				{
 					Severity: expectations.Note,
-					Line:     headerLines + 3,
+					Line:     headerLines + 2,
 					Message:  "all 4 tests now pass",
 				},
 			},
@@ -365,18 +506,20 @@ crbug.com/a/123 a:b,c:d:* [ Failure ]
 			updated: `# A comment
 
 ################################################################################
-# New flakes. Please triage:
+# New flakes. Please triage - will be discarded/regenerated by the next roll:
+# ##ROLLER_DISCARD_AND_REWRITE##
 ################################################################################
-crbug.com/dawn/0000 [ gpu-b os-b ] suite:dir_a,dir_b:test_c:case=5;* [ RetryOnFailure ]
 crbug.com/dawn/0000 [ gpu-a os-a ] suite:dir_a,dir_b:test_c:case=6;* [ RetryOnFailure ]
+crbug.com/dawn/0000 [ gpu-b os-b ] suite:dir_a,dir_b:test_c:case=5;* [ RetryOnFailure ]
 
 ################################################################################
-# New failures. Please triage:
+# New failures. Please triage - will be discarded/regenerated by the next roll:
+# ##ROLLER_DISCARD_AND_REWRITE##
 ################################################################################
-crbug.com/dawn/0000 [ gpu-b os-a ] suite:* [ Failure ]
 crbug.com/dawn/0000 [ gpu-a os-a ] suite:dir_a,dir_b:test_a:* [ Failure ]
 crbug.com/dawn/0000 [ gpu-a os-a ] suite:dir_a,dir_b:test_b:* [ Slow ]
 crbug.com/dawn/0000 [ gpu-a os-a ] suite:dir_a,dir_b:test_c:case=4;* [ Failure ]
+crbug.com/dawn/0000 [ gpu-b os-a ] suite:* [ Failure ]
 crbug.com/dawn/0000 [ gpu-b os-b ] suite:dir_a,dir_b:test_c:case=4;* [ Failure ]
 `,
 		},
@@ -421,7 +564,8 @@ crbug.com/dawn/0000 [ gpu-b os-b ] suite:dir_a,dir_b:test_c:case=4;* [ Failure ]
 			updated: `# A comment
 
 ################################################################################
-# New failures. Please triage:
+# New failures. Please triage - will be discarded/regenerated by the next roll:
+# ##ROLLER_DISCARD_AND_REWRITE##
 ################################################################################
 crbug.com/dawn/0000 [ os-a ] a:b,c:d:* [ Failure ]
 crbug.com/dawn/0000 [ os-b ] a:b,c:d:x,* [ Failure ]
@@ -459,7 +603,8 @@ crbug.com/dawn/0000 [ os-b ] a:b,c:d:x,* [ Failure ]
 			},
 			updated: `
 ################################################################################
-# New failures. Please triage:
+# New failures. Please triage - will be discarded/regenerated by the next roll:
+# ##ROLLER_DISCARD_AND_REWRITE##
 ################################################################################
 crbug.com/dawn/0000 [ gpu-a ] a:* [ Failure ]
 crbug.com/dawn/0000 [ gpu-b ] a:* [ Failure ]
@@ -489,10 +634,11 @@ crbug.com/dawn/0000 [ os-b ] a:* [ Failure ]
 			},
 			updated: `
 ################################################################################
-# New failures. Please triage:
+# New failures. Please triage - will be discarded/regenerated by the next roll:
+# ##ROLLER_DISCARD_AND_REWRITE##
 ################################################################################
-crbug.com/dawn/0000 [ gpu-c os-b ] a:* [ Failure ]
 crbug.com/dawn/0000 [ gpu-b os-c ] a:* [ Failure ]
+crbug.com/dawn/0000 [ gpu-c os-b ] a:* [ Failure ]
 `,
 		},
 		{ //////////////////////////////////////////////////////////////////////
@@ -512,7 +658,8 @@ crbug.com/dawn/0000 [ gpu-b os-c ] a:* [ Failure ]
 			},
 			updated: `
 ################################################################################
-# New failures. Please triage:
+# New failures. Please triage - will be discarded/regenerated by the next roll:
+# ##ROLLER_DISCARD_AND_REWRITE##
 ################################################################################
 crbug.com/dawn/0000 a:* [ Failure ]
 `,
@@ -534,7 +681,8 @@ crbug.com/dawn/0000 a:* [ Failure ]
 			},
 			updated: `
 ################################################################################
-# New failures. Please triage:
+# New failures. Please triage - will be discarded/regenerated by the next roll:
+# ##ROLLER_DISCARD_AND_REWRITE##
 ################################################################################
 crbug.com/dawn/0000 a:b,c:0:* [ Failure ]
 crbug.com/dawn/0000 a:b,c:2:* [ Failure ]
@@ -580,7 +728,8 @@ crbug.com/dawn/0000 a:b,c:8:* [ Failure ]
 			},
 			updated: `
 ################################################################################
-# New failures. Please triage:
+# New failures. Please triage - will be discarded/regenerated by the next roll:
+# ##ROLLER_DISCARD_AND_REWRITE##
 ################################################################################
 crbug.com/dawn/0000 a:* [ Failure ]
 `,
@@ -622,7 +771,8 @@ crbug.com/dawn/0000 a:* [ Failure ]
 			},
 			updated: `
 ################################################################################
-# New failures. Please triage:
+# New failures. Please triage - will be discarded/regenerated by the next roll:
+# ##ROLLER_DISCARD_AND_REWRITE##
 ################################################################################
 crbug.com/dawn/0000 a:b,c:00:* [ Failure ]
 crbug.com/dawn/0000 a:b,c:05:* [ Failure ]
@@ -645,6 +795,12 @@ crbug.com/dawn/0000 a:b,c:29:* [ Failure ]
 		testList := container.NewMap[string, query.Query]()
 		for _, r := range test.results {
 			testList.Add(r.Query.String(), r.Query)
+		}
+		for _, s := range []string{
+			"a:missing,test,result:a=1,b=2",
+			"another:missing,test,result:cat=meow,dog=woof",
+		} {
+			testList.Add(s, query.Parse(s))
 		}
 
 		errMsg := ""

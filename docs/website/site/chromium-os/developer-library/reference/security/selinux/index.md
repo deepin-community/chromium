@@ -1,7 +1,7 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library/reference
-  - Chromium OS > Developer Library > Reference
+  - ChromiumOS > Reference
 page_name: selinux
 title: SELinux in ChromeOS
 ---
@@ -1034,7 +1034,7 @@ for acknowledged users on user build. But for developer build, we still write
 all audit events dumped to syslog to crash pool.
 
 If you see any `selinux_violation`\* in `/var/spool/crash`, it doesn't mean that
-something has crashed. It only means an audit event has occured. SELinux doesn't
+something has crashed. It only means an audit event has occurred. SELinux doesn't
 kill any process violating the policy, it just forces the corresponding syscall
 to return `-EACCESS` (permission denied). In most cases, you don't need to care
 about what's being stored in /var/spool/crash for SELinux violations. If you
@@ -1169,8 +1169,8 @@ SELinux policies to refer to though it's for Android, at
 [go/sepolicy-debug](https://goto.google.com/sepolicy-debug)
 
 [SELinux talk]: https://drive.google.com/file/d/1zT0IH3fg2KoTx0phU78aj6pEscHPIqAq/view
-[File Contexts]: https://chromium.googlesource.com/chromiumos/docs/+/main/security/selinux.md#File-Contexts
-[How to read the denials in audit logs]: https://chromium.googlesource.com/chromiumos/docs/+/main/security/selinux.md#How-to-read-the-denials-in-audit-logs
+[File Contexts]: https://www.chromium.org/chromium-os/developer-library/reference/security/selinux/#file-contexts
+[How to read the denials in audit logs]: https://www.chromium.org/chromium-os/developer-library/reference/security/selinux/#how-to-read-the-denials-in-audit-logs
 
 [base/imported/global_macros]: https://source.corp.google.com/chromeos_public/src/platform2/sepolicy/policy/base/imported/global_macros
 [base/imported/te_macros]: https://source.corp.google.com/chromeos_public/src/platform2/sepolicy/policy/base/imported/te_macros

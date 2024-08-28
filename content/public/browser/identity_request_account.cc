@@ -14,7 +14,10 @@ IdentityRequestAccount::IdentityRequestAccount(
     const GURL& picture,
     std::vector<std::string> login_hints,
     std::vector<std::string> domain_hints,
-    std::optional<LoginState> login_state)
+    std::vector<std::string> labels,
+    std::optional<LoginState> login_state,
+    LoginState browser_trusted_login_state,
+    std::optional<base::Time> last_used_timestamp)
     : id{id},
       email{email},
       name{name},
@@ -22,7 +25,10 @@ IdentityRequestAccount::IdentityRequestAccount(
       picture{picture},
       login_hints(std::move(login_hints)),
       domain_hints(std::move(domain_hints)),
-      login_state{login_state} {}
+      labels(std::move(labels)),
+      login_state{login_state},
+      browser_trusted_login_state{browser_trusted_login_state},
+      last_used_timestamp{last_used_timestamp} {}
 
 IdentityRequestAccount::IdentityRequestAccount(const IdentityRequestAccount&) =
     default;

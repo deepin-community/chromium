@@ -8,7 +8,6 @@
 
 #include "third_party/blink/renderer/core/css/css_color.h"
 #include "third_party/blink/renderer/core/css/css_keyframe_rule.h"
-#include "third_party/blink/renderer/core/css/css_try_rule.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_fast_paths.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_impl.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_token_stream.h"
@@ -53,10 +52,9 @@ base::span<CSSSelector> CSSParser::ParseSelector(
     const String& selector,
     HeapVector<CSSSelector>& arena) {
   CSSTokenizer tokenizer(selector);
-  const auto tokens = tokenizer.TokenizeToEOF();
+  CSSParserTokenStream stream(tokenizer);
   return CSSSelectorParser::ParseSelector(
-      CSSParserTokenRange(tokens), context, nesting_type,
-      parent_rule_for_nesting, is_within_scope,
+      stream, context, nesting_type, parent_rule_for_nesting, is_within_scope,
       /* semicolon_aborts_nested_selector */ false, style_sheet_contents,
       arena);
 }
@@ -69,6 +67,14 @@ CSSSelectorList* CSSParser::ParsePageSelector(
   const auto tokens = tokenizer.TokenizeToEOF();
   return CSSParserImpl::ParsePageSelector(CSSParserTokenRange(tokens),
                                           style_sheet_contents, context);
+}
+
+StyleRuleBase* CSSParser::ParseMarginRule(const CSSParserContext* context,
+                                          StyleSheetContents* style_sheet,
+                                          const String& rule) {
+  return CSSParserImpl::ParseRule(rule, context, CSSNestingType::kNone,
+                                  /*parent_rule_for_nesting=*/nullptr,
+                                  style_sheet, CSSParserImpl::kPageMarginRules);
 }
 
 StyleRuleBase* CSSParser::ParseRule(const CSSParserContext* context,
@@ -180,9 +186,9 @@ MutableCSSPropertyValueSet::SetResult CSSParser::ParseValue(
   if (parser_mode == kHTMLStandardMode && property.IsProperty() &&
       !property.IsShorthand()) {
     CSSTokenizer tokenizer(string);
-    const auto tokens = tokenizer.TokenizeToEOF();
+    CSSParserTokenStream stream(tokenizer);
     value =
-        CSSPropertyParser::ParseSingleValue(resolved_property, tokens, context);
+        CSSPropertyParser::ParseSingleValue(resolved_property, stream, context);
     if (value != nullptr) {
       return declaration->SetLonghandProperty(CSSPropertyValue(
           CSSPropertyName(resolved_property), *value, important));
@@ -245,9 +251,8 @@ const CSSValue* CSSParser::ParseSingleValue(CSSPropertyID property_id,
     return value;
   }
   CSSTokenizer tokenizer(string);
-  const auto tokens = tokenizer.TokenizeToEOF();
-  return CSSPropertyParser::ParseSingleValue(
-      property_id, CSSParserTokenRange(tokens), context);
+  CSSParserTokenStream stream(tokenizer);
+  return CSSPropertyParser::ParseSingleValue(property_id, stream, context);
 }
 
 ImmutableCSSPropertyValueSet* CSSParser::ParseInlineStyleDeclaration(
@@ -259,9 +264,10 @@ ImmutableCSSPropertyValueSet* CSSParser::ParseInlineStyleDeclaration(
 ImmutableCSSPropertyValueSet* CSSParser::ParseInlineStyleDeclaration(
     const String& style_string,
     CSSParserMode parser_mode,
-    SecureContextMode secure_context_mode) {
-  return CSSParserImpl::ParseInlineStyleDeclaration(style_string, parser_mode,
-                                                    secure_context_mode);
+    SecureContextMode secure_context_mode,
+    const Document* document) {
+  return CSSParserImpl::ParseInlineStyleDeclaration(
+      style_string, parser_mode, secure_context_mode, document);
 }
 
 std::unique_ptr<Vector<KeyframeOffset>> CSSParser::ParseKeyframeKeyList(
@@ -282,13 +288,6 @@ String CSSParser::ParseCustomPropertyName(const String& name_text) {
   return CSSParserImpl::ParseCustomPropertyName(name_text);
 }
 
-StyleRuleTry* CSSParser::ParseTryRule(const CSSParserContext* context,
-                                      const String& rule) {
-  StyleRuleBase* try_rule = CSSParserImpl::ParseRule(
-      rule, context, CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
-      nullptr, CSSParserImpl::kTryRules);
-  return To<StyleRuleTry>(try_rule);
-}
 bool CSSParser::ParseSupportsCondition(
     const String& condition,
     const ExecutionContext* execution_context) {

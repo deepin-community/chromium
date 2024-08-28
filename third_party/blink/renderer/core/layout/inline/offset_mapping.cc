@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/core/layout/inline/offset_mapping.h"
 
 #include <algorithm>
@@ -119,11 +124,6 @@ void OffsetMappingUnit::AssertValid() const {
         AssociatedNode() ? layout_text.TextStartOffset() : 0;
     SECURITY_DCHECK(dom_end_ >= text_start)
         << dom_end_ << " vs. " << text_start;
-    if (!RuntimeEnabledFeatures::OffsetMappingUnitVariableEnabled()) {
-      const unsigned text_end =
-          text_start + layout_text.TransformedTextLength();
-      SECURITY_DCHECK(dom_end_ <= text_end) << dom_end_ << " vs. " << text_end;
-    }
   } else {
     SECURITY_DCHECK(dom_start_ == 0) << dom_start_;
     SECURITY_DCHECK(dom_end_ == 1) << dom_end_;
@@ -595,6 +595,21 @@ bool OffsetMapping::HasBidiControlCharactersOnly(unsigned start,
       return false;
   }
   return true;
+}
+
+unsigned OffsetMapping::LayoutObjectConverter::TextContentOffset(
+    unsigned offset) const {
+  auto iter = offset >= last_offset_ ? last_unit_ : units_.begin();
+  if (offset >= iter->DOMEnd()) {
+    iter = base::ranges::find_if(
+        iter, units_.end(), [offset](const OffsetMappingUnit& unit) {
+          return unit.DOMStart() <= offset && offset < unit.DOMEnd();
+        });
+  }
+  CHECK(iter != units_.end());
+  last_unit_ = iter;
+  last_offset_ = offset;
+  return iter->ConvertDOMOffsetToTextContent(offset);
 }
 
 void OffsetMappingUnit::Trace(Visitor* visitor) const {

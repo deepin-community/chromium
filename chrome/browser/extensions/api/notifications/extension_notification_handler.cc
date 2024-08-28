@@ -7,7 +7,6 @@
 #include "base/check_op.h"
 #include "base/functional/callback.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/strings/string_piece.h"
 #include "chrome/browser/extensions/api/notifications/extension_notification_display_helper.h"
 #include "chrome/browser/extensions/api/notifications/extension_notification_display_helper_factory.h"
 #include "chrome/browser/notifications/notification_common.h"
@@ -112,6 +111,13 @@ void ExtensionNotificationHandler::DisableNotifications(Profile* profile,
       message_center::NotifierType::APPLICATION, origin.host());
   NotifierStateTrackerFactory::GetForProfile(profile)->SetNotifierEnabled(
       notifier_id, false /* enabled */);
+}
+
+// There are not settings to open, but on the chance the notification shows with
+// the "Open Settings" prompt, this will no-op.
+void ExtensionNotificationHandler::OpenSettings(Profile* profile,
+                                                const GURL& origin) {
+  return;
 }
 
 void ExtensionNotificationHandler::SendEvent(

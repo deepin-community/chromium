@@ -26,6 +26,7 @@
 #include "ui/gfx/text_constants.h"
 #include "ui/gfx/text_utils.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/caption_button_layout_constants.h"
@@ -53,7 +54,8 @@ FrameCenterButton::FrameCenterButton(PressedCallback callback)
     : FrameCaptionButton(std::move(callback),
                          views::CAPTION_BUTTON_ICON_CENTER,
                          HTMENU) {
-  SetAccessibleName(l10n_util::GetStringUTF16(IDS_APP_ACCNAME_CENTER));
+  GetViewAccessibility().SetName(
+      l10n_util::GetStringUTF16(IDS_APP_ACCNAME_CENTER));
   background_color_changed_subscription_ = AddBackgroundColorChangedCallback(
       base::BindRepeating(&FrameCenterButton::OnBackgroundColorChanged,
                           base::Unretained(this)));
@@ -62,7 +64,7 @@ FrameCenterButton::FrameCenterButton(PressedCallback callback)
 FrameCenterButton::~FrameCenterButton() = default;
 
 gfx::Size FrameCenterButton::GetMinimumSize() const {
-  gfx::Size size = GetPreferredSize();
+  gfx::Size size = GetPreferredSize({0, 0});
   // Similar to CalculatePreferredSize(), but allow the text width to be zero.
   size.set_width((sub_icon_image_
                       ? base::ClampCeil(icon_image().width() / 2.0f) +
@@ -128,8 +130,9 @@ void FrameCenterButton::SetText(std::optional<std::u16string> text) {
 // (v) The margin between the text and the sub icon (kMarginBetweenContents)
 // (vi) The left semicircle of the sub icon (sub_icon_image_->width() / 2)
 // (vii) The right semicircle of the sub icon (views::kCaptionButtonWidth / 2)
-gfx::Size FrameCenterButton::CalculatePreferredSize() const {
-  gfx::Size size = views::View::CalculatePreferredSize();
+gfx::Size FrameCenterButton::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  gfx::Size size = views::View::CalculatePreferredSize(available_size);
 
   if (chromeos::features::IsJellyEnabled()) {
     size.set_width(

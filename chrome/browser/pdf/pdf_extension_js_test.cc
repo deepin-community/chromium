@@ -27,7 +27,6 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/base/web_ui_test_data_source.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
-#include "components/services/screen_ai/buildflags/buildflags.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
@@ -149,10 +148,6 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, PluginController) {
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, Viewport) {
   RunTestsInJsModule("viewport_test.js", "test.pdf");
-}
-
-IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, ViewportScroller) {
-  RunTestsInJsModule("viewport_scroller_test.js", "test.pdf");
 }
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, Layout3) {
@@ -277,15 +272,6 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, Fullscreen) {
   RunTestsInJsModule("fullscreen_test.js", "test-bookmarks.pdf");
 }
 
-IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, ViewerPropertiesDialog) {
-  // The properties dialog formats some values based on locale.
-  base::test::ScopedRestoreICUDefaultLocale scoped_locale{"en_US"};
-  // This will apply to the new processes spawned within RunTestsInJsModule(),
-  // thus consistently running the test in a well known time zone.
-  content::ScopedTimeZone scoped_time_zone{"America/Los_Angeles"};
-  RunTestsInJsModule("viewer_properties_dialog_test.js", "document_info.pdf");
-}
-
 IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, PostMessageProxy) {
   // Although this test file does not require a PDF to be loaded, loading the
   // elements without loading a PDF is difficult.
@@ -299,11 +285,11 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, Printing) {
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 #if BUILDFLAG(ENABLE_INK)
-// TODO(https://crbug.com/920684): Test times out under sanitizers.
-// TODO(https://crbug.com/1523044): Test fails for
+// TODO(crbug.com/41434927): Test times out under sanitizers.
+// TODO(crbug.com/41495998): Test fails for
 // testViewportToCameraConversion.
 IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, DISABLED_AnnotationsFeatureEnabled) {
-  // TODO(crbug.com/1445746): Remove this once the test passes for OOPIF PDF.
+  // TODO(crbug.com/40268279): Remove this once the test passes for OOPIF PDF.
   if (UseOopif()) {
     GTEST_SKIP();
   }
@@ -324,15 +310,22 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, ViewerToolbarDropdown) {
 }
 #endif  // BUILDFLAG(ENABLE_INK)
 
-#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
-// TODO(crbug.com/1444895): Re-enable it when integrating PDF OCR with
-// Select-to-Speak.
-IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, DISABLED_PdfOcrToolbar) {
-  // Although this test file does not require a PDF to be loaded, loading the
-  // elements without loading a PDF is difficult.
-  RunTestsInJsModule("pdf_ocr_toolbar_test.js", "test.pdf");
+// PDFExtensionJSTest with forced Pacific Time Zone.
+class PDFExtensionPacificTimeZoneJSTest : public PDFExtensionJSTest {
+  // This will apply to the new processes spawned within RunTestsInJsModule(),
+  // thus consistently running the test in a well known time zone.
+  // ScopedTimeZone needs to be created before the test setup. ScopedTimeZone
+  // overrides TimeZoneMonitor binder in DeviceService so the test setup creates
+  // FakeTimeZoneMonitor instead of the real TimeZoneMonitor implementation.
+  content::ScopedTimeZone scoped_time_zone_{"America/Los_Angeles"};
+};
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionPacificTimeZoneJSTest,
+                       ViewerPropertiesDialog) {
+  // The properties dialog formats some values based on locale.
+  base::test::ScopedRestoreICUDefaultLocale scoped_locale{"en_US"};
+  RunTestsInJsModule("viewer_properties_dialog_test.js", "document_info.pdf");
 }
-#endif  // BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
 
 class PDFExtensionContentSettingJSTest : public PDFExtensionJSTest {
  protected:
@@ -356,21 +349,11 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, Beep) {
 }
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, NoBeep) {
-  // TODO(crbug.com/1445746): Remove this once the test passes for OOPIF PDF.
-  if (UseOopif()) {
-    GTEST_SKIP();
-  }
-
   SetPdfJavaScript(/*enabled=*/false);
   RunTestsInJsModule("nobeep_test.js", "test-beep.pdf");
 }
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, BeepThenNoBeep) {
-  // TODO(crbug.com/1445746): Remove this once the test passes for OOPIF PDF.
-  if (UseOopif()) {
-    GTEST_SKIP();
-  }
-
   content::RenderProcessHost::SetMaxRendererProcessCount(1);
 
   RunTestsInJsModule("beep_test.js", "test-beep.pdf");
@@ -384,11 +367,6 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, BeepThenNoBeep) {
 }
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, NoBeepThenBeep) {
-  // TODO(crbug.com/1445746): Remove this once the test passes for OOPIF PDF.
-  if (UseOopif()) {
-    GTEST_SKIP();
-  }
-
   content::RenderProcessHost::SetMaxRendererProcessCount(1);
 
   SetPdfJavaScript(/*enabled=*/false);
@@ -409,14 +387,9 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, BeepCsp) {
 }
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, DISABLED_NoBeepCsp) {
-  // TODO(crbug.com/1445746): Remove this once the test passes for OOPIF PDF.
-  if (UseOopif()) {
-    GTEST_SKIP();
-  }
-
   // The script-source none directive in the mock headers file should
   // prevent the JavaScript from executing the beep().
-  // TODO(https://crbug.com/1032511) functionality not implemented.
+  // TODO(crbug.com/40050941) functionality not implemented.
   RunTestsInJsModule("nobeep_test.js", "test-nobeep-csp.pdf");
 }
 
@@ -475,9 +448,50 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionServiceWorkerJSTest, Interception) {
   RunServiceWorkerTest("respond_with_fetch_worker.js");
 }
 
-// TODO(crbug.com/1445746): Stop testing both modes after OOPIF PDF viewer
+#if BUILDFLAG(ENABLE_PDF_INK2)
+#if !BUILDFLAG(IS_CHROMEOS_ASH)
+// Test behavior when Ink2 and annotation mode are disabled for the PDF viewer.
+// Don't run this test on Ash, as annotation mode is always enabled there.
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, Ink2Disabled) {
+  RunTestsInJsModule("ink2_disabled_test.js", "test.pdf");
+}
+#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+
+class PDFExtensionJSInk2Test : public PDFExtensionJSTest {
+ protected:
+  std::vector<base::test::FeatureRef> GetEnabledFeatures() const override {
+    auto enabled = PDFExtensionJSTest::GetEnabledFeatures();
+    enabled.push_back(chrome_pdf::features::kPdfInk2);
+    return enabled;
+  }
+};
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2Test, Ink2) {
+  RunTestsInJsModule("ink2_test.js", "test.pdf");
+}
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2Test, Ink2Save) {
+  RunTestsInJsModule("ink2_save_test.js", "test.pdf");
+}
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2Test, Ink2SidePanel) {
+  RunTestsInJsModule("ink2_side_panel_test.js", "test.pdf");
+}
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2Test, Ink2ViewerToolbar) {
+  RunTestsInJsModule("ink2_viewer_toolbar_test.js", "test.pdf");
+}
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2Test, Ink2AnnotationBar) {
+  RunTestsInJsModule("ink2_annotation_bar_test.js", "test.pdf");
+}
+#endif  // BUILDFLAG(ENABLE_PDF_INK2)
+
+// TODO(crbug.com/40268279): Stop testing both modes after OOPIF PDF viewer
 // launches.
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionJSTest);
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionPacificTimeZoneJSTest);
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionContentSettingJSTest);
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionWebUICodeCacheJSTest);
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionServiceWorkerJSTest);
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionJSInk2Test);

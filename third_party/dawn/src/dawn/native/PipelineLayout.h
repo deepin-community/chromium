@@ -51,7 +51,7 @@ namespace dawn::native {
 ResultOrError<UnpackedPtr<PipelineLayoutDescriptor>> ValidatePipelineLayoutDescriptor(
     DeviceBase*,
     const PipelineLayoutDescriptor* descriptor,
-    PipelineCompatibilityToken pipelineCompatibilityToken = PipelineCompatibilityToken(0));
+    PipelineCompatibilityToken pipelineCompatibilityToken = kExplicitPCT);
 
 struct StageAndDescriptor {
     StageAndDescriptor(SingleShaderStage shaderStage,
@@ -83,7 +83,8 @@ class PipelineLayoutBase : public ApiObjectBase,
     static Ref<PipelineLayoutBase> MakeError(DeviceBase* device, const char* label);
     static ResultOrError<Ref<PipelineLayoutBase>> CreateDefault(
         DeviceBase* device,
-        std::vector<StageAndDescriptor> stages);
+        std::vector<StageAndDescriptor> stages,
+        bool allowInternalBinding);
 
     ObjectType GetType() const override;
 

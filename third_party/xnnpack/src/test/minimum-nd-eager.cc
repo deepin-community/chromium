@@ -3,6 +3,9 @@
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree.
 
+#include <cstddef>
+#include <cstdint>
+
 #include <gtest/gtest.h>
 #include "binary-elementwise-operator-tester.h"
 

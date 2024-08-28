@@ -6,9 +6,9 @@
 
 #include <algorithm>
 #include <set>
+#include <vector>
 
 #include "base/containers/adapters.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/file_version_info.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
@@ -133,7 +133,7 @@ std::string ProcessMemoryInformation::GetRendererTypeNameInEnglish(
       return "Background App";
     case RENDERER_UNKNOWN:
     default:
-      NOTREACHED() << "Unknown renderer process type!";
+      NOTREACHED_IN_MIGRATION() << "Unknown renderer process type!";
       return "Unknown";
   }
 }
@@ -308,13 +308,12 @@ void MemoryDetails::CollectChildInfoOnUIThread() {
       int rph_id = render_process_host->GetID();
       process_is_for_extensions = process_map->Contains(rph_id);
 
-      // For our purposes, don't count processes containing only hosted
-      // apps as extension processes. See also: crbug.com/102533.
-      for (auto& extension_id : process_map->GetExtensionsInProcess(rph_id)) {
-        const Extension* extension = extension_set->GetByID(extension_id);
-        if (extension && !extension->is_hosted_app()) {
+      // For our purposes, don't count processes running hosted apps as
+      // extension processes. See also: crbug.com/102533.
+      if (const Extension* extension =
+              process_map->GetEnabledExtensionByProcessID(rph_id)) {
+        if (!extension->is_hosted_app()) {
           process.renderer_type = ProcessMemoryInformation::RENDERER_EXTENSION;
-          break;
         }
       }
     }
@@ -347,7 +346,7 @@ void MemoryDetails::CollectChildInfoOnUIThread() {
     return process.process_type == content::PROCESS_TYPE_UNKNOWN;
   };
   auto& vector = chrome_browser->processes;
-  base::EraseIf(vector, is_unknown);
+  std::erase_if(vector, is_unknown);
 
   // Grab a memory dump for all processes.
   memory_instrumentation::MemoryInstrumentation::GetInstance()

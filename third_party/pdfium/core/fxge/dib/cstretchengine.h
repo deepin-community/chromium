@@ -9,15 +9,15 @@
 
 #include <stdint.h>
 
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fixed_size_data_vector.h"
 #include "core/fxcrt/fx_coordinates.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxcrt/raw_span.h"
 #include "core/fxcrt/retain_ptr.h"
-#include "core/fxcrt/span.h"
 #include "core/fxcrt/unowned_ptr.h"
 #include "core/fxge/dib/fx_dib.h"
-#include "third_party/base/check_op.h"
 
 class CFX_DIBBase;
 class PauseIndicatorIface;
@@ -60,13 +60,15 @@ class CStretchEngine {
     uint32_t GetWeightForPosition(int position) const {
       CHECK_GE(position, m_SrcStart);
       CHECK_LE(position, m_SrcEnd);
-      return m_Weights[position - m_SrcStart];
+      // SAFETY: enforced by checks above.
+      return UNSAFE_BUFFERS(m_Weights[position - m_SrcStart]);
     }
 
     void SetWeightForPosition(int position, uint32_t weight) {
       CHECK_GE(position, m_SrcStart);
       CHECK_LE(position, m_SrcEnd);
-      m_Weights[position - m_SrcStart] = weight;
+      // SAFETY: enforced by checks above.
+      UNSAFE_BUFFERS(m_Weights[position - m_SrcStart] = weight);
     }
 
     // NOTE: relies on defined behaviour for unsigned overflow to
@@ -74,7 +76,8 @@ class CStretchEngine {
     void RemoveLastWeightAndAdjust(uint32_t weight_change) {
       CHECK_GT(m_SrcEnd, m_SrcStart);
       --m_SrcEnd;
-      m_Weights[m_SrcEnd - m_SrcStart] += weight_change;
+      // SAFETY: enforced by checks above.
+      UNSAFE_BUFFERS(m_Weights[m_SrcEnd - m_SrcStart] += weight_change);
     }
 
     int m_SrcStart;
@@ -142,7 +145,7 @@ class CStretchEngine {
   const int m_SrcBpp;
   const bool m_bHasAlpha;
   RetainPtr<const CFX_DIBBase> const m_pSource;
-  pdfium::span<const uint32_t> m_pSrcPalette;
+  pdfium::raw_span<const uint32_t> m_pSrcPalette;
   const int m_SrcWidth;
   const int m_SrcHeight;
   UnownedPtr<ScanlineComposerIface> const m_pDestBitmap;

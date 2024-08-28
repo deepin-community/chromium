@@ -39,6 +39,7 @@ CoreOobe::CoreOobe(const std::string& display_type,
   version_info_updater_.StartUpdate(false);
 #endif
 
+  OnTabletModeChanged(display::Screen::GetScreen()->InTabletMode());
   UpdateClientAreaSize(
       display::Screen::GetScreen()->GetPrimaryDisplay().size());
 
@@ -216,7 +217,7 @@ void CoreOobe::OnOobeConfigurationChanged() {
 void CoreOobe::UpdateUiInitState(CoreOobeView::UiState state) {
   switch (state) {
     case CoreOobeView::UiState::kUninitialized:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
     case CoreOobeView::UiState::kCoreHandlerInitialized:
       // JavaScript is now allowed in the handler.

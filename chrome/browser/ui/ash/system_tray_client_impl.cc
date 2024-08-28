@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <memory>
+#include <string_view>
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
@@ -15,6 +16,7 @@
 #include "ash/public/cpp/new_window_delegate.h"
 #include "ash/public/cpp/system_tray.h"
 #include "ash/public/cpp/update_types.h"
+#include "ash/webui/settings/public/constants/routes.mojom-forward.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
 #include "ash/webui/settings/public/constants/setting.mojom.h"
 #include "base/command_line.h"
@@ -198,7 +200,7 @@ ash::ManagementDeviceMode GetManagementDeviceMode(
       return ash::ManagementDeviceMode::kChromeEducation;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return ash::ManagementDeviceMode::kOther;
 }
 
@@ -398,7 +400,7 @@ void SystemTrayClientImpl::ShowBluetoothSettings(const std::string& device_id) {
 }
 
 void SystemTrayClientImpl::ShowBluetoothPairingDialog(
-    std::optional<base::StringPiece> device_address) {
+    std::optional<std::string_view> device_address) {
   if (ash::BluetoothPairingDialog::ShowDialog(device_address)) {
     base::RecordAction(
         base::UserMetricsAction("StatusArea_Bluetooth_Connect_Unknown"));
@@ -409,7 +411,9 @@ void SystemTrayClientImpl::ShowDateSettings() {
   base::RecordAction(base::UserMetricsAction("ShowDateOptions"));
   // Everybody can change the time zone (even though it is a device setting).
   ShowSettingsSubPageForActiveUser(
-      chromeos::settings::mojom::kDateAndTimeSectionPath);
+      ash::features::IsOsSettingsRevampWayfindingEnabled()
+          ? chromeos::settings::mojom::kSystemPreferencesSectionPath
+          : chromeos::settings::mojom::kDateAndTimeSectionPath);
 }
 
 void SystemTrayClientImpl::ShowSetTimeDialog() {
@@ -606,12 +610,17 @@ void SystemTrayClientImpl::ShowNetworkCreate(const std::string& type) {
 }
 
 void SystemTrayClientImpl::ShowSettingsCellularSetup(bool show_psim_flow) {
-  // TODO(crbug.com/1093185) Add metrics action recorder
+  // TODO(crbug.com/40134918) Add metrics action recorder
   std::string page = chromeos::settings::mojom::kCellularNetworksSubpagePath;
   page += "&showCellularSetup=true";
   if (show_psim_flow)
     page += "&showPsimFlow=true";
   ShowSettingsSubPageForActiveUser(page);
+}
+
+void SystemTrayClientImpl::ShowMobileDataSubpage() {
+  ShowSettingsSubPageForActiveUser(
+      chromeos::settings::mojom::kCellularNetworksSubpagePath);
 }
 
 void SystemTrayClientImpl::ShowThirdPartyVpnCreate(
@@ -639,7 +648,7 @@ void SystemTrayClientImpl::ShowArcVpnCreate(const std::string& app_id) {
 }
 
 void SystemTrayClientImpl::ShowSettingsSimUnlock() {
-  // TODO(https://crbug.com/1093185) Add metrics action recorder.
+  // TODO(crbug.com/40134918) Add metrics action recorder.
   SessionManager* const session_manager = SessionManager::Get();
   DCHECK(session_manager->IsSessionStarted());
   DCHECK(!session_manager->IsInSecondaryLoginScreen());
@@ -710,9 +719,6 @@ void SystemTrayClientImpl::ShowNetworkSettingsHelper(
 
 void SystemTrayClientImpl::ShowMultiDeviceSetup() {
   ash::multidevice_setup::MultiDeviceSetupDialog::Show();
-  ash::phonehub::util::LogMultiDeviceSetupDialogEntryPoint(
-      ash::phonehub::util::MultiDeviceSetupDialogEntrypoint::
-          kSetupNotification);
 }
 
 void SystemTrayClientImpl::ShowFirmwareUpdate() {
@@ -824,11 +830,25 @@ void SystemTrayClientImpl::ShowMouseSettings() {
       chromeos::settings::mojom::kPerDeviceMouseSubpagePath);
 }
 
+void SystemTrayClientImpl::ShowKeyboardSettings() {
+  DCHECK(ash::features::IsWelcomeExperienceEnabled());
+  base::RecordAction(base::UserMetricsAction("ShowKeyboardSettingsPage"));
+  ShowSettingsSubPageForActiveUser(
+      chromeos::settings::mojom::kPerDeviceKeyboardSubpagePath);
+}
+
 void SystemTrayClientImpl::ShowTouchpadSettings() {
   DCHECK(ash::features::IsInputDeviceSettingsSplitEnabled());
   base::RecordAction(base::UserMetricsAction("ShowTouchpadSettingsPage"));
   ShowSettingsSubPageForActiveUser(
       chromeos::settings::mojom::kPerDeviceTouchpadSubpagePath);
+}
+
+void SystemTrayClientImpl::ShowPointingStickSettings() {
+  DCHECK(ash::features::IsWelcomeExperienceEnabled());
+  base::RecordAction(base::UserMetricsAction("ShowPointingStickSettingsPage"));
+  ShowSettingsSubPageForActiveUser(
+      chromeos::settings::mojom::kPerDevicePointingStickSubpagePath);
 }
 
 void SystemTrayClientImpl::ShowRemapKeysSubpage(int device_id) {
@@ -839,6 +859,31 @@ void SystemTrayClientImpl::ShowRemapKeysSubpage(int device_id) {
       "?keyboardId=",
       base::NumberToString(device_id),
   }));
+}
+
+void SystemTrayClientImpl::ShowYouTubeMusicPremiumPage() {
+  DCHECK(ash::features::IsFocusModeEnabled());
+  base::RecordAction(base::UserMetricsAction("ShowYouTubeMusicPremiumPage"));
+
+  const GURL official_url(chrome::kYoutubeMusicPremiumURL);
+
+  // Check YouTube Music web app installation.
+  if (!IsAppInstalled(web_app::kYoutubeMusicAppId)) {
+    OpenInBrowser(official_url);
+    return;
+  }
+
+  // Need this in order to launch the web app.
+  apps::AppServiceProxyAsh* proxy = GetActiveUserAppServiceProxyAsh();
+  if (!proxy) {
+    LOG(ERROR) << " failed to get active user AppServiceProxyAsh";
+    OpenInBrowser(official_url);
+    return;
+  }
+
+  // Launch web app.
+  proxy->LaunchAppWithUrl(web_app::kYoutubeMusicAppId, ui::EF_NONE,
+                          official_url, apps::LaunchSource::kFromFocusMode);
 }
 
 void SystemTrayClientImpl::ShowEolInfoPage() {
@@ -958,7 +1003,6 @@ void SystemTrayClientImpl::UpdateDeviceEnterpriseInfo() {
   ash::DeviceEnterpriseInfo device_enterprise_info;
   device_enterprise_info.enterprise_domain_manager =
       connector->GetEnterpriseDomainManager();
-  device_enterprise_info.active_directory_managed = false;
   device_enterprise_info.management_device_mode =
       GetManagementDeviceMode(connector);
   if (!last_device_enterprise_info_) {

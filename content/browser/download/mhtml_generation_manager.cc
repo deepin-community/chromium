@@ -8,10 +8,12 @@
 #include <utility>
 
 #include "base/containers/queue.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -220,7 +222,7 @@ class MHTMLGenerationManager::Job {
   // with on the fly hash computation.
   // Bound to the data pipe watcher and called upon notification of write
   // completion to producer pipe sent to the Renderer.
-  // TODO(https://crbug.com/915966): Eventually simplify this implementation
+  // TODO(crbug.com/40606905): Eventually simplify this implementation
   // with a DataPipeDrainer once error signalling is implemented there.
   void WriteMHTMLToDisk(MHTMLWriteCompleteCallback callback,
                         MojoResult result,
@@ -488,15 +490,20 @@ void MHTMLGenerationManager::Job::WriteMHTMLToDisk(
   DCHECK(download::GetDownloadTaskRunner()->RunsTasksInCurrentSequence());
   DCHECK_NE(result, MOJO_RESULT_FAILED_PRECONDITION);
   // Begin consumer data pipe handle read and file write loop.
-  char buffer[1024];
-  uint32_t num_bytes = sizeof(buffer);
+  std::vector<uint8_t> buffer(1024, 0x00);
+  size_t actually_read_bytes;
   while (result == MOJO_RESULT_OK && state.readable()) {
-    result = mhtml_data_consumer_->ReadData(&buffer, &num_bytes,
-                                            MOJO_READ_DATA_FLAG_NONE);
+    result = mhtml_data_consumer_->ReadData(MOJO_READ_DATA_FLAG_NONE,
+                                            base::as_writable_byte_span(buffer),
+                                            actually_read_bytes);
     if (result == MOJO_RESULT_OK) {
+      std::string_view read_chars =
+          base::as_string_view(buffer).substr(0, actually_read_bytes);
       if (secure_hash_)
-        secure_hash_->Update(&buffer, num_bytes);
-      if (browser_file_.WriteAtCurrentPos(buffer, num_bytes) < 0) {
+        secure_hash_->Update(read_chars.data(), read_chars.size());
+      if (browser_file_.WriteAtCurrentPos(
+              read_chars.data(), base::checked_cast<int>(read_chars.size())) <
+          0) {
         DLOG(ERROR) << "Error writing to file handle.";
         OnWriteComplete(std::move(callback),
                         mojom::MhtmlSaveStatus::kFileWritingError);
@@ -585,7 +592,7 @@ void MHTMLGenerationManager::Job::MarkAsFinished() {
   // writer_.reset() does not correctly stop OnConnectionError
   // notifications for the case described in https://crbug.com/612098.
   if (is_finished_) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return;
   }
   is_finished_ = true;
@@ -727,7 +734,7 @@ CloseFileResult MHTMLGenerationManager::Job::FinalizeOnFileThread(
                  "MHTMLGenerationManager::Job MHTML footer writing");
 
 #if BUILDFLAG(IS_FUCHSIA)
-    // TODO(crbug.com/1288816): Remove the Seek call.
+    // TODO(crbug.com/42050414): Remove the Seek call.
     // On fuchsia, fds do not share state. As the fd has been duped and sent to
     // the renderer process, it must be seeked to the end to ensure the data is
     // appended.

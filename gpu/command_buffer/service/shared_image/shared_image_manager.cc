@@ -11,6 +11,7 @@
 
 #include "base/containers/contains.h"
 #include "base/logging.h"
+#include "base/memory/stack_allocated.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
@@ -19,6 +20,7 @@
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/common/shared_image_trace_utils.h"
+#include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
 #include "ui/gl/trace_util.h"
@@ -65,6 +67,8 @@ bool operator<(const std::unique_ptr<SharedImageBacking>& lhs,
 }
 
 class SCOPED_LOCKABLE SharedImageManager::AutoLock {
+  STACK_ALLOCATED();
+
  public:
   explicit AutoLock(SharedImageManager* manager)
       EXCLUSIVE_LOCK_FUNCTION(manager->lock_)
@@ -121,12 +125,12 @@ std::unique_ptr<SharedImageRepresentationFactoryRef>
 SharedImageManager::Register(std::unique_ptr<SharedImageBacking> backing,
                              MemoryTypeTracker* tracker) {
   CALLED_ON_VALID_THREAD();
-  DCHECK(backing->mailbox().IsSharedImage());
 
   AutoLock autolock(this);
   if (base::Contains(images_, backing->mailbox())) {
     LOG(ERROR) << "SharedImageManager::Register: Trying to register an "
                   "already registered mailbox.";
+    backing->MarkForDestruction();
     return nullptr;
   }
 
@@ -146,7 +150,6 @@ std::unique_ptr<SharedImageRepresentationFactoryRef>
 SharedImageManager::AddSecondaryReference(const Mailbox& mailbox,
                                           MemoryTypeTracker* tracker) {
   CALLED_ON_VALID_THREAD();
-  DCHECK(mailbox.IsSharedImage());
 
   AutoLock autolock(this);
   auto found = images_.find(mailbox);
@@ -374,7 +377,8 @@ std::unique_ptr<VulkanImageRepresentation> SharedImageManager::ProduceVulkan(
     const Mailbox& mailbox,
     MemoryTypeTracker* tracker,
     gpu::VulkanDeviceQueue* vulkan_device_queue,
-    gpu::VulkanImplementation& vulkan_impl) {
+    gpu::VulkanImplementation& vulkan_impl,
+    bool needs_detiling) {
   CALLED_ON_VALID_THREAD();
 
   AutoLock autolock(this);
@@ -387,7 +391,7 @@ std::unique_ptr<VulkanImageRepresentation> SharedImageManager::ProduceVulkan(
   }
 
   return (*found)->ProduceVulkan(this, tracker, vulkan_device_queue,
-                                 vulkan_impl);
+                                 vulkan_impl, needs_detiling);
 }
 #endif
 
@@ -437,7 +441,7 @@ void SharedImageManager::UpdateExternalFence(
 }
 #endif
 
-std::optional<uint32_t> SharedImageManager::GetUsageForMailbox(
+std::optional<SharedImageUsageSet> SharedImageManager::GetUsageForMailbox(
     const Mailbox& mailbox) {
   AutoLock autolock(this);
 
@@ -446,7 +450,7 @@ std::optional<uint32_t> SharedImageManager::GetUsageForMailbox(
     if (found == images_.end()) {
       return std::nullopt;
     }
-    return std::optional<uint32_t>((*found)->usage());
+    return std::optional<SharedImageUsageSet>((*found)->usage());
   }
 }
 

@@ -36,7 +36,7 @@ import {type EventDescriptor, type EventTargetEvent, type GenericEvents} from '.
 import {ObjectWrapper} from './Object.js';
 import {
   getLocalizedSettingsCategory,
-  getRegisteredSettings,
+  getRegisteredSettings as getRegisteredSettingsInternal,
   maybeRemoveSettingExtension,
   type RegExpSettingItem,
   registerSettingExtension,
@@ -57,10 +57,11 @@ export class Settings {
   #eventSupport: ObjectWrapper<GenericEvents>;
   #registry: Map<string, Setting<unknown>>;
   readonly moduleSettings: Map<string, Setting<unknown>>;
+  readonly #config?: Root.Runtime.HostConfig;
 
   private constructor(
       readonly syncedStorage: SettingsStorage, readonly globalStorage: SettingsStorage,
-      readonly localStorage: SettingsStorage) {
+      readonly localStorage: SettingsStorage, config?: Root.Runtime.HostConfig) {
     this.#sessionStorage = new SettingsStorage({});
 
     this.settingNameSet = new Set();
@@ -71,14 +72,15 @@ export class Settings {
     this.#registry = new Map();
     this.moduleSettings = new Map();
 
-    for (const registration of getRegisteredSettings()) {
-      // TODO(b/320405843): remove normalization when kebab migration is complete
+    this.#config = config;
+    for (const registration of this.getRegisteredSettings()) {
       const {settingName, defaultValue, storageType} = registration;
       const isRegex = registration.settingType === SettingType.REGEX;
 
-      const setting = isRegex && typeof defaultValue === 'string' ?
-          this.createRegExpSetting(settingName, defaultValue, undefined, storageType) :
-          this.createSetting(settingName, defaultValue, storageType);
+      const evaluatedDefaultValue = typeof defaultValue === 'function' ? defaultValue(this.#config) : defaultValue;
+      const setting = isRegex && typeof evaluatedDefaultValue === 'string' ?
+          this.createRegExpSetting(settingName, evaluatedDefaultValue, undefined, storageType) :
+          this.createSetting(settingName, evaluatedDefaultValue, storageType);
 
       setting.setTitleFunction(registration.title);
       if (registration.userActionCondition) {
@@ -90,6 +92,10 @@ export class Settings {
     }
   }
 
+  getRegisteredSettings(): SettingRegistration[] {
+    return getRegisteredSettingsInternal(this.#config);
+  }
+
   static hasInstance(): boolean {
     return typeof settingsInstance !== 'undefined';
   }
@@ -99,14 +105,15 @@ export class Settings {
     syncedStorage: SettingsStorage|null,
     globalStorage: SettingsStorage|null,
     localStorage: SettingsStorage|null,
+    config?: Root.Runtime.HostConfig,
   } = {forceNew: null, syncedStorage: null, globalStorage: null, localStorage: null}): Settings {
-    const {forceNew, syncedStorage, globalStorage, localStorage} = opts;
+    const {forceNew, syncedStorage, globalStorage, localStorage, config} = opts;
     if (!settingsInstance || forceNew) {
       if (!syncedStorage || !globalStorage || !localStorage) {
         throw new Error(`Unable to create settings: global and local storage must be provided: ${new Error().stack}`);
       }
 
-      settingsInstance = new Settings(syncedStorage, globalStorage, localStorage);
+      settingsInstance = new Settings(syncedStorage, globalStorage, localStorage, config);
     }
 
     return settingsInstance;
@@ -114,6 +121,10 @@ export class Settings {
 
   static removeInstance(): void {
     settingsInstance = undefined;
+  }
+
+  getHostConfig(): Root.Runtime.HostConfig|undefined {
+    return this.#config;
   }
 
   private registerModuleSetting(setting: Setting<unknown>): void {
@@ -151,8 +162,6 @@ export class Settings {
   // TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   moduleSetting<T = any>(settingName: string): Setting<T> {
-    // TODO(b/320405843): remove normalization when kebab migration is complete
-    settingName = Settings.normalizeSettingName(settingName);
     const setting = this.moduleSettings.get(settingName) as Setting<T>;
     if (!setting) {
       throw new Error('No setting registered: ' + settingName);
@@ -161,8 +170,6 @@ export class Settings {
   }
 
   settingForTest(settingName: string): Setting<unknown> {
-    // TODO(b/320405843): remove normalization when kebab migration is complete
-    settingName = Settings.normalizeSettingName(settingName);
     const setting = this.#registry.get(settingName);
     if (!setting) {
       throw new Error('No setting registered: ' + settingName);
@@ -170,9 +177,10 @@ export class Settings {
     return setting;
   }
 
+  /**
+   * Get setting via key, and create a new setting if the requested setting does not exist.
+   */
   createSetting<T>(key: string, defaultValue: T, storageType?: SettingStorageType): Setting<T> {
-    // TODO(b/320405843): remove normalization when kebab migration is complete
-    key = Settings.normalizeSettingName(key);
     const storage = this.storageFromType(storageType);
     let setting = (this.#registry.get(key) as Setting<T>);
     if (!setting) {
@@ -183,15 +191,11 @@ export class Settings {
   }
 
   createLocalSetting<T>(key: string, defaultValue: T): Setting<T> {
-    // TODO(b/320405843): remove normalization when kebab migration is complete
-    key = Settings.normalizeSettingName(key);
     return this.createSetting(key, defaultValue, SettingStorageType.Local);
   }
 
   createRegExpSetting(key: string, defaultValue: string, regexFlags?: string, storageType?: SettingStorageType):
       RegExpSetting {
-    // TODO(b/320405843): remove normalization when kebab migration is complete
-    key = Settings.normalizeSettingName(key);
     if (!this.#registry.get(key)) {
       this.#registry.set(
           key, new RegExpSetting(key, defaultValue, this.#eventSupport, this.storageFromType(storageType), regexFlags));
@@ -356,13 +360,10 @@ export class Setting<V> {
   #hadUserAction?: boolean;
   #disabled?: boolean;
   #deprecation: Deprecation|null = null;
-  readonly name: string;
 
   constructor(
-      name: string, readonly defaultValue: V, private readonly eventSupport: ObjectWrapper<GenericEvents>,
+      readonly name: string, readonly defaultValue: V, private readonly eventSupport: ObjectWrapper<GenericEvents>,
       readonly storage: SettingsStorage) {
-    // TODO(b/320405843): remove normalization when kebab migration is complete
-    this.name = Settings.normalizeSettingName(name);
     storage.register(this.name);
   }
 
@@ -404,7 +405,7 @@ export class Setting<V> {
 
   disabled(): boolean {
     if (this.#registration?.disabledCondition) {
-      const {disabled} = this.#registration.disabledCondition();
+      const {disabled} = this.#registration.disabledCondition(Settings.instance().getHostConfig());
       // If registration does not disable it, pass through to #disabled
       // attribute check.
       if (disabled) {
@@ -416,7 +417,7 @@ export class Setting<V> {
 
   disabledReason(): string|undefined {
     if (this.#registration?.disabledCondition) {
-      const result = this.#registration.disabledCondition();
+      const result = this.#registration.disabledCondition(Settings.instance().getHostConfig());
       if (result.disabled) {
         return result.reason;
       }
@@ -1345,7 +1346,6 @@ export function settingForTest(settingName: string): Setting<unknown> {
 
 export {
   getLocalizedSettingsCategory,
-  getRegisteredSettings,
   maybeRemoveSettingExtension,
   registerSettingExtension,
   RegExpSettingItem,

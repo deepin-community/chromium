@@ -6,17 +6,18 @@
 
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/trace_event/trace_event.h"
 #include "base/uuid.h"
 #include "base/version.h"
 #include "chrome/browser/sharing/sharing_constants.h"
-#include "chrome/browser/sharing/sharing_message_bridge.h"
 #include "chrome/browser/sharing/sharing_sync_preference.h"
 #include "chrome/browser/sharing/sharing_utils.h"
 #include "chrome/browser/sharing/vapid_key_manager.h"
 #include "chrome/browser/sharing/web_push/web_push_sender.h"
 #include "components/gcm_driver/crypto/gcm_encryption_result.h"
 #include "components/gcm_driver/gcm_driver.h"
+#include "components/sharing_message/sharing_message_bridge.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync_device_info/device_info_tracker.h"
 #include "components/sync_device_info/local_device_info_provider.h"
@@ -72,12 +73,16 @@ void SharingFCMSender::DoSendMessageToDevice(
     return;
   }
 
+  base::UmaHistogramBoolean(
+      "Sharing.SendMessageWithSyncAckFcmConfiguration",
+      !message.fcm_channel_configuration().sender_id_fcm_token().empty());
   SendMessageToFcmTarget(*fcm_configuration, time_to_live, std::move(message),
                          std::move(callback));
 }
 
 void SharingFCMSender::SendMessageToFcmTarget(
-    const chrome_browser_sharing::FCMChannelConfiguration& fcm_configuration,
+    const components_sharing_message::FCMChannelConfiguration&
+        fcm_configuration,
     base::TimeDelta time_to_live,
     SharingMessage message,
     SendMessageCallback callback) {
@@ -92,6 +97,7 @@ void SharingFCMSender::SendMessageToFcmTarget(
                          !fcm_configuration.vapid_p256dh().empty() &&
                          !fcm_configuration.vapid_auth_secret().empty();
 
+  base::UmaHistogramBoolean("Sharing.SendMessageUsingSync", canSendViaSync);
   if (canSendViaSync) {
     message.set_message_id(base::Uuid::GenerateRandomV4().AsLowercaseString());
     EncryptMessage(
@@ -105,7 +111,7 @@ void SharingFCMSender::SendMessageToFcmTarget(
     return;
   }
 
-  // TODO(crbug.com/1408456): This can probably go away.
+  // TODO(crbug.com/40253551): This can probably go away.
   if (canSendViaVapid) {
     std::optional<SharingSyncPreference::FCMRegistration> fcm_registration =
         sync_preference_->GetFCMRegistration();
@@ -133,7 +139,8 @@ void SharingFCMSender::SendMessageToFcmTarget(
 }
 
 void SharingFCMSender::SendMessageToServerTarget(
-    const chrome_browser_sharing::ServerChannelConfiguration& server_channel,
+    const components_sharing_message::ServerChannelConfiguration&
+        server_channel,
     SharingMessage message,
     SendMessageCallback callback) {
   TRACE_EVENT0("sharing", "SharingFCMSender::SendMessageToServerTarget");

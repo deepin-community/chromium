@@ -40,7 +40,7 @@ inline constexpr size_t kHashLen = 40;
 // being remote. Returns an empty string if the `file_path` is empty.
 std::string HashOfFileContents(std::string_view file_path);
 // Returns a printable string representing at most `max_len` bytes of `data`.
-std::string AsString(const ByteArray &data, size_t max_len = 16);
+std::string AsPrintableString(const ByteArray &data, size_t max_len);
 // Reads from a local file `file_path` into `data`.
 // Crashes on any error.
 void ReadFromLocalFile(std::string_view file_path, ByteArray &data);
@@ -51,6 +51,8 @@ void ReadFromLocalFile(std::string_view file_path, std::string &data);
 void ReadFromLocalFile(std::string_view file_path, FeatureVec &data);
 // Same as above but for vector<uint32_t>.
 void ReadFromLocalFile(std::string_view file_path, std::vector<uint32_t> &data);
+// Clears the content of the file `file_path`. Crashes on any error.
+void ClearLocalFileContents(std::string_view file_path);
 // Writes the contents of `data` to a local file `file_path`.
 // Crashes on any error.
 void WriteToLocalFile(std::string_view file_path, ByteSpan data);
@@ -139,10 +141,10 @@ void RemoveSubset(const std::vector<size_t> &subset_indices,
 // appended to another such packed data and then the operation can be reversed.
 // The purpose is to allow appending blobs of data to a (possibly remote) file
 // such that when reading this file we can separate the blobs.
-// TODO(kcc): [impl] is there a lightweight equivalent in the open-source world?
-//  tar sounds too heavy.
-// TODO(kcc): [impl] investigate https://github.com/google/riegeli.
-ByteArray PackBytesForAppendFile(const ByteArray &data);
+// NOTE: The now-default blob file format (Riegeli) doesn't need this, but some
+// external clients continue to use plain blob files and are unlikely to switch
+// (e.g. Chromium).
+ByteArray PackBytesForAppendFile(ByteSpan blob);
 // Unpacks `packed_data` into `unpacked` and `hashes`.
 // `packed_data` is multiple data packed by PackBytesForAppendFile()
 // and merged together.
@@ -166,7 +168,7 @@ ByteArray PackFeaturesAndHashAsRawBytes(const ByteArray &data,
 
 // Given a `blob` created by `PackFeaturesAndHash`, unpack the features into
 // `features` and return the hash.
-std::string UnpackFeaturesAndHash(const ByteSpan &blob,
+std::string UnpackFeaturesAndHash(ByteSpan blob,
                                   absl::Nonnull<FeatureVec *> features);
 
 // Parses `dictionary_text` representing an AFL/libFuzzer dictionary.

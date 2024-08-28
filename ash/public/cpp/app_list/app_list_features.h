@@ -7,6 +7,7 @@
 
 #include "ash/public/cpp/ash_public_export.h"
 #include "base/feature_list.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/time/time.h"
 
 namespace app_list_features {
@@ -42,6 +43,21 @@ ASH_PUBLIC_EXPORT BASE_DECLARE_FEATURE(kDragAndDropRefactor);
 // different categories filled with predefined apps.
 ASH_PUBLIC_EXPORT BASE_DECLARE_FEATURE(kAppsCollections);
 
+// Whether the Apps Collections is enabled counterfactually as part of an
+// experiment arm.
+const base::FeatureParam<bool> kAppsCollectionsEnabledCounterfactually{
+    &kAppsCollections, "is-counterfactual", false};
+
+// Whether the Apps Collections is enabled counterfactually as part of an
+// experiment arm.
+const base::FeatureParam<bool> kAppsCollectionsEnabledWithModifiedOrder{
+    &kAppsCollections, "is-modified-order", false};
+
+// Forces the user elegibility of the AppsCollections feature. When this is
+// enabled, the regular checks for the account are ignored and AppsCollection
+// show by default.
+ASH_PUBLIC_EXPORT BASE_DECLARE_FEATURE(kForceShowAppsCollections);
+
 ASH_PUBLIC_EXPORT bool IsAppReinstallZeroStateEnabled();
 ASH_PUBLIC_EXPORT bool IsAppListLaunchRecordingEnabled();
 ASH_PUBLIC_EXPORT bool IsExactMatchForNonLatinLocaleEnabled();
@@ -53,6 +69,9 @@ ASH_PUBLIC_EXPORT base::TimeDelta DynamicSearchUpdateAnimationDuration();
 ASH_PUBLIC_EXPORT bool IsLauncherPlayStoreSearchEnabled();
 ASH_PUBLIC_EXPORT bool IsDragAndDropRefactorEnabled();
 ASH_PUBLIC_EXPORT bool IsAppsCollectionsEnabled();
+ASH_PUBLIC_EXPORT bool IsAppsCollectionsEnabledCounterfactually();
+ASH_PUBLIC_EXPORT bool IsAppsCollectionsEnabledWithModifiedOrder();
+ASH_PUBLIC_EXPORT bool IsForceShowAppsCollectionsEnabled();
 
 }  // namespace app_list_features
 

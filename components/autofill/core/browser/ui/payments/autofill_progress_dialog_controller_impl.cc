@@ -11,8 +11,11 @@
 
 namespace autofill {
 
-AutofillProgressDialogControllerImpl::AutofillProgressDialogControllerImpl() =
-    default;
+AutofillProgressDialogControllerImpl::AutofillProgressDialogControllerImpl(
+    AutofillProgressDialogType autofill_progress_dialog_type,
+    base::OnceClosure cancel_callback)
+    : autofill_progress_dialog_type_(autofill_progress_dialog_type),
+      cancel_callback_(std::move(cancel_callback)) {}
 
 AutofillProgressDialogControllerImpl::~AutofillProgressDialogControllerImpl() {
   // This if-statement is entered in the case where the tab is closed. When the
@@ -27,21 +30,17 @@ AutofillProgressDialogControllerImpl::~AutofillProgressDialogControllerImpl() {
 }
 
 void AutofillProgressDialogControllerImpl::ShowDialog(
-    AutofillProgressDialogType autofill_progress_dialog_type,
     base::OnceCallback<base::WeakPtr<AutofillProgressDialogView>()>
-        create_and_show_view_callback,
-    base::OnceClosure cancel_callback) {
+        create_and_show_view_callback) {
   if (autofill_progress_dialog_view_) {
     return;
   }
 
-  autofill_progress_dialog_type_ = autofill_progress_dialog_type;
-  cancel_callback_ = std::move(cancel_callback);
   autofill_progress_dialog_view_ =
       std::move(create_and_show_view_callback).Run();
 
   if (autofill_progress_dialog_view_) {
-    AutofillMetrics::LogProgressDialogShown(autofill_progress_dialog_type);
+    AutofillMetrics::LogProgressDialogShown(autofill_progress_dialog_type_);
   }
 }
 
@@ -57,7 +56,6 @@ void AutofillProgressDialogControllerImpl::DismissDialog(
 
   autofill_progress_dialog_view_->Dismiss(show_confirmation_before_closing,
                                           /*is_canceled_by_user=*/false);
-  autofill_progress_dialog_view_ = nullptr;
 }
 
 void AutofillProgressDialogControllerImpl::OnDismissed(
@@ -74,7 +72,6 @@ void AutofillProgressDialogControllerImpl::OnDismissed(
 
   AutofillMetrics::LogProgressDialogResultMetric(
       is_canceled_by_user, autofill_progress_dialog_type_);
-  autofill_progress_dialog_type_ = AutofillProgressDialogType::kUnspecified;
   cancel_callback_.Reset();
 }
 
@@ -91,9 +88,7 @@ std::u16string AutofillProgressDialogControllerImpl::GetLoadingTitle() const {
       return l10n_util::GetStringUTF16(
           IDS_AUTOFILL_IBAN_UNMASK_PROGRESS_DIALOG_TITLE);
     case AutofillProgressDialogType::kUnspecified:
-      // TODO(crbug.com/1510471): Replace all below with `NOTREACHED_NORETURN`.
-      NOTREACHED();
-      return std::u16string();
+      NOTREACHED_NORETURN();
   }
 }
 
@@ -107,8 +102,7 @@ std::u16string AutofillProgressDialogControllerImpl::GetConfirmationTitle()
           IDS_AUTOFILL_CARD_UNMASK_CONFIRMATION_DIALOG_TITLE);
     case AutofillProgressDialogType::kServerIbanUnmaskProgressDialog:
     case AutofillProgressDialogType::kUnspecified:
-      NOTREACHED();
-      return std::u16string();
+      NOTREACHED_NORETURN();
   }
 }
 
@@ -119,14 +113,14 @@ std::u16string AutofillProgressDialogControllerImpl::GetCancelButtonLabel()
       return l10n_util::GetStringUTF16(IDS_CANCEL);
     case AutofillProgressDialogType::kVirtualCardUnmaskProgressDialog:
     case AutofillProgressDialogType::kServerCardUnmaskProgressDialog:
-    // TODO(b/296651406): Rename IDS_AUTOFILL_CARD_UNMASK_CANCEL_BUTTON_LABEL to
+    // TODO(crbug.com/296651406): Rename
+    // IDS_AUTOFILL_CARD_UNMASK_CANCEL_BUTTON_LABEL to
     // IDS_AUTOFILL_PAYMENT_METHOD_UNMASK_CANCEL_BUTTON_LABEL
     case AutofillProgressDialogType::kServerIbanUnmaskProgressDialog:
       return l10n_util::GetStringUTF16(
           IDS_AUTOFILL_CARD_UNMASK_CANCEL_BUTTON_LABEL);
     case AutofillProgressDialogType::kUnspecified:
-      NOTREACHED();
-      return std::u16string();
+      NOTREACHED_NORETURN();
   }
 }
 
@@ -144,8 +138,7 @@ std::u16string AutofillProgressDialogControllerImpl::GetLoadingMessage() const {
       return l10n_util::GetStringUTF16(
           IDS_AUTOFILL_IBAN_UNMASK_PROGRESS_BAR_MESSAGE);
     case AutofillProgressDialogType::kUnspecified:
-      NOTREACHED();
-      return std::u16string();
+      NOTREACHED_NORETURN();
   }
 }
 
@@ -160,8 +153,7 @@ std::u16string AutofillProgressDialogControllerImpl::GetConfirmationMessage()
           IDS_AUTOFILL_CARD_UNMASK_CONFIRMATION_MESSAGE);
     case AutofillProgressDialogType::kServerIbanUnmaskProgressDialog:
     case AutofillProgressDialogType::kUnspecified:
-      NOTREACHED();
-      return std::u16string();
+      NOTREACHED_NORETURN();
   }
 }
 
@@ -169,5 +161,12 @@ base::WeakPtr<AutofillProgressDialogController>
 AutofillProgressDialogControllerImpl::GetWeakPtr() {
   return weak_ptr_factory_.GetWeakPtr();
 }
+
+#if BUILDFLAG(IS_IOS)
+base::WeakPtr<AutofillProgressDialogControllerImpl>
+AutofillProgressDialogControllerImpl::GetImplWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+#endif
 
 }  // namespace autofill

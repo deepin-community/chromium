@@ -206,7 +206,7 @@ class MEDIA_EXPORT AudioRendererImpl
 
   // Called upon AudioDecoderStream initialization, or failure thereof
   // (indicated by the value of |success|).
-  void OnAudioDecoderStreamInitialized(bool succes);
+  void OnAudioDecoderStreamInitialized(bool success);
 
   void FinishInitialization(PipelineStatus status);
   void FinishFlush();
@@ -239,6 +239,10 @@ class MEDIA_EXPORT AudioRendererImpl
 
   void EnableSpeechRecognition();
   void TranscribeAudio(scoped_refptr<media::AudioBuffer> buffer);
+
+  // Returns the delta between AudioClock::back_timestamp() and
+  // AudioRendererAlgorithm::FrontTimestamp().
+  base::TimeDelta CalculateClockAndAlgorithmDrift() const;
 
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 

@@ -27,10 +27,7 @@ constexpr base::TimeDelta kBigLocalChangeNudgeDelay = base::Milliseconds(2000);
 constexpr base::TimeDelta kVeryBigLocalChangeNudgeDelay = kDefaultPollInterval;
 
 constexpr base::TimeDelta kDefaultLocalChangeNudgeDelayForSessions =
-    base::Seconds(11);
-
-constexpr base::TimeDelta kDefaultLocalChangeNudgeDelayForSegmentations =
-    base::Seconds(11);
+    base::Seconds(15);
 
 // Nudge delay for remote invalidations. Common to all data types.
 constexpr base::TimeDelta kRemoteInvalidationDelay = base::Milliseconds(250);
@@ -52,19 +49,16 @@ base::TimeDelta GetDefaultLocalChangeNudgeDelay(ModelType model_type) {
       return kVeryBigLocalChangeNudgeDelay;
     case SESSIONS:
     case HISTORY:
+    case COOKIES:
       // Sessions is the type that causes the most commit traffic. It gets a
       // custom nudge delay, tuned for a reasonable trade-off between traffic
       // and freshness.
       return kDefaultLocalChangeNudgeDelayForSessions;
     case SAVED_TAB_GROUP:
       return syncer::kTabGroupsSaveCustomNudgeDelay.Get();
-    case SEGMENTATION:
-      // There are multiple segmentations computed during start-up within
-      // seconds. Applies a custom nudge delay, so that they are batched into
-      // one commit.
-      return kDefaultLocalChangeNudgeDelayForSegmentations;
     case BOOKMARKS:
     case PREFERENCES:
+    case PRODUCT_COMPARISON:
       // Types with sometimes automatic changes get longer delays to allow more
       // coalescing.
       return kBigLocalChangeNudgeDelay;
@@ -79,6 +73,7 @@ base::TimeDelta GetDefaultLocalChangeNudgeDelay(ModelType model_type) {
     case AUTOFILL_WALLET_METADATA:
     case AUTOFILL_WALLET_OFFER:
     case AUTOFILL_WALLET_USAGE:
+    case COLLABORATION_GROUP:
     case CONTACT_INFO:
     case THEMES:
     case EXTENSIONS:
@@ -110,9 +105,11 @@ base::TimeDelta GetDefaultLocalChangeNudgeDelay(ModelType model_type) {
     case NIGORI:
     case POWER_BOOKMARK:
     case WEBAUTHN_CREDENTIAL:
+    case PLUS_ADDRESS:
+    case PLUS_ADDRESS_SETTING:
       return kMediumLocalChangeNudgeDelay;
     case UNSPECIFIED:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return base::TimeDelta();
   }
 }
@@ -158,7 +155,6 @@ bool CanGetCommitsFromExtensions(ModelType model_type) {
     case PRINTERS_AUTHORIZATION_SERVERS:
     case READING_LIST:
     case USER_CONSENTS:
-    case SEGMENTATION:
     case SEND_TAB_TO_SELF:
     case SECURITY_EVENTS:
     case WIFI_CONFIGURATIONS:
@@ -174,9 +170,14 @@ bool CanGetCommitsFromExtensions(ModelType model_type) {
     case INCOMING_PASSWORD_SHARING_INVITATION:
     case OUTGOING_PASSWORD_SHARING_INVITATION:
     case SHARED_TAB_GROUP_DATA:
+    case COLLABORATION_GROUP:
+    case PLUS_ADDRESS:
+    case PLUS_ADDRESS_SETTING:
+    case PRODUCT_COMPARISON:
+    case COOKIES:
       return false;
     case UNSPECIFIED:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return false;
   }
 }
@@ -274,9 +275,9 @@ bool DataTypeTracker::IsSyncRequired() const {
 }
 
 bool DataTypeTracker::IsGetUpdatesRequired() const {
-  // TODO(crbug.com/926184): Maybe this shouldn't check IsInitialSyncRequired():
-  // The initial sync is done in a configuration cycle, while this method
-  // refers to normal cycles.
+  // TODO(crbug.com/40611499): Maybe this shouldn't check
+  // IsInitialSyncRequired(): The initial sync is done in a configuration cycle,
+  // while this method refers to normal cycles.
   return !IsBlocked() &&
          (HasRefreshRequestPending() || HasPendingInvalidation() ||
           IsInitialSyncRequired() || IsSyncRequiredToResolveConflict());
@@ -326,7 +327,7 @@ base::TimeDelta DataTypeTracker::GetTimeUntilUnblock() const {
 base::TimeDelta DataTypeTracker::GetLastBackoffInterval() const {
   if (GetBlockingMode() !=
       WaitInterval::BlockingMode::kExponentialBackoffRetrying) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return base::Seconds(0);
   }
   return wait_interval_->length;

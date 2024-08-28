@@ -11,9 +11,9 @@ static_library("public") {
     "accessory_sheet_data.h",
     "accessory_sheet_enums.h",
     "address_accessory_controller.h",
-    "credit_card_accessory_controller.h",
     "manual_filling_controller.h",
     "password_accessory_controller.h",
+    "payment_method_accessory_controller.h",
   ]
 
   deps = [
@@ -38,9 +38,9 @@ source_set("unit_test") {
   testonly = true
   sources = [
     "address_accessory_controller_impl_unittest.cc",
-    "credit_card_accessory_controller_impl_unittest.cc",
     "manual_filling_controller_impl_unittest.cc",
     "password_accessory_controller_impl_unittest.cc",
+    "payment_method_accessory_controller_impl_unittest.cc",
   ]
   deps = [
     ":android",
@@ -52,10 +52,12 @@ source_set("unit_test") {
     "//chrome/test:test_support",
     "//components/autofill/content/browser:test_support",
     "//components/autofill/core/browser",
+    "//components/autofill/core/common:credit_card_number_validation",
     "//components/device_reauth",
     "//components/password_manager/content/browser",
     "//components/password_manager/core/browser",
     "//components/password_manager/core/browser:test_support",
+    "//components/plus_addresses:features",
     "//components/strings",
     "//components/webauthn/android",
     "//content/test:test_support",

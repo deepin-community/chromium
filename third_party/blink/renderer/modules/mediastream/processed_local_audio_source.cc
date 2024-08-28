@@ -555,12 +555,15 @@ void ProcessedLocalAudioSource::OnCaptureStarted() {
   started_callback_.Run(this, mojom::blink::MediaStreamRequestResult::OK, "");
 }
 
-void ProcessedLocalAudioSource::Capture(const media::AudioBus* audio_bus,
-                                        base::TimeTicks audio_capture_time,
-                                        double volume,
-                                        bool key_pressed) {
+void ProcessedLocalAudioSource::Capture(
+    const media::AudioBus* audio_bus,
+    base::TimeTicks audio_capture_time,
+    const media::AudioGlitchInfo& glitch_info,
+    double volume,
+    bool key_pressed) {
   TRACE_EVENT1("audio", "ProcessedLocalAudioSource::Capture", "capture-time",
                audio_capture_time);
+  glitch_info_accumulator_.Add(glitch_info);
   // Maximum number of channels used by the sinks.
   int num_preferred_channels = NumPreferredChannels();
   if (media_stream_audio_processor_) {
@@ -638,7 +641,8 @@ void ProcessedLocalAudioSource::DeliverProcessedAudio(
   TRACE_EVENT1("audio", "ProcessedLocalAudioSource::DeliverProcessedAudio",
                "capture-time", audio_capture_time);
   level_calculator_.Calculate(processed_audio, force_report_nonzero_energy_);
-  DeliverDataToTracks(processed_audio, audio_capture_time);
+  DeliverDataToTracks(processed_audio, audio_capture_time,
+                      glitch_info_accumulator_.GetAndReset());
 
   if (new_volume) {
     PostCrossThreadTask(

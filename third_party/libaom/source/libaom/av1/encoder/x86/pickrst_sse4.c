@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2018, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -10,7 +10,7 @@
  */
 
 #include <assert.h>
-#include <emmintrin.h>
+#include <smmintrin.h>
 #include "aom_dsp/x86/mem_sse2.h"
 #include "aom_dsp/x86/synonyms.h"
 
@@ -524,21 +524,27 @@ static INLINE void compute_stats_highbd_win5_opt_sse4_1(
 }
 
 void av1_compute_stats_highbd_sse4_1(int wiener_win, const uint8_t *dgd8,
-                                     const uint8_t *src8, int h_start,
-                                     int h_end, int v_start, int v_end,
-                                     int dgd_stride, int src_stride, int64_t *M,
-                                     int64_t *H, aom_bit_depth_t bit_depth) {
+                                     const uint8_t *src8, int16_t *dgd_avg,
+                                     int16_t *src_avg, int h_start, int h_end,
+                                     int v_start, int v_end, int dgd_stride,
+                                     int src_stride, int64_t *M, int64_t *H,
+                                     aom_bit_depth_t bit_depth) {
   if (wiener_win == WIENER_WIN) {
+    (void)dgd_avg;
+    (void)src_avg;
     compute_stats_highbd_win7_opt_sse4_1(dgd8, src8, h_start, h_end, v_start,
                                          v_end, dgd_stride, src_stride, M, H,
                                          bit_depth);
   } else if (wiener_win == WIENER_WIN_CHROMA) {
+    (void)dgd_avg;
+    (void)src_avg;
     compute_stats_highbd_win5_opt_sse4_1(dgd8, src8, h_start, h_end, v_start,
                                          v_end, dgd_stride, src_stride, M, H,
                                          bit_depth);
   } else {
-    av1_compute_stats_highbd_c(wiener_win, dgd8, src8, h_start, h_end, v_start,
-                               v_end, dgd_stride, src_stride, M, H, bit_depth);
+    av1_compute_stats_highbd_c(wiener_win, dgd8, src8, dgd_avg, src_avg,
+                               h_start, h_end, v_start, v_end, dgd_stride,
+                               src_stride, M, H, bit_depth);
   }
 }
 #endif  // CONFIG_AV1_HIGHBITDEPTH
@@ -725,7 +731,8 @@ void av1_compute_stats_sse4_1(int wiener_win, const uint8_t *dgd,
 }
 
 static INLINE __m128i pair_set_epi16(int a, int b) {
-  return _mm_set1_epi32((int32_t)(((uint16_t)(a)) | (((uint32_t)(b)) << 16)));
+  return _mm_set1_epi32(
+      (int32_t)(((uint16_t)(a)) | (((uint32_t)(uint16_t)(b)) << 16)));
 }
 
 int64_t av1_lowbd_pixel_proj_error_sse4_1(

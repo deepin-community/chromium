@@ -28,9 +28,8 @@
 #ifndef SRC_DAWN_NATIVE_APPLYCLEARVALUEWITHDRAWHELPER_H_
 #define SRC_DAWN_NATIVE_APPLYCLEARVALUEWITHDRAWHELPER_H_
 
-#include <bitset>
-
 #include "absl/container/flat_hash_map.h"
+#include "dawn/common/Ref.h"
 #include "dawn/common/ityp_array.h"
 #include "dawn/common/ityp_bitset.h"
 #include "dawn/native/Error.h"
@@ -38,13 +37,16 @@
 
 namespace dawn::native {
 class BufferBase;
+class CommandEncoder;
 class RenderPassEncoder;
 struct RenderPassDescriptor;
 
 struct KeyOfApplyClearColorValueWithDrawPipelines {
-    uint8_t colorAttachmentCount;
+    uint8_t colorAttachmentCount = 0;
     PerColorAttachment<wgpu::TextureFormat> colorTargetFormats;
     ColorAttachmentMask colorTargetsToApplyClearColorValue;
+    uint32_t sampleCount = 0;
+    wgpu::TextureFormat depthStencilFormat = wgpu::TextureFormat::Undefined;
 };
 
 struct KeyOfApplyClearColorValueWithDrawPipelinesHashFunc {
@@ -60,11 +62,20 @@ using ApplyClearColorValueWithDrawPipelinesCache =
                         KeyOfApplyClearColorValueWithDrawPipelinesHashFunc,
                         KeyOfApplyClearColorValueWithDrawPipelinesEqualityFunc>;
 
-bool ShouldApplyClearBigIntegerColorValueWithDraw(const DeviceBase* device,
-                                                  const RenderPassDescriptor* renderPassDescriptor);
+class ClearWithDrawHelper {
+  public:
+    ClearWithDrawHelper();
+    ~ClearWithDrawHelper();
 
-MaybeError ApplyClearBigIntegerColorValueWithDraw(RenderPassEncoder* renderPassEncoder,
-                                                  const RenderPassDescriptor* renderPassDescriptor);
+    MaybeError Initialize(CommandEncoder* encoder,
+                          const RenderPassDescriptor* renderPassDescriptor);
+    MaybeError Apply(RenderPassEncoder* renderPassEncoder);
+
+  private:
+    bool mShouldRun = false;
+    KeyOfApplyClearColorValueWithDrawPipelines mKey;
+    Ref<BufferBase> mUniformBufferWithClearColorValues;
+};
 
 }  // namespace dawn::native
 

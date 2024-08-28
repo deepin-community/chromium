@@ -145,7 +145,7 @@ VariationsSeed CreateTestSeedWithLimitedEntropyLayer() {
 
   auto* layer_member_reference = study->mutable_layer();
   layer_member_reference->set_layer_id(1);
-  layer_member_reference->set_layer_member_id(1);
+  layer_member_reference->add_layer_member_ids(1);
 
   return seed;
 }
@@ -180,7 +180,7 @@ VariationsSeed CreateTestSeedWithLimitedEntropyLayerUsingExcessiveEntropy() {
 
   auto* layer_member_reference = study->mutable_layer();
   layer_member_reference->set_layer_id(1);
-  layer_member_reference->set_layer_member_id(1);
+  layer_member_reference->add_layer_member_ids(1);
 
   return seed;
 }
@@ -288,7 +288,7 @@ class FakeSyntheticTrialObserver : public SyntheticTrialObserver {
   std::vector<SyntheticTrialGroup> groups_;
 };
 
-// TODO(crbug/1167566): Remove when fake VariationsServiceClient created.
+// TODO(crbug.com/40742801): Remove when fake VariationsServiceClient created.
 class TestVariationsServiceClient : public VariationsServiceClient {
  public:
   TestVariationsServiceClient() = default;

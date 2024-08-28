@@ -56,7 +56,8 @@ class TestDialog : public DialogDelegateView {
   bool ShouldShowCloseButton() const override { return show_close_button_; }
 
   // DialogDelegateView overrides:
-  gfx::Size CalculatePreferredSize() const override {
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& /*available_size*/) const override {
     return gfx::Size(200, 200);
   }
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override {
@@ -102,7 +103,7 @@ class DialogTest : public ViewsTestBase {
     // These tests all expect to use a custom frame on the dialog so they can
     // control hit-testing and other behavior. Custom frames are only supported
     // with a parent widget, so create the parent widget here.
-    parent_widget_ = CreateTestWidget();
+    parent_widget_ = CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
     parent_widget_->Show();
 
     InitializeDialog();
@@ -140,7 +141,7 @@ class DialogTest : public ViewsTestBase {
   void ShowDialog() { CreateDialogWidget(std::move(dialog_))->Show(); }
 
   void SimulateKeyPress(ui::KeyboardCode key) {
-    ui::KeyEvent event(ui::ET_KEY_PRESSED, key, ui::EF_NONE);
+    ui::KeyEvent event(ui::EventType::kKeyPressed, key, ui::EF_NONE);
     if (dialog()->GetFocusManager()->OnKeyEvent(event))
       dialog()->GetWidget()->OnKeyEvent(&event);
   }
@@ -156,7 +157,7 @@ class DialogTest : public ViewsTestBase {
  private:
   std::unique_ptr<views::Widget> parent_widget_;
   std::unique_ptr<TestDialog> dialog_;
-  raw_ptr<TestDialog, DanglingUntriaged> dialog_raw_ = nullptr;
+  raw_ptr<TestDialog> dialog_raw_ = nullptr;
 };
 
 }  // namespace
@@ -202,7 +203,7 @@ TEST_F(DialogTest, EscButtonCancelsWithoutCloseAction) {
 }
 
 TEST_F(DialogTest, ReturnDirectedToOkButtonPlatformStyle) {
-  const ui::KeyEvent return_event(ui::ET_KEY_PRESSED, ui::VKEY_RETURN,
+  const ui::KeyEvent return_event(ui::EventType::kKeyPressed, ui::VKEY_RETURN,
                                   ui::EF_NONE);
   if (PlatformStyle::kReturnClicksFocusedControl) {
     EXPECT_TRUE(dialog()->GetOkButton()->OnKeyPressed(return_event));
@@ -217,7 +218,7 @@ TEST_F(DialogTest, ReturnDirectedToOkButtonPlatformStyle) {
 }
 
 TEST_F(DialogTest, ReturnDirectedToCancelButtonPlatformBehavior) {
-  const ui::KeyEvent return_event(ui::ET_KEY_PRESSED, ui::VKEY_RETURN,
+  const ui::KeyEvent return_event(ui::EventType::kKeyPressed, ui::VKEY_RETURN,
                                   ui::EF_NONE);
   if (PlatformStyle::kReturnClicksFocusedControl) {
     EXPECT_TRUE(dialog()->GetCancelButton()->OnKeyPressed(return_event));
@@ -365,16 +366,16 @@ TEST_F(DialogTest, BoundsAccommodateTitle) {
   // Titled dialogs have taller initial frame bounds than untitled dialogs.
   View* frame1 = dialog()->GetWidget()->non_client_view()->frame_view();
   View* frame2 = dialog2->GetWidget()->non_client_view()->frame_view();
-  EXPECT_LT(frame1->GetPreferredSize().height(),
-            frame2->GetPreferredSize().height());
+  EXPECT_LT(frame1->GetPreferredSize({}).height(),
+            frame2->GetPreferredSize({}).height());
 
   // Giving the default test dialog a title will yield the same bounds.
   dialog()->set_title(u"Title");
   EXPECT_TRUE(dialog()->ShouldShowWindowTitle());
 
   dialog()->GetWidget()->UpdateWindowTitle();
-  EXPECT_EQ(frame1->GetPreferredSize().height(),
-            frame2->GetPreferredSize().height());
+  EXPECT_EQ(frame1->GetPreferredSize({}).height(),
+            frame2->GetPreferredSize({}).height());
 
   dialog2->TearDown();
 }
@@ -386,7 +387,7 @@ TEST_F(DialogTest, ActualBoundsMatchPreferredBounds) {
   dialog()->GetWidget()->UpdateWindowTitle();
 
   views::View* root_view = dialog()->GetWidget()->GetRootView();
-  gfx::Size preferred_size(root_view->GetPreferredSize());
+  gfx::Size preferred_size(root_view->GetPreferredSize({}));
   EXPECT_FALSE(preferred_size.IsEmpty());
   root_view->SizeToPreferredSize();
   views::test::RunScheduledLayout(root_view);
@@ -562,7 +563,8 @@ TEST_F(DialogDelegateCloseTest, OldClosePathDoesNotDoubleClose) {
 TEST_F(DialogDelegateCloseTest, CloseParentWidgetDoesNotInvokeCloseCallback) {
   auto dialog_owned = std::make_unique<DialogDelegateView>();
   DialogDelegateView* dialog = dialog_owned.get();
-  std::unique_ptr<Widget> parent = CreateTestWidget();
+  std::unique_ptr<Widget> parent =
+      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
   Widget* widget = DialogDelegate::CreateDialogWidget(
       std::move(dialog_owned), GetContext(), parent->GetNativeView());
 

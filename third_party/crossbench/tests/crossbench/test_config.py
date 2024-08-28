@@ -9,19 +9,29 @@ import dataclasses
 import enum
 import json
 import pathlib
-from typing import Any, Dict, List, Optional
 import unittest
-from frozendict import frozendict
+from typing import Any, Dict, List, Optional
+
+from immutabledict import immutabledict
 
 from crossbench import cli_helper, compat
-from crossbench.config import ConfigObject, ConfigParser
+from crossbench.config import ConfigEnum, ConfigObject, ConfigParser
+from tests import test_helper
 from tests.crossbench.mock_helper import CrossbenchFakeFsTestCase
 
 
-class ConfigEnum(compat.StrEnumWithHelp):
+@enum.unique
+class GenericEnum(compat.StrEnumWithHelp):
   A = ("a", "A Help")
   B = ("b", "B Help")
+  C = ("c", "C Help")
 
+
+@enum.unique
+class CustomConfigEnum(ConfigEnum):
+  A = ("a", "A Help")
+  B = ("b", "B Help")
+  C = ("c", "C Help")
 
 class CustomValueEnum(enum.Enum):
 
@@ -69,6 +79,8 @@ class CustomConfigObject(ConfigObject):
   integer: Optional[int] = None
   nested: Optional[CustomNestedConfigObject] = None
   choices: str = ""
+  generic_enum: GenericEnum = GenericEnum.A
+  config_enum: CustomConfigEnum = CustomConfigEnum.A
   custom_value_enum: CustomValueEnum = CustomValueEnum.DEFAULT
   depending_nested: Optional[Dict[str, Any]] = None
   depending_many: Optional[Dict[str, Any]] = None
@@ -86,17 +98,22 @@ class CustomConfigObject(ConfigObject):
     return cls(name=value)
 
   @classmethod
-  def parse_depending_nested(cls, value: str,
-                             nested: CustomNestedConfigObject) -> Dict:
-
+  def parse_depending_nested(
+      cls, value: Optional[str],
+      nested: CustomNestedConfigObject) -> Optional[Dict]:
+    if not value:
+      return None
     return {
         "value": cli_helper.parse_non_empty_str(value),
         "nested": cli_helper.parse_not_none(nested, "nested")
     }
 
   @classmethod
-  def parse_depending_many(cls, value: str, array: List[Any], integer: int,
-                           nested: CustomNestedConfigObject) -> Dict:
+  def parse_depending_many(cls, value: Optional[str], array: List[Any],
+                           integer: int,
+                           nested: CustomNestedConfigObject) -> Optional[Dict]:
+    if not value:
+      return None
     return {
         "value": cli_helper.parse_non_empty_str(value),
         "nested": cli_helper.parse_not_none(nested, "nested"),
@@ -117,6 +134,8 @@ class CustomConfigObject(ConfigObject):
     parser.add_argument("array", type=list)
     parser.add_argument("integer", type=cli_helper.parse_positive_int)
     parser.add_argument("nested", type=CustomNestedConfigObject)
+    parser.add_argument("generic_enum", type=GenericEnum)
+    parser.add_argument("config_enum", type=CustomConfigEnum)
     parser.add_argument(
         "custom_value_enum",
         type=CustomValueEnum,
@@ -186,6 +205,8 @@ class ConfigParserTestCase(unittest.TestCase):
       self.parser.add_argument("any", type=None, depends_on=("other",))
 
     with self.assertRaises(ValueError):
+      self.parser.add_argument("enum", type=GenericEnum, depends_on=("other",))
+    with self.assertRaises(ValueError):
       self.parser.add_argument("enum", type=ConfigEnum, depends_on=("other",))
 
     for primitive_type in (bool, float, int, str):
@@ -231,10 +252,21 @@ class ConfigObjectTestCase(CrossbenchFakeFsTestCase):
     self.assertIn("array", help_text)
     self.assertIn("integer", help_text)
     self.assertIn("nested", help_text)
+    self.assertIn("generic_enum", help_text)
+    self.assertIn("config_enum", help_text)
     self.assertIn("custom_value_enum", help_text)
     self.assertIn("choices", help_text)
     self.assertIn("depending_nested", help_text)
     self.assertIn("depending_many", help_text)
+
+  def test_value_has_path_prefix(self):
+    for value in ("/foo/bar", "~/foo/bar", "../foo/bar", "./foo/bar",
+                  "C:\\foo\\bar", "C:/foo/bar"):
+      with self.subTest(value=value):
+        self.assertTrue(CustomConfigObject.value_has_path_prefix(value))
+    for value in ("foo/bar", "foo:bar", "foo", "{foo:'/foo/bar'}"):
+      with self.subTest(value=value):
+        self.assertFalse(CustomConfigObject.value_has_path_prefix(value))
 
   def test_load_invalid_str(self):
     for invalid in ("", None, 1, []):
@@ -288,8 +320,12 @@ class ConfigObjectTestCase(CrossbenchFakeFsTestCase):
     config = CustomConfigObject.parse({"name_alias": "foo"})
     assert isinstance(config, CustomConfigObject)
     self.assertIs(config.custom_value_enum, CustomValueEnum.DEFAULT)
-    for config_value, result in (("a", CustomValueEnum.A_OR_TRUE),
+    for config_value, result in ((CustomValueEnum.A_OR_TRUE,
+                                  CustomValueEnum.A_OR_TRUE),
+                                 ("a", CustomValueEnum.A_OR_TRUE),
                                  (True, CustomValueEnum.A_OR_TRUE),
+                                 (CustomValueEnum.B_OR_FALSE,
+                                  CustomValueEnum.B_OR_FALSE),
                                  ("b", CustomValueEnum.B_OR_FALSE),
                                  (False, CustomValueEnum.B_OR_FALSE),
                                  ("default", CustomValueEnum.DEFAULT)):
@@ -367,7 +403,7 @@ class ConfigObjectTestCase(CrossbenchFakeFsTestCase):
     config_2 = CustomConfigObject.parse(str(path))
     self.assertEqual(config, config_2)
 
-  TEST_DICT = frozendict({
+  TEST_DICT = immutabledict({
       "name": "Config Name",
       "array": [1, 3],
       "integer": 166
@@ -394,7 +430,7 @@ class ConfigObjectTestCase(CrossbenchFakeFsTestCase):
     self.assertEqual(config.integer, 166)
     self.assertIsNone(config.nested)
 
-  TEST_DICT_NESTED = frozendict({"name": "a nested name"})
+  TEST_DICT_NESTED = immutabledict({"name": "a nested name"})
 
   def test_load_dict_nested(self):
     test_dict = dict(self.TEST_DICT)
@@ -443,3 +479,63 @@ class ConfigObjectTestCase(CrossbenchFakeFsTestCase):
         "value": "a value",
         "nested": config.nested
     })
+
+  def test_load_generic_enum(self):
+    test_dict = dict(self.TEST_DICT)
+    test_dict["generic_enum"] = "b"
+    config = CustomConfigObject.load_dict(test_dict)
+    self.assertIs(config.generic_enum, GenericEnum.B)
+    test_dict = dict(self.TEST_DICT)
+    test_dict["generic_enum"] = "c"
+    config = CustomConfigObject.load_dict(test_dict)
+    self.assertIs(config.generic_enum, GenericEnum.C)
+
+  def test_load_generic_enum_invalid(self):
+    test_dict = dict(self.TEST_DICT)
+    test_dict["generic_enum"] = "unknown value"
+    with self.assertRaises(argparse.ArgumentTypeError) as cm:
+      CustomConfigObject.load_dict(test_dict)
+    error_message = str(cm.exception).lower()
+    self.assertIn("choices are", error_message)
+    self.assertIn("generic_enum", error_message)
+
+  def test_load_config_enum(self):
+    test_dict = dict(self.TEST_DICT)
+    test_dict["config_enum"] = "b"
+    config = CustomConfigObject.load_dict(test_dict)
+    self.assertIs(config.config_enum, CustomConfigEnum.B)
+    test_dict = dict(self.TEST_DICT)
+    test_dict["config_enum"] = "c"
+    config = CustomConfigObject.load_dict(test_dict)
+    self.assertIs(config.config_enum, CustomConfigEnum.C)
+
+  def test_load_custom_enum_invalid(self):
+    test_dict = dict(self.TEST_DICT)
+    test_dict["config_enum"] = "unknown value"
+    with self.assertRaises(argparse.ArgumentTypeError) as cm:
+      CustomConfigObject.load_dict(test_dict)
+    error_message = str(cm.exception).lower()
+    self.assertIn("choices are", error_message)
+    self.assertIn("config_enum", error_message)
+
+
+class ConfigEnumTestCase(unittest.TestCase):
+
+  def test_load_invalid(self):
+    for invalid in ("", None):
+      with self.assertRaises(argparse.ArgumentTypeError) as cm:
+        CustomConfigEnum.parse(invalid)
+      error_message = str(cm.exception)
+      self.assertIn("Choices are", error_message)
+      self.assertIn("CustomConfigEnum", error_message)
+
+  def test_parse(self):
+    for value, result in ((CustomConfigEnum.A,
+                           CustomConfigEnum.A), ("a", CustomConfigEnum.A),
+                          (CustomConfigEnum.B,
+                           CustomConfigEnum.B), ("c", CustomConfigEnum.C)):
+      self.assertIs(CustomConfigEnum.parse(value), result)
+
+
+if __name__ == "__main__":
+  test_helper.run_pytest(__file__)

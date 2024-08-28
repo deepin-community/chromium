@@ -88,7 +88,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientSecondaryAccountSyncTest,
   syncer::ModelTypeSet bad_types =
       base::Difference(GetSyncService(0)->GetActiveDataTypes(),
                        AllowedTypesInStandaloneTransportMode());
-  EXPECT_TRUE(bad_types.Empty())
+  EXPECT_TRUE(bad_types.empty())
       << syncer::ModelTypeSetToDebugString(bad_types);
 }
 #else
@@ -165,7 +165,9 @@ IN_PROC_BROWSER_TEST_F(SingleClientSecondaryAccountSyncTest,
                    ->IsInitialSyncFeatureSetupComplete());
   ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureEnabled());
 
-  syncer::SyncTransportDataPrefs prefs(GetProfile(0)->GetPrefs());
+  syncer::SyncTransportDataPrefs prefs(
+      GetProfile(0)->GetPrefs(),
+      GetClient(0)->GetGaiaIdHashForPrimaryAccount());
   const std::string cache_guid = prefs.GetCacheGuid();
   ASSERT_FALSE(cache_guid.empty());
 
@@ -188,7 +190,9 @@ IN_PROC_BROWSER_TEST_F(SingleClientSecondaryAccountSyncTest,
                    ->IsInitialSyncFeatureSetupComplete());
   ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureEnabled());
 
-  syncer::SyncTransportDataPrefs prefs(GetProfile(0)->GetPrefs());
+  syncer::SyncTransportDataPrefs prefs(
+      GetProfile(0)->GetPrefs(),
+      GetClient(0)->GetGaiaIdHashForPrimaryAccount());
   ASSERT_FALSE(prefs.GetCacheGuid().empty());
 
   std::string old_cache_guid;

@@ -9,8 +9,8 @@
 #include <set>
 #include <utility>
 #include <vector>
+
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/time/time.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -18,8 +18,9 @@
 #include "extensions/browser/api/declarative_net_request/action_tracker.h"
 #include "extensions/browser/api/declarative_net_request/composite_matcher.h"
 #include "extensions/browser/api/declarative_net_request/constants.h"
-#include "extensions/browser/api/declarative_net_request/declarative_net_request_prefs_helper.h"
 #include "extensions/browser/api/declarative_net_request/file_backed_ruleset_source.h"
+#include "extensions/browser/api/declarative_net_request/prefs_helper.h"
+#include "extensions/browser/api/declarative_net_request/request_action.h"
 #include "extensions/browser/api/declarative_net_request/request_params.h"
 #include "extensions/browser/api/declarative_net_request/rules_monitor_service.h"
 #include "extensions/browser/api/declarative_net_request/ruleset_manager.h"
@@ -65,7 +66,7 @@ void FilterRules(std::vector<dnr_api::Rule>& rules,
   // Filter the rules by the rule IDs, if provided.
   if (rule_filter.rule_ids) {
     const base::flat_set<int>& rule_ids = *rule_filter.rule_ids;
-    base::EraseIf(rules, [rule_ids](const auto& rule) {
+    std::erase_if(rules, [rule_ids](const auto& rule) {
       return !rule_ids.contains(rule.id);
     });
   }
@@ -356,7 +357,7 @@ DeclarativeNetRequestGetEnabledRulesetsFunction::Run() {
 
     // Exclude any reserved ruleset IDs since they would correspond to
     // non-static rulesets.
-    base::EraseIf(public_ids, [](const std::string& id) {
+    std::erase_if(public_ids, [](const std::string& id) {
       DCHECK(!id.empty());
       return id[0] == declarative_net_request::kReservedRulesetIDPrefix;
     });
@@ -376,8 +377,7 @@ DeclarativeNetRequestUpdateStaticRulesFunction::Run() {
   using Params = dnr_api::UpdateStaticRules::Params;
   using DNRManifestData = declarative_net_request::DNRManifestData;
   using RulesMonitorService = declarative_net_request::RulesMonitorService;
-  using RuleIdsToUpdate = declarative_net_request::
-      DeclarativeNetRequestPrefsHelper::RuleIdsToUpdate;
+  using RuleIdsToUpdate = declarative_net_request::PrefsHelper::RuleIdsToUpdate;
 
   auto params = Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params.has_value());
@@ -557,20 +557,21 @@ DeclarativeNetRequestSetExtensionActionOptionsFunction::Run() {
       declarative_net_request::RulesMonitorService::Get(browser_context());
   DCHECK(rules_monitor_service);
 
-  ExtensionPrefs* prefs = ExtensionPrefs::Get(browser_context());
+  declarative_net_request::PrefsHelper helper(
+      *ExtensionPrefs::Get(browser_context()));
   declarative_net_request::ActionTracker& action_tracker =
       rules_monitor_service->action_tracker();
 
   bool use_action_count_as_badge_text =
-      prefs->GetDNRUseActionCountAsBadgeText(extension_id());
+      helper.GetUseActionCountAsBadgeText(extension_id());
 
   if (params->options.display_action_count_as_badge_text &&
       *params->options.display_action_count_as_badge_text !=
           use_action_count_as_badge_text) {
     use_action_count_as_badge_text =
         *params->options.display_action_count_as_badge_text;
-    prefs->SetDNRUseActionCountAsBadgeText(extension_id(),
-                                           use_action_count_as_badge_text);
+    helper.SetUseActionCountAsBadgeText(extension_id(),
+                                        use_action_count_as_badge_text);
 
     // If the preference is switched on, update the extension's badge text
     // with the number of actions matched for this extension. Otherwise, clear
@@ -734,7 +735,7 @@ DeclarativeNetRequestTestMatchOutcomeFunction::Run() {
   auto method = params->request.method == dnr_api::RequestMethod::kNone
                     ? dnr_api::RequestMethod::kGet
                     : params->request.method;
-  // TODO(crbug.com/1141166): Add response header support for ruleset test
+  // TODO(crbug.com/40727004): Add response header support for ruleset test
   // matching.
   declarative_net_request::RequestParams request_params(
       url, initiator, params->request.type, method, tab_id,
@@ -768,27 +769,60 @@ DeclarativeNetRequestTestMatchOutcomeFunction::Run() {
               REQUIRE_HOST_PERMISSION_FOR_URL_AND_INITIATOR,
           initiator, web_request_resource_type);
 
-  // Check for "before request" matches (e.g. allow/block rules).
-  declarative_net_request::CompositeMatcher::ActionInfo before_request_action =
-      matcher->GetBeforeRequestAction(request_params, page_access);
-  if (before_request_action.action) {
+  std::vector<declarative_net_request::RequestAction> actions =
+      GetActions(*matcher, request_params, page_access);
+  for (auto& action : actions) {
     dnr_api::MatchedRule match;
-    match.rule_id = before_request_action.action->rule_id;
-    match.ruleset_id = GetPublicRulesetID(
-        *extension(), before_request_action.action->ruleset_id);
+    match.rule_id = action.rule_id;
+    match.ruleset_id = GetPublicRulesetID(*extension(), action.ruleset_id);
     result.matched_rules.push_back(std::move(match));
-  } else {
-    // If none found, check for modify header matches.
-    for (auto& action : matcher->GetModifyHeadersActions(request_params)) {
-      dnr_api::MatchedRule match;
-      match.rule_id = action.rule_id;
-      match.ruleset_id = GetPublicRulesetID(*extension(), action.ruleset_id);
-      result.matched_rules.push_back(std::move(match));
-    }
   }
 
   return RespondNow(
       ArgumentList(dnr_api::TestMatchOutcome::Results::Create(result)));
+}
+
+std::vector<declarative_net_request::RequestAction>
+DeclarativeNetRequestTestMatchOutcomeFunction::GetActions(
+    const declarative_net_request::CompositeMatcher& matcher,
+    const declarative_net_request::RequestParams& params,
+    PermissionsData::PageAccess page_access) const {
+  // TODO(crbug.com/343503170): The logic here is very similar to that of
+  // `RulesetManager::EvaluateRequestInternal` except this is for a single
+  // extension. One way to DRY this up is to put this logic in utils, and pass
+  // in function objects for matching a singular action and matching modify
+  // headers actions.
+
+  using RequestAction = declarative_net_request::RequestAction;
+  std::vector<RequestAction> actions;
+
+  std::optional<RequestAction> action =
+      matcher
+          .GetAction(
+              params,
+              declarative_net_request::RulesetMatchingStage::kOnBeforeRequest,
+              page_access)
+          .action;
+
+  if (action) {
+    bool is_request_modifying_action = !action->IsAllowOrAllowAllRequests();
+    actions.push_back(std::move(*action));
+
+    if (is_request_modifying_action) {
+      return actions;
+    }
+  }
+
+  std::vector<RequestAction> modify_headers_actions =
+      matcher.GetModifyHeadersActions(
+          params,
+          declarative_net_request::RulesetMatchingStage::kOnBeforeRequest);
+
+  if (!modify_headers_actions.empty()) {
+    return modify_headers_actions;
+  }
+
+  return actions;
 }
 
 }  // namespace extensions

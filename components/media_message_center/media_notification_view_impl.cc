@@ -4,6 +4,8 @@
 
 #include "components/media_message_center/media_notification_view_impl.h"
 
+#include <vector>
+
 #include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
@@ -25,6 +27,7 @@
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/message_center/public/cpp/message_center_constants.h"
 #include "ui/message_center/views/notification_header_view.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/layout/box_layout.h"
@@ -338,8 +341,8 @@ void MediaNotificationViewImpl::GetAccessibleNodeData(
       l10n_util::GetStringUTF8(
           IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACCESSIBLE_NAME));
 
-  if (!GetAccessibleName().empty()) {
-    node_data->SetNameChecked(GetAccessibleName());
+  if (!accessible_name_.empty()) {
+    node_data->SetNameChecked(accessible_name_);
   }
 }
 
@@ -389,7 +392,8 @@ void MediaNotificationViewImpl::UpdateWithMediaMetadata(
   title_label_->SetText(metadata.title);
   artist_label_->SetText(metadata.artist);
 
-  SetAccessibleName(GetAccessibleNameFromMetadata(metadata));
+  accessible_name_ = GetAccessibleNameFromMetadata(metadata);
+  GetViewAccessibility().SetName(accessible_name_);
 
   // The title label should only be a11y-focusable when there is text to be
   // read.
@@ -597,7 +601,7 @@ void MediaNotificationViewImpl::CreateMediaButton(
                           base::Unretained(this), button.get()));
   button->set_tag(static_cast<int>(action));
   button->SetPreferredSize(is_cros_ ? kCrOSMediaButtonSize : kMediaButtonSize);
-  button->SetAccessibleName(accessible_name);
+  button->GetViewAccessibility().SetName(accessible_name);
   button->SetTooltipText(accessible_name);
   button->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
   button->SetFlipCanvasOnPaintForRTLUI(false);
@@ -792,7 +796,7 @@ MediaNotificationViewImpl::GetButtons() {
   buttons.insert(buttons.cbegin(),
                  playback_button_container_->children().cbegin(),
                  playback_button_container_->children().cend());
-  base::EraseIf(buttons, [](views::View* view) {
+  std::erase_if(buttons, [](views::View* view) {
     return !(views::IsViewClass<views::ImageButton>(view) ||
              views::IsViewClass<views::ToggleImageButton>(view));
   });

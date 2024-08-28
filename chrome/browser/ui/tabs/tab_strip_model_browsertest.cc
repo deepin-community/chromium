@@ -17,9 +17,12 @@
 #include "chrome/browser/ui/tabs/organization/tab_organization_service.h"
 #include "chrome/browser/ui/tabs/organization/tab_organization_service_factory.h"
 #include "chrome/browser/ui/tabs/organization/tab_organization_session.h"
+#include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_keyed_service.h"
+#include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_service_factory.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
+#include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/prevent_close_test_base.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_id_constants.h"
@@ -30,6 +33,8 @@
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
+#include "components/saved_tab_groups/features.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -93,6 +98,7 @@ class TabStripModelPreventCloseTest : public PreventCloseTestBase,
               (override));
 
  protected:
+  web_app::OsIntegrationTestOverrideBlockingRegistration faked_os_integration_;
   base::ScopedObservation<TabStripModel, TabStripModelPreventCloseTest>
       observer_{this};
 };
@@ -168,15 +174,52 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(0, tab_strip_model->count());
 }
 
-class TabStripModelBrowserTest : public InProcessBrowserTest {
+class TabStripModelBrowserTest : public InProcessBrowserTest,
+                                 public TabStripModelObserver {
  public:
   TabStripModelBrowserTest() {
-    feature_list_.InitWithFeatures(
-        {features::kTabOrganization, features::kChromeRefresh2023}, {});
+    feature_list_.InitWithFeatures({features::kTabOrganization}, {});
   }
 
+  void TearDownOnMainThread() override { observer_.Reset(); }
+
+  MOCK_METHOD(void,
+              OnTabGroupAdded,
+              (const tab_groups::TabGroupId& group_id),
+              (override));
+  MOCK_METHOD(void,
+              OnTabGroupWillBeRemoved,
+              (const tab_groups::TabGroupId& group_id),
+              (override));
+
   base::test::ScopedFeatureList feature_list_;
+  base::ScopedObservation<TabStripModel, TabStripModelBrowserTest> observer_{
+      this};
 };
+
+IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest, OnTabGroupAdded) {
+  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+
+  // We should already have a tab. Add it to a group and see if
+  // TabStripModelObserver::OnTabGroupAdded is called.
+  EXPECT_CALL(*this, OnTabGroupAdded(_)).Times(1);
+
+  observer_.Observe(browser()->tab_strip_model());
+  browser()->tab_strip_model()->AddToNewGroup({0});
+}
+
+IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest, OnTabGroupWillBeRemoved) {
+  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  tab_groups::TabGroupId group_id =
+      browser()->tab_strip_model()->AddToNewGroup({0});
+
+  // Close the group and see if TabStripModelObserver::OnTabGroupWillBeRemoved
+  // is called.
+  EXPECT_CALL(*this, OnTabGroupWillBeRemoved(group_id)).Times(1);
+
+  observer_.Observe(browser()->tab_strip_model());
+  browser()->tab_strip_model()->CloseAllTabsInGroup(group_id);
+}
 
 IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest, CommandOrganizeTabs) {
   base::HistogramTester histogram_tester;
@@ -203,4 +246,31 @@ IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest, CommandOrganizeTabs) {
                                       true, 1);
   histogram_tester.ExpectUniqueSample("Tab.Organization.TabContextMenu.Clicked",
                                       true, 1);
+}
+
+class SavedTabGroupV2TabStripModelBrowserTest : public InProcessBrowserTest {
+ public:
+  SavedTabGroupV2TabStripModelBrowserTest() {
+    feature_list_.InitWithFeatures({tab_groups::kTabGroupsSaveV2}, {});
+  }
+
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(SavedTabGroupV2TabStripModelBrowserTest,
+                       GroupAutoSaveOnCreate) {
+  // Create a group, expect it to be saved.
+  tab_groups::SavedTabGroupKeyedService* const service =
+      tab_groups::SavedTabGroupServiceFactory::GetForProfile(
+          browser()->profile());
+  ASSERT_NE(service, nullptr);
+
+  TabStripModel* const tab_strip_model = browser()->tab_strip_model();
+  ASSERT_EQ(1, tab_strip_model->count());
+
+  // Create a group.
+  tab_groups::TabGroupId group = tab_strip_model->AddToNewGroup({0});
+
+  // With the V2 flag the group should be saved.
+  EXPECT_TRUE(service->model()->Contains(group));
 }

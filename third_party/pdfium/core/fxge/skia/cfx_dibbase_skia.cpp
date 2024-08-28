@@ -11,17 +11,18 @@
 #include <type_traits>
 #include <utility>
 
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/fx_2d_size.h"
 #include "core/fxcrt/fx_memory.h"
 #include "core/fxcrt/fx_memory_wrappers.h"
 #include "core/fxcrt/fx_safe_types.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxcrt/retain_ptr.h"
 #include "core/fxcrt/span.h"
 #include "core/fxge/calculate_pitch.h"
 #include "core/fxge/dib/cfx_dibitmap.h"
 #include "core/fxge/dib/fx_dib.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/notreached.h"
 #include "third_party/skia/include/core/SkAlphaType.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkColorPriv.h"
@@ -80,7 +81,7 @@ class PixelTransformTraits<1, PixelTransform> {
   using Result = std::invoke_result_t<PixelTransform, bool>;
 
   static Result Invoke(PixelTransform&& pixel_transform,
-                       const uint8_t* scanline,
+                       pdfium::span<const uint8_t> scanline,
                        size_t column) {
     uint8_t kMask = 1 << (7 - column % 8);
     return pixel_transform(!!(scanline[column / 8] & kMask));
@@ -93,7 +94,7 @@ class PixelTransformTraits<8, PixelTransform> {
   using Result = std::invoke_result_t<PixelTransform, uint8_t>;
 
   static Result Invoke(PixelTransform&& pixel_transform,
-                       const uint8_t* scanline,
+                       pdfium::span<const uint8_t> scanline,
                        size_t column) {
     return pixel_transform(scanline[column]);
   }
@@ -106,7 +107,7 @@ class PixelTransformTraits<24, PixelTransform> {
       std::invoke_result_t<PixelTransform, uint8_t, uint8_t, uint8_t>;
 
   static Result Invoke(PixelTransform&& pixel_transform,
-                       const uint8_t* scanline,
+                       pdfium::span<const uint8_t> scanline,
                        size_t column) {
     size_t offset = column * 3;
     return pixel_transform(scanline[offset + 2], scanline[offset + 1],
@@ -157,9 +158,8 @@ sk_sp<SkImage> CreateSkiaImageFromTransformedDib(
     ValidateScanlineSize(scanline, min_row_bytes);
 
     for (int column = 0; column < width; ++column) {
-      *output_cursor++ =
-          Traits::Invoke(std::forward<PixelTransform>(pixel_transform),
-                         scanline.data(), column);
+      UNSAFE_TODO(*output_cursor++) = Traits::Invoke(
+          std::forward<PixelTransform>(pixel_transform), scanline, column);
     }
   }
 
@@ -229,7 +229,7 @@ sk_sp<SkImage> CFX_DIBBase::RealizeSkImage() const {
       return CreateSkiaImageFromTransformedDib</*source_bits_per_pixel=*/24>(
           *this, kBGRA_8888_SkColorType, kOpaque_SkAlphaType,
           [](uint8_t red, uint8_t green, uint8_t blue) {
-            return SkPackARGB32NoCheck(0xFF, red, green, blue);
+            return SkPackARGB32(0xFF, red, green, blue);
           });
 
     case 32:

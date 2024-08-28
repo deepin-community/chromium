@@ -8,6 +8,7 @@
 #include "third_party/blink/renderer/core/dom/range.h"
 #include "third_party/blink/renderer/core/editing/position.h"
 #include "third_party/blink/renderer/core/editing/range_in_flat_tree.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
@@ -18,7 +19,7 @@ SelectorDirective::SelectorDirective(Type type) : Directive(type) {}
 SelectorDirective::~SelectorDirective() = default;
 
 namespace {
-void RejectWithCode(ScriptPromiseResolver* resolver,
+void RejectWithCode(ScriptPromiseResolverBase* resolver,
                     DOMExceptionCode code,
                     const String& message) {
   ScriptState::Scope scope(resolver->GetScriptState());
@@ -31,9 +32,10 @@ void RejectWithCode(ScriptPromiseResolver* resolver,
 }
 }  // namespace
 
-ScriptPromise SelectorDirective::getMatchingRange(ScriptState* state) const {
+ScriptPromise<Range> SelectorDirective::getMatchingRange(
+    ScriptState* state) const {
   if (ExecutionContext::From(state)->IsContextDestroyed())
-    return ScriptPromise();
+    return EmptyPromise();
 
   // TODO(bokan): This method needs to be able to initiate the search since
   // author code can construct a TextDirective; if it then calls this method
@@ -41,11 +43,12 @@ ScriptPromise SelectorDirective::getMatchingRange(ScriptState* state) const {
   // TODO(bokan): If this method can initiate a search, it'd probably be more
   // straightforward to avoid caching and have each call start a new search.
   // That way this is more resilient to changes in the DOM.
-  matching_range_resolver_ = MakeGarbageCollected<ScriptPromiseResolver>(state);
+  matching_range_resolver_ =
+      MakeGarbageCollected<ScriptPromiseResolver<Range>>(state);
 
   // Access the promise first to ensure it is created so that the proper state
   // can be changed when it is resolved or rejected.
-  ScriptPromise promise = matching_range_resolver_->Promise();
+  auto promise = matching_range_resolver_->Promise();
 
   if (matching_finished_)
     ResolvePromise();

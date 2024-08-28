@@ -144,7 +144,7 @@ String AudioHandler::NodeTypeName() const {
     case kNodeTypeUnknown:
     case kNodeTypeEnd:
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return "UnknownNode";
   }
 }
@@ -207,7 +207,7 @@ void AudioHandler::SetInternalChannelInterpretation(
 void AudioHandler::SetChannelCount(unsigned channel_count,
                                    ExceptionState& exception_state) {
   DCHECK(IsMainThread());
-  BaseAudioContext::GraphAutoLocker locker(Context());
+  DeferredTaskHandler::GraphAutoLocker locker(Context());
 
   if (channel_count > 0 &&
       channel_count <= BaseAudioContext::MaxNumberOfChannels()) {
@@ -240,14 +240,14 @@ String AudioHandler::GetChannelCountMode() {
     case kExplicit:
       return "explicit";
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return "";
 }
 
 void AudioHandler::SetChannelCountMode(const String& mode,
                                        ExceptionState& exception_state) {
   DCHECK(IsMainThread());
-  BaseAudioContext::GraphAutoLocker locker(Context());
+  DeferredTaskHandler::GraphAutoLocker locker(Context());
 
   ChannelCountMode old_mode = channel_count_mode_;
 
@@ -258,7 +258,7 @@ void AudioHandler::SetChannelCountMode(const String& mode,
   } else if (mode == "explicit") {
     new_channel_count_mode_ = kExplicit;
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 
   if (new_channel_count_mode_ != old_mode) {
@@ -276,14 +276,14 @@ String AudioHandler::ChannelInterpretation() {
     case AudioBus::kDiscrete:
       return "discrete";
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return "";
 }
 
 void AudioHandler::SetChannelInterpretation(const String& interpretation,
                                             ExceptionState& exception_state) {
   DCHECK(IsMainThread());
-  BaseAudioContext::GraphAutoLocker locker(Context());
+  DeferredTaskHandler::GraphAutoLocker locker(Context());
 
   AudioBus::ChannelInterpretation old_mode = channel_interpretation_;
 
@@ -292,7 +292,7 @@ void AudioHandler::SetChannelInterpretation(const String& interpretation,
   } else if (interpretation == "discrete") {
     new_channel_interpretation_ = AudioBus::kDiscrete;
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 
   if (new_channel_interpretation_ != old_mode) {
@@ -398,7 +398,9 @@ bool AudioHandler::InputsAreSilent() {
 
 void AudioHandler::SilenceOutputs() {
   for (auto& output : outputs_) {
-    output->Bus()->Zero();
+    if (output->IsConnectedDuringRendering()) {
+      output->Bus()->Zero();
+    }
   }
 }
 

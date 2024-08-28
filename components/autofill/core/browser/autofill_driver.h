@@ -22,6 +22,7 @@
 namespace autofill {
 
 class FormStructure;
+class AutofillClient;
 class AutofillManager;
 
 // AutofillDriver is Autofill's lowest-level abstraction of a frame that is
@@ -34,6 +35,9 @@ class AutofillManager;
 // The reverse communication, from the AutofillAgent to the browser code, goes
 // through mojom::AutofillDriver on non-iOS, and directly to AutofillManager on
 // iOS.
+//
+// Events for browser-internal communication do *NOT* belong here. Use
+// AutofillManager::Observer instead.
 //
 // An AutofillDriver corresponds to a frame, rather than a document, in the
 // sense that it may survive navigations.
@@ -67,26 +71,29 @@ class AutofillDriver {
   // exist, and nullptr otherwise.
   virtual AutofillDriver* GetParent() = 0;
 
+  // The owning AutofillClient.
+  virtual AutofillClient& GetAutofillClient() = 0;
+
   // Returns the AutofillManager owned by the AutofillDriver.
   virtual AutofillManager& GetAutofillManager() = 0;
 
   // Returns whether the AutofillDriver instance is associated with an active
   // frame in the MPArch sense.
-  virtual bool IsInActiveFrame() const = 0;
+  virtual bool IsActive() const = 0;
 
   // Returns whether the AutofillDriver instance is associated with a main
   // frame, in the MPArch sense. This can be a primary or non-primary main
   // frame.
   virtual bool IsInAnyMainFrame() const = 0;
 
-  // Returns whether the AutofillDriver instance is associated with a
-  // prerendered frame.
-  virtual bool IsPrerendering() const = 0;
-
   // Returns whether the policy-controlled feature "shared-autofill" is enabled
   // in the document. In the main frame the permission is enabled by default.
   // The main frame may pass it on to its children.
   virtual bool HasSharedAutofillPermission() const = 0;
+
+  // Returns the IsolationInfo of the associated frame. May be nullopt if the
+  // IsolationInfo is not used (for example, on iOS).
+  virtual std::optional<net::IsolationInfo> GetIsolationInfo() = 0;
 
   // Returns true iff a popup can be shown on the behalf of the associated
   // frame.
@@ -177,25 +184,23 @@ class AutofillDriver {
   //
   // This method is a no-op if the renderer is not currently available.
   virtual base::flat_set<FieldGlobalId> ApplyFormAction(
-      mojom::ActionType action_type,
+      mojom::FormActionType action_type,
       mojom::ActionPersistence action_persistence,
-      const FormData& form,
+      base::span<const FormFieldData> data,
       const url::Origin& triggered_origin,
       const base::flat_map<FieldGlobalId, FieldType>& field_type_map) = 0;
 
-  // Tells the renderer to set the node text.
-  virtual void ApplyFieldAction(mojom::ActionPersistence action_persistence,
-                                mojom::TextReplacement text_replacement,
+  // Tells the renderer to perform actions on the node text.
+  // If the `action_type` is kSelectAll, then `value` needs to be empty.
+  virtual void ApplyFieldAction(mojom::FieldActionType action_type,
+                                mojom::ActionPersistence action_persistence,
                                 const FieldGlobalId& field_id,
                                 const std::u16string& value) = 0;
-
-  // Forwards parsed |forms| to the embedder.
-  virtual void HandleParsedForms(const std::vector<FormData>& forms) = 0;
 
   // Sends the field type predictions specified in |forms| to the renderer. This
   // method is a no-op if the renderer is not available or the appropriate
   // command-line flag is not set.
-  virtual void SendAutofillTypePredictionsToRenderer(
+  virtual void SendTypePredictionsToRenderer(
       const std::vector<raw_ptr<FormStructure, VectorExperimental>>& forms) = 0;
 
   // Tells the renderer to accept data list suggestions for |value|.
@@ -203,12 +208,10 @@ class AutofillDriver {
       const FieldGlobalId& field_id,
       const std::u16string& value) = 0;
 
-  // Tells the renderer to clear the current section of the autofilled values.
-  virtual void RendererShouldClearFilledSection() = 0;
-
   // Tells the renderer to clear the currently previewed Autofill results.
   virtual void RendererShouldClearPreviewedForm() = 0;
 
+  // Tells the renderer to trigger a AskForValuesToFill() event.
   virtual void RendererShouldTriggerSuggestions(
       const FieldGlobalId& field_id,
       AutofillSuggestionTriggerSource trigger_source) = 0;
@@ -219,11 +222,6 @@ class AutofillDriver {
   virtual void RendererShouldSetSuggestionAvailability(
       const FieldGlobalId& field_id,
       mojom::AutofillSuggestionAvailability suggestion_availability) = 0;
-
-  // Informs the renderer that the popup has been hidden.
-  virtual void PopupHidden() = 0;
-
-  virtual net::IsolationInfo IsolationInfo() = 0;
 
   // Query's the DOM for four digit combinations that could potentially be of a
   // card number.

@@ -75,7 +75,7 @@ class SerialPortManagerImpl;
 #endif
 
 class DeviceService;
-class GeolocationManager;
+class GeolocationSystemPermissionManager;
 class PowerMonitorMessageBroadcaster;
 class PressureManagerImpl;
 class PublicIpAddressLocationNotifier;
@@ -97,7 +97,8 @@ struct DeviceServiceParams {
   std::string geolocation_api_key;
   CustomLocationProviderCallback custom_location_provider_callback;
   bool use_gms_core_location_provider = false;
-  raw_ptr<GeolocationManager> geolocation_manager = nullptr;
+  raw_ptr<GeolocationSystemPermissionManager>
+      geolocation_system_permission_manager = nullptr;
   WakeLockContextCallback wake_lock_context_callback;
 
 #if BUILDFLAG(IS_ANDROID)
@@ -136,6 +137,12 @@ class DeviceService : public mojom::DeviceService {
   static void OverridePressureManagerBinderForTesting(
       PressureManagerBinder binder);
 
+  // Supports global override of TimeZoneMonitor binding within the service.
+  using TimeZoneMonitorBinder = base::RepeatingCallback<void(
+      mojo::PendingReceiver<mojom::TimeZoneMonitor>)>;
+  static void OverrideTimeZoneMonitorBinderForTesting(
+      TimeZoneMonitorBinder binder);
+
 #if BUILDFLAG(IS_ANDROID)
   // Allows tests to override how frame hosts bind NFCProvider receivers.
   using NFCProviderBinder = base::RepeatingCallback<void(
@@ -173,7 +180,8 @@ class DeviceService : public mojom::DeviceService {
 #endif
 
   void BindVibrationManager(
-      mojo::PendingReceiver<mojom::VibrationManager> receiver) override;
+      mojo::PendingReceiver<mojom::VibrationManager> receiver,
+      mojo::PendingRemote<mojom::VibrationManagerListener> listener) override;
 
 #if !BUILDFLAG(IS_ANDROID)
   void BindHidManager(

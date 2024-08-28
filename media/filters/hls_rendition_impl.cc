@@ -47,7 +47,7 @@ void HlsRenditionImpl::CheckState(
   }
 
   if (IsLive() && playback_rate != 1 && playback_rate != 0) {
-    // TODO(crbug.com/1266991): What should be done about non-paused,
+    // TODO(crbug.com/40057824): What should be done about non-paused,
     // non-real-time playback? Anything above 1 would hit the end and constantly
     // be in a state of demuxer underflow, and anything slower than 1 would
     // eventually have so much data buffered that it would OOM.
@@ -105,7 +105,7 @@ void HlsRenditionImpl::CheckState(
   if (segments_->Exhausted() && duration_.has_value()) {
     if (!set_stream_end_) {
       set_stream_end_ = true;
-      engine_host_->SetEndOfStream();
+      rendition_host_->SetEndOfStream(true);
     }
     std::move(time_remaining_cb).Run(kNoTimestamp);
     return;
@@ -206,7 +206,8 @@ void HlsRenditionImpl::FetchManifestUpdates(ManifestDemuxer::DelayCallback cb,
 }
 
 void HlsRenditionImpl::OnManifestUpdate(ManifestDemuxer::DelayCallback cb,
-                                       base::TimeDelta delay) {
+                                        base::TimeDelta delay,
+                                        bool success) {
   TRACE_EVENT_NESTABLE_ASYNC_END0("media", "HLS::FetchManifestUpdates", this);
   auto update_duration = base::TimeTicks::Now() - last_download_time_;
   if (update_duration > delay) {
@@ -235,7 +236,7 @@ void HlsRenditionImpl::MaybeFetchManifestUpdates(
 }
 
 base::TimeDelta HlsRenditionImpl::GetIdealBufferSize() const {
-  // TODO(crbug.com/1266991): This buffer size _could_ be based on network
+  // TODO(crbug.com/40057824): This buffer size _could_ be based on network
   // speed and video bitrate, but it's actually quite effective to keep it just
   // at a fixed size, due to the fact that the stream adaptation will always try
   // to match an appropriate bitrate. 10 seconds was chosen based on a good
@@ -254,7 +255,7 @@ ManifestDemuxer::SeekResponse HlsRenditionImpl::Seek(
 
   if (set_stream_end_) {
     set_stream_end_ = false;
-    engine_host_->UnsetEndOfStream();
+    rendition_host_->SetEndOfStream(false);
   }
 
   auto ranges = engine_host_->GetBufferedRanges(role_);
@@ -372,8 +373,8 @@ void HlsRenditionImpl::OnSegmentData(base::OnceClosure cb,
 
   if (!result.has_value()) {
     // Drop |cb| here, and let the abort handler pick up the pieces.
-    // TODO(crbug/1266991): If a seek abort interrupts us, we want to not bubble
-    // the error upwards.
+    // TODO(crbug.com/40057824): If a seek abort interrupts us, we want to not
+    // bubble the error upwards.
     return engine_host_->OnError(
         {DEMUXER_ERROR_COULD_NOT_PARSE, std::move(result).error()});
   }
@@ -383,7 +384,8 @@ void HlsRenditionImpl::OnSegmentData(base::OnceClosure cb,
 
   if (!engine_host_->AppendAndParseData(
           role_, base::TimeDelta(), parse_end + base::Seconds(1),
-          &parse_offset_, stream->raw_data(), stream->buffer_size())) {
+          &parse_offset_,
+          base::span(stream->raw_data(), stream->buffer_size()))) {
     return engine_host_->OnError(DEMUXER_ERROR_COULD_NOT_PARSE);
   }
 

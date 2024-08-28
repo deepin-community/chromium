@@ -48,25 +48,27 @@ class GLTexturePassthroughD3DImageRepresentation
 };
 
 // Representation of a D3DImageBacking as a Dawn Texture
-#if BUILDFLAG(USE_DAWN)
 class DawnD3DImageRepresentation : public DawnImageRepresentation {
  public:
   DawnD3DImageRepresentation(SharedImageManager* manager,
                              SharedImageBacking* backing,
                              MemoryTypeTracker* tracker,
                              const wgpu::Device& device,
-                             wgpu::BackendType backend_type);
+                             wgpu::BackendType backend_type,
+                             std::vector<wgpu::TextureFormat> view_formats);
   ~DawnD3DImageRepresentation() override;
 
-  wgpu::Texture BeginAccess(wgpu::TextureUsage usage) override;
+  wgpu::Texture BeginAccess(wgpu::TextureUsage usage,
+                            wgpu::TextureUsage internal_usage) override;
   void EndAccess() override;
+  bool SupportsMultipleConcurrentReadAccess() override;
 
  private:
   const wgpu::Device device_;
   const wgpu::BackendType backend_type_;
   wgpu::Texture texture_;
+  std::vector<wgpu::TextureFormat> view_formats_;
 };
-#endif  // BUILDFLAG(USE_DAWN)
 
 // Representation of a D3DImageBacking as an overlay.
 class OverlayD3DImageRepresentation : public OverlayImageRepresentation {

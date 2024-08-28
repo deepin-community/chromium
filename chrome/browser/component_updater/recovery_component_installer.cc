@@ -278,7 +278,7 @@ void RecoveryRegisterHelper(ComponentUpdateService* cus, PrefService* prefs) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   base::Version version(prefs->GetString(prefs::kRecoveryComponentVersion));
   if (!version.IsValid()) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return;
   }
   std::vector<uint8_t> public_key_hash;
@@ -292,8 +292,9 @@ void RecoveryRegisterHelper(ComponentUpdateService* cus, PrefService* prefs) {
           /*requires_network_encryption=*/false,
           /*supports_group_policy_enable_component_updates=*/true,
           /*allow_cached_copies=*/true,
-          /*allow_updates_on_metered_connection=*/true))) {
-    NOTREACHED() << "Recovery component registration failed.";
+          /*allow_updates_on_metered_connection=*/true,
+          /*allow_updates=*/true))) {
+    NOTREACHED_IN_MIGRATION() << "Recovery component registration failed.";
   }
 }
 
@@ -313,12 +314,10 @@ void SetPrefsForElevatedRecoveryInstall(const base::FilePath& unpack_path,
 RecoveryComponentInstaller::RecoveryComponentInstaller(
     const base::Version& version,
     PrefService* prefs)
-    : current_version_(version), prefs_(prefs) {
-  DCHECK(version.IsValid());
-}
+    : current_version_(version), prefs_(prefs) {}
 
 void RecoveryComponentInstaller::OnUpdateError(int error) {
-  NOTREACHED() << "Recovery component update error: " << error;
+  NOTREACHED_IN_MIGRATION() << "Recovery component update error: " << error;
 }
 
 void WaitForInstallToComplete(base::Process process,

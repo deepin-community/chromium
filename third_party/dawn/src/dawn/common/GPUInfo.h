@@ -30,8 +30,8 @@
 
 #include <string>
 
+#include "absl/container/inlined_vector.h"
 #include "dawn/common/GPUInfo_autogen.h"
-#include "dawn/common/StackContainer.h"
 
 namespace dawn::gpu_info {
 
@@ -53,7 +53,7 @@ class DriverVersion {
     std::string ToString() const;
 
   private:
-    StackVector<uint16_t, kMaxVersionFields> mDriverVersion;
+    absl::InlinedVector<uint16_t, kMaxVersionFields> mDriverVersion;
 };
 
 // Do comparison between two driver versions. Currently we only support the comparison between
@@ -73,6 +73,7 @@ int CompareIntelMesaDriverVersion(const DriverVersion& version1, const DriverVer
 
 // Intel architectures
 bool IsSkylake(PCIDeviceID deviceId);
+bool IsIrisPlus655(PCIDeviceID deviceId);
 
 }  // namespace dawn::gpu_info
 #endif  // SRC_DAWN_COMMON_GPUINFO_H_

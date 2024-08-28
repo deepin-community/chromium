@@ -43,6 +43,7 @@ ts_files = [
   "file_manager/manage_dialog.ts",
   "file_manager/metadata.ts",
   "file_manager/metrics.ts",
+  "file_manager/materialized_views.ts",
   "file_manager/my_files.ts",
   "file_manager/navigation.ts",
   "file_manager/office.ts",
@@ -101,6 +102,7 @@ ts_library("build_ts") {
   composite = true
 
   definitions = [
+    "//tools/typescript/definitions/chrome_event.d.ts",
     "//tools/typescript/definitions/chrome_test.d.ts",
     "//tools/typescript/definitions/runtime.d.ts",
     "//tools/typescript/definitions/file_system.d.ts",

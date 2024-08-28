@@ -206,6 +206,10 @@ void TestWebContents::SetMainFrameMimeType(const std::string& mime_type) {
   GetPrimaryPage().SetContentsMimeType(mime_type);
 }
 
+void TestWebContents::SetMainFrameSize(const gfx::Size& frame_size) {
+  GetPrimaryMainFrame()->FrameSizeChanged(frame_size);
+}
+
 const std::string& TestWebContents::GetContentsMimeType() {
   return GetPrimaryPage().GetContentsMimeType();
 }
@@ -307,7 +311,8 @@ void TestWebContents::TestSetIsLoading(bool value) {
           node->render_manager()->speculative_frame_host();
       if (speculative_frame_host)
         speculative_frame_host->ResetLoadingState();
-      node->ResetNavigationRequest(NavigationDiscardReason::kCancelled);
+      node->ResetNavigationRequest(
+          NavigationDiscardReason::kExplicitCancellation);
     }
   }
 }
@@ -447,11 +452,13 @@ int TestWebContents::AddPrerender(const GURL& url) {
       /*embedder_histogram_suffix=*/"",
       blink::mojom::SpeculationTargetHint::kNoHint, Referrer(),
       blink::mojom::SpeculationEagerness::kEager,
-      rfhi->GetLastCommittedOrigin(), rfhi->GetProcess()->GetID(), GetWeakPtr(),
-      rfhi->GetFrameToken(), rfhi->GetFrameTreeNodeId(),
-      rfhi->GetPageUkmSourceId(), ui::PAGE_TRANSITION_LINK,
-      /*url_match_predicate=*/std::nullopt,
-      /*prerender_navigation_handle_callback=*/std::nullopt));
+      /*no_vary_search_expected=*/std::nullopt, rfhi->GetLastCommittedOrigin(),
+      rfhi->GetProcess()->GetID(), GetWeakPtr(), rfhi->GetFrameToken(),
+      rfhi->GetFrameTreeNodeId(), rfhi->GetPageUkmSourceId(),
+      ui::PAGE_TRANSITION_LINK,
+      /*should_warm_up_compositor=*/false,
+      /*url_match_predicate=*/{},
+      /*prerender_navigation_handle_callback=*/{}));
 }
 
 TestRenderFrameHost* TestWebContents::AddPrerenderAndCommitNavigation(
@@ -550,6 +557,21 @@ bool TestWebContents::GetOverscrollNavigationEnabled() {
 void TestWebContents::SetSafeAreaInsetsHost(
     std::unique_ptr<SafeAreaInsetsHost> safe_area_insets_host) {
   safe_area_insets_host_ = std::move(safe_area_insets_host);
+}
+
+void TestWebContents::GetMediaCaptureRawDeviceIdsOpened(
+    blink::mojom::MediaStreamType type,
+    base::OnceCallback<void(std::vector<std::string>)> callback) {
+  CHECK(media_capture_raw_device_ids_opened_.contains(type));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback),
+                                media_capture_raw_device_ids_opened_.at(type)));
+}
+
+void TestWebContents::SetMediaCaptureRawDeviceIdsOpened(
+    blink::mojom::MediaStreamType type,
+    std::vector<std::string> ids) {
+  media_capture_raw_device_ids_opened_[type] = std::move(ids);
 }
 
 }  // namespace content

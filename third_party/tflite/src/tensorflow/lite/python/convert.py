@@ -14,26 +14,26 @@
 # ==============================================================================
 """Converts a frozen graph into a TFLite FlatBuffer."""
 
-import distutils.spawn
 import enum
 import hashlib
 import os as _os
 import platform as _platform
+import shutil
 import subprocess as _subprocess
 import tempfile as _tempfile
 from typing import Optional
 import warnings
 
+from tensorflow.compiler.mlir.lite.metrics import converter_error_data_pb2
+from tensorflow.compiler.mlir.lite.python import wrap_converter
 from tensorflow.compiler.mlir.quantization.stablehlo import quantization_config_pb2
 from tensorflow.compiler.mlir.quantization.stablehlo import quantization_options_pb2 as quant_opts_pb2
 from tensorflow.lite.python import lite_constants
 from tensorflow.lite.python import util
-from tensorflow.lite.python import wrap_toco
 from tensorflow.lite.python.convert_phase import Component
 from tensorflow.lite.python.convert_phase import convert_phase
 from tensorflow.lite.python.convert_phase import ConverterError
 from tensorflow.lite.python.convert_phase import SubComponent
-from tensorflow.lite.python.metrics import converter_error_data_pb2
 from tensorflow.lite.python.metrics.wrapper import metrics_wrapper as _metrics_wrapper
 from tensorflow.lite.toco import model_flags_pb2 as _model_flags_pb2
 from tensorflow.lite.toco import toco_flags_pb2 as _conversion_flags_pb2
@@ -230,6 +230,8 @@ def mlir_quantize(
     denylisted_ops=None,
     denylisted_nodes=None,
     enable_variable_quantization=False,
+    disable_per_channel_for_dense_layers=False,
+    debug_options_str="",
 ):
   """Quantize `input_data_str` with calibration results.
 
@@ -255,12 +257,17 @@ def mlir_quantize(
     enable_variable_quantization: Experimental. Subject to change. Bool
       indicating whether to enable quantization of the residual variables
       remaining after the variable freezing pass.
+    disable_per_channel_for_dense_layers: Bool indicating whether to do
+      per-channel or per-tensor quantization in Fully Connected layers. Default
+      value is False meaning per-channel quantization is enabled.
+    debug_options_str: Serialized proto describing TFLite converter debug
+      options, see `debug/debug_options.proto`.
 
   Returns:
     Quantized model in serialized form (e.g. a TFLITE model) with floating-point
     inputs and outputs.
   """
-  return wrap_toco.wrapped_experimental_mlir_quantize(
+  return wrap_converter.wrapped_experimental_mlir_quantize(
       input_data_str,
       disable_per_channel,
       fully_quantize,
@@ -272,6 +279,8 @@ def mlir_quantize(
       denylisted_ops,
       denylisted_nodes,
       enable_variable_quantization,
+      disable_per_channel_for_dense_layers,
+      debug_options_str,
   )
 
 
@@ -285,7 +294,7 @@ def mlir_sparsify(input_data_str):
   Returns:
     Sparsified model in serialized form (e.g. a TFLITE model).
   """
-  return wrap_toco.wrapped_experimental_mlir_sparsify(input_data_str)
+  return wrap_converter.wrapped_experimental_mlir_sparsify(input_data_str)
 
 
 def register_custom_opdefs(custom_opdefs_list):
@@ -298,7 +307,7 @@ def register_custom_opdefs(custom_opdefs_list):
   Returns:
     True if the registration is successfully completed.
   """
-  return wrap_toco.wrapped_register_custom_opdefs(custom_opdefs_list)
+  return wrap_converter.wrapped_register_custom_opdefs(custom_opdefs_list)
 
 
 def convert(
@@ -333,7 +342,7 @@ def convert(
   # pipeline surfaces errors instead, and can be safely run in-process.
   if enable_mlir_converter or not _deprecated_conversion_binary:
     try:
-      return wrap_toco.wrapped_toco_convert(
+      return wrap_converter.wrapped_convert(
           model_flags.SerializeToString(),
           conversion_flags.SerializeToString(),
           input_data_str,
@@ -399,7 +408,7 @@ def _run_deprecated_conversion_binary(
     RuntimeError: When conversion fails, an exception is raised with the error
       message embedded.
   """
-  if distutils.spawn.find_executable(_deprecated_conversion_binary) is None:
+  if shutil.which(_deprecated_conversion_binary) is None:
     raise ConverterError("""Could not find `toco_from_protos` binary, make sure
 your virtualenv bin directory or pip local bin directory is in your path.
 In particular, if you have installed TensorFlow with --user, make sure you
@@ -419,15 +428,12 @@ Alternative, use virtualenv.""")
   output_filename: str = None
   try:
     # Build all input files
-    with _tempfile.NamedTemporaryFile(
-        delete=False
-    ) as fp_conversion, _tempfile.NamedTemporaryFile(
-        delete=False
-    ) as fp_model, _tempfile.NamedTemporaryFile(
-        delete=False
-    ) as fp_input, _tempfile.NamedTemporaryFile(
-        delete=False
-    ) as fp_debug:
+    with (
+        _tempfile.NamedTemporaryFile(delete=False) as fp_conversion,
+        _tempfile.NamedTemporaryFile(delete=False) as fp_model,
+        _tempfile.NamedTemporaryFile(delete=False) as fp_input,
+        _tempfile.NamedTemporaryFile(delete=False) as fp_debug,
+    ):
       conversion_filename = fp_conversion.name
       input_filename = fp_input.name
       model_filename = fp_model.name
@@ -502,7 +508,7 @@ def build_model_flags(
     saved_model_version=0,
     saved_model_tags=None,
     saved_model_exported_names=None,
-    **_
+    **_,
 ):
   """Builds the model flags object from params.
 
@@ -592,7 +598,9 @@ def build_conversion_flags(
     use_buffer_offset=False,
     reduce_type_precision=False,
     qdq_conversion_mode=None,
-    **_
+    disable_per_channel_quantization_for_dense_layers=False,
+    enable_composite_direct_lowering=False,
+    **_,
 ):
   """Builds protocol buffer describing a conversion of a model.
 
@@ -718,6 +726,11 @@ def build_conversion_flags(
       This could have side effects e.g. reduced flatbuffer size.
     qdq_conversion_mode: If set, assume input model is a quantized model
       represented with QDQ ops and convert to quantized kernels.
+    disable_per_channel_quantization_for_dense_layers: If set, disables per
+      channel end enables per tensor integer quantization for weights in Dense
+      layers. The flag works only for integer quantized model.
+    enable_composite_direct_lowering: If set, attempts to lower composite ops
+      directly to tflite ops.
 
   Returns:
     conversion_flags: protocol buffer describing the conversion process.
@@ -835,6 +848,12 @@ def build_conversion_flags(
     conversion_flags.reduce_type_precision = reduce_type_precision
   if qdq_conversion_mode is not None:
     conversion_flags.qdq_conversion_mode = qdq_conversion_mode
+  conversion_flags.disable_per_channel_quantization_for_dense_layers = (
+      disable_per_channel_quantization_for_dense_layers
+  )
+  conversion_flags.enable_composite_direct_lowering = (
+      enable_composite_direct_lowering
+  )
   return conversion_flags
 
 
@@ -846,7 +865,7 @@ def convert_graphdef_with_arrays(
     input_arrays_with_shape,
     output_arrays,
     control_output_arrays,
-    **kwargs
+    **kwargs,
 ):
   """Convert a frozen GraphDef that can't be loaded in TF.
 

@@ -9,9 +9,13 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/i18n/rtl.h"
+#include "chrome/browser/ui/autofill/autofill_popup_controller.h"
+#include "chrome/browser/ui/views/autofill/popup/popup_row_content_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_row_view.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "components/strings/grit/components_strings.h"
-#include "content/public/common/input/native_web_keyboard_event.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -138,7 +142,7 @@ int ButtonPlaceholder::GetHeightForWidth(int width) const {
   // children. This is not the case here because the button is at first no
   // visible. Therefore we override GetHeightForWidth to return the preferred
   // height regardless of children being visible or not.
-  return GetPreferredSize().height();
+  return GetPreferredSize(views::SizeBounds(width, {})).height();
 }
 
 BEGIN_METADATA(ButtonPlaceholder)
@@ -168,14 +172,18 @@ PopupRowWithButtonView::PopupRowWithButtonView(
   button_placeholder_->SetPreferredSize(button->GetPreferredSize());
   button_ = button_placeholder_->AddChildView(std::move(button));
   button_->SetVisible(ShouldButtonBeVisible());
-  button_->GetViewAccessibility().OverrideIsIgnored(true);
+  button_->GetViewAccessibility().SetIsIgnored(true);
   button_->SetButtonController(std::make_unique<ButtonController>(
       button_, this,
       std::make_unique<views::Button::DefaultButtonControllerDelegate>(
           button_.get())));
 
-  static_cast<views::BoxLayout*>(GetContentView().GetLayoutManager())
-      ->SetFlexForView(button_placeholder_, 0);
+  auto* content_layout =
+      static_cast<views::BoxLayout*>(GetContentView().GetLayoutManager());
+  content_layout->set_between_child_spacing(
+      ChromeLayoutProvider::Get()->GetDistanceMetric(
+          DISTANCE_RELATED_LABEL_HORIZONTAL_LIST));
+  content_layout->SetFlexForView(button_placeholder_, 0);
 }
 
 PopupRowWithButtonView::~PopupRowWithButtonView() = default;
@@ -201,7 +209,7 @@ void PopupRowWithButtonView::HandleKeyPressEventFocusOnContent() {
 }
 
 bool PopupRowWithButtonView::HandleKeyPressEvent(
-    const content::NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   switch (event.windows_key_code) {
     // When pressing left arrow key (LTR):
     // 1. Set button as not focused.

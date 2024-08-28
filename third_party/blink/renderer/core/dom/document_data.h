@@ -7,7 +7,7 @@
 
 #include "services/network/public/mojom/trust_tokens.mojom-blink.h"
 #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_regexp.h"
+#include "third_party/blink/renderer/platform/bindings/script_regexp.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 
@@ -51,7 +51,7 @@ class DocumentData final : public GarbageCollected<DocumentData> {
   // In order to be able to answer promises when the Mojo remote disconnects,
   // maintain all pending promises here, deleting them on successful completion
   // or on connection error, whichever comes first.
-  HeapHashSet<Member<ScriptPromiseResolver>>
+  HeapHashSet<Member<ScriptPromiseResolverBase>>
       pending_trust_token_query_resolvers_;
 
   // To do email regex checks.
@@ -76,6 +76,14 @@ class DocumentData final : public GarbageCollected<DocumentData> {
   // LCPP's LCP ElementLocator was matched against a tag against html
   // during preload scanning.
   bool lcpp_encountered_lcp_in_html = false;
+
+  // Measures `InlineNode::ShapeText` performance per document.
+  base::TimeDelta accumulated_shape_text_elapsed_time_;
+  base::TimeDelta max_shape_text_elapsed_time_;
+
+  // Measures SVGImage performance per document.
+  int svg_image_processed_count_ = 0;
+  base::TimeDelta accumulated_svg_image_elapsed_time_;
 
   friend class Document;
 };

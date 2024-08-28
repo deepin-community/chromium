@@ -21,11 +21,11 @@
 #include "core/fpdfapi/parser/cpdf_string.h"
 #include "core/fpdfapi/parser/fpdf_parser_decode.h"
 #include "core/fpdfapi/parser/fpdf_parser_utility.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxge/cfx_drawutils.h"
 #include "fpdfsdk/cpdfsdk_formfillenvironment.h"
 #include "fpdfsdk/cpdfsdk_pageview.h"
-#include "third_party/base/check.h"
-#include "third_party/base/containers/contains.h"
 
 CPDFSDK_BAAnnot::CPDFSDK_BAAnnot(CPDF_Annot* pAnnot,
                                  CPDFSDK_PageView* pPageView)
@@ -110,7 +110,7 @@ uint32_t CPDFSDK_BAAnnot::GetFlags() const {
 
 void CPDFSDK_BAAnnot::SetAppStateOff() {
   RetainPtr<CPDF_Dictionary> pDict = GetMutableAnnotDict();
-  pDict->SetNewFor<CPDF_String>(pdfium::annotation::kAS, "Off", false);
+  pDict->SetNewFor<CPDF_String>(pdfium::annotation::kAS, "Off");
 }
 
 ByteString CPDFSDK_BAAnnot::GetAppState() const {

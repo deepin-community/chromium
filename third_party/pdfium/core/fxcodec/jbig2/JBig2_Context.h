@@ -7,6 +7,9 @@
 #ifndef CORE_FXCODEC_JBIG2_JBIG2_CONTEXT_H_
 #define CORE_FXCODEC_JBIG2_JBIG2_CONTEXT_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <list>
 #include <memory>
 #include <utility>
@@ -92,7 +95,7 @@ class CJBig2_Context {
   bool m_bBufSpecified = false;
   int32_t m_PauseStep = 10;
   FXCODEC_STATUS m_ProcessingStatus = FXCODEC_STATUS::kFrameReady;
-  std::vector<JBig2ArithCtx> m_gbContext;
+  std::vector<JBig2ArithCtx> m_gbContexts;
   std::unique_ptr<CJBig2_ArithDecoder> m_pArithDecoder;
   std::unique_ptr<CJBig2_GRDProc> m_pGRD;
   std::unique_ptr<CJBig2_Segment> m_pSegment;

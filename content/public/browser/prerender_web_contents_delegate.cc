@@ -12,7 +12,8 @@ namespace content {
 
 WebContents* PrerenderWebContentsDelegate::OpenURLFromTab(
     WebContents* source,
-    const OpenURLParams& params) {
+    const OpenURLParams& params,
+    base::OnceCallback<void(NavigationHandle&)> navigation_handle_callback) {
   NOTREACHED_NORETURN();
 }
 
@@ -77,8 +78,7 @@ void PrerenderWebContentsDelegate::WebContentsCreated(
 }
 
 bool PrerenderWebContentsDelegate::CanEnterFullscreenModeForTab(
-    RenderFrameHost* requesting_frame,
-    const blink::mojom::FullscreenOptions& options) {
+    RenderFrameHost* requesting_frame) {
   // This should not be called for a prerendered page.
   NOTREACHED_NORETURN();
 }
@@ -130,14 +130,6 @@ bool PrerenderWebContentsDelegate::ShouldAllowRunningInsecureContent(
 PreloadingEligibility PrerenderWebContentsDelegate::IsPrerender2Supported(
     WebContents& web_contents) {
   // This should be checked in the initiator's WebContents.
-  NOTREACHED_NORETURN();
-}
-
-void PrerenderWebContentsDelegate::UpdateInspectedWebContentsIfNecessary(
-    WebContents* old_contents,
-    WebContents* new_contents,
-    base::OnceCallback<void()> callback) {
-  // This is called only for Portal that is not available on a prerendered page.
   NOTREACHED_NORETURN();
 }
 

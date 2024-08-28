@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "perfetto/trace_processor/basic_types.h"
@@ -38,26 +39,24 @@ class DummyStorage final : public DataLayer {
                                     SqlValue,
                                     uint32_t) const override;
 
-    UniqueSearchResult UniqueSearch(FilterOp,
-                                    SqlValue,
-                                    uint32_t*) const override;
-
     SearchValidationResult ValidateSearchConstraints(FilterOp,
                                                      SqlValue) const override;
 
     RangeOrBitVector SearchValidated(FilterOp, SqlValue, Range) const override;
 
-    RangeOrBitVector IndexSearchValidated(FilterOp,
-                                          SqlValue,
-                                          Indices) const override;
+    void IndexSearchValidated(FilterOp, SqlValue, Indices&) const override;
 
-    Range OrderedIndexSearchValidated(FilterOp,
-                                      SqlValue,
-                                      Indices) const override;
+    void StableSort(Token* start, Token* end, SortDirection) const override;
 
-    void StableSort(SortToken* start,
-                    SortToken* end,
-                    SortDirection) const override;
+    void Distinct(Indices&) const override;
+
+    std::optional<Token> MaxElement(Indices&) const override;
+
+    std::optional<Token> MinElement(Indices&) const override;
+
+    std::unique_ptr<DataLayer> Flatten(std::vector<uint32_t>&) const override;
+
+    SqlValue Get_AvoidUsingBecauseSlow(uint32_t index) const override;
 
     void Serialize(StorageProto*) const override;
 

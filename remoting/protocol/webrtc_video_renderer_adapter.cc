@@ -107,13 +107,14 @@ void WebrtcVideoRendererAdapter::OnFrame(const webrtc::VideoFrame& frame) {
   if (frame.timestamp_us() > rtc::TimeMicros()) {
     // The host sets playout delay to 0, so all incoming frames are expected to
     // be rendered as so as they are received.
-    NOTREACHED() << "Received frame with playout delay greater than 0.";
+    NOTREACHED_IN_MIGRATION()
+        << "Received frame with playout delay greater than 0.";
   }
 
   task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&WebrtcVideoRendererAdapter::HandleFrameOnMainThread,
-                     weak_factory_.GetWeakPtr(), frame.timestamp(),
+                     weak_factory_.GetWeakPtr(), frame.rtp_timestamp(),
                      base::TimeTicks::Now(),
                      scoped_refptr<webrtc::VideoFrameBuffer>(
                          frame.video_frame_buffer().get())));

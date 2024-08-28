@@ -30,8 +30,9 @@ namespace {
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 std::u16string GetAuthenticationMessage(PasswordsModelDelegate* delegate) {
-  if (!delegate || !delegate->GetWebContents())
+  if (!delegate || !delegate->GetWebContents()) {
     return u"";
+  }
   const std::u16string origin = base::UTF8ToUTF16(
       password_manager::GetShownOrigin(delegate->GetWebContents()
                                            ->GetPrimaryMainFrame()
@@ -112,8 +113,8 @@ std::u16string CredentialManagerDialogControllerImpl::GetAutoSigninText()
 bool CredentialManagerDialogControllerImpl::ShouldShowFooter() const {
   const syncer::SyncService* sync_service =
       SyncServiceFactory::GetForProfile(profile_);
-  // TODO(crbug.com/1464264): Migrate away from `ConsentLevel::kSync` on desktop
-  // platforms and remove #ifdef below.
+  // TODO(crbug.com/40067296): Migrate away from `ConsentLevel::kSync` on
+  // desktop platforms and remove #ifdef below.
 #if BUILDFLAG(IS_ANDROID)
 #error If this code is built on Android, please update TODO above.
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -206,8 +207,9 @@ void CredentialManagerDialogControllerImpl::OnBiometricReauthCompleted(
     password_manager::PasswordForm password_form,
     password_manager::CredentialType credential_type,
     bool result) {
-  if (!result)
+  if (!result) {
     return;
+  }
   ResetDialog();
   delegate_->ChooseCredential(password_form, credential_type);
 }

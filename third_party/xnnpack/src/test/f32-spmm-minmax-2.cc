@@ -7,13 +7,11 @@
 //   Specification: test/f32-spmm-minmax.yaml
 //   Generator: tools/generate-spmm-test.py
 
-
 #include <gtest/gtest.h>
-
-#include <xnnpack/common.h>
-#include <xnnpack/isa-checks.h>
-
-#include <xnnpack/spmm.h>
+#include "xnnpack/common.h"
+#include "xnnpack/isa-checks.h"
+#include "xnnpack/microparams-init.h"
+#include "xnnpack/spmm.h"
 #include "spmm-microkernel-tester.h"
 
 

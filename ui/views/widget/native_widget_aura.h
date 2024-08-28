@@ -143,11 +143,11 @@ class VIEWS_EXPORT NativeWidgetAura : public internal::NativeWidgetPrivate,
   void SetAspectRatio(const gfx::SizeF& aspect_ratio,
                       const gfx::Size& excluded_margin) override;
   void FlashFrame(bool flash_frame) override;
-  void RunShellDrag(View* view,
-                    std::unique_ptr<ui::OSExchangeData> data,
+  void RunShellDrag(std::unique_ptr<ui::OSExchangeData> data,
                     const gfx::Point& location,
                     int operation,
                     ui::mojom::DragEventSource source) override;
+  void CancelShellDrag(View* view) override;
   void SchedulePaintInRect(const gfx::Rect& rect) override;
   void ScheduleLayout() override;
   void SetCursor(const ui::Cursor& cursor) override;
@@ -169,6 +169,8 @@ class VIEWS_EXPORT NativeWidgetAura : public internal::NativeWidgetPrivate,
   void OnSizeConstraintsChanged() override;
   void OnNativeViewHierarchyWillChange() override;
   void OnNativeViewHierarchyChanged() override;
+  bool SetAllowScreenshots(bool allow) override;
+  bool AreScreenshotsAllowed() override;
   std::string GetName() const override;
   base::WeakPtr<internal::NativeWidgetPrivate> GetWeakPtr() override;
 
@@ -283,7 +285,7 @@ class VIEWS_EXPORT NativeWidgetAura : public internal::NativeWidgetPrivate,
   // work properly. CloseNow can destroy the aura::Window
   // which will not destroy the NativeWidget if WIDGET_OWNS_NATIVE_WIDGET, and
   // we need to make sure we do not attempt to destroy the aura::Window twice.
-  // TODO(1346381): The two factories can be combined if the
+  // TODO(crbug.com/40232479): The two factories can be combined if the
   // WIDGET_OWNS_NATIVE_WIDGET is removed.
   base::WeakPtrFactory<NativeWidgetAura> weak_factory{this};
 };

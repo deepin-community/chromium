@@ -9,6 +9,7 @@
 #include "ash/components/arc/session/arc_bridge_service.h"
 #include "ash/components/arc/session/arc_service_manager.h"
 #include "ash/constants/ash_features.h"
+#include "base/feature_list.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/field_trial_params.h"
 #include "chromeos/constants/chromeos_features.h"
@@ -93,6 +94,18 @@ void ArcChromeFeatureFlagsBridge::NotifyFeatureFlags() {
       ash::features::IsRenderArcNotificationsByChromeEnabled();
   flags->game_dashboard = ash::features::IsGameDashboardEnabled();
   flags->resize_compat = base::FeatureList::IsEnabled(arc::kResizeCompat);
+  flags->ignore_hover_event_anr =
+      base::FeatureList::IsEnabled(arc::kIgnoreHoverEventAnr);
+  flags->extend_input_anr_timeout =
+      base::FeatureList::IsEnabled(arc::kExtendInputAnrTimeout);
+  flags->extend_intent_anr_timeout =
+      base::FeatureList::IsEnabled(arc::kExtendIntentAnrTimeout);
+  flags->extend_service_anr_timeout =
+      base::FeatureList::IsEnabled(arc::kExtendServiceAnrTimeout);
+  flags->notification_width_increase =
+      chromeos::features::IsNotificationWidthIncreaseEnabled();
+  flags->enable_friendlier_error_dialog =
+      base::FeatureList::IsEnabled(arc::kEnableFriendlierErrorDialog);
 
   chrome_feature_flags_instance->NotifyFeatureFlags(std::move(flags));
 }

@@ -17,10 +17,13 @@
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
+#include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/instant_service.h"
 #include "chrome/browser/search/instant_service_factory.h"
 #include "chrome/browser/search/search.h"
+#include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/search/instant_test_base.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -37,6 +40,7 @@
 #include "components/enterprise/buildflags/buildflags.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
+#include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations.h"
 #include "components/privacy_sandbox/privacy_sandbox_attestations/scoped_privacy_sandbox_attestations.h"
@@ -52,6 +56,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
+#include "content/public/common/url_utils.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/fenced_frame_test_util.h"
@@ -63,6 +68,8 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
+#include "services/network/public/cpp/url_loader_factory_builder.h"
+#include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom.h"
 #include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
 #include "ui/color/color_provider.h"
 #include "ui/color/color_provider_key.h"
@@ -165,7 +172,7 @@ class TopChromeChromeContentBrowserClientTest
 };
 
 #if BUILDFLAG(IS_MAC)
-// TODO(https://crbug.com/1497344) Flaky on Mac.
+// TODO(crbug.com/40938936) Flaky on Mac.
 #define MAYBE_ShouldUseSpareRendererWhenNoTopChromePagesPresent \
   DISABLED_ShouldUseSpareRendererWhenNoTopChromePagesPresent
 #else
@@ -192,24 +199,26 @@ IN_PROC_BROWSER_TEST_F(
 
   // Initially there will be no top chrome pages and the client should return
   // true for using the spare renderer.
-  EXPECT_TRUE(client()->ShouldUseSpareRenderProcessHost(browser()->profile(),
-                                                        top_chrome_url));
+  EXPECT_FALSE(client()->ShouldUseSpareRenderProcessHost(browser()->profile(),
+                                                         top_chrome_url));
 
   // Navigate to a top chrome URL.
   navigate_browser(top_chrome_url);
 
   // The browser now hosts a top chrome page and the client should return false
   // for using the spare renderer.
-  EXPECT_FALSE(client()->ShouldUseSpareRenderProcessHost(browser()->profile(),
-                                                         top_chrome_url));
+  EXPECT_EQ(client()->ShouldUseSpareRenderProcessHost(browser()->profile(),
+                                                      top_chrome_url),
+            content::ContentBrowserClient::SpareProcessRefusedByEmbedderReason::
+                TopFrameChromeWebUI);
 
   // Navigate away from the top chrome page.
   navigate_browser(non_top_chrome_url);
 
   // There will no longer be any top chrome pages hosted by the browser and the
   // client should return true for using the spare renderer.
-  EXPECT_TRUE(client()->ShouldUseSpareRenderProcessHost(browser()->profile(),
-                                                        top_chrome_url));
+  EXPECT_FALSE(client()->ShouldUseSpareRenderProcessHost(browser()->profile(),
+                                                         top_chrome_url));
 }
 
 // Helper class to mark "https://ntp.com/" as an isolated origin.
@@ -357,6 +366,174 @@ IN_PROC_BROWSER_TEST_F(OpenWindowFromNTPBrowserTest,
       opened_tab->GetPrimaryMainFrame()->GetProcess()->GetID()));
 }
 
+// Test for the state of Forced Colors Mode for a given WebContents across
+// various scenarios.
+class ForcedColorsTest : public testing::WithParamInterface<bool>,
+                         public InProcessBrowserTest {
+ protected:
+  ForcedColorsTest() : theme_client_(&test_theme_) {}
+
+  ~ForcedColorsTest() override {
+    CHECK_EQ(&theme_client_, SetBrowserClientForTesting(original_client_));
+  }
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    command_line->AppendSwitchASCII(switches::kEnableBlinkFeatures,
+                                    "ForcedColors");
+  }
+
+  void SetUpOnMainThread() override {
+    InProcessBrowserTest::SetUpOnMainThread();
+    original_client_ = SetBrowserClientForTesting(&theme_client_);
+  }
+
+ protected:
+  ui::TestNativeTheme test_theme_;
+
+ private:
+  raw_ptr<content::ContentBrowserClient> original_client_ = nullptr;
+
+  class ChromeContentBrowserClientWithWebTheme
+      : public ChromeContentBrowserClient {
+   public:
+    explicit ChromeContentBrowserClientWithWebTheme(
+        const ui::NativeTheme* theme)
+        : theme_(theme) {}
+
+   protected:
+    const ui::NativeTheme* GetWebTheme() const override { return theme_; }
+
+   private:
+    const raw_ptr<const ui::NativeTheme> theme_;
+  };
+
+  ChromeContentBrowserClientWithWebTheme theme_client_;
+};
+
+IN_PROC_BROWSER_TEST_P(ForcedColorsTest, ForcedColors) {
+  test_theme_.set_forced_colors(GetParam());
+  browser()
+      ->tab_strip_model()
+      ->GetActiveWebContents()
+      ->OnWebPreferencesChanged();
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), ui_test_utils::GetTestUrl(
+                     base::FilePath(base::FilePath::kCurrentDirectory),
+                     base::FilePath(FILE_PATH_LITERAL("forced-colors.html")))));
+  std::u16string tab_title;
+  const char* expected = test_theme_.InForcedColorsMode() ? "active" : "none";
+  ASSERT_TRUE(ui_test_utils::GetCurrentTabTitle(browser(), &tab_title));
+  EXPECT_EQ(base::ASCIIToUTF16(expected), tab_title);
+}
+
+IN_PROC_BROWSER_TEST_P(ForcedColorsTest, ForcedColorsWithBlockList) {
+  test_theme_.set_forced_colors(GetParam());
+
+  const char* url = "http://foo.com";
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(url)));
+
+  // Add url to the page colors block list.
+  base::Value::List list;
+  list.Append(url);
+  Profile* profile = browser()->profile();
+  profile->GetPrefs()->SetList(prefs::kPageColorsBlockList, list.Clone());
+  browser()
+      ->tab_strip_model()
+      ->GetActiveWebContents()
+      ->OnWebPreferencesChanged();
+
+  // Forced colors should be `none` when a site is added to the block list.
+  EXPECT_EQ(true, EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+                         base::StringPrintf(
+                             "window.matchMedia('(forced-colors: %s)').matches",
+                             "none")));
+
+  // Remove url from the page colors block list.
+  list.EraseValue(base::Value(url));
+  profile->GetPrefs()->SetList(prefs::kPageColorsBlockList, list.Clone());
+  browser()
+      ->tab_strip_model()
+      ->GetActiveWebContents()
+      ->OnWebPreferencesChanged();
+
+  // Forced colors should respect the NativeTheme when a site is removed from
+  // the block list.
+  const char* expected = test_theme_.InForcedColorsMode() ? "active" : "none";
+  EXPECT_EQ(true, EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+                         base::StringPrintf(
+                             "window.matchMedia('(forced-colors: %s)').matches",
+                             expected)));
+}
+
+INSTANTIATE_TEST_SUITE_P(All, ForcedColorsTest, testing::Bool());
+
+// Helper class to test the Page colors feature. Page colors is a feature that
+// simulates Forced colors mode via a browser setting.
+class PageColorsBrowserClientTest : public InProcessBrowserTest {
+ public:
+  PageColorsBrowserClientTest() = default;
+
+  PageColorsBrowserClientTest(const PageColorsBrowserClientTest&) = delete;
+  PageColorsBrowserClientTest& operator=(const PageColorsBrowserClientTest&) =
+      delete;
+
+  void SetUpOnMainThread() override {
+    InProcessBrowserTest::SetUpOnMainThread();
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(PageColorsBrowserClientTest,
+                       PageColorsAffectsWebContents) {
+  browser()->profile()->GetPrefs()->SetBoolean(
+      prefs::kApplyPageColorsOnlyOnIncreasedContrast, false);
+  browser()->profile()->GetPrefs()->SetInteger(
+      prefs::kPageColors, ui::NativeTheme::PageColors::kDusk);
+
+  browser()
+      ->tab_strip_model()
+      ->GetActiveWebContents()
+      ->OnWebPreferencesChanged();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("http://foo.com")));
+
+  // Check that the page colors are applied when Forced Colors is enabled. For
+  // the Dusk theme, the color value for Window is 0x2D3236 which corresponds to
+  // rgb(45, 50, 54).
+  std::string expected_bg_color = "rgb(45, 50, 54)";
+  EXPECT_EQ(expected_bg_color,
+            EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+                   "window.getComputedStyle(document.body).getPropertyValue('"
+                   "background-color').toString()"));
+}
+
+IN_PROC_BROWSER_TEST_F(PageColorsBrowserClientTest,
+                       PageColorsAffectsCssPseudoElements) {
+  browser()->profile()->GetPrefs()->SetBoolean(
+      prefs::kApplyPageColorsOnlyOnIncreasedContrast, false);
+  browser()->profile()->GetPrefs()->SetInteger(
+      prefs::kPageColors, ui::NativeTheme::PageColors::kDesert);
+
+  browser()
+      ->tab_strip_model()
+      ->GetActiveWebContents()
+      ->OnWebPreferencesChanged();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), ui_test_utils::GetTestUrl(
+                     base::FilePath(base::FilePath::kCurrentDirectory),
+                     base::FilePath(FILE_PATH_LITERAL("system-colors.html")))));
+
+  // Check that the right system color is applied for Pseudo elements when
+  // Forced Colors is enabled. For the Desert theme, the color value for
+  // WindowText is 0x3D3D3D which corresponds to rgb(61, 61, 61).
+  std::string expected_element_color = "rgb(61, 61, 61)";
+  EXPECT_EQ(expected_element_color,
+            EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+                   "window.getComputedStyle(document.getElementById('icon'), "
+                   "'::before')."
+                   "getPropertyValue('color').toString()"));
+}
+
 // Tests for the preferred color scheme for a given WebContents. The first param
 // controls whether the web NativeTheme is light or dark the second controls
 // whether the color mode on the associated color provider is light or dark.
@@ -381,7 +558,7 @@ class PrefersColorSchemeTest
                                          ->tab_strip_model()
                                          ->GetActiveWebContents()
                                          ->GetLastCommittedURL();
-    if (last_committed_url.SchemeIs(content::kChromeUIScheme)) {
+    if (content::HasWebUIScheme(last_committed_url)) {
       return GetIsDarkColorProviderColorMode() ? "dark" : "light";
     }
     return GetIsDarkNativeTheme() ? "dark" : "light";
@@ -427,7 +604,6 @@ class PrefersColorSchemeTest
     explicit MockColorProviderSource(bool is_dark) {
       key_.color_mode = is_dark ? ui::ColorProviderKey::ColorMode::kDark
                                 : ui::ColorProviderKey::ColorMode::kLight;
-      provider_.GenerateColorMap();
     }
     MockColorProviderSource(const MockColorProviderSource&) = delete;
     MockColorProviderSource& operator=(const MockColorProviderSource&) = delete;
@@ -438,7 +614,7 @@ class PrefersColorSchemeTest
       return &provider_;
     }
 
-    const ui::RendererColorMap GetRendererColorMap(
+    ui::RendererColorMap GetRendererColorMap(
         ui::ColorProviderKey::ColorMode color_mode,
         ui::ColorProviderKey::ForcedColors forced_colors) const override {
       auto key = GetColorProviderKey();
@@ -518,6 +694,80 @@ IN_PROC_BROWSER_TEST_P(PrefersColorSchemeTest, FeatureOverridesPdfUI) {
 
 INSTANTIATE_TEST_SUITE_P(All,
                          PrefersColorSchemeTest,
+                         testing::Combine(testing::Bool(), testing::Bool()));
+
+class PreferredRootScrollbarColorSchemeChromeClientTest
+    : public testing::WithParamInterface<std::tuple<bool, bool>>,
+      public InProcessBrowserTest {
+ protected:
+  PreferredRootScrollbarColorSchemeChromeClientTest()
+      : dark_mode_(std::get<0>(GetParam())),
+        uses_custom_theme_(std::get<1>(GetParam())),
+        theme_client_(&test_theme_) {
+    test_theme_.SetDarkMode(dark_mode_);
+  }
+
+  void SetUpOnMainThread() override {
+    InProcessBrowserTest::SetUpOnMainThread();
+    original_client_ = SetBrowserClientForTesting(&theme_client_);
+    test_theme_.SetDarkMode(dark_mode_);
+    ui::NativeTheme::GetInstanceForNativeUi()->set_use_dark_colors(dark_mode_);
+    ThemeService* theme_service =
+        ThemeServiceFactory::GetForProfile(browser()->profile());
+    if (uses_custom_theme_) {
+      theme_service->BuildAutogeneratedThemeFromColor(SK_ColorRED);
+    } else {
+      theme_service->UseDefaultTheme();
+    }
+  }
+
+  ~PreferredRootScrollbarColorSchemeChromeClientTest() override {
+    CHECK_EQ(&theme_client_, SetBrowserClientForTesting(original_client_));
+  }
+
+  blink::mojom::PreferredColorScheme ExpectedColorScheme() const {
+    return dark_mode_ && !uses_custom_theme_
+               ? blink::mojom::PreferredColorScheme::kDark
+               : blink::mojom::PreferredColorScheme::kLight;
+  }
+
+ private:
+  class ChromeContentBrowserClientWithWebTheme
+      : public ChromeContentBrowserClient {
+   public:
+    explicit ChromeContentBrowserClientWithWebTheme(
+        const ui::NativeTheme* theme)
+        : theme_(theme) {}
+
+   protected:
+    const ui::NativeTheme* GetWebTheme() const override { return theme_; }
+
+   private:
+    const raw_ptr<const ui::NativeTheme> theme_;
+  };
+
+  const bool dark_mode_ = false;
+  const bool uses_custom_theme_ = false;
+  raw_ptr<content::ContentBrowserClient> original_client_ = nullptr;
+  ui::TestNativeTheme test_theme_;
+  ChromeContentBrowserClientWithWebTheme theme_client_;
+};
+
+// This test verifies that the preferred color scheme for root scrollbars is set
+// appropriately following the web content's color scheme and the presence of
+// a custom theme.
+IN_PROC_BROWSER_TEST_P(PreferredRootScrollbarColorSchemeChromeClientTest,
+                       ScrollbarFollowsPreferredColorScheme) {
+  EXPECT_EQ(browser()
+                ->tab_strip_model()
+                ->GetActiveWebContents()
+                ->GetOrCreateWebPreferences()
+                .preferred_root_scrollbar_color_scheme,
+            ExpectedColorScheme());
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         PreferredRootScrollbarColorSchemeChromeClientTest,
                          testing::Combine(testing::Bool(), testing::Bool()));
 
 class PrefersContrastTest
@@ -629,7 +879,7 @@ class ProtocolHandlerTest : public InProcessBrowserTest {
   }
 };
 
-// TODO(https://crbug.com/1454691): Enable test when MacOS flake is fixed.
+// TODO(crbug.com/40917055): Enable test when MacOS flake is fixed.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_CustomHandler DISABLED_CustomHandler
 #else
@@ -678,6 +928,164 @@ IN_PROC_BROWSER_TEST_F(ProtocolHandlerTest, ExternalProgramNotLaunched) {
   content::TitleWatcher title_watcher(
       browser()->tab_strip_model()->GetActiveWebContents(), expected_title);
   EXPECT_EQ(expected_title, title_watcher.WaitAndGetTitle());
+}
+
+namespace {
+class FakeExternalProtocolHandlerWorker
+    : public shell_integration::DefaultSchemeClientWorker {
+ public:
+  FakeExternalProtocolHandlerWorker(
+      const GURL& url,
+      shell_integration::DefaultWebClientState os_state,
+      const std::u16string& program_name)
+      : shell_integration::DefaultSchemeClientWorker(url),
+        os_state_(os_state),
+        program_name_(program_name) {}
+
+ private:
+  ~FakeExternalProtocolHandlerWorker() override = default;
+
+  shell_integration::DefaultWebClientState CheckIsDefaultImpl() override {
+    return os_state_;
+  }
+
+  std::u16string GetDefaultClientNameImpl() override { return program_name_; }
+
+  void SetAsDefaultImpl(base::OnceClosure on_finished_callback) override {
+    std::move(on_finished_callback).Run();
+  }
+
+  shell_integration::DefaultWebClientState os_state_;
+  std::u16string program_name_;
+};
+
+class ScopedFakeExternalProtocolHandlerDelegate
+    : public ExternalProtocolHandler::Delegate {
+ public:
+  ScopedFakeExternalProtocolHandlerDelegate() {
+    ExternalProtocolHandler::SetDelegateForTesting(this);
+  }
+  ~ScopedFakeExternalProtocolHandlerDelegate() override {
+    ExternalProtocolHandler::SetDelegateForTesting(nullptr);
+  }
+  scoped_refptr<shell_integration::DefaultSchemeClientWorker> CreateShellWorker(
+      const GURL& url) override {
+    return new FakeExternalProtocolHandlerWorker(
+        url, shell_integration::UNKNOWN_DEFAULT, program_name_);
+  }
+
+  ExternalProtocolHandler::BlockState GetBlockState(const std::string& scheme,
+                                                    Profile* profile) override {
+    return ExternalProtocolHandler::UNKNOWN;
+  }
+
+  void BlockRequest() override {
+    FAIL() << "Unexpected BlockRequest call received";
+  }
+
+  void RunExternalProtocolDialog(
+      const GURL& url,
+      content::WebContents* web_contents,
+      ui::PageTransition page_transition,
+      bool has_user_gesture,
+      const std::optional<url::Origin>& initiating_origin,
+      const std::u16string& program_name) override {
+    EXPECT_EQ(program_name_, program_name);
+    external_protocol_dialog_called_ = true;
+    launched_url_with_security_check_ = url.spec();
+  }
+
+  void LaunchUrlWithoutSecurityCheck(
+      const GURL& url,
+      content::WebContents* web_contents) override {
+    launched_url_without_security_check_ = url.spec();
+    launch_url_run_loop_.Quit();
+  }
+
+  void FinishedProcessingCheck() override { launch_url_run_loop_.Quit(); }
+
+  void WaitExternalUrlLaunchCompleted() { launch_url_run_loop_.Run(); }
+
+  bool external_protocol_dialog_called() {
+    return external_protocol_dialog_called_;
+  }
+  std::string launched_url_without_security_check() {
+    return launched_url_without_security_check_;
+  }
+  std::string launched_url_with_security_check() {
+    return launched_url_with_security_check_;
+  }
+
+ private:
+  base::RunLoop launch_url_run_loop_;
+  const std::u16string program_name_ = u"custom";
+  bool launch_url_called_ = false;
+  bool external_protocol_dialog_called_ = false;
+  std::string launched_url_without_security_check_;
+  std::string launched_url_with_security_check_;
+};
+
+}  // namespace
+
+// URLs which are explicitly allowlisted by policy can bypass security checks.
+IN_PROC_BROWSER_TEST_F(ProtocolHandlerTest,
+                       SecurityCheckExceptionForAllowlistedUrls) {
+  ProtocolHandlerRegistryFactory::GetInstance()
+      ->GetForBrowserContext(browser()->profile())
+      ->OnAcceptRegisterProtocolHandler(
+          custom_handlers::ProtocolHandler::CreateProtocolHandler(
+              "map", GURL("geo://%s")));
+
+  ScopedFakeExternalProtocolHandlerDelegate delegate;
+
+  base::Value::List allowlist;
+  allowlist.Append("geo://*");
+  browser()->profile()->GetPrefs()->SetList(policy::policy_prefs::kUrlAllowlist,
+                                            std::move(allowlist));
+  // The call to update the internal allowlist value is async.
+  base::RunLoop().RunUntilIdle();
+
+  const char kGeoUrl[] = "geo:48.2082,16.3738";
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kGeoUrl)));
+  delegate.WaitExternalUrlLaunchCompleted();
+
+  EXPECT_FALSE(delegate.external_protocol_dialog_called());
+  EXPECT_EQ(delegate.launched_url_without_security_check(), kGeoUrl);
+  EXPECT_EQ(delegate.launched_url_with_security_check(), "");
+}
+
+// Regardless of the value of the UrlAllowlist policy, intent:// URLs should
+// always be deferred to the external protocol dialog (which currently defers
+// the call to ARC).
+IN_PROC_BROWSER_TEST_F(ProtocolHandlerTest,
+                       IntentSchemeBypassSecurityExceptions) {
+  ProtocolHandlerRegistryFactory::GetInstance()
+      ->GetForBrowserContext(browser()->profile())
+      ->OnAcceptRegisterProtocolHandler(
+          custom_handlers::ProtocolHandler::CreateProtocolHandler(
+              "search", GURL("intent://%s")));
+
+  ScopedFakeExternalProtocolHandlerDelegate delegate;
+
+  base::Value::List allowlist;
+  allowlist.Append("intent://*");
+  browser()->profile()->GetPrefs()->SetList(policy::policy_prefs::kUrlAllowlist,
+                                            std::move(allowlist));
+  // The call to update the internal allowlist value is async.
+  base::RunLoop().RunUntilIdle();
+
+  const char kIntentUrl[] =
+      "intent://www.google.com/"
+      "#Intent;scheme=http;package=com.android.chrome;end";
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kIntentUrl)));
+  delegate.WaitExternalUrlLaunchCompleted();
+
+  EXPECT_TRUE(delegate.external_protocol_dialog_called());
+  // intent:// URLs should not skip security checks.
+  EXPECT_EQ(delegate.launched_url_without_security_check(), "");
+  EXPECT_EQ(delegate.launched_url_with_security_check(), kIntentUrl);
 }
 #endif
 
@@ -907,12 +1315,13 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, BitmapAllowed) {
   clipboard_paste_data.png = StringToVector("allowed");
 
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .size = clipboard_paste_data.png.size(),
           .format_type = ui::ClipboardFormatType::BitmapType(),
@@ -933,12 +1342,13 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, BitmapBlocked) {
   clipboard_paste_data.png = StringToVector("blocked");
 
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .size = clipboard_paste_data.png.size(),
           .format_type = ui::ClipboardFormatType::BitmapType(),
@@ -966,12 +1376,13 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, TextAllowed) {
   clipboard_paste_data.text = u"allowed";
 
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .size = clipboard_paste_data.text.size(),
           .format_type = ui::ClipboardFormatType::PlainTextType(),
@@ -992,12 +1403,13 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, TextBlocked) {
   clipboard_paste_data.text = u"blocked";
 
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .size = clipboard_paste_data.text.size(),
           .format_type = ui::ClipboardFormatType::PlainTextType(),
@@ -1025,12 +1437,13 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, HtmlAllowed) {
   clipboard_paste_data.html = u"allowed";
 
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .size = clipboard_paste_data.html.size(),
           .format_type = ui::ClipboardFormatType::HtmlType(),
@@ -1051,12 +1464,13 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, HtmlBlocked) {
   clipboard_paste_data.html = u"blocked";
 
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .size = clipboard_paste_data.html.size(),
           .format_type = ui::ClipboardFormatType::HtmlType(),
@@ -1084,12 +1498,13 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, SvgAllowed) {
   clipboard_paste_data.svg = u"allowed";
 
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .size = clipboard_paste_data.svg.size(),
           .format_type = ui::ClipboardFormatType::SvgType(),
@@ -1110,12 +1525,13 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, SvgBlocked) {
   clipboard_paste_data.svg = u"blocked";
 
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .size = clipboard_paste_data.svg.size(),
           .format_type = ui::ClipboardFormatType::SvgType(),
@@ -1142,12 +1558,13 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, RtfAllowed) {
   clipboard_paste_data.rtf = "allowed";
 
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .size = clipboard_paste_data.rtf.size(),
           .format_type = ui::ClipboardFormatType::RtfType(),
@@ -1168,12 +1585,13 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, RtfBlocked) {
   clipboard_paste_data.rtf = "blocked";
 
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .size = clipboard_paste_data.rtf.size(),
           .format_type = ui::ClipboardFormatType::RtfType(),
@@ -1201,15 +1619,16 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, CustomDataAllowed) {
   clipboard_paste_data.custom_data[u"custom/data"] = u"allowed";
 
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .size = clipboard_paste_data.custom_data[u"custom/data"].size(),
-          .format_type = ui::ClipboardFormatType::WebCustomDataType(),
+          .format_type = ui::ClipboardFormatType::DataTransferCustomType(),
       },
       clipboard_paste_data,
       base::BindOnce(
@@ -1231,15 +1650,16 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, CustomDataBlocked) {
   clipboard_paste_data.custom_data[u"custom/data"] = u"blocked";
 
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .size = clipboard_paste_data.custom_data[u"custom/data"].size(),
-          .format_type = ui::ClipboardFormatType::WebCustomDataType(),
+          .format_type = ui::ClipboardFormatType::DataTransferCustomType(),
       },
       clipboard_paste_data,
       base::BindOnce(
@@ -1271,12 +1691,13 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, AllFilesAllowed) {
   content::WebContents* contents =
       browser()->tab_strip_model()->GetWebContentsAt(0);
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .format_type = ui::ClipboardFormatType::FilenamesType(),
       },
@@ -1301,12 +1722,13 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, AllFilesBlocked) {
   content::WebContents* contents =
       browser()->tab_strip_model()->GetWebContentsAt(0);
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .format_type = ui::ClipboardFormatType::FilenamesType(),
       },
@@ -1337,12 +1759,13 @@ IN_PROC_BROWSER_TEST_F(IsClipboardPasteAllowedTest, SomeFilesBlocked) {
   content::WebContents* contents =
       browser()->tab_strip_model()->GetWebContentsAt(0);
   client()->IsClipboardPasteAllowedByPolicy(
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com"))),
-      content::ClipboardEndpoint(ui::DataTransferEndpoint(GURL("google.com")),
-                                 base::BindLambdaForTesting([contents] {
-                                   return contents->GetBrowserContext();
-                                 }),
-                                 *contents->GetPrimaryMainFrame()),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com"))),
+      content::ClipboardEndpoint(
+          ui::DataTransferEndpoint(GURL("https://google.com")),
+          base::BindLambdaForTesting(
+              [contents] { return contents->GetBrowserContext(); }),
+          *contents->GetPrimaryMainFrame()),
       {
           .format_type = ui::ClipboardFormatType::FilenamesType(),
       },
@@ -1482,6 +1905,95 @@ IN_PROC_BROWSER_TEST_F(AutomaticBeaconCredentialsBrowserTest,
              content::JsReplace("window.open($1, '_blank');", top_nav_url)));
   second_response.WaitForRequest();
   EXPECT_EQ(0U, second_response.http_request()->headers.count("Cookie"));
+}
+
+IN_PROC_BROWSER_TEST_F(TopChromeChromeContentBrowserClientTest,
+                       UnboundRequestDoesNothing) {
+#if BUILDFLAG(IS_ANDROID)
+  network::URLLoaderFactoryBuilder factory_builder;
+  client()->MaybeProxyNetworkBoundRequest(browser()->profile(),
+                                          net::handles::kInvalidNetworkHandle,
+                                          factory_builder, nullptr);
+  EXPECT_EQ(
+      client()
+          ->get_target_network_for_network_bound_network_context_for_testing(),
+      net::handles::kInvalidNetworkHandle);
+  EXPECT_FALSE(
+      client()->get_network_bound_network_context_for_testing().is_bound());
+#else   // !BUILDFLAG(IS_ANDROID)
+  GTEST_SKIP() << "proxying bound requests is supported only on Android";
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+IN_PROC_BROWSER_TEST_F(TopChromeChromeContentBrowserClientTest,
+                       BoundRequestCreatesNetworkContext) {
+#if BUILDFLAG(IS_ANDROID)
+  constexpr net::handles::NetworkHandle network = 1;
+  network::URLLoaderFactoryBuilder factory_builder;
+  client()->MaybeProxyNetworkBoundRequest(browser()->profile(), network,
+                                          factory_builder, nullptr);
+  EXPECT_EQ(
+      client()
+          ->get_target_network_for_network_bound_network_context_for_testing(),
+      network);
+  EXPECT_TRUE(
+      client()->get_network_bound_network_context_for_testing().is_bound());
+  EXPECT_TRUE(
+      client()->get_network_bound_network_context_for_testing().is_connected());
+  {
+    base::RunLoop run_loop;
+    client()
+        ->get_network_bound_network_context_for_testing()
+        ->GetBoundNetworkForTesting(base::BindOnce(
+            [](base::OnceClosure callback,
+               net::handles::NetworkHandle bound_network) {
+              EXPECT_EQ(bound_network, network);
+              std::move(callback).Run();
+            },
+            run_loop.QuitClosure()));
+    run_loop.Run();
+  }
+#else   // !BUILDFLAG(IS_ANDROID)
+  GTEST_SKIP() << "proxying bound requests is supported only on Android";
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+IN_PROC_BROWSER_TEST_F(TopChromeChromeContentBrowserClientTest,
+                       BoundRequestWithOverrideCreatesNetworkContext) {
+#if BUILDFLAG(IS_ANDROID)
+  constexpr net::handles::NetworkHandle network = 1;
+  network::URLLoaderFactoryBuilder factory_builder;
+  network::mojom::URLLoaderFactoryOverridePtr factory_override;
+  EXPECT_FALSE(factory_override);
+  client()->MaybeProxyNetworkBoundRequest(browser()->profile(), network,
+                                          factory_builder, &factory_override);
+  EXPECT_EQ(
+      client()
+          ->get_target_network_for_network_bound_network_context_for_testing(),
+      network);
+  EXPECT_TRUE(
+      client()->get_network_bound_network_context_for_testing().is_bound());
+  EXPECT_TRUE(
+      client()->get_network_bound_network_context_for_testing().is_connected());
+  EXPECT_TRUE(factory_override->overriding_factory);
+  mojo::Remote<network::mojom::URLLoaderFactory> overridden_factory;
+  overridden_factory.Bind(std::move(factory_override->overriding_factory));
+  {
+    base::RunLoop run_loop;
+    client()
+        ->get_network_bound_network_context_for_testing()
+        ->GetBoundNetworkForTesting(base::BindOnce(
+            [](base::OnceClosure callback,
+               net::handles::NetworkHandle bound_network) {
+              EXPECT_EQ(bound_network, network);
+              std::move(callback).Run();
+            },
+            run_loop.QuitClosure()));
+    run_loop.Run();
+  }
+#else   // !BUILDFLAG(IS_ANDROID)
+  GTEST_SKIP() << "proxying bound requests is supported only on Android";
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 }  // namespace

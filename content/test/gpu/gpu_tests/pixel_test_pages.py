@@ -18,6 +18,7 @@ from typing import Callable, Dict, List, Optional
 from enum import Enum
 
 from gpu_tests import common_browser_args as cba
+from gpu_tests import crop_actions as ca
 from gpu_tests import overlay_support
 from gpu_tests import skia_gold_heartbeat_integration_test_base as sghitb
 from gpu_tests import skia_gold_matching_algorithms as algo
@@ -65,8 +66,9 @@ class PixelTestPage(sghitb.SkiaGoldHeartbeatTestCase):
       self,
       url: str,
       name: str,
-      test_rect: List[int],
       *args,
+      test_rect: Optional[List[int]] = None,
+      crop_action: Optional[ca.BaseCropAction] = None,
       browser_args: Optional[BrowserArgType] = None,
       restart_browser_after_test: bool = False,
       other_args: Optional[dict] = None,
@@ -74,13 +76,22 @@ class PixelTestPage(sghitb.SkiaGoldHeartbeatTestCase):
       timeout: int = 300,
       should_capture_full_screenshot_func: Optional[Callable[
           [browser_module.Browser], bool]] = None,
+      requires_fullscreen_os_screenshot_func: Optional[Callable[[],
+                                                                bool]] = None,
       **kwargs):
     # Video tests can result in non-hermetic test behavior due to overlays, so
     # do a full refresh after each one. See crbug.com/1484212.
     is_video_test = 'video' in name.lower()
     super().__init__(name, refresh_after_finish=is_video_test, *args, **kwargs)
     self.url = url
-    self.test_rect = test_rect
+    # TODO(crbug.com/349510532): Remove this automatic conversion once all
+    # tests explicitly provide a crop action.
+    if crop_action is None:
+      assert test_rect
+      self.crop_action = ca.FixedRectCropAction(test_rect[0], test_rect[1],
+                                                test_rect[2], test_rect[3])
+    else:
+      self.crop_action = crop_action
     self.browser_args = browser_args
     # Whether the browser should be forcibly restarted after the test
     # runs. The browser is always restarted after running tests with
@@ -103,6 +114,13 @@ class PixelTestPage(sghitb.SkiaGoldHeartbeatTestCase):
     if should_capture_full_screenshot_func is None:
       should_capture_full_screenshot_func = lambda _: False
     self.ShouldCaptureFullScreenshot = should_capture_full_screenshot_func
+    # Some tests may require to capture a full OS screenshot to exercise
+    # end-to-end integration. That is, such browsers as LaCros do delegated
+    # compositing and they are interested in comparing the result produced
+    # by the OS compositor rather than Chromium's one.
+    if requires_fullscreen_os_screenshot_func is None:
+      requires_fullscreen_os_screenshot_func = lambda: False
+    self.RequiresFullScreenOSScreenshot = requires_fullscreen_os_screenshot_func
 
 
 class TestActionCrashGpuProcess(sghitb.TestAction):
@@ -244,6 +262,10 @@ def GetMediaStreamTestBrowserArgs(media_stream_source_relpath: str
   ]
 
 
+def RequiresFullScreenOSScreenshot() -> bool:
+  return True
+
+
 def CaptureFullScreenshotOnFuchsia(browser: browser_module.Browser) -> bool:
   return browser.platform.GetOSName() == 'fuchsia'
 
@@ -283,6 +305,13 @@ class PixelTestPages():
                       test_rect=[0, 0, 300, 300],
                       matching_algorithm=algo.FuzzyMatchingAlgorithm(
                           max_different_pixels=130,
+                          pixel_per_channel_delta_threshold=2)),
+        PixelTestPage('pixel_canvas2d_blit.html',
+                      base_name + '_Canvas2DBlitText',
+                      test_rect=[0, 0, 800, 300],
+                      grace_period_end=date(2024, 4, 1),
+                      matching_algorithm=algo.FuzzyMatchingAlgorithm(
+                          max_different_pixels=5,
                           pixel_per_channel_delta_threshold=2)),
         PixelTestPage('pixel_canvas2d_untagged.html',
                       base_name + '_Canvas2DUntagged',
@@ -528,10 +557,36 @@ class PixelTestPages():
                       base_name + '_OffscreenCanvasIBRCWorker',
                       test_rect=[0, 0, 100, 100],
                       grace_period_end=date(2023, 8, 5)),
+        PixelTestPage('pixel_webgl_resized_canvas.html',
+                      base_name + '_WebglResizedCanvas',
+                      test_rect=[0, 0, 300, 300],
+                      grace_period_end=date(2024, 3, 5)),
+        PixelTestPage(
+            'pixel_render_passes.html',
+            base_name + '_RenderPasses',
+            test_rect=[3, 90, 485, 245],
+            grace_period_end=date(2024, 5, 1),
+            requires_fullscreen_os_screenshot_func=\
+            RequiresFullScreenOSScreenshot
+        ),
+        PixelTestPage('pixel_view_transitions_capture.html',
+                      base_name + '_ViewTransitionsCapture',
+                      test_rect=[0, 0, 300, 300],
+                      matching_algorithm=algo.SobelMatchingAlgorithm(
+                          max_different_pixels=0,
+                          pixel_delta_threshold=0,
+                          edge_threshold=90)),
+        PixelTestPage(
+            'pixel_perspective_paint.html',
+            base_name + '_PerspectiveTest',
+            test_rect=[0, 0, 400, 250],
+            grace_period_end=date(2024, 8, 1),
+        ),
     ]
 
   @staticmethod
-  def WebGPUPages(base_name):
+  def WebGPUPages(base_name) -> List[PixelTestPage]:
+
     class Mode(Enum):
       WEBGPU_DEFAULT = 0
       WEBGPU_SWIFTSHADER = 1
@@ -557,77 +612,84 @@ class PixelTestPages():
         ]
         video_frame_query_params = '?sourceType=sw_decoder'
 
+      # For most tests which have a few elements of interest.
+      standard_crop = ca.NonWhiteContentCropAction(
+          initial_crop=ca.FixedRectCropAction(0, 0, 500, 500))
+      # For tests which don't have a white background to remove. In this case,
+      # we're effectively just making sure the color is correct.
+      fixed_crop = ca.FixedRectCropAction(0, 0, 300, 300)
+
       return [
           PixelTestPage('pixel_webgpu_import_video_frame.html' +
                         video_frame_query_params,
                         base_name + '_WebGPUImportVideoFrame',
-                        test_rect=[0, 0, 400, 200],
+                        crop_action=standard_crop,
                         browser_args=webgpu_args),
           PixelTestPage(
               'pixel_webgpu_import_video_frame.html' + video_frame_query_params,
               base_name + '_WebGPUImportVideoFrameUnaccelerated',
-              test_rect=[0, 0, 400, 200],
+              crop_action=standard_crop,
               browser_args=webgpu_args + [cba.DISABLE_ACCELERATED_2D_CANVAS]),
           PixelTestPage(
               'pixel_webgpu_import_video_frame_offscreen_canvas.html' +
               video_frame_query_params,
               base_name + '_WebGPUImportVideoFrameOffscreenCanvas',
-              test_rect=[0, 0, 400, 200],
+              crop_action=standard_crop,
               browser_args=webgpu_args),
           PixelTestPage(
               'pixel_webgpu_import_video_frame_offscreen_canvas.html' +
               video_frame_query_params,
               base_name + '_WebGPUImportVideoFrameUnacceleratedOffscreenCanvas',
-              test_rect=[0, 0, 400, 200],
+              crop_action=standard_crop,
               browser_args=webgpu_args + [cba.DISABLE_ACCELERATED_2D_CANVAS]),
           PixelTestPage('pixel_webgpu_webgl_teximage2d.html',
                         base_name + '_WebGPUWebGLTexImage2D',
-                        test_rect=[0, 0, 400, 200],
+                        crop_action=standard_crop,
                         browser_args=webgpu_args),
           PixelTestPage('pixel_webgpu_canvas2d_drawimage.html',
                         base_name + '_WebGPUCanvas2DDrawImage',
-                        test_rect=[0, 0, 400, 200],
+                        crop_action=standard_crop,
                         browser_args=webgpu_args),
           PixelTestPage('pixel_webgpu_copy_image.html',
                         base_name + '_WebGPUToDataURL',
-                        test_rect=[0, 0, 400, 300],
+                        crop_action=standard_crop,
                         browser_args=webgpu_args),
           PixelTestPage('pixel_webgpu_cached_swap_buffer_invalidated.html',
                         base_name +
                         '_WebGPUCachedSwapBufferInvalidatedShouldBeBlank',
-                        test_rect=[0, 0, 300, 300],
+                        crop_action=fixed_crop,
                         browser_args=webgpu_args),
           PixelTestPage('pixel_webgpu_copy_externalImage_2d_canvas.html',
                         base_name + '_WebGPUCopyExternalImage2DCanvas',
-                        test_rect=[0, 0, 400, 200],
+                        crop_action=standard_crop,
                         browser_args=webgpu_args),
           PixelTestPage('pixel_webgpu_copy_externalImage_imageData.html',
                         base_name + '_WebGPUCopyExternalImageImageData',
-                        test_rect=[0, 0, 400, 200],
+                        crop_action=standard_crop,
                         browser_args=webgpu_args),
           PixelTestPage('pixel_webgpu_copy_externalImage_imageBitmap.html',
                         base_name + '_WebGPUCopyExternalImageImageBitmap',
-                        test_rect=[0, 0, 400, 200],
+                        crop_action=standard_crop,
                         browser_args=webgpu_args),
           PixelTestPage('pixel_webgpu_copy_externalImage_offscreenCanvas.html',
                         base_name + '_WebGPUCopyExternalImageOffscreenCanvas',
-                        test_rect=[0, 0, 400, 200],
+                        crop_action=standard_crop,
                         browser_args=webgpu_args),
           PixelTestPage('pixel_webgpu_copy_externalImage_webgl_canvas.html',
                         base_name + '_WebGPUCopyExternalImageWebGLCanvas',
-                        test_rect=[0, 0, 400, 200],
+                        crop_action=standard_crop,
                         browser_args=webgpu_args),
           PixelTestPage('pixel_webgpu_copy_externalImage_webgpu_canvas.html',
                         base_name + '_WebGPUCopyExternalImageWebGPUCanvas',
-                        test_rect=[0, 0, 400, 200],
+                        crop_action=standard_crop,
                         browser_args=webgpu_args),
           PixelTestPage('pixel_webgpu_display_p3.html',
                         base_name + '_WebGPUDisplayP3',
-                        test_rect=[0, 0, 300, 300],
+                        crop_action=standard_crop,
                         browser_args=webgpu_args),
           PixelTestPage('pixel_webgpu_canvas_format_reinterpretation.html',
                         base_name + '_WebGPUCanvasFormatReinterpretation',
-                        test_rect=[0, 0, 300, 300],
+                        crop_action=standard_crop,
                         browser_args=webgpu_args),
       ]
 
@@ -636,7 +698,7 @@ class PixelTestPages():
             webgpu_pages_helper(base_name, mode=Mode.VULKAN_SWIFTSHADER))
 
   @staticmethod
-  def WebGPUCanvasCapturePages(base_name):
+  def WebGPUCanvasCapturePages(base_name) -> List[PixelTestPage]:
     webgpu_args = cba.ENABLE_WEBGPU_FOR_TESTING + [
         cba.ENABLE_EXPERIMENTAL_WEB_PLATFORM_FEATURES
     ]
@@ -654,19 +716,22 @@ class PixelTestPages():
         'accelerated_two_copy': True
     }
 
+    standard_crop = ca.NonWhiteContentCropAction(
+        initial_crop=ca.FixedRectCropAction(0, 0, 500, 500))
+
     # Setting grace_period_end to monitor the affects on bots for 2 weeks
     # without making the bots red unexpectedly.
     return [
         # Enabled OneCopyCapture
         PixelTestPage('pixel_webgpu_canvas_capture_to_video.html',
                       base_name + '_WebGPUCanvasOneCopyCapture',
-                      test_rect=[0, 0, 400, 200],
+                      crop_action=standard_crop,
                       matching_algorithm=GENERAL_MP4_ALGO,
                       browser_args=browser_args_canvas_one_copy_capture,
                       other_args=other_args_canvas_one_copy_capture),
         PixelTestPage('pixel_webgpu_canvas_capture_to_video.html?hidden=true',
                       base_name + '_WebGPUCanvasOneCopyCapture_Hidden',
-                      test_rect=[0, 0, 200, 200],
+                      crop_action=standard_crop,
                       matching_algorithm=GENERAL_MP4_ALGO,
                       browser_args=browser_args_canvas_one_copy_capture,
                       other_args=other_args_canvas_one_copy_capture),
@@ -674,11 +739,10 @@ class PixelTestPages():
         PixelTestPage(
             'pixel_webgpu_canvas_capture_to_video.html?has_alpha=false',
             base_name + '_WebGPUCanvasDisableOneCopyCapture_Accelerated',
-            test_rect=[0, 0, 400, 200],
+            crop_action=standard_crop,
             matching_algorithm=GENERAL_MP4_ALGO,
             browser_args=browser_args_canvas_disable_one_copy_capture,
-            other_args=other_args_canvas_accelerated_two_copy,
-            grace_period_end=date(2022, 8, 30)),
+            other_args=other_args_canvas_accelerated_two_copy),
     ]
 
 
@@ -689,19 +753,25 @@ class PixelTestPages():
         cba.ENABLE_GPU_RASTERIZATION,
         cba.DISABLE_SOFTWARE_COMPOSITING_FALLBACK,
     ]
+
     return [
         PixelTestPage('pixel_background.html',
                       base_name + '_GpuRasterization_BlueBox',
-                      test_rect=[0, 0, 220, 220],
+                      crop_action=ca.FixedRectCropAction(0, 0, 220, 220),
                       browser_args=browser_args),
         PixelTestPage('concave_paths.html',
                       base_name + '_GpuRasterization_ConcavePaths',
-                      test_rect=[0, 0, 100, 100],
+                      crop_action=ca.NonWhiteContentCropAction(
+                          initial_crop=ca.FixedRectCropAction(0, 0, None, 200)),
                       browser_args=browser_args),
         PixelTestPage(
             'pixel_precision_rounded_corner.html',
             base_name + '_PrecisionRoundedCorner',
-            test_rect=[0, 0, 400, 400],
+            # Entire image is typically too big to be captured fully via the
+            # default screenshot path, so continue to use the historical crop
+            # bounds which results in a small section of the rendered circle
+            # being captured.
+            crop_action=ca.FixedRectCropAction(0, 0, 400, 400),
             browser_args=browser_args,
             matching_algorithm=algo.SobelMatchingAlgorithm(
                 max_different_pixels=10,
@@ -721,11 +791,11 @@ class PixelTestPages():
     ]
 
     return [
-        PixelTestPage(
-            'pixel_paintWorklet_transform.html',
-            base_name + '_PaintWorkletTransform',
-            test_rect=[0, 0, 200, 200],
-            browser_args=browser_args),
+        PixelTestPage('pixel_paintWorklet_transform.html',
+                      base_name + '_PaintWorkletTransform',
+                      crop_action=ca.NonWhiteContentCropAction(
+                          initial_crop=ca.FixedRectCropAction(0, 0, 200, 200)),
+                      browser_args=browser_args),
     ]
 
   # Pages that should be run with experimental canvas features.
@@ -750,6 +820,11 @@ class PixelTestPages():
     # (~15,000) of pixels with difference ~3.
     srgb_fuzzy_algo = algo.FuzzyMatchingAlgorithm(
         max_different_pixels=20000, pixel_per_channel_delta_threshold=2)
+
+    # Small number of differing pixels. May need to be upgraded to sobel in the
+    # future since there are a number of hard edges in the image.
+    offscreen_canvas_algo = algo.FuzzyMatchingAlgorithm(
+        max_different_pixels=100, pixel_per_channel_delta_threshold=3)
 
     return [
         PixelTestPage('pixel_offscreenCanvas_transfer_after_style_resize.html',
@@ -799,11 +874,13 @@ class PixelTestPages():
         PixelTestPage('pixel_offscreenCanvas_2d_commit_main.html',
                       base_name + '_OffscreenCanvasAccelerated2D',
                       test_rect=[0, 0, 360, 200],
-                      browser_args=browser_args + accelerated_args),
+                      browser_args=browser_args + accelerated_args,
+                      matching_algorithm=offscreen_canvas_algo),
         PixelTestPage('pixel_offscreenCanvas_2d_commit_worker.html',
                       base_name + '_OffscreenCanvasAccelerated2DWorker',
                       test_rect=[0, 0, 360, 200],
-                      browser_args=browser_args + accelerated_args),
+                      browser_args=browser_args + accelerated_args,
+                      matching_algorithm=offscreen_canvas_algo),
         PixelTestPage('pixel_offscreenCanvas_2d_commit_main.html',
                       base_name + '_OffscreenCanvasUnaccelerated2D',
                       test_rect=[0, 0, 360, 200],
@@ -860,35 +937,40 @@ class PixelTestPages():
         cba.DISABLE_ACCELERATED_2D_CANVAS,
         cba.DISABLE_GPU_COMPOSITING,
     ]
+
+    standard_crop = ca.NonWhiteContentCropAction(
+        initial_crop=ca.FixedRectCropAction(0, 0, 250, 250))
+
     return [
         PixelTestPage('pixel_canvas_low_latency_2d.html',
                       base_name + '_CanvasLowLatency2D',
-                      test_rect=[0, 0, 100, 100]),
+                      crop_action=standard_crop),
         PixelTestPage('pixel_canvas_low_latency_2d.html',
                       base_name + '_CanvasUnacceleratedLowLatency2D',
-                      test_rect=[0, 0, 100, 100],
+                      crop_action=standard_crop,
                       browser_args=unaccelerated_args),
         PixelTestPage('pixel_canvas_low_latency_webgl.html',
                       base_name + '_CanvasLowLatencyWebGL',
-                      test_rect=[0, 0, 200, 200]),
+                      crop_action=standard_crop),
         PixelTestPage('pixel_canvas_low_latency_webgl_alpha_false.html',
                       base_name + '_CanvasLowLatencyWebGLAlphaFalse',
-                      test_rect=[0, 0, 200, 200]),
+                      crop_action=standard_crop),
         PixelTestPage('pixel_canvas_low_latency_2d_draw_image.html',
                       base_name + '_CanvasLowLatency2DDrawImage',
-                      test_rect=[0, 0, 200, 100]),
+                      crop_action=standard_crop),
         PixelTestPage('pixel_canvas_low_latency_webgl_draw_image.html',
                       base_name + '_CanvasLowLatencyWebGLDrawImage',
-                      test_rect=[0, 0, 200, 100]),
+                      crop_action=standard_crop),
         PixelTestPage('pixel_canvas_low_latency_2d_image_data.html',
                       base_name + '_CanvasLowLatency2DImageData',
-                      test_rect=[0, 0, 200, 100]),
+                      crop_action=standard_crop),
         PixelTestPage('pixel_canvas_low_latency_webgl_rounded_corners.html',
                       base_name + '_CanvasLowLatencyWebGLRoundedCorners',
-                      test_rect=[0, 0, 100, 100]),
+                      crop_action=standard_crop,
+                      matching_algorithm=ROUNDING_ERROR_ALGO),
         PixelTestPage('pixel_canvas_low_latency_webgl_occluded.html',
                       base_name + '_CanvasLowLatencyWebGLOccluded',
-                      test_rect=[0, 0, 100, 100],
+                      crop_action=standard_crop,
                       other_args={'no_overlay': True}),
     ]
 
@@ -960,48 +1042,55 @@ class PixelTestPages():
     filter_effect_fuzzy_algo = algo.FuzzyMatchingAlgorithm(
         max_different_pixels=57500, pixel_per_channel_delta_threshold=10)
 
+    standard_crop = ca.NonWhiteContentCropAction(
+        initial_crop=ca.FixedRectCropAction(0, 0, 350, 350))
+
+    # Use a fixed crop since the fuzziness of the image is liable to make the
+    # image size change randomly.
+    filter_effects_crop = ca.FixedRectCropAction(0, 0, 300, 300)
+
     return [
         PixelTestPage('pixel_canvas2d_webgl.html',
                       base_name + '_IOSurface2DCanvasWebGL',
-                      test_rect=[0, 0, 300, 300]),
+                      crop_action=standard_crop),
 
         # On macOS, test WebGL non-Chromium Image compositing path.
         PixelTestPage('pixel_webgl_aa_alpha.html',
                       base_name +
                       '_WebGLGreenTriangle_NonChromiumImage_AA_Alpha',
-                      test_rect=[0, 0, 300, 300],
+                      crop_action=standard_crop,
                       browser_args=non_chromium_image_args),
         PixelTestPage('pixel_webgl_noaa_alpha.html',
                       base_name +
                       '_WebGLGreenTriangle_NonChromiumImage_NoAA_Alpha',
-                      test_rect=[0, 0, 300, 300],
+                      crop_action=standard_crop,
                       browser_args=non_chromium_image_args),
         PixelTestPage('pixel_webgl_aa_noalpha.html',
                       base_name +
                       '_WebGLGreenTriangle_NonChromiumImage_AA_NoAlpha',
-                      test_rect=[0, 0, 300, 300],
+                      crop_action=standard_crop,
                       browser_args=non_chromium_image_args),
         PixelTestPage('pixel_webgl_noaa_noalpha.html',
                       base_name +
                       '_WebGLGreenTriangle_NonChromiumImage_NoAA_NoAlpha',
-                      test_rect=[0, 0, 300, 300],
+                      crop_action=standard_crop,
                       browser_args=non_chromium_image_args),
 
         # On macOS, test CSS filter effects with and without the CA compositor.
         PixelTestPage('filter_effects.html',
                       base_name + '_CSSFilterEffects',
-                      test_rect=[0, 0, 300, 300],
+                      crop_action=filter_effects_crop,
                       matching_algorithm=filter_effect_fuzzy_algo),
         PixelTestPage('filter_effects.html',
                       base_name + '_CSSFilterEffects_NoOverlays',
-                      test_rect=[0, 0, 300, 300],
+                      crop_action=filter_effects_crop,
                       browser_args=no_overlays_args,
                       matching_algorithm=filter_effect_fuzzy_algo),
 
         # Test WebGL's premultipliedAlpha:false without the CA compositor.
         PixelTestPage('pixel_webgl_premultiplied_alpha_false.html',
                       base_name + '_WebGL_PremultipliedAlpha_False_NoOverlays',
-                      test_rect=[0, 0, 150, 150],
+                      crop_action=standard_crop,
                       browser_args=no_overlays_args),
 
         # Test GpuBenchmarking::AddCoreAnimationStatusEventListener.
@@ -1010,7 +1099,7 @@ class PixelTestPages():
         # this test.
         PixelTestPage('core_animation_status_api.html?error=0',
                       base_name + '_CoreAnimationStatusApiNoError',
-                      test_rect=[0, 0, 300, 300]),
+                      crop_action=standard_crop),
         # Test GpuBenchmarking::AddCoreAnimationStatusEventListener.
         # Error code is 32 (gfx::kCALayerFailedOverlayDisabled) when
         # CoreAnimationRenderer is disabled.
@@ -1018,20 +1107,20 @@ class PixelTestPages():
         # this test.
         PixelTestPage('core_animation_status_api.html?error=32',
                       base_name + '_CoreAnimationStatusApiWithError',
-                      test_rect=[0, 0, 300, 300],
+                      crop_action=standard_crop,
                       browser_args=no_overlays_args),
 
         # --enable-gpu-benchmarking is required to run this test. it's added to
         # the pixel tests by default.
         PixelTestPage('canvas_uses_overlay.html',
                       base_name + '_CanvasUsesOverlay',
-                      test_rect=[0, 0, 100, 100]),
+                      crop_action=standard_crop),
 
         # --enable-gpu-benchmarking is required to run this test. it's added to
         # the pixel tests by default.
         PixelTestPage('canvas_uses_overlay.html',
                       base_name + '_UnacceleratedCanvasUsesOverlay',
-                      test_rect=[0, 0, 100, 100],
+                      crop_action=standard_crop,
                       browser_args=unaccelerated_2d_canvas_args),
 
         # --enable-gpu-benchmarking is required to run this test. it's added to
@@ -1039,7 +1128,7 @@ class PixelTestPages():
         PixelTestPage(
             'offscreencanvas_imagebitmap_from_worker_uses_overlay.html',
             base_name + '_OffscreenCanvasImageBitmapWorkerUsesOverlay',
-            test_rect=[0, 0, 100, 100]),
+            crop_action=standard_crop),
 
         # --enable-gpu-benchmarking is required to run this test. it's added to
         # the pixel tests by default.
@@ -1047,29 +1136,28 @@ class PixelTestPages():
             'offscreencanvas_imagebitmap_from_worker_uses_overlay.html',
             base_name +
             '_UnacceleratedOffscreenCanvasImageBitmapWorkerUsesOverlay',
-            test_rect=[0, 0, 100, 100],
+            crop_action=standard_crop,
             browser_args=unaccelerated_2d_canvas_args),
 
         # --enable-gpu-benchmarking is required to run this test. it's added to
         # the pixel tests by default.
         PixelTestPage('offscreencanvas_imagebitmap_uses_overlay.html',
                       base_name + '_OffscreenCanvasImageBitmapUsesOverlay',
-                      test_rect=[0, 0, 100, 100]),
+                      crop_action=standard_crop),
 
         # --enable-gpu-benchmarking is required to run this test. it's added to
         # the pixel tests by default.
         PixelTestPage('offscreencanvas_imagebitmap_uses_overlay.html',
                       base_name +
                       '_UnacceleratedOffscreenCanvasImageBitmapUsesOverlay',
-                      test_rect=[0, 0, 100, 100],
+                      crop_action=standard_crop,
                       browser_args=unaccelerated_2d_canvas_args),
 
         # Regression test for crbug.com/1410696
         PixelTestPage('pixel_offscreenCanvas_ibrc_worker.html',
                       base_name + '_OffscreenCanvasIBRCWorkerAngleGL',
-                      test_rect=[0, 0, 100, 100],
-                      browser_args=angle_gl,
-                      grace_period_end=date(2023, 8, 5)),
+                      crop_action=standard_crop,
+                      browser_args=angle_gl),
     ]
 
   # Pages that should be run only on dual-GPU MacBook Pros (at the
@@ -1089,11 +1177,14 @@ class PixelTestPages():
         sghitb.TestActionWaitForFinish(SHORT_GLOBAL_TIMEOUT),
     ]
 
+    standard_crop = ca.NonWhiteContentCropAction(
+        initial_crop=ca.FixedRectCropAction(0, 0, 350, 350))
+
     return [
         PixelTestPage(
             'pixel_webgl_high_to_low_power.html',
             base_name + '_WebGLHighToLowPower',
-            test_rect=[0, 0, 300, 300],
+            crop_action=standard_crop,
             test_actions=[
                 sghitb.TestActionWaitForContinue(SHORT_GLOBAL_TIMEOUT),
                 TestActionRunTestWithHighPerformanceTab(),
@@ -1101,19 +1192,19 @@ class PixelTestPages():
             ]),
         PixelTestPage('pixel_webgl_low_to_high_power.html',
                       base_name + '_WebGLLowToHighPower',
-                      test_rect=[0, 0, 300, 300],
+                      crop_action=standard_crop,
                       test_actions=low_to_high_power_test_actions),
         PixelTestPage('pixel_webgl_low_to_high_power_alpha_false.html',
                       base_name + '_WebGLLowToHighPowerAlphaFalse',
-                      test_rect=[0, 0, 300, 300],
+                      crop_action=standard_crop,
                       test_actions=low_to_high_power_test_actions),
         PixelTestPage('pixel_offscreen_canvas_ibrc_webgl_main.html',
                       base_name + '_OffscreenCanvasIBRCWebGLHighPerfMain',
-                      test_rect=[0, 0, 300, 300],
+                      crop_action=standard_crop,
                       test_actions=high_perf_test_actions),
         PixelTestPage('pixel_offscreen_canvas_ibrc_webgl_worker.html',
                       base_name + '_OffscreenCanvasIBRCWebGLHighPerfWorker',
-                      test_rect=[0, 0, 300, 300],
+                      crop_action=standard_crop,
                       test_actions=high_perf_test_actions),
     ]
 
@@ -1516,6 +1607,7 @@ class PixelTestPages():
             browser_args=['--force-color-profile=hdr10']),
     ]
 
+  # TODO(crbug.com/337737554): Move this to trace_test_pages.py
   # Check that the root swap chain claims to be opaque. A root swap chain with a
   # premultiplied alpha mode has a large negative battery impact (even if all
   # the pixels are opaque).
@@ -1525,6 +1617,7 @@ class PixelTestPages():
         PixelTestPage('wait_for_compositing.html',
                       base_name + '_IsOpaque',
                       test_rect=[0, 0, 0, 0],
+                      crop_action=ca.NoOpCropAction(),
                       other_args={
                           'has_alpha': False,
                       }),
@@ -1532,9 +1625,26 @@ class PixelTestPages():
 
   # This should only be used with the cast_streaming suite.
   @staticmethod
-  def CastStreamingReceiverPages(base_name):
+  def CastStreamingReceiverPages(base_name) -> List[PixelTestPage]:
     return [
-        PixelTestPage('receiver.html',
-                      base_name + '_VP8_1Frame',
-                      test_rect=[0, 0, 0, 0]),
+        PixelTestPage(
+            'receiver.html',
+            base_name + '_VP8_1Frame',
+            test_rect=[0, 0, 0, 0],
+            crop_action=ca.NoOpCropAction(),
+        ),
+    ]
+
+  # Check what MediaFoundationD3D11VideoCapture works
+  @staticmethod
+  def MediaFoundationD3D11VideoCapturePages(
+      base_name: str) -> List[PixelTestPage]:
+    return [
+        PixelTestPage('media_foundation_d3d11_video_capture.html',
+                      base_name + '_MediaFoundationD3D11VideoCapture',
+                      test_rect=[0, 0, 300, 300],
+                      browser_args=[
+                          '--use-fake-ui-for-media-stream',
+                          '--enable-features=MediaFoundationD3D11VideoCapture'
+                      ]),
     ]

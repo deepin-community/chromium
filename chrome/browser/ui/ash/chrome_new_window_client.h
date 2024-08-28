@@ -42,13 +42,14 @@ class ChromeNewWindowClient : public ash::NewWindowDelegate,
   void OpenCrosh() override;
   void OpenGetHelp() override;
   void RestoreTab() override;
-  void ShowKeyboardShortcutViewer() override;
   void ShowShortcutCustomizationApp() override;
   void ShowTaskManager() override;
   void OpenDiagnostics() override;
   void OpenFeedbackPage(FeedbackSource source,
                         const std::string& description_template) override;
   void OpenPersonalizationHub() override;
+  void OpenCaptivePortalSignin(const GURL& url) override;
+  void OpenFile(const base::FilePath& file_path) override;
 
   // arc::ControlCameraAppDelegate:
   void LaunchCameraApp(const std::string& queries, int32_t task_id) override;

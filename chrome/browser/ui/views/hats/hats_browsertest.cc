@@ -9,7 +9,6 @@
 #include "base/files/file_util.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/values_util.h"
-#include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
@@ -34,6 +33,7 @@
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
+#include "ui/views/test/views_test_utils.h"
 #include "url/gurl.h"
 
 namespace {
@@ -74,7 +74,6 @@ class MockHatsNextWebDialog : public HatsNextWebDialog {
 
   MOCK_METHOD(void, ShowWidget, (), (override));
   MOCK_METHOD(void, CloseWidget, (), (override));
-  MOCK_METHOD(void, UpdateWidgetSize, (), (override));
 
   void WaitForClose() {
     base::RunLoop run_loop;
@@ -84,22 +83,13 @@ class MockHatsNextWebDialog : public HatsNextWebDialog {
     });
     run_loop.Run();
   }
-
-  void WaitForUpdateWidgetSize() {
-    base::RunLoop run_loop;
-    EXPECT_CALL(*this, UpdateWidgetSize).WillOnce(testing::Invoke([&run_loop] {
-      run_loop.Quit();
-    }));
-    run_loop.Run();
-  }
 };
 
 class HatsNextWebDialogBrowserTest : public InProcessBrowserTest {
  public:
   void SetUpOnMainThread() override {
-    hats_service_ = static_cast<MockHatsService*>(
-        HatsServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-            browser()->profile(), base::BindRepeating(&BuildMockHatsService)));
+    HatsServiceFactory::GetInstance()->SetTestingFactoryAndUse(
+        browser()->profile(), base::BindRepeating(&BuildMockHatsService));
   }
 
   // Open a blank tab in the main browser, inspect it, and return the devtools
@@ -113,7 +103,10 @@ class HatsNextWebDialogBrowserTest : public InProcessBrowserTest {
     return devtools_window->browser_;
   }
 
-  MockHatsService* hats_service() { return hats_service_; }
+  MockHatsService* hats_service() {
+    return static_cast<MockHatsService*>(HatsServiceFactory::GetForProfile(
+        browser()->profile(), /*create_if_necessary=*/false));
+  }
 
   base::OnceClosure GetSuccessClosure() {
     return base::BindLambdaForTesting([&]() { ++success_count; });
@@ -125,9 +118,6 @@ class HatsNextWebDialogBrowserTest : public InProcessBrowserTest {
 
   int success_count = 0;
   int failure_count = 0;
-
- private:
-  raw_ptr<MockHatsService, DanglingUntriaged> hats_service_;
 };
 
 // Test that the web dialog correctly receives change to history state that
@@ -337,13 +327,8 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, DialogResize) {
 
   // Depending on renderer warm-up, an initial empty size may additionally be
   // reported before hats_next_mock.html has had a chance to resize.
-  dialog->WaitForUpdateWidgetSize();
-  auto size = dialog->CalculatePreferredSize();
+  auto size = dialog->CalculatePreferredSize({});
   EXPECT_TRUE(size == kTargetSize || size == dialog->kMinSize);
-  if (size != kTargetSize) {
-    dialog->WaitForUpdateWidgetSize();
-    EXPECT_EQ(kTargetSize, dialog->CalculatePreferredSize());
-  }
 }
 
 IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, MaximumSize) {
@@ -359,19 +344,14 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, MaximumSize) {
   // dialogs maximum size. Depending on renderer warm-up, an initial empty size
   // may additionally be reported before hats_next_mock.html has had a chance
   // to resize.
-  dialog->WaitForUpdateWidgetSize();
-  auto size = dialog->CalculatePreferredSize();
+  auto size = dialog->CalculatePreferredSize({});
   EXPECT_TRUE(size == HatsNextWebDialog::kMaxSize || size == dialog->kMinSize);
-  if (size != HatsNextWebDialog::kMaxSize) {
-    dialog->WaitForUpdateWidgetSize();
-    EXPECT_EQ(HatsNextWebDialog::kMaxSize, dialog->CalculatePreferredSize());
-  }
 }
 
 IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, ZoomLevel) {
   // Ensure that the dialog correctly resets the zoom level to default.
   browser()->profile()->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(
-      blink::PageZoomFactorToZoomLevel(5.0f));
+      blink::ZoomFactorToZoomLevel(5.0f));
 
   ScopedBrowserLocale browser_locale(kTestLocale);
 
@@ -390,8 +370,8 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, ZoomLevel) {
   }));
   run_loop.Run();
 
-  EXPECT_TRUE(blink::PageZoomValuesEqual(
+  EXPECT_TRUE(blink::ZoomValuesEqual(
       content::HostZoomMap::GetDefaultForBrowserContext(dialog->otr_profile_)
           ->GetZoomLevel(dialog->web_view_->GetWebContents()),
-      blink::PageZoomFactorToZoomLevel(1.0f)));
+      blink::ZoomFactorToZoomLevel(1.0f)));
 }

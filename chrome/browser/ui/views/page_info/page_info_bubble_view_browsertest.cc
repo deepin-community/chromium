@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
 
+#include "base/files/file_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
@@ -14,6 +14,11 @@
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/with_feature_override.h"
 #include "build/build_config.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
+#include "chrome/browser/file_system_access/file_system_access_features.h"
+#include "chrome/browser/file_system_access/file_system_access_permission_context_factory.h"
+#include "chrome/browser/file_system_access/file_system_access_permission_request_manager.h"
 #include "chrome/browser/interstitials/security_interstitial_page_test_utils.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
@@ -28,14 +33,19 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/hats/mock_trust_safety_sentiment_service.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service_factory.h"
+#include "chrome/browser/ui/page_info/chrome_page_info_delegate.h"
 #include "chrome/browser/ui/page_info/page_info_dialog.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/controls/rich_hover_button.h"
+#include "chrome/browser/ui/views/file_system_access/file_system_access_test_utils.h"
+#include "chrome/browser/ui/views/file_system_access/file_system_access_ui_helpers.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/location_bar/location_icon_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_cookies_content_view.h"
+#include "chrome/browser/ui/views/page_info/page_info_permission_content_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
 #include "chrome/browser/ui/views/page_info/security_information_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
@@ -55,6 +65,7 @@
 #include "components/page_info/core/proto/about_this_site_metadata.pb.h"
 #include "components/page_info/page_info.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
+#include "components/permissions/features.h"
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/safe_browsing/content/browser/password_protection/password_protection_test_util.h"
 #include "components/safe_browsing/core/common/features.h"
@@ -176,12 +187,15 @@ void AddHintForTesting(Browser* browser,
 class PageInfoBubbleViewBrowserTest : public InProcessBrowserTest {
  public:
   PageInfoBubbleViewBrowserTest() {
-    // TODO(crbug.com/1344787): Clean up when PageSpecificSiteDataDialog is
+    // TODO(crbug.com/40231917): Clean up when PageSpecificSiteDataDialog is
     // launched. Disable features for the new version of "Cookies in use"
     // dialog. The new UI is covered by
     // PageInfoBubbleViewBrowserTestCookiesSubpage.
-    feature_list_.InitWithFeatures({safe_browsing::kRedInterstitialFacelift},
-                                   {});
+    feature_list_.InitWithFeatures(
+        {features::kFileSystemAccessPersistentPermissions,
+         features::kFileSystemAccessPersistentPermissionsUpdatedPageInfo,
+         permissions::features::kOneTimePermission},
+        {});
   }
 
   PageInfoBubbleViewBrowserTest(const PageInfoBubbleViewBrowserTest& test) =
@@ -616,6 +630,109 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest,
   PerformMouseClickOnView(cookies_button);
 }
 
+IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest,
+                       InteractedWithFileSystemSubpage) {
+  base::HistogramTester histograms;
+  const GURL url = embedded_test_server()->GetURL("/title1.html");
+  const url::Origin origin = url::Origin::Create(url);
+
+  // Open a file to create an active grant for testing.
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::FilePath test_file;
+  base::CreateTemporaryFile(&test_file);
+
+  ui::SelectFileDialog::SetFactory(
+      std::make_unique<SelectPredeterminedFileDialogFactory>(
+          std::vector<base::FilePath>{test_file}));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  FileSystemAccessPermissionRequestManager::FromWebContents(web_contents)
+      ->set_auto_response_for_test(permissions::PermissionAction::GRANTED);
+  EXPECT_EQ(test_file.BaseName().AsUTF8Unsafe(),
+            EvalJs(web_contents,
+                   "(async () => {"
+                   "  let [e] = await self.showOpenFilePicker();"
+                   "  self.selected_entry = e;"
+                   "  return e.name; })()"));
+
+  ChromeFileSystemAccessPermissionContext* permission_context =
+      FileSystemAccessPermissionContextFactory::GetForProfile(
+          web_contents->GetBrowserContext());
+  ASSERT_TRUE(permission_context);
+
+  // Open the Page Info bubble.
+  base::RunLoop run_loop;
+  GetPageInfoDialogCreatedCallbackForTesting() = run_loop.QuitClosure();
+  OpenPageInfoBubble(browser());
+  run_loop.Run();
+
+  // Open the File System subpage view.
+  auto* page_info_bubble = static_cast<PageInfoBubbleView*>(
+      PageInfoBubbleView::GetPageInfoBubbleForTesting());
+  page_info_bubble->OpenPermissionPage(
+      ContentSettingsType::FILE_SYSTEM_WRITE_GUARD);
+  // Simulate toggling the Extended Permissions checkbox button on the File
+  // System subpage.
+  views::Checkbox* toggle_extended_permissions_button =
+      static_cast<views::Checkbox*>(
+          GetView(PageInfoViewFactory::
+                      VIEW_ID_PAGE_INFO_PERMISSION_SUBPAGE_REMEMBER_CHECKBOX));
+  EXPECT_TRUE(toggle_extended_permissions_button->GetVisible());
+  EXPECT_FALSE(toggle_extended_permissions_button->GetChecked());
+  // The origin does not initially have extended permissions enabled by
+  // default.
+  EXPECT_FALSE(permission_context->OriginHasExtendedPermission(origin));
+  // Clicking the extended permissions checkbox enables extended permissions
+  // for the given origin.
+  PerformMouseClickOnView(toggle_extended_permissions_button);
+  EXPECT_TRUE(permission_context->OriginHasExtendedPermission(origin));
+  EXPECT_TRUE(toggle_extended_permissions_button->GetChecked());
+  histograms.ExpectBucketCount(
+      "Storage.FileSystemAccess.ToggleExtendedPermissionOutcome", true, 1);
+  // Clicking the extended permissions checkbox again disables extended
+  // permissions for the given origin.
+  PerformMouseClickOnView(toggle_extended_permissions_button);
+  EXPECT_FALSE(permission_context->OriginHasExtendedPermission(origin));
+  EXPECT_FALSE(toggle_extended_permissions_button->GetChecked());
+  histograms.ExpectBucketCount(
+      "Storage.FileSystemAccess.ToggleExtendedPermissionOutcome", false, 1);
+
+  // The `FileSystemAccessScrollPanel` element is visible and is populated as
+  // expected.
+  views::ScrollView* scroll_panel =
+      static_cast<views::ScrollView*>(page_info_bubble->GetViewByID(
+          PageInfoViewFactory::
+              VIEW_ID_PAGE_INFO_PERMISSION_SUBPAGE_FILE_SYSTEM_SCROLL_PANEL));
+  EXPECT_TRUE(scroll_panel->GetVisible());
+  ASSERT_THAT(scroll_panel->contents()->children(), testing::SizeIs(1));
+  views::Label* label = static_cast<views::Label*>(
+      scroll_panel->contents()->children()[0]->children()[1]);
+  const std::u16string expected_file_path =
+      file_system_access_ui_helper::GetPathForDisplayAsParagraph(test_file);
+  EXPECT_EQ(label->GetText(), expected_file_path);
+
+  // Simulate clicking the subpage manage button for File System.
+  views::View* content_settings_button = GetView(
+      PageInfoViewFactory::VIEW_ID_PAGE_INFO_PERMISSION_SUBPAGE_MANAGE_BUTTON);
+  EXPECT_TRUE(content_settings_button->GetVisible());
+  PerformMouseClickOnView(content_settings_button);
+  constexpr char kParamRequest[] = "site";
+  // TODO(crbug.com/40946480): Update `origin_string` to remove the encoded
+  // trailing slash, once it's no longer required to correctly navigate to
+  // file system site settings page for the given origin.
+  const std::string origin_string =
+      base::StrCat({url::Origin::Create(url).Serialize(), "/"});
+  GURL link_destination = net::AppendQueryParameter(
+      chrome::GetSettingsUrl(chrome::kFileSystemSettingsSubpage), kParamRequest,
+      origin_string);
+  content::WebContents* updated_web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  EXPECT_EQ(link_destination, updated_web_contents->GetVisibleURL().spec());
+  EXPECT_TRUE(base::DeleteFile(test_file));
+}
+
 class PageInfoBubbleViewBrowserTestWithAutoupgradesDisabled
     : public PageInfoBubbleViewBrowserTest {
  public:
@@ -674,7 +791,7 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest, BlockedAndInvalidCert) {
 
   // Verify bubble complains of malware...
   EXPECT_EQ(GetPageInfoBubbleViewSummaryText(),
-            l10n_util::GetStringUTF16(IDS_PAGE_INFO_MALWARE_SUMMARY_NEW));
+            l10n_util::GetStringUTF16(IDS_PAGE_INFO_SAFE_BROWSING_SUMMARY));
 
   // ...and has a "Certificate (Invalid)" button.
   std::u16string invalid_text;
@@ -719,7 +836,10 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest, MalwareAndEvCert) {
 
   // Verify bubble complains of malware...
   EXPECT_EQ(GetPageInfoBubbleViewSummaryText(),
-            l10n_util::GetStringUTF16(IDS_PAGE_INFO_MALWARE_SUMMARY_NEW));
+            l10n_util::GetStringUTF16(IDS_PAGE_INFO_SAFE_BROWSING_SUMMARY));
+  EXPECT_EQ(GetPageInfoBubbleViewDetailText(),
+            l10n_util::GetStringUTF16(IDS_PAGE_INFO_MALWARE_DETAILS) + u" " +
+                l10n_util::GetStringUTF16(IDS_LEARN_MORE));
 
   // ...and has the correct organization details in the Certificate button.
   EXPECT_EQ(GetCertificateButtonSubtitle(),
@@ -728,10 +848,62 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest, MalwareAndEvCert) {
                 u"Thawte Inc", u"US"));
 }
 
+IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest,
+                       SocialEngineeringStrings) {
+  net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
+  https_server.AddDefaultHandlers(
+      base::FilePath(FILE_PATH_LITERAL("chrome/test/data")));
+  ASSERT_TRUE(https_server.Start());
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), https_server.GetURL("/simple.html")));
+
+  // Setup the bogus identity with an expired cert and SB flagging.
+  PageInfoUI::IdentityInfo identity;
+  identity.safe_browsing_status =
+      PageInfo::SAFE_BROWSING_STATUS_SOCIAL_ENGINEERING;
+  OpenPageInfoBubble(browser());
+
+  SetPageInfoBubbleIdentityInfo(identity);
+
+  // Verify bubble uses new malware summary and details strings.
+  EXPECT_EQ(GetPageInfoBubbleViewSummaryText(),
+            l10n_util::GetStringUTF16(IDS_PAGE_INFO_SAFE_BROWSING_SUMMARY));
+  EXPECT_EQ(
+      GetPageInfoBubbleViewDetailText(),
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_SOCIAL_ENGINEERING_DETAILS) +
+          u" " + l10n_util::GetStringUTF16(IDS_LEARN_MORE));
+}
+
+IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest, UnwantedSoftwareStrings) {
+  net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
+  https_server.AddDefaultHandlers(
+      base::FilePath(FILE_PATH_LITERAL("chrome/test/data")));
+  ASSERT_TRUE(https_server.Start());
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), https_server.GetURL("/simple.html")));
+
+  // Setup the bogus identity with an expired cert and SB flagging.
+  PageInfoUI::IdentityInfo identity;
+  identity.safe_browsing_status =
+      PageInfo::SAFE_BROWSING_STATUS_UNWANTED_SOFTWARE;
+  OpenPageInfoBubble(browser());
+
+  SetPageInfoBubbleIdentityInfo(identity);
+
+  // Verify bubble uses new malware summary and details strings.
+  EXPECT_EQ(GetPageInfoBubbleViewSummaryText(),
+            l10n_util::GetStringUTF16(IDS_PAGE_INFO_SAFE_BROWSING_SUMMARY));
+  EXPECT_EQ(GetPageInfoBubbleViewDetailText(),
+            l10n_util::GetStringUTF16(IDS_PAGE_INFO_UNWANTED_SOFTWARE_DETAILS) +
+                u" " + l10n_util::GetStringUTF16(IDS_LEARN_MORE));
+}
+
 // Tests that the "reset warning decisions" button is shown if the user has
 // clicked through an SSL warning or the HTTP interstitial, but not for silent
 // fallback to HTTP under HTTPS-Upgrades.
-// TODO(crbug.com/1394910): Convert these tests to be normal
+// TODO(crbug.com/40248833): Convert these tests to be normal
 // PageInfoBubbleViewBrowserTest when HTTPS-Upgrades is enabled-by-default.
 class PageInfoBubbleViewHttpsUpgradesBrowserTest
     : public PageInfoBubbleViewBrowserTest {
@@ -783,8 +955,8 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewHttpsUpgradesBrowserTest,
 }
 
 // Navigate to a malware page with an SSL warning and click through the warning.
-// The "reset decisions" button should not be displayed (otherwise it's confusing
-// which warning the user is re-enabling).
+// The "reset decisions" button should not be displayed (otherwise it's
+// confusing which warning the user is re-enabling).
 IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewHttpsUpgradesBrowserTest,
                        ResetWarningDecisionsButtonCertAndMalwareWarnings) {
   GURL bad_https_url = bad_https_server()->GetURL("baz.com", "/simple.html");
@@ -1202,6 +1374,10 @@ class PageInfoBubbleViewBrowserTestCookiesSubpage
     return mock_privacy_sandbox_service_.get();
   }
 
+  HostContentSettingsMap* host_content_settings_map() {
+    return HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+  }
+
   void SetCookieControlsMode(content_settings::CookieControlsMode mode) {
     prefs_->SetInteger(prefs::kCookieControlsMode, static_cast<int>(mode));
   }
@@ -1334,30 +1510,61 @@ IN_PROC_BROWSER_TEST_P(PageInfoBubbleViewBrowserTestCookiesSubpage,
 
   // FPS blocked and 3pc blocked -> buttons for cookie dialog and third party
   // cookies.
-    size_t kExpectedChildren = 2;
-    auto* cookies_buttons_container = GetView(
-        PageInfoViewFactory::VIEW_ID_PAGE_INFO_COOKIES_BUTTONS_CONTAINER);
-    EXPECT_THAT(cookies_buttons_container->children().size(),
-                testing::Eq(kExpectedChildren));
-    EXPECT_TRUE(GetView(
-        PageInfoViewFactory::VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_COOKIE_DIALOG));
-    EXPECT_TRUE(GetView(
-        PageInfoViewFactory::VIEW_ID_PAGE_INFO_THIRD_PARTY_COOKIES_ROW));
+  size_t kExpectedChildren = 2;
+  auto* cookies_buttons_container =
+      GetView(PageInfoViewFactory::VIEW_ID_PAGE_INFO_COOKIES_BUTTONS_CONTAINER);
+  EXPECT_THAT(cookies_buttons_container->children().size(),
+              testing::Eq(kExpectedChildren));
+  EXPECT_TRUE(GetView(
+      PageInfoViewFactory::VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_COOKIE_DIALOG));
+  EXPECT_TRUE(
+      GetView(PageInfoViewFactory::VIEW_ID_PAGE_INFO_THIRD_PARTY_COOKIES_ROW));
 
-    auto* third_party_cookies_toggle =
-        static_cast<views::ToggleButton*>(GetView(
-            PageInfoViewFactory::VIEW_ID_PAGE_INFO_THIRD_PARTY_COOKIES_TOGGLE));
-    EXPECT_THAT(third_party_cookies_toggle->GetIsOn(), IsFalse());
+  auto* third_party_cookies_toggle = static_cast<views::ToggleButton*>(GetView(
+      PageInfoViewFactory::VIEW_ID_PAGE_INFO_THIRD_PARTY_COOKIES_TOGGLE));
+  EXPECT_THAT(third_party_cookies_toggle->GetIsOn(), IsFalse());
 
-    base::UserActionTester user_actions_stats;
+  base::UserActionTester user_actions_stats;
 
-    PerformMouseClickOnView(third_party_cookies_toggle);
-    EXPECT_THAT(third_party_cookies_toggle->GetIsOn(), IsTrue());
-    EXPECT_EQ(user_actions_stats.GetActionCount("PageInfo.Cookies.Allowed"), 1);
+  PerformMouseClickOnView(third_party_cookies_toggle);
+  EXPECT_THAT(third_party_cookies_toggle->GetIsOn(), IsTrue());
+  EXPECT_EQ(user_actions_stats.GetActionCount("PageInfo.Cookies.Allowed"), 1);
 
-    PerformMouseClickOnView(third_party_cookies_toggle);
-    EXPECT_THAT(third_party_cookies_toggle->GetIsOn(), IsFalse());
-    EXPECT_EQ(user_actions_stats.GetActionCount("PageInfo.Cookies.Blocked"), 1);
+  PerformMouseClickOnView(third_party_cookies_toggle);
+  EXPECT_THAT(third_party_cookies_toggle->GetIsOn(), IsFalse());
+  EXPECT_EQ(user_actions_stats.GetActionCount("PageInfo.Cookies.Blocked"), 1);
+}
+
+// Checks that tracking protection exceptions are properly created and removed
+// when flipping the third party cookies toggle.
+IN_PROC_BROWSER_TEST_P(
+    PageInfoBubbleViewBrowserTestCookiesSubpage,
+    ToggleForBlockingThirdPartyCookiesUpdatesTrackingProtectionException) {
+  GURL url_example = GURL("http://example/other/stuff.htm");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url_example));
+
+  SetCookieControlsMode(content_settings::CookieControlsMode::kBlockThirdParty);
+
+  OpenPageInfoAndGoToCookiesSubpage(/*fps_owner =*/{});
+
+  auto* third_party_cookies_toggle = static_cast<views::ToggleButton*>(GetView(
+      PageInfoViewFactory::VIEW_ID_PAGE_INFO_THIRD_PARTY_COOKIES_TOGGLE));
+  EXPECT_THAT(third_party_cookies_toggle->GetIsOn(), IsFalse());
+
+  PerformMouseClickOnView(third_party_cookies_toggle);
+  EXPECT_THAT(third_party_cookies_toggle->GetIsOn(), IsTrue());
+  content_settings::SettingInfo info;
+  EXPECT_EQ(
+      host_content_settings_map()->GetContentSetting(
+          GURL(), url_example, ContentSettingsType::TRACKING_PROTECTION, &info),
+      CONTENT_SETTING_ALLOW);
+
+  PerformMouseClickOnView(third_party_cookies_toggle);
+  EXPECT_THAT(third_party_cookies_toggle->GetIsOn(), IsFalse());
+  EXPECT_EQ(
+      host_content_settings_map()->GetContentSetting(
+          GURL(), url_example, ContentSettingsType::TRACKING_PROTECTION, &info),
+      CONTENT_SETTING_BLOCK);
 }
 
 // Checks if there is a correct number of buttons in cookies subpage when fps
@@ -1396,100 +1603,4 @@ IN_PROC_BROWSER_TEST_P(PageInfoBubbleViewBrowserTestCookiesSubpage,
             1);
 
   EXPECT_EQ(new_tab_observer.GetWebContents()->GetVisibleURL(), url);
-}
-
-class PageInfoBubbleViewBrowserTestWithRedInterstitialFaceliftEnabled
-    : public PageInfoBubbleViewBrowserTest {
- public:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    PageInfoBubbleViewBrowserTest::SetUpCommandLine(command_line);
-    feature_list.InitAndEnableFeature(safe_browsing::kRedInterstitialFacelift);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list;
-};
-
-IN_PROC_BROWSER_TEST_F(
-    PageInfoBubbleViewBrowserTestWithRedInterstitialFaceliftEnabled,
-    MalwareNewStrings) {
-  net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
-  https_server.AddDefaultHandlers(
-      base::FilePath(FILE_PATH_LITERAL("chrome/test/data")));
-  ASSERT_TRUE(https_server.Start());
-
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), https_server.GetURL("/simple.html")));
-
-  // Setup the bogus identity with an expired cert and SB flagging.
-  PageInfoUI::IdentityInfo identity;
-  identity.safe_browsing_status = PageInfo::SAFE_BROWSING_STATUS_MALWARE;
-  OpenPageInfoBubble(browser());
-
-  SetPageInfoBubbleIdentityInfo(identity);
-
-  // Verify bubble uses new malware summary and details strings.
-  EXPECT_EQ(GetPageInfoBubbleViewSummaryText(),
-            l10n_util::GetStringUTF16(IDS_PAGE_INFO_MALWARE_SUMMARY_NEW));
-  EXPECT_EQ(GetPageInfoBubbleViewDetailText(),
-            l10n_util::GetStringUTF16(IDS_PAGE_INFO_MALWARE_DETAILS_NEW) +
-                u" " + l10n_util::GetStringUTF16(IDS_LEARN_MORE));
-}
-
-IN_PROC_BROWSER_TEST_F(
-    PageInfoBubbleViewBrowserTestWithRedInterstitialFaceliftEnabled,
-    SocialEngineeringNewStrings) {
-  net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
-  https_server.AddDefaultHandlers(
-      base::FilePath(FILE_PATH_LITERAL("chrome/test/data")));
-  ASSERT_TRUE(https_server.Start());
-
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), https_server.GetURL("/simple.html")));
-
-  // Setup the bogus identity with an expired cert and SB flagging.
-  PageInfoUI::IdentityInfo identity;
-  identity.safe_browsing_status =
-      PageInfo::SAFE_BROWSING_STATUS_SOCIAL_ENGINEERING;
-  OpenPageInfoBubble(browser());
-
-  SetPageInfoBubbleIdentityInfo(identity);
-
-  // Verify bubble uses new malware summary and details strings.
-  EXPECT_EQ(
-      GetPageInfoBubbleViewSummaryText(),
-      l10n_util::GetStringUTF16(IDS_PAGE_INFO_SOCIAL_ENGINEERING_SUMMARY_NEW));
-  EXPECT_EQ(
-      GetPageInfoBubbleViewDetailText(),
-      l10n_util::GetStringUTF16(IDS_PAGE_INFO_SOCIAL_ENGINEERING_DETAILS_NEW) +
-          u" " + l10n_util::GetStringUTF16(IDS_LEARN_MORE));
-}
-
-IN_PROC_BROWSER_TEST_F(
-    PageInfoBubbleViewBrowserTestWithRedInterstitialFaceliftEnabled,
-    UnwantedSoftwareNewStrings) {
-  net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
-  https_server.AddDefaultHandlers(
-      base::FilePath(FILE_PATH_LITERAL("chrome/test/data")));
-  ASSERT_TRUE(https_server.Start());
-
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), https_server.GetURL("/simple.html")));
-
-  // Setup the bogus identity with an expired cert and SB flagging.
-  PageInfoUI::IdentityInfo identity;
-  identity.safe_browsing_status =
-      PageInfo::SAFE_BROWSING_STATUS_UNWANTED_SOFTWARE;
-  OpenPageInfoBubble(browser());
-
-  SetPageInfoBubbleIdentityInfo(identity);
-
-  // Verify bubble uses new malware summary and details strings.
-  EXPECT_EQ(
-      GetPageInfoBubbleViewSummaryText(),
-      l10n_util::GetStringUTF16(IDS_PAGE_INFO_UNWANTED_SOFTWARE_SUMMARY_NEW));
-  EXPECT_EQ(
-      GetPageInfoBubbleViewDetailText(),
-      l10n_util::GetStringUTF16(IDS_PAGE_INFO_UNWANTED_SOFTWARE_DETAILS_NEW) +
-          u" " + l10n_util::GetStringUTF16(IDS_LEARN_MORE));
 }

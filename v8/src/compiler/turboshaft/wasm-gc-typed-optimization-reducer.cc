@@ -67,6 +67,7 @@ void WasmGCTypeAnalyzer::StartNewSnapshotFor(const Block& block) {
   // Reset reachability information. This can be outdated in case of loop
   // revisits. Below the reachability is calculated again and potentially
   // re-added.
+  bool block_was_previously_reachable = IsReachable(block);
   block_is_unreachable_.Remove(block.index().id());
   // Start new snapshot based on predecessor information.
   if (block.HasPredecessors() == 0) {
@@ -74,21 +75,29 @@ void WasmGCTypeAnalyzer::StartNewSnapshotFor(const Block& block) {
     DCHECK_EQ(block.index().id(), 0);
     types_table_.StartNewSnapshot();
   } else if (block.IsLoop()) {
+    const Block& forward_predecessor =
+        *block.LastPredecessor()->NeighboringPredecessor();
+    if (!IsReachable(forward_predecessor)) {
+      // If a loop isn't reachable through its forward edge, it can't possibly
+      // become reachable via the backedge.
+      block_is_unreachable_.Add(block.index().id());
+    }
     MaybeSnapshot back_edge_snap =
         block_to_snapshot_[block.LastPredecessor()->index()];
-    if (back_edge_snap.has_value()) {
+    if (back_edge_snap.has_value() && block_was_previously_reachable) {
       // The loop was already visited at least once. In this case use the
       // available information from the backedge.
+      // Note that we only do this if the loop wasn't marked as unreachable
+      // before. This solves an issue where a single block loop would think the
+      // backedge is reachable as we just removed the unreachable information
+      // above. Once the analyzer hits the backedge, it will re-evaluate if the
+      // backedge changes any analysis results and then potentially revisit
+      // this loop with forward edge and backedge.
       CreateMergeSnapshot(block);
     } else {
       // The loop wasn't visited yet. There isn't any type information available
       // for the backedge.
       is_first_loop_header_evaluation_ = true;
-      const Block& forward_predecessor =
-          *block.LastPredecessor()->NeighboringPredecessor();
-      if (!IsReachable(forward_predecessor)) {
-        block_is_unreachable_.Add(block.index().id());
-      }
       Snapshot forward_edge_snap =
           block_to_snapshot_[forward_predecessor.index()].value();
       types_table_.StartNewSnapshot(forward_edge_snap);
@@ -141,6 +150,9 @@ void WasmGCTypeAnalyzer::ProcessOperations(const Block& block) {
       case Opcode::kStructSet:
         ProcessStructSet(op.Cast<StructSetOp>());
         break;
+      case Opcode::kArrayGet:
+        ProcessArrayGet(op.Cast<ArrayGetOp>());
+        break;
       case Opcode::kArrayLength:
         ProcessArrayLength(op.Cast<ArrayLengthOp>());
         break;
@@ -172,7 +184,7 @@ void WasmGCTypeAnalyzer::ProcessOperations(const Block& block) {
 }
 
 void WasmGCTypeAnalyzer::ProcessTypeCast(const WasmTypeCastOp& type_cast) {
-  OpIndex object = type_cast.object();
+  V<Object> object = type_cast.object();
   wasm::ValueType target_type = type_cast.config.to;
   wasm::ValueType known_input_type = RefineTypeKnowledge(object, target_type);
   input_type_map_[graph_.Index(type_cast)] = known_input_type;
@@ -185,7 +197,7 @@ void WasmGCTypeAnalyzer::ProcessTypeCheck(const WasmTypeCheckOp& type_check) {
 
 void WasmGCTypeAnalyzer::ProcessAssertNotNull(
     const AssertNotNullOp& assert_not_null) {
-  OpIndex object = assert_not_null.object();
+  V<Object> object = assert_not_null.object();
   wasm::ValueType new_type = assert_not_null.type.AsNonNull();
   wasm::ValueType known_input_type = RefineTypeKnowledge(object, new_type);
   input_type_map_[graph_.Index(assert_not_null)] = known_input_type;
@@ -206,14 +218,24 @@ void WasmGCTypeAnalyzer::ProcessStructGet(const StructGetOp& struct_get) {
   // struct.get performs a null check.
   wasm::ValueType type = RefineTypeKnowledgeNotNull(struct_get.object());
   input_type_map_[graph_.Index(struct_get)] = type;
-  RefineTypeKnowledge(graph_.Index(struct_get),
-                      struct_get.type->field(struct_get.field_index));
+  RefineTypeKnowledge(
+      graph_.Index(struct_get),
+      struct_get.type->field(struct_get.field_index).Unpacked());
 }
 
 void WasmGCTypeAnalyzer::ProcessStructSet(const StructSetOp& struct_set) {
   // struct.set performs a null check.
   wasm::ValueType type = RefineTypeKnowledgeNotNull(struct_set.object());
   input_type_map_[graph_.Index(struct_set)] = type;
+}
+
+void WasmGCTypeAnalyzer::ProcessArrayGet(const ArrayGetOp& array_get) {
+  // array.get traps on null. (Typically already on the array length access
+  // needed for the bounds check.)
+  RefineTypeKnowledgeNotNull(array_get.array());
+  // The result type is at least the static array element type.
+  RefineTypeKnowledge(graph_.Index(array_get),
+                      array_get.array_type->element_type().Unpacked());
 }
 
 void WasmGCTypeAnalyzer::ProcessArrayLength(const ArrayLengthOp& array_length) {

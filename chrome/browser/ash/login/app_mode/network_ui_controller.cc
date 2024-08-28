@@ -5,20 +5,26 @@
 #include "chrome/browser/ash/login/app_mode/network_ui_controller.h"
 
 #include <memory>
+#include <optional>
+#include <utility>
 
 #include "base/auto_reset.h"
+#include "base/check.h"
 #include "base/check_is_test.h"
-#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/location.h"
+#include "base/notreached.h"
 #include "base/syslog_logging.h"
-#include "chrome/browser/ash/login/app_mode/kiosk_launch_controller.h"
+#include "base/time/time.h"
+#include "chrome/browser/ash/login/screens/network_error.h"
 #include "chrome/browser/ash/login/ui/login_display_host.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part_ash.h"
+#include "chrome/browser/ui/webui/ash/login/app_launch_splash_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/network_state_informer.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
-#include "components/user_manager/user_manager.h"
 #include "content/public/browser/network_service_instance.h"
+#include "services/network/public/mojom/network_change_manager.mojom-shared.h"
 
 namespace {
 
@@ -28,12 +34,6 @@ constexpr base::TimeDelta kKioskNetworkWaitTime = base::Seconds(10);
 base::TimeDelta g_network_wait_time = kKioskNetworkWaitTime;
 
 std::optional<bool> g_can_configure_network_for_testing;
-
-bool IsDeviceEnterpriseManaged() {
-  return g_browser_process->platform_part()
-      ->browser_policy_connector_ash()
-      ->IsDeviceEnterpriseManaged();
-}
 
 bool CanConfigureNetworkForEnterpriseKiosk() {
   bool should_prompt;
@@ -128,7 +128,7 @@ void NetworkUiController::InitializeNetwork() {
 void NetworkUiController::OnConfigureNetwork() {
   // TODO(b/256596599): Remove this consumer-kiosk only method and all its
   // references.
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void NetworkUiController::OnNetworkConfigFinished() {
@@ -236,15 +236,23 @@ bool NetworkUiController::CanConfigureNetwork() {
     return g_can_configure_network_for_testing.value();
   }
 
-  return IsDeviceEnterpriseManaged() && CanConfigureNetworkForEnterpriseKiosk();
+  return ash::InstallAttributes::Get()->IsEnterpriseManaged() &&
+         CanConfigureNetworkForEnterpriseKiosk();
 }
 
 // static
-std::unique_ptr<base::AutoReset<std::optional<bool>>>
+base::AutoReset<std::optional<bool>>
 NetworkUiController::SetCanConfigureNetworkForTesting(
     bool can_configure_network) {
-  return std::make_unique<base::AutoReset<std::optional<bool>>>(
+  return base::AutoReset<std::optional<bool>>(
       &g_can_configure_network_for_testing, can_configure_network);
+}
+
+// static
+base::AutoReset<base::TimeDelta>
+NetworkUiController::SetNetworkWaitTimeoutForTesting(
+    base::TimeDelta new_timeout) {
+  return base::AutoReset<base::TimeDelta>(&g_network_wait_time, new_timeout);
 }
 
 }  // namespace ash

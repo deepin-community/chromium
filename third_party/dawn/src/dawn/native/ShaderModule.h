@@ -41,6 +41,7 @@
 #include "dawn/common/Constants.h"
 #include "dawn/common/ContentLessObjectCacheable.h"
 #include "dawn/common/MutexProtected.h"
+#include "dawn/common/RefCountedWithExternalCount.h"
 #include "dawn/common/ityp_array.h"
 #include "dawn/native/BindingInfo.h"
 #include "dawn/native/CachedObject.h"
@@ -52,7 +53,6 @@
 #include "dawn/native/Limits.h"
 #include "dawn/native/ObjectBase.h"
 #include "dawn/native/PerStage.h"
-#include "dawn/native/RefCountedWithExternalCount.h"
 #include "dawn/native/dawn_platform.h"
 #include "tint/tint.h"
 
@@ -92,6 +92,8 @@ enum class InterpolationSampling {
     Center,
     Centroid,
     Sample,
+    First,
+    Either,
 };
 
 enum class PixelLocalMemberType {
@@ -130,10 +132,12 @@ struct ShaderModuleEntryPoint {
     std::string name;
 };
 
-MaybeError ValidateAndParseShaderModule(DeviceBase* device,
-                                        const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
-                                        ShaderModuleParseResult* parseResult,
-                                        OwnedCompilationMessages* outMessages);
+MaybeError ValidateAndParseShaderModule(
+    DeviceBase* device,
+    const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
+    const std::vector<tint::wgsl::Extension>& internalExtensions,
+    ShaderModuleParseResult* parseResult,
+    OwnedCompilationMessages* outMessages);
 MaybeError ValidateCompatibilityWithPipelineLayout(DeviceBase* device,
                                                    const EntryPointMetadata& entryPoint,
                                                    const PipelineLayoutBase* layout);
@@ -155,43 +159,8 @@ ResultOrError<tint::Program> RunTransforms(tint::ast::transform::Manager* transf
                                            tint::ast::transform::DataMap* outputs,
                                            OwnedCompilationMessages* messages);
 
-// Mirrors wgpu::SamplerBindingLayout but instead stores a single boolean
-// for isComparison instead of a wgpu::SamplerBindingType enum.
-struct SamplerBindingInfo {
-    bool isComparison;
-};
-
-// Mirrors wgpu::TextureBindingLayout but instead has a set of compatible sampleTypes
-// instead of a single enum.
-struct SampledTextureBindingInfo {
-    SampleTypeBit compatibleSampleTypes;
-    wgpu::TextureViewDimension viewDimension;
-    bool multisampled;
-};
-
-// Mirrors wgpu::ExternalTextureBindingLayout
-struct ExternalTextureBindingInfo {};
-
-// Mirrors wgpu::BufferBindingLayout
-struct BufferBindingInfo {
-    wgpu::BufferBindingType type;
-    uint64_t minBindingSize;
-};
-
-// Mirrors wgpu::StorageTextureBindingLayout
-struct StorageTextureBindingInfo {
-    wgpu::TextureFormat format;
-    wgpu::TextureViewDimension viewDimension;
-    wgpu::StorageTextureAccess access;
-};
-
-// Per-binding shader metadata contains some SPIRV specific information in addition to
-// most of the frontend per-binding information.
+// Shader metadata for a binding, very similar to information contained in a pipeline layout.
 struct ShaderBindingInfo {
-    // The SPIRV ID of the resource.
-    uint32_t id;
-    uint32_t base_type_id;
-
     BindingNumber binding;
 
     // The variable name of the binding resource.
@@ -199,13 +168,14 @@ struct ShaderBindingInfo {
 
     std::variant<BufferBindingInfo,
                  SamplerBindingInfo,
-                 SampledTextureBindingInfo,
+                 TextureBindingInfo,
                  StorageTextureBindingInfo,
-                 ExternalTextureBindingInfo>
+                 ExternalTextureBindingInfo,
+                 InputAttachmentBindingInfo>
         bindingInfo;
 };
 
-using BindingGroupInfoMap = std::map<BindingNumber, ShaderBindingInfo>;
+using BindingGroupInfoMap = absl::flat_hash_map<BindingNumber, ShaderBindingInfo>;
 using BindingInfoArray = ityp::array<BindGroupIndex, BindingGroupInfoMap, kMaxBindGroups>;
 
 // The WebGPU override variables only support these scalar types
@@ -228,8 +198,7 @@ struct EntryPointMetadata {
     // tries to use the entry point.
     std::vector<std::string> infringedLimitErrors;
 
-    // bindings[G][B] is the reflection data for the binding defined with
-    // @group(G) @binding(B) in WGSL / SPIRV.
+    // bindings[G][B] is the reflection data for the binding defined with @group(G) @binding(B)
     BindingInfoArray bindings;
 
     struct SamplerTexturePair {
@@ -247,6 +216,7 @@ struct EntryPointMetadata {
     struct FragmentRenderAttachmentInfo {
         TextureComponentType baseType;
         uint8_t componentCount;
+        uint8_t blendSrc;
     };
     PerColorAttachment<FragmentRenderAttachmentInfo> fragmentOutputVariables;
     ColorAttachmentMask fragmentOutputMask;
@@ -307,19 +277,21 @@ struct EntryPointMetadata {
     bool usesInstanceIndex = false;
     bool usesNumWorkgroups = false;
     bool usesSampleMaskOutput = false;
-    bool usesSampleIndex = false;
     bool usesVertexIndex = false;
 };
 
-class ShaderModuleBase : public RefCountedWithExternalCountBase<ApiObjectBase>,
+class ShaderModuleBase : public RefCountedWithExternalCount<ApiObjectBase>,
                          public CachedObject,
                          public ContentLessObjectCacheable<ShaderModuleBase> {
   public:
-    using Base = RefCountedWithExternalCountBase<ApiObjectBase>;
+    using Base = RefCountedWithExternalCount<ApiObjectBase>;
     ShaderModuleBase(DeviceBase* device,
                      const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
+                     std::vector<tint::wgsl::Extension> internalExtensions,
                      ApiObjectBase::UntrackedByDeviceTag tag);
-    ShaderModuleBase(DeviceBase* device, const UnpackedPtr<ShaderModuleDescriptor>& descriptor);
+    ShaderModuleBase(DeviceBase* device,
+                     const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
+                     std::vector<tint::wgsl::Extension> internalExtensions);
     ~ShaderModuleBase() override;
 
     static Ref<ShaderModuleBase> MakeError(DeviceBase* device, const char* label);
@@ -347,6 +319,8 @@ class ShaderModuleBase : public RefCountedWithExternalCountBase<ApiObjectBase>,
         bool operator()(const ShaderModuleBase* a, const ShaderModuleBase* b) const;
     };
 
+    std::optional<bool> GetStrictMath() const;
+
     using ScopedUseTintProgram = APIRef<ShaderModuleBase>;
     ScopedUseTintProgram UseTintProgram();
 
@@ -356,6 +330,7 @@ class ShaderModuleBase : public RefCountedWithExternalCountBase<ApiObjectBase>,
 
     void APIGetCompilationInfo(wgpu::CompilationInfoCallback callback, void* userdata);
     Future APIGetCompilationInfoF(const CompilationInfoCallbackInfo& callbackInfo);
+    Future APIGetCompilationInfo2(const WGPUCompilationInfoCallbackInfo2& callbackInfo);
 
     void InjectCompilationMessages(std::unique_ptr<OwnedCompilationMessages> compilationMessages);
     OwnedCompilationMessages* GetCompilationMessages() const;
@@ -377,6 +352,10 @@ class ShaderModuleBase : public RefCountedWithExternalCountBase<ApiObjectBase>,
     std::vector<uint32_t> mOriginalSpirv;
     std::string mWgsl;
 
+    // TODO(dawn:2503): Remove the optional when Dawn can has a consistent default across backends.
+    // Right now D3D uses strictness by default, and Vulkan/Metal use fast math by default.
+    std::optional<bool> mStrictMath;
+
     EntryPointMetadataTable mEntryPoints;
     PerStage<std::string> mDefaultEntryPointNames;
     PerStage<size_t> mEntryPointCounts;
@@ -388,6 +367,8 @@ class ShaderModuleBase : public RefCountedWithExternalCountBase<ApiObjectBase>,
     MutexProtected<TintData> mTintData;
 
     std::unique_ptr<OwnedCompilationMessages> mCompilationMessages;
+
+    const std::vector<tint::wgsl::Extension> mInternalExtensions;
 };
 
 }  // namespace dawn::native

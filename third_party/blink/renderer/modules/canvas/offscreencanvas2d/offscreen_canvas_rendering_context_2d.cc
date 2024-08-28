@@ -127,27 +127,6 @@ void OffscreenCanvasRenderingContext2D::Trace(Visitor* visitor) const {
   BaseRenderingContext2D::Trace(visitor);
 }
 
-void OffscreenCanvasRenderingContext2D::commit() {
-  // TODO(fserb): consolidate this with PushFrame
-  SkIRect damage_rect(dirty_rect_for_commit_);
-  dirty_rect_for_commit_.setEmpty();
-  FinalizeFrame(FlushReason::kOffscreenCanvasCommit);
-  Host()->Commit(ProduceCanvasResource(FlushReason::kOffscreenCanvasCommit),
-                 damage_rect);
-  GetOffscreenFontCache().PruneLocalFontCache(kMaxCachedFonts);
-}
-
-void OffscreenCanvasRenderingContext2D::FlushRecording(FlushReason reason) {
-  CanvasResourceProvider* provider = GetCanvasResourceProvider();
-  if (UNLIKELY(provider == nullptr) ||
-      !provider->Recorder().HasReleasableDrawOps()) {
-    return;
-  }
-
-  provider->FlushCanvas(reason);
-  provider->ReleaseLockedImages();
-}
-
 void OffscreenCanvasRenderingContext2D::FinalizeFrame(FlushReason reason) {
   TRACE_EVENT0("blink", "OffscreenCanvasRenderingContext2D::FinalizeFrame");
 
@@ -155,7 +134,9 @@ void OffscreenCanvasRenderingContext2D::FinalizeFrame(FlushReason reason) {
   // because it will be too late during the paint invalidation phase.
   if (!GetOrCreateCanvasResourceProvider())
     return;
-  FlushRecording(reason);
+  if (Host()) {
+    Host()->FlushRecording(reason);
+  }
 }
 
 // BaseRenderingContext2D implementation
@@ -286,11 +267,6 @@ scoped_refptr<StaticBitmapImage> OffscreenCanvasRenderingContext2D::GetImage(
   return image;
 }
 
-NoAllocDirectCallHost*
-OffscreenCanvasRenderingContext2D::AsNoAllocDirectCallHost() {
-  return this;
-}
-
 V8RenderingContext* OffscreenCanvasRenderingContext2D::AsV8RenderingContext() {
   return nullptr;
 }
@@ -341,7 +317,12 @@ void OffscreenCanvasRenderingContext2D::WillDraw(
   DCHECK(GetPaintCanvas());
   dirty_rect_for_commit_.join(dirty_rect);
   GetCanvasPerformanceMonitor().DidDraw(draw_type);
-  Host()->DidDraw(dirty_rect_for_commit_);
+  if (GetState().ShouldAntialias()) {
+    SkIRect inflated_dirty_rect = dirty_rect_for_commit_.makeOutset(1, 1);
+    Host()->DidDraw(inflated_dirty_rect);
+  } else {
+    Host()->DidDraw(dirty_rect_for_commit_);
+  }
   if (!layer_count_) {
     // TODO(crbug.com/1246486): Make auto-flushing layer friendly.
     GetCanvasResourceProvider()->FlushIfRecordingLimitExceeded();
@@ -382,8 +363,8 @@ bool OffscreenCanvasRenderingContext2D::WritePixels(
   DCHECK(IsPaintable());
   FinalizeFrame(FlushReason::kWritePixels);
 
-  return offscreenCanvasForBinding()->ResourceProvider()->WritePixels(
-      orig_info, pixels, row_bytes, x, y);
+  return Host()->ResourceProvider()->WritePixels(orig_info, pixels, row_bytes,
+                                                 x, y);
 }
 
 bool OffscreenCanvasRenderingContext2D::ResolveFont(const String& new_font) {
@@ -398,7 +379,6 @@ bool OffscreenCanvasRenderingContext2D::ResolveFont(const String& new_font) {
     if (!style) {
       return false;
     }
-
     FontDescription desc =
         FontStyleResolver::ComputeFont(*style, host->GetFontSelector());
 
@@ -416,9 +396,7 @@ bool OffscreenCanvasRenderingContext2D::IsCanvas2DBufferValid() const {
 
 void OffscreenCanvasRenderingContext2D::DispatchContextLostEvent(
     TimerBase* time) {
-  PostDeferrableAction(WTF::BindOnce(
-      [](BaseRenderingContext2D* context) { context->ResetInternal(); },
-      WrapPersistent(this)));
+  ResetInternal();
   BaseRenderingContext2D::DispatchContextLostEvent(time);
 }
 

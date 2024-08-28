@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/platform/fonts/shaping/shaping_line_breaker.h"
 
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_result.h"
@@ -97,8 +102,7 @@ inline ShapingLineBreaker::EdgeOffset ShapingLineBreaker::FirstSafeOffset(
     // When it's not at the start of a wrapped line, disable reshaping.
     return {start};
   }
-  if (UNLIKELY(RuntimeEnabledFeatures::CSSTextSpacingTrimEnabled()) &&
-      UNLIKELY(ShouldTrimStartOfWrappedLine(text_spacing_trim_)) &&
+  if (UNLIKELY(ShouldTrimStartOfWrappedLine(text_spacing_trim_)) &&
       UNLIKELY(Character::MaybeHanKerningOpen(GetText()[start]))) {
     // `HanKerning` wants to apply kerning to `kOpen` characters at the start of
     // the line. Reshape it to resolve the `SimpleFontData` and apply
@@ -321,7 +325,6 @@ const ShapeResultView* ShapingLineBreaker::ShapeLine(
   unsigned last_safe;
   const ShapeResult* line_end_result = nullptr;
   if (candidate_break < range_end &&
-      UNLIKELY(RuntimeEnabledFeatures::CSSTextSpacingTrimEnabled()) &&
       ShouldTrimEnd(text_spacing_trim_) &&
       UNLIKELY(Character::MaybeHanKerningClose(text[candidate_break]))) {
     const unsigned adjusted_candidate_break = candidate_break + 1;
@@ -498,7 +501,7 @@ const ShapeResultView* ShapingLineBreaker::ShapeLine(
         break;
       if (UNLIKELY(last_safe > break_opportunity.offset)) {
         // TODO(crbug.com/1787026): This should not happen, but we see crashes.
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
       }
 

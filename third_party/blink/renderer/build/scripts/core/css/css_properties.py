@@ -89,6 +89,8 @@ def validate_property(prop, props_by_name):
         assert prop.mutable, 'Derived flags must be mutable [%s]' % name
         assert not prop.field_group, 'Derived flags may not have field groups [%s]' % name
         assert prop.reset_on_new_style, 'Derived flags must have reset_on_new_style [%s]' % name
+    if prop.is_logical:
+        assert not prop.field_group, 'Logical properties can not have fields [%s]' % name
 
 # Determines whether or not style builders (i.e. Apply functions)
 # should be generated for the given property.
@@ -310,12 +312,11 @@ class CSSProperties(object):
         # the resulting order is deterministic.
         # Sort properties by priority, then alphabetically.
         for property_ in self._longhands + self._shorthands:
-            priority_numbers = {'High': 0, 'Low': 1}
-            priority = priority_numbers[property_.priority]
             name_without_leading_dash = property_.name.original
             if name_without_leading_dash.startswith('-'):
                 name_without_leading_dash = name_without_leading_dash[1:]
-            property_.sorting_key = (priority, name_without_leading_dash)
+            property_.sorting_key = (-property_.priority,
+                                     name_without_leading_dash)
 
         sorting_keys = {}
         for property_ in self._longhands + self._shorthands:
@@ -338,7 +339,7 @@ class CSSProperties(object):
                 ('property with ID {} appears more than once in the '
                  'properties list'.format(property_.property_id))
             self._properties_by_id[property_.property_id] = property_
-            if property_.priority == 'High':
+            if property_.priority > 0:
                 self._last_high_priority_property = property_
 
         self._alias_offset = self._last_used_enum_value
@@ -510,6 +511,9 @@ class CSSProperties(object):
             set_if_none(property_, 'converter', 'CSSPrimitiveValue')
         else:
             set_if_none(property_, 'converter', 'CSSIdentifierValue')
+
+        if property_.anchor_mode:
+            property_.anchor_mode = NameStyleConverter(property_.anchor_mode)
 
         if not property_.longhands:
             property_.superclass = 'Longhand'

@@ -5,7 +5,8 @@
 #ifndef CHROME_BROWSER_UI_PERFORMANCE_CONTROLS_TEST_SUPPORT_MEMORY_SAVER_BROWSER_TEST_MIXIN_H_
 #define CHROME_BROWSER_UI_PERFORMANCE_CONTROLS_TEST_SUPPORT_MEMORY_SAVER_BROWSER_TEST_MIXIN_H_
 
-#include <type_traits>
+#include <concepts>
+#include <string_view>
 #include <vector>
 
 #include "base/json/values_util.h"
@@ -29,9 +30,8 @@ constexpr base::TimeDelta kShortDelay = base::Seconds(1);
 
 // Template to be used as a mixin class for memory saver tests extending
 // InProcessBrowserTest.
-template <typename T,
-          typename =
-              std::enable_if_t<std::is_base_of_v<InProcessBrowserTest, T>>>
+template <typename T>
+  requires(std::derived_from<T, InProcessBrowserTest>)
 class MemorySaverBrowserTestMixin : public T {
  public:
   template <class... Args>
@@ -67,8 +67,8 @@ class MemorySaverBrowserTestMixin : public T {
             ->SetMemorySaverModeEnabled(enabled);
   }
 
-  GURL GetURL(base::StringPiece hostname = "example.com",
-              base::StringPiece path = "/title1.html") {
+  GURL GetURL(std::string_view hostname = "example.com",
+              std::string_view path = "/title1.html") {
     return T::embedded_test_server()->GetURL(hostname, path);
   }
 

@@ -5,8 +5,6 @@
 package org.chromium.chrome.browser.ui.quickactionsearchwidget;
 
 import android.app.Activity;
-import android.content.Intent;
-import android.text.TextUtils;
 import android.view.View;
 
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -14,6 +12,7 @@ import androidx.test.runner.lifecycle.Stage;
 
 import org.junit.Assert;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.Criteria;
@@ -22,9 +21,7 @@ import org.chromium.base.test.util.Matchers;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.searchwidget.SearchActivity;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityConstants;
 import org.chromium.components.embedder_support.util.UrlConstants;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 
 /** Util class for testing the Quick Action Search Widget. */
 class QuickActionSearchWidgetTestUtils {
@@ -45,9 +42,6 @@ class QuickActionSearchWidgetTestUtils {
         testRule.setActivity(
                 ApplicationTestUtils.waitForActivityWithClass(
                         SearchActivity.class, Stage.CREATED, action));
-
-        assertSearchActivityLaunchedWithCorrectVoiceExtras(
-                testRule.getActivity(), shouldActivityLaunchVoiceMode);
     }
 
     /**
@@ -83,20 +77,10 @@ class QuickActionSearchWidgetTestUtils {
      * @param clickTarget the id of the view to click on.
      */
     static void clickOnView(final View view, final int clickTarget) {
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     view.findViewById(clickTarget).performClick();
                 });
-    }
-
-    private static void assertSearchActivityLaunchedWithCorrectVoiceExtras(
-            final Activity activity, final boolean shouldActivityLaunchVoiceMode) {
-        Intent intent = activity.getIntent();
-        boolean isVoiceMode =
-                TextUtils.equals(
-                        intent.getAction(),
-                        SearchActivityConstants.ACTION_START_EXTENDED_VOICE_SEARCH);
-        Assert.assertEquals(shouldActivityLaunchVoiceMode, isVoiceMode);
     }
 
     /**

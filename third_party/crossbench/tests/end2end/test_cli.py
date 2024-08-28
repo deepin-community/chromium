@@ -72,7 +72,7 @@ def test_speedometer_2_0(output_dir, cache_dir, root_dir) -> None:
   with pytest.raises(SysExitException):
     _run_cli("speedometer_2.0", "--help")
   _run_cli("describe", "benchmark", "speedometer_2.0")
-  browser_config = root_dir / "config" / "browser.config.example.hjson"
+  browser_config = root_dir / "config/doc/browser.config.hjson"
   assert browser_config.is_file()
   results_dir = output_dir / "results"
   assert not results_dir.exists()
@@ -153,8 +153,9 @@ def test_speedometer_2_1_chrome_safari(output_dir, cache_dir,
   # This fails on the CQ bot, so make sure we skip it there:
   if driver_path:
     pytest.skip("Skipping test on CQ.")
-  if not plt.PLATFORM.is_macos and (
-      not browsers.Safari.default_path().exists()):
+  platform = plt.PLATFORM
+  if not platform.is_macos and (not platform.exists(
+      browsers.Safari.default_path(platform))):
     pytest.skip("Test requires Safari, skipping on non macOS devices.")
   results_dir = output_dir / "results"
   assert not results_dir.exists()
@@ -212,12 +213,43 @@ def test_jetstream_2_1(output_dir, cache_dir, root_dir) -> None:
   with pytest.raises(SysExitException):
     _run_cli("jetstream_2.1", "--help")
   _run_cli("describe", "benchmark", "jetstream_2.1")
-  probe_config = root_dir / "config" / "probe.config.example.hjson"
+  probe_config = root_dir / "config/doc/probe.config.hjson"
   assert probe_config.is_file()
   results_dir = output_dir / "results"
   assert not results_dir.exists()
   chrome_version = "--browser=chrome"
   _run_cli("jetstream_2.1", chrome_version, "--env-validation=skip",
+           "--splashscreen=http://google.com", f"--out-dir={results_dir}",
+           f"--cache-dir={cache_dir}", "--viewport=900x800", "--stories=Box2D",
+           "--time-unit=0.9", f"--probe-config={probe_config}", "--throw")
+
+  browser_dirs = _get_browser_dirs(results_dir)
+  assert len(browser_dirs) == 1
+  v8_log_files = _get_v8_log_files(results_dir)
+  assert len(v8_log_files) > 1
+
+
+@pytest.mark.skipif(
+    not plt.PLATFORM.has_display, reason="end2end test cannot run headless")
+@pytest.mark.skipif(
+    plt.PLATFORM.is_linux, reason="Tests temporarily skipped on linux")
+@pytest.mark.xdist_group("end2end-benchmark")
+def test_jetstream_2_2(output_dir, cache_dir, root_dir) -> None:
+  # - jetstream 2.2
+  # - custom --time-unit
+  # - explicit single story
+  # - custom splashscreen
+  # - custom viewport
+  # - --probe-config
+  with pytest.raises(SysExitException):
+    _run_cli("jetstream_2.2", "--help")
+  _run_cli("describe", "benchmark", "jetstream_2.2")
+  probe_config = root_dir / "config/doc/probe.config.hjson"
+  assert probe_config.is_file()
+  results_dir = output_dir / "results"
+  assert not results_dir.exists()
+  chrome_version = "--browser=chrome"
+  _run_cli("jetstream_2.2", chrome_version, "--env-validation=skip",
            "--splashscreen=http://google.com", f"--out-dir={results_dir}",
            f"--cache-dir={cache_dir}", "--viewport=900x800", "--stories=Box2D",
            "--time-unit=0.9", f"--probe-config={probe_config}", "--throw")
@@ -258,7 +290,7 @@ def test_loading(output_dir, cache_dir) -> None:
     plt.PLATFORM.is_linux, reason="Tests temporarily skipped on linux")
 def test_loading_page_config(output_dir, cache_dir, root_dir) -> None:
   # - loading with config file
-  page_config = root_dir / "config" / "page.config.example.hjson"
+  page_config = root_dir / "config/doc/page.config.hjson"
   assert page_config.is_file()
   results_dir = output_dir / "results"
   assert not results_dir.exists()
@@ -313,8 +345,9 @@ def test_loading_playback_firefox(output_dir, cache_dir) -> None:
   # - loading using named pages with timeouts
   # - --playback controller
   # - Firefox
+  platform = plt.PLATFORM
   try:
-    if not browsers.Firefox.default_path().exists():
+    if not platform.exists(browsers.Firefox.default_path(platform)):
       pytest.skip("Test requires Firefox.")
   except Exception:
     pytest.skip("Test requires Firefox.")

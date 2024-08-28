@@ -4,7 +4,8 @@
 
 #include "chrome/browser/sync/test/integration/invalidations/fake_server_sync_invalidation_sender.h"
 
-#include "base/containers/cxx20_erase.h"
+#include <vector>
+
 #include "base/logging.h"
 #include "base/time/time.h"
 #include "components/gcm_driver/instance_id/fake_gcm_driver_for_instance_id.h"
@@ -42,7 +43,7 @@ void FakeServerSyncInvalidationSender::AddFakeGCMDriver(
 void FakeServerSyncInvalidationSender::RemoveFakeGCMDriver(
     instance_id::FakeGCMDriverForInstanceID* fake_gcm_driver) {
   fake_gcm_driver->RemoveConnectionObserver(this);
-  base::Erase(fake_gcm_drivers_, fake_gcm_driver);
+  std::erase(fake_gcm_drivers_, fake_gcm_driver);
 }
 
 void FakeServerSyncInvalidationSender::OnWillCommit() {
@@ -61,7 +62,7 @@ void FakeServerSyncInvalidationSender::OnCommit(
     // Send the invalidation only for interested types.
     const syncer::ModelTypeSet invalidated_data_types =
         Intersection(committed_model_types, token_and_data_types.second);
-    if (invalidated_data_types.Empty()) {
+    if (invalidated_data_types.empty()) {
       continue;
     }
 
@@ -99,7 +100,7 @@ void FakeServerSyncInvalidationSender::DeliverInvalidationsToHandlers() {
     const std::string& token = token_and_invalidations.first;
 
     // Pass a message to GCMDriver to simulate a message from the server.
-    // TODO(crbug.com/1082115): Implement reflection blocking.
+    // TODO(crbug.com/40130815): Implement reflection blocking.
     instance_id::FakeGCMDriverForInstanceID* fake_gcm_driver =
         GetFakeGCMDriverByToken(token);
     if (!fake_gcm_driver) {
@@ -161,7 +162,7 @@ void FakeServerSyncInvalidationSender::UpdateTokenToInterestedDataTypesMap() {
     // If several DeviceInfos have the same FCM registration token, select the
     // latest updated one. This may happen after resetting sync engine and
     // changing cache GUID without signout.
-    // TODO(crbug.com/1325295): remove once fixed.
+    // TODO(crbug.com/40225423): remove once fixed.
     const base::Time last_updated = syncer::ProtoTimeToTime(
         entity.specifics().device_info().last_updated_timestamp());
     if (token_to_mtime.find(token) != token_to_mtime.end() &&

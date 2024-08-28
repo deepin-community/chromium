@@ -22,6 +22,14 @@
 
 namespace signin {
 
+namespace {
+#if !(BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS))
+// Default timeout used to wait for account capabilities fetch.
+const int kMinorModeRestrictionsFetchDeadlineMs = 1000;
+#endif
+
+}  // namespace
+
 content::RenderFrameHost* GetAuthFrame(content::WebContents* web_contents,
                                        const std::string& parent_frame_name) {
   content::RenderFrameHost* frame = nullptr;
@@ -52,6 +60,15 @@ Browser* GetDesktopBrowser(content::WebUI* web_ui) {
   return browser;
 }
 
+base::TimeDelta GetMinorModeRestrictionsDeadline() {
+#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+  // Not implemented for those platforms.
+  NOTREACHED_NORETURN();
+#else
+  return base::Milliseconds(kMinorModeRestrictionsFetchDeadlineMs);
+#endif
+}
+
 void SetInitializedModalHeight(Browser* browser,
                                content::WebUI* web_ui,
                                const base::Value::List& args) {
@@ -74,8 +91,7 @@ void ClearProfileWithManagedAccounts(Profile* profile) {
       identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
   if (!primary_account_id.empty()) {
     identity_manager->GetPrimaryAccountMutator()->ClearPrimaryAccount(
-        signin_metrics::ProfileSignout::kAbortSignin,
-        signin_metrics::SignoutDelete::kIgnoreMetric);
+        signin_metrics::ProfileSignout::kAbortSignin);
   }
 }
 #endif

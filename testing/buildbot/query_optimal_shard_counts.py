@@ -19,7 +19,7 @@ import sys
 
 _CLOUD_PROJECT_ID = 'chrome-trooper-analytics'
 
-# TODO(crbug.com/1480065): Replace with queried, per-suite overheads, once
+# TODO(crbug.com/40281184): Replace with queried, per-suite overheads, once
 # infra is set up to support automated overhead measurements.
 # See go/nplus1shardsproposal
 DEFAULT_OVERHEAD_SEC = 60
@@ -35,6 +35,7 @@ ANDROID_OVERHEAD_SEC = 60 * 2
 # All suites triggered by the builder will not be autosharded.
 BUILDER_EXCLUDE_SET = set([
     'mac-rel',
+    'mac14-arm64-rel',
     'ios-simulator',
     'ios-simulator-full-configs',
     'android-arm64-rel',
@@ -172,9 +173,10 @@ def _calculate_and_filter_optimal_shard_counts(overhead_dict, durations,
       continue
     r['optimal_shard_count'] = optimal_shard_count
 
+    overhead_change = (optimal_shard_count - shard_count) * overhead
     simulated_max_shard_duration = round(
-        (float(r['percentile_duration_minutes']) * shard_count /
-         optimal_shard_count), 2)
+        ((float(r['percentile_duration_minutes']) * shard_count +
+          overhead_change) / optimal_shard_count), 2)
     r['simulated_max_shard_duration'] = simulated_max_shard_duration
 
     filtered_durations.append(r)

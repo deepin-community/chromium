@@ -29,10 +29,15 @@ VENDOR_SUBSTITUTIONS = {
 DEVICE_SUBSTITUTIONS = {
     'm1': '0',
     'm2': '0',
-    # Qualcomm Adreno 690 on Windows arm64. The approach swarming uses to find
-    # GPUs (looking for all Win32_VideoController WMI objects) results in
-    # different output than what Chrome does.
+    # Qualcomm Adreno 680/685/690 and 741 on Windows arm64. The approach
+    # swarming uses to find GPUs (looking for all Win32_VideoController WMI
+    # objects) results in different output than what Chrome sees.
+    # 043a = Adreno 680/685/690 GPU (such as Surface Pro X, Dell trybots)
+    # 0636 = Adreno 690 GPU (such as Surface Pro 9 5G)
+    # 0c36 = Adreno 741 GPU (such as Surface Pro 11th Edition)
     '043a': '41333430',
+    '0636': '36333630',
+    '0c36': '36334330',
 }
 
 
@@ -71,6 +76,10 @@ def ChromeOSGtestFilterFile(test_config, _, tester_config):
   else:
     board = _GetChromeOSBoardName(test_config)
   test_name = test_config['name']
+  # Strip off the variant suffix if it's present.
+  if 'variant_id' in test_config:
+    test_name = test_name.replace(test_config['variant_id'], '')
+    test_name = test_name.strip()
   filter_file = 'chromeos.%s.%s.filter' % (board, test_name)
   return [
       '--test-launcher-filter-file=../../testing/buildbot/filters/' +
@@ -244,7 +253,7 @@ def GPUParallelJobs(test_config, tester_name, tester_config):
   # These bots can't handle parallel tests. See crbug.com/1353938.
   # The load can also negatively impact WebGL tests, so reduce the number of
   # jobs there.
-  # TODO(crbug.com/1349828): Try removing the Windows/Intel special casing once
+  # TODO(crbug.com/40233910): Try removing the Windows/Intel special casing once
   # we swap which machines we're using.
   is_webgpu_cts = test_name.startswith('webgpu_cts') or test_config.get(
       'telemetry_test_name') == 'webgpu_cts'
@@ -299,7 +308,12 @@ def GPUTelemetryNoRootForUnrootedDevices(test_config, _, tester_config):
   if os_type != 'android':
     return []
 
-  unrooted_devices = {'a13', 'a23'}
+  unrooted_devices = {
+      'a13',
+      'a23',
+      'dm1q',  # Samsung S23.
+      'devonn',  # Motorola Moto G Power 5G.
+  }
   dimensions = test_config.get('swarming', {}).get('dimensions')
   assert dimensions is not None
   device_type = dimensions.get('device_type')

@@ -60,17 +60,17 @@ std::unique_ptr<base::test::ScopedFeatureList> SetNetworkAnonymizationKeyMode(
   switch (mode) {
     case NetworkAnonymizationKeyMode::kDisabled:
       feature_list->InitAndDisableFeature(
-          features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+          features::kPartitionConnectionsByNetworkIsolationKey);
       break;
     case NetworkAnonymizationKeyMode::kEnabled:
       feature_list->InitAndEnableFeature(
-          features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+          features::kPartitionConnectionsByNetworkIsolationKey);
       break;
   }
   return feature_list;
 }
 
-class MockPrefDelegate : public net::HttpServerProperties::PrefDelegate {
+class MockPrefDelegate : public HttpServerProperties::PrefDelegate {
  public:
   MockPrefDelegate() = default;
 
@@ -1591,9 +1591,8 @@ TEST_F(HttpServerPropertiesManagerTest, ReadAdvertisedVersionsFromPref) {
   // Verify advertised versions.
   const quic::ParsedQuicVersionVector loaded_advertised_versions =
       alternative_service_info_vector[1].advertised_versions();
-  ASSERT_EQ(2u, loaded_advertised_versions.size());
+  ASSERT_EQ(1u, loaded_advertised_versions.size());
   EXPECT_EQ(quic::ParsedQuicVersion::Q046(), loaded_advertised_versions[0]);
-  EXPECT_EQ(quic::ParsedQuicVersion::Q050(), loaded_advertised_versions[1]);
 
   // No other fields should have been populated.
   server_info.alternative_services.reset();
@@ -1662,7 +1661,7 @@ TEST_F(HttpServerPropertiesManagerTest,
   AlternativeServiceInfoVector alternative_service_info_vector_2;
   // Quic alternative service set with two advertised QUIC versions.
   quic::ParsedQuicVersionVector advertised_versions = {
-      quic::ParsedQuicVersion::Q046(), quic::ParsedQuicVersion::Q050()};
+      quic::ParsedQuicVersion::Q046(), quic::ParsedQuicVersion::Draft29()};
   alternative_service_info_vector_2.push_back(
       AlternativeServiceInfo::CreateQuicAlternativeServiceInfo(
           quic_alternative_service1, expiration1, advertised_versions));
@@ -1683,7 +1682,7 @@ TEST_F(HttpServerPropertiesManagerTest,
       "\"server_info\":\"quic_server_info1\"}],"
       "\"servers\":["
       "{\"alternative_service\":"
-      "[{\"advertised_alpns\":[\"h3-Q046\",\"h3-Q050\"],"
+      "[{\"advertised_alpns\":[\"h3-Q046\",\"h3-29\"],"
       "\"expiration\":\"13756212000000000\",\"port\":443,"
       "\"protocol_str\":\"quic\"}],"
       "\"anonymization\":[],"
@@ -1698,7 +1697,7 @@ TEST_F(HttpServerPropertiesManagerTest,
   AlternativeServiceInfoVector alternative_service_info_vector_3;
   // A same set of QUIC versions but listed in a different order.
   quic::ParsedQuicVersionVector advertised_versions_2 = {
-      quic::ParsedQuicVersion::Q050(), quic::ParsedQuicVersion::Q046()};
+      quic::ParsedQuicVersion::Draft29(), quic::ParsedQuicVersion::Q046()};
   alternative_service_info_vector_3.push_back(
       AlternativeServiceInfo::CreateQuicAlternativeServiceInfo(
           quic_alternative_service1, expiration1, advertised_versions_2));
@@ -1719,7 +1718,7 @@ TEST_F(HttpServerPropertiesManagerTest,
       "\"server_info\":\"quic_server_info1\"}],"
       "\"servers\":["
       "{\"alternative_service\":"
-      "[{\"advertised_alpns\":[\"h3-Q050\",\"h3-Q046\"],"
+      "[{\"advertised_alpns\":[\"h3-29\",\"h3-Q046\"],"
       "\"expiration\":\"13756212000000000\",\"port\":443,"
       "\"protocol_str\":\"quic\"}],"
       "\"anonymization\":[],"
@@ -2110,8 +2109,7 @@ TEST_F(HttpServerPropertiesManagerTest, NetworkAnonymizationKeyServerInfo) {
       std::unique_ptr<base::test::ScopedFeatureList> feature_list =
           SetNetworkAnonymizationKeyMode(save_network_anonymization_key_mode);
 
-      // This parameter is normally calculated by HttpServerProperties based on
-      // the kPartitionHttpServerPropertiesByNetworkIsolationKey feature, but
+      // This parameter is normally calculated by HttpServerProperties, but
       // this test doesn't use that class.
       bool use_network_anonymization_key =
           save_network_anonymization_key_mode !=
@@ -2204,7 +2202,7 @@ TEST_F(HttpServerPropertiesManagerTest, NetworkAnonymizationKeyIntegration) {
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
 
   // Create and initialize an HttpServerProperties with no state.
   std::unique_ptr<MockPrefDelegate> pref_delegate =
@@ -2282,7 +2280,7 @@ TEST_F(HttpServerPropertiesManagerTest,
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
 
   // Create three alt service vectors of different lengths.
   base::Time expiration = base::Time::Now() + base::Days(1);
@@ -2646,7 +2644,7 @@ TEST_F(HttpServerPropertiesManagerTest,
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
 
   // Create and initialize an HttpServerProperties, must be done after
   // setting the feature.
@@ -2871,7 +2869,7 @@ TEST_F(HttpServerPropertiesManagerTest,
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
 
   // Create and initialize an HttpServerProperties with no state.
   std::unique_ptr<MockPrefDelegate> pref_delegate =
@@ -2974,7 +2972,7 @@ TEST_F(HttpServerPropertiesManagerTest,
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
 
   // Create and initialize an HttpServerProperties, must be done after
   // setting the feature.
@@ -3074,7 +3072,7 @@ TEST_F(HttpServerPropertiesManagerTest, SameOrderAfterReload) {
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kPartitionHttpServerPropertiesByNetworkIsolationKey);
+      features::kPartitionConnectionsByNetworkIsolationKey);
 
   // Create and initialize an HttpServerProperties with no state.
   std::unique_ptr<MockPrefDelegate> pref_delegate =

@@ -13,6 +13,7 @@
 #include "extensions/browser/app_window/app_window.h"
 #include "extensions/common/mojom/app_window.mojom.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
+#include "third_party/blink/public/mojom/page/draggable_region.mojom.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/controls/webview/webview.h"
@@ -83,7 +84,9 @@ void NativeAppWindowViews::InitializeWindow(
     extensions::AppWindow* app_window,
     const extensions::AppWindow::CreateParams& create_params) {
   // Stub implementation. See also ChromeNativeAppWindowViews.
-  views::Widget::InitParams init_params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams init_params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   init_params.delegate = this;
   if (create_params.always_on_top)
     init_params.z_order = ui::ZOrderLevel::kFloatingWindow;
@@ -277,7 +280,7 @@ void NativeAppWindowViews::RenderFrameCreated(
     mojo::Remote<extensions::mojom::AppWindow> app_window;
     render_frame_host->GetRemoteInterfaces()->GetInterface(
         app_window.BindNewPipeAndPassReceiver());
-    app_window->SetSupportsAppRegion(true);
+    app_window->SetSupportsDraggableRegions(true);
   }
 }
 
@@ -320,8 +323,8 @@ void NativeAppWindowViews::UpdateWindowTitle() {
   widget_->UpdateWindowTitle();
 }
 
-void NativeAppWindowViews::UpdateDraggableRegions(
-    const std::vector<extensions::mojom::DraggableRegionPtr>& regions) {
+void NativeAppWindowViews::DraggableRegionsChanged(
+    const std::vector<blink::mojom::DraggableRegionPtr>& regions) {
   // Draggable region is not supported for non-frameless window.
   if (!frameless_)
     return;
@@ -340,7 +343,7 @@ void NativeAppWindowViews::UpdateShape(std::unique_ptr<ShapeRects> rects) {
 }
 
 bool NativeAppWindowViews::HandleKeyboardEvent(
-    const content::NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   return unhandled_keyboard_event_handler_.HandleKeyboardEvent(
       event, GetFocusManager());
 }

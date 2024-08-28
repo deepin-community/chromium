@@ -234,9 +234,9 @@ class TypographyProviderImpl : public TypographyProvider {
  private:
   const FontInfo& LookupInfo(TypographyToken token) const {
     TypographyToken converted_token = ConvertToken(token);
-    const auto* iter = font_map_.find(converted_token);
+    const auto iter = font_map_.find(converted_token);
     if (iter == font_map_.end()) {
-      NOTREACHED() << "Tried to resolve unmapped token";
+      NOTREACHED_IN_MIGRATION() << "Tried to resolve unmapped token";
       return font_map_.at(TypographyToken::kLegacyDisplay1);
     }
     return iter->second;
@@ -250,10 +250,10 @@ class TypographyProviderImpl : public TypographyProvider {
       return token;
     }
 
-    const auto* iter = kTokenEquivalents.find(token);
+    const auto iter = kTokenEquivalents.find(token);
     if (iter == kTokenEquivalents.end()) {
-      NOTREACHED() << "Missing a mapping for legacy token "
-                   << static_cast<int>(token);
+      NOTREACHED_IN_MIGRATION()
+          << "Missing a mapping for legacy token " << static_cast<int>(token);
       // Return an arbitrary but valid cros.sys token.
       return TypographyToken::kCrosButton1;
     }

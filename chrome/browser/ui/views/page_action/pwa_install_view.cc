@@ -16,6 +16,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/views/web_apps/pwa_confirmation_bubble_view.h"
 #include "chrome/browser/ui/web_applications/web_app_dialog_utils.h"
@@ -25,11 +26,11 @@
 #include "chrome/browser/web_applications/web_app_pref_guardrails.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/feature_engagement/public/feature_constants.h"
-#include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/vector_icons.h"
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "components/user_education/common/feature_promo_controller.h"
 #include "components/user_education/common/feature_promo_specification.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "components/webapps/browser/banners/app_banner_manager.h"
 #include "components/webapps/browser/banners/web_app_banner_data.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
@@ -37,11 +38,12 @@
 #include "third_party/blink/public/common/manifest/manifest_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/view_class_properties.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/metrics/structured/event_logging_features.h"
-// TODO(crbug.com/1125897): Enable gn check once it handles conditional includes
+// TODO(crbug.com/40147906): Enable gn check once it handles conditional
+// includes
 #include "components/metrics/structured/structured_events.h"  // nogncheck
 #include "components/metrics/structured/structured_metrics_client.h"  // nogncheck
 #endif
@@ -109,11 +111,17 @@ void PwaInstallView::UpdateImpl() {
     return;
   }
 
-  SetAccessibleName(l10n_util::GetStringFUTF16(
+  Browser* browser = chrome::FindBrowserWithTab(web_contents);
+  if (!browser) {
+    return;
+  }
+
+  GetViewAccessibility().SetName(l10n_util::GetStringFUTF16(
       IDS_OMNIBOX_PWA_INSTALL_ICON_TOOLTIP,
       webapps::AppBannerManager::GetInstallableWebAppName(web_contents)));
 
   auto* manager = webapps::AppBannerManager::FromWebContents(web_contents);
+
   // May not be present e.g. in incognito mode.
   if (!manager) {
     return;
@@ -132,6 +140,8 @@ void PwaInstallView::UpdateImpl() {
     ResetSlideAnimation(false);
   }
 
+  // TODO(crbug.com/341254289): Cleanup after Universal Install has launched to
+  // 100% on Stable.
   SetVisible(is_probably_promotable || PWAConfirmationBubbleView::IsShowing());
 
   // See above about safety of this call.
@@ -141,7 +151,9 @@ void PwaInstallView::UpdateImpl() {
   // Only try to show IPH when |PwaInstallView.IsDrawn|. This catches the case
   // that view is set to visible but not drawn in fullscreen mode.
   if (data && is_probably_promotable && ShouldShowIph(web_contents, *data) &&
-      IsDrawn()) {
+      IsDrawn() &&
+      base::FeatureList::IsEnabled(
+          feature_engagement::kIPHDesktopPwaInstallFeature)) {
     user_education::FeaturePromoParams params(
         feature_engagement::kIPHDesktopPwaInstallFeature);
     params.close_callback = base::BindOnce(
@@ -194,11 +206,9 @@ void PwaInstallView::OnExecuting(PageActionIconView::ExecuteSource source) {
   }
 
 #if BUILDFLAG(IS_CHROMEOS)
-  if (base::FeatureList::IsEnabled(metrics::structured::kAppDiscoveryLogging)) {
-    metrics::structured::StructuredMetricsClient::Record(
-        std::move(cros_events::AppDiscovery_Browser_OmniboxInstallIconClicked()
-                      .SetIPHShown(install_icon_clicked_after_iph_shown_)));
-  }
+  metrics::structured::StructuredMetricsClient::Record(
+      cros_events::AppDiscovery_Browser_OmniboxInstallIconClicked().SetIPHShown(
+          install_icon_clicked_after_iph_shown_));
 #endif
 
   web_app::CreateWebAppFromManifest(
@@ -208,11 +218,24 @@ void PwaInstallView::OnExecuting(PageActionIconView::ExecuteSource source) {
 }
 
 views::BubbleDialogDelegate* PwaInstallView::GetBubble() const {
-  views::BubbleDialogDelegate* bubble = PWAConfirmationBubbleView::GetBubble();
+  content::WebContents* web_contents = GetWebContents();
+  if (!web_contents) {
+    return nullptr;
+  }
+
+  Browser* browser = chrome::FindBrowserWithTab(web_contents);
+  if (!browser) {
+    return nullptr;
+  }
+
+  // TODO(crbug.com/341254289): Cleanup after Universal Install has launched to
+  // 100% on Stable.
+  auto* bubble = PWAConfirmationBubbleView::GetBubble();
   // Only return the active bubble if it's anchored to `this`. (This check takes
   // the more generic approach of verifying that it's the same widget as to
   // avoid depending too heavily on the exact details of how anchoring works.)
-  if (bubble && (bubble->GetAnchorView()->GetWidget() == GetWidget())) {
+  if (bubble && bubble->GetAnchorView() &&
+      (bubble->GetAnchorView()->GetWidget() == GetWidget())) {
     return bubble;
   }
 
@@ -220,9 +243,7 @@ views::BubbleDialogDelegate* PwaInstallView::GetBubble() const {
 }
 
 const gfx::VectorIcon& PwaInstallView::GetVectorIcon() const {
-  return OmniboxFieldTrial::IsChromeRefreshIconsEnabled()
-             ? kInstallDesktopChromeRefreshIcon
-             : omnibox::kInstallDesktopIcon;
+  return kInstallDesktopChromeRefreshIcon;
 }
 
 bool PwaInstallView::ShouldShowIph(content::WebContents* web_contents,

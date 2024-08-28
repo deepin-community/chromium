@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/banners/app_banner_manager_desktop.h"
+
 #include <memory>
 #include <string>
 #include <utility>
@@ -17,7 +19,6 @@
 #include "build/chromeos_buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/banners/app_banner_manager_browsertest_base.h"
-#include "chrome/browser/banners/app_banner_manager_desktop.h"
 #include "chrome/browser/banners/test_app_banner_manager_desktop.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -40,6 +41,7 @@
 #include "components/webapps/browser/banners/app_banner_metrics.h"
 #include "components/webapps/browser/banners/app_banner_settings_helper.h"
 #include "components/webapps/browser/install_result_code.h"
+#include "components/webapps/browser/uninstall_result_code.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -54,7 +56,6 @@ namespace webapps {
 namespace {
 
 std::vector<base::test::FeatureRef> GetDisabledFeatures() {
-// TODO(crbug.com/1462253): Also test with Lacros flags enabled.
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   return ash::standalone_browser::GetFeatureRefs();
 #else
@@ -136,7 +137,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
                             blink::mojom::DisplayMode::kStandalone, 1);
 }
 
-// TODO(crbug.com/988292): Flakes on most platforms.
+// TODO(crbug.com/40637899): Flakes on most platforms.
 IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
                        DISABLED_WebAppBannerFiresAppInstalled) {
   content::WebContents* web_contents =
@@ -185,7 +186,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
   EXPECT_EQ(title, watcher.WaitAndGetTitle());
 }
 
-// TODO(https://crbug.com/1289196): Flaky failures.
+// TODO(crbug.com/40817384): Flaky failures.
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #define MAYBE_DestroyWebContents DISABLED_DestroyWebContents
 #else
@@ -344,13 +345,14 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
     base::RunLoop run_loop;
     web_app::WebAppProvider::GetForTest(profile)
         ->externally_managed_app_manager()
-        .UninstallApps({GetBannerURL()},
-                       web_app::ExternalInstallSource::kExternalPolicy,
-                       base::BindLambdaForTesting(
-                           [&run_loop](const GURL& app_url, bool succeeded) {
-                             EXPECT_TRUE(succeeded);
-                             run_loop.Quit();
-                           }));
+        .UninstallApps(
+            {GetBannerURL()}, web_app::ExternalInstallSource::kExternalPolicy,
+            base::BindLambdaForTesting(
+                [&run_loop](const GURL& app_url,
+                            webapps::UninstallResultCode code) {
+                  EXPECT_EQ(code, webapps::UninstallResultCode::kAppRemoved);
+                  run_loop.Quit();
+                }));
     run_loop.Run();
   }
 

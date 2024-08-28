@@ -139,15 +139,15 @@ gfx::Point GetPillOrigin(const gfx::Size& pill_size,
 
 views::Widget::InitParams CreateInitParams(int64_t display_id,
                                            const std::string& target_name) {
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_POPUP);
 
   aura::Window* root =
       Shell::GetRootWindowControllerWithDisplayId(display_id)->GetRootWindow();
 
   params.parent = Shell::GetContainer(root, kShellWindowId_OverlayContainer);
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
-  params.ownership =
-      views::Widget::InitParams::Ownership::WIDGET_OWNS_NATIVE_WIDGET;
   params.activatable = views::Widget::InitParams::Activatable::kNo;
   params.accept_events = false;
   params.name = target_name;
@@ -250,12 +250,13 @@ class IndicatorPillView : public views::View {
   ~IndicatorPillView() override = default;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override {
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
     // Pill is laid out as:
     // ( | | text )
     // Has max width of kMaxPillWidth.
 
-    const int text_width = text_label_->CalculatePreferredSize().width();
+    const int text_width = text_label_->CalculatePreferredSize({}).width();
     const int width = kArrowAllocatedWidth + text_width + kTextMarginNormal;
 
     return gfx::Size(std::min(width, kMaxPillWidth), kPillHeight);
@@ -278,7 +279,7 @@ class IndicatorPillView : public views::View {
 
     // If width of the pill is equal or greater than the max pill width, then
     // text is elided and thus side margin must be reduced.
-    const int side_margin = CalculatePreferredSize().width() >= kMaxPillWidth
+    const int side_margin = CalculatePreferredSize({}).width() >= kMaxPillWidth
                                 ? kTextMarginElided
                                 : kTextMarginNormal;
 

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/core/editing/spellcheck/idle_spell_check_controller.h"
 
 #include "base/debug/crash_logging.h"
@@ -24,6 +29,7 @@
 #include "third_party/blink/renderer/core/editing/visible_units.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/scheduler/scripted_idle_task_controller.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cancellable_task.h"
 
@@ -245,7 +251,7 @@ void IdleSpellCheckController::HotModeInvocation(IdleDeadline* deadline) {
     // before using it.
     if (!step->EndingSelection().IsValidFor(GetDocument()))
       continue;
-    requester.CheckSpellingAt(step->EndingSelection().Extent());
+    requester.CheckSpellingAt(step->EndingSelection().Focus());
   }
 
   needs_invocation_for_changed_selection_ = false;
@@ -280,7 +286,7 @@ void IdleSpellCheckController::Invoke(IdleDeadline* deadline) {
     static auto* state_data = base::debug::AllocateCrashKeyString(
         "spellchecker-state-on-invocation", base::debug::CrashKeySize::Size32);
     base::debug::SetCrashKeyString(state_data, GetStateAsString());
-    NOTREACHED() << GetStateAsString();
+    DUMP_WILL_BE_NOTREACHED() << GetStateAsString();
     Deactivate();
   }
 }
@@ -318,7 +324,7 @@ void IdleSpellCheckController::ForceInvocationForTesting() {
     case State::kInactive:
     case State::kInHotModeInvocation:
     case State::kInColdModeInvocation:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 }
 

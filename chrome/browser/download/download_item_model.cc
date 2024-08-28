@@ -12,6 +12,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "base/observer_list.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -34,7 +35,6 @@
 #include "chrome/browser/download/download_ui_model.h"
 #include "chrome/browser/download/offline_item_utils.h"
 #include "chrome/browser/enterprise/connectors/common.h"
-#include "chrome/browser/enterprise/connectors/connectors_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_util.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
@@ -44,6 +44,7 @@
 #include "components/download/public/common/download_danger_type.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_item.h"
+#include "components/download/public/common/download_item_rename_handler.h"
 #include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/content/browser/web_ui/safe_browsing_ui.h"
 #include "components/safe_browsing/content/common/file_type_policies.h"
@@ -62,16 +63,24 @@
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
+#endif
+
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/browser.h"
 #include "ui/views/vector_icons.h"
 #endif
 
 #if BUILDFLAG(FULL_SAFE_BROWSING)
+#include "chrome/browser/safe_browsing/advanced_protection_status_manager.h"
+#include "chrome/browser/safe_browsing/advanced_protection_status_manager_factory.h"
 #include "chrome/browser/safe_browsing/download_protection/deep_scanning_request.h"
 #include "chrome/browser/safe_browsing/download_protection/download_feedback_service.h"
+#include "chrome/browser/enterprise/connectors/connectors_manager.h"
 #endif
 
+using DangerUiPattern = DownloadUIModel::DangerUiPattern;
 using download::DownloadItem;
 using InsecureDownloadStatus = download::DownloadItem::InsecureDownloadStatus;
 using safe_browsing::DownloadFileType;
@@ -274,7 +283,14 @@ Profile* DownloadItemModel::profile() const {
 
 std::u16string DownloadItemModel::GetTabProgressStatusText() const {
   int64_t total = GetTotalBytes();
-  int64_t size = download_->GetReceivedBytes();
+  int64_t size;
+  auto* renamer = download_->GetRenameHandler();
+  if (renamer && renamer->ShowRenameProgress()) {
+    size = static_cast<int>(
+        (download_->GetReceivedBytes() + download_->GetUploadedBytes()) * 0.5);
+  } else {
+    size = download_->GetReceivedBytes();
+  }
   std::u16string received_size = ui::FormatBytes(size);
   std::u16string amount = received_size;
 
@@ -316,6 +332,11 @@ std::u16string DownloadItemModel::GetTabProgressStatusText() const {
 }
 
 int64_t DownloadItemModel::GetCompletedBytes() const {
+  auto* renamer = download_->GetRenameHandler();
+  if (renamer && renamer->ShowRenameProgress()) {
+    return static_cast<int>(
+        (download_->GetReceivedBytes() + download_->GetUploadedBytes()) * 0.5);
+  }
   return download_->GetReceivedBytes();
 }
 
@@ -328,6 +349,13 @@ int64_t DownloadItemModel::GetTotalBytes() const {
 //     ChromeDownloadManagerDelegate, we should calculate the percentage here
 //     instead of calling into the DownloadItem.
 int DownloadItemModel::PercentComplete() const {
+  auto* renamer = download_->GetRenameHandler();
+  if (renamer && renamer->ShowRenameProgress()) {
+    return static_cast<int>(
+        ((download_->GetReceivedBytes() + download_->GetUploadedBytes()) * 0.5 *
+         100.0) /
+        GetTotalBytes());
+  }
   return download_->PercentComplete();
 }
 
@@ -361,7 +389,7 @@ bool DownloadItemModel::IsMalicious() const {
     case download::DOWNLOAD_DANGER_TYPE_MAX:
     case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE:
       // We shouldn't get any of these due to the MightBeMalicious() test above.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       [[fallthrough]];
     case download::DOWNLOAD_DANGER_TYPE_UNCOMMON_CONTENT:
     case download::DOWNLOAD_DANGER_TYPE_ASYNC_SCANNING:
@@ -374,10 +402,10 @@ bool DownloadItemModel::IsMalicious() const {
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_FAILED:
     case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_SCANNING:
     case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
-    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE:
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
       return false;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return false;
 }
 
@@ -395,7 +423,8 @@ bool DownloadItemModel::ShouldRemoveFromShelfWhenComplete() const {
 
       // If the download is a trusted extension, temporary, or will be opened
       // automatically, then it should be removed from the shelf on completion.
-      // TODO(crbug.com/1077929): The logic for deciding opening behavior should
+      // TODO(crbug.com/40129365): The logic for deciding opening behavior
+      // should
       //                          be in a central location.
       return (download_crx_util::IsTrustedExtensionDownload(profile(),
                                                             *download_) ||
@@ -414,10 +443,10 @@ bool DownloadItemModel::ShouldRemoveFromShelfWhenComplete() const {
       return false;
 
     case DownloadItem::MAX_DOWNLOAD_STATE:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return false;
 }
 
@@ -691,6 +720,32 @@ void DownloadItemModel::OpenUsingPlatformHandler() {
                      download_->GetMimeType());
 }
 
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+std::optional<DownloadCommands::Command>
+DownloadItemModel::MaybeGetMediaAppAction() const {
+  std::string mime_type = GetMimeType();
+
+  if (mime_type == "application/pdf") {
+    return DownloadCommands::EDIT_WITH_MEDIA_APP;
+  }
+
+  if (base::StartsWith(mime_type, "audio/", base::CompareCase::SENSITIVE) ||
+      base::StartsWith(mime_type, "video/", base::CompareCase::SENSITIVE)) {
+    return DownloadCommands::OPEN_WITH_MEDIA_APP;
+  }
+
+  return std::nullopt;
+}
+
+void DownloadItemModel::OpenUsingMediaApp() {
+  ash::SystemAppLaunchParams params;
+  params.launch_paths.push_back(GetTargetFilePath());
+  ash::LaunchSystemWebAppAsync(profile(), ash::SystemWebAppType::MEDIA, params);
+
+  RecordDownloadOpen(DOWNLOAD_OPEN_METHOD_MEDIA_APP, GetMimeType());
+}
+#endif
+
 #if !BUILDFLAG(IS_ANDROID)
 bool DownloadItemModel::IsCommandEnabled(
     const DownloadCommands* download_commands,
@@ -716,6 +771,18 @@ bool DownloadItemModel::IsCommandEnabled(
     case DownloadCommands::PAUSE:
       return !download_->IsSavePackageDownload() &&
              DownloadUIModel::IsCommandEnabled(download_commands, command);
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+    case DownloadCommands::EDIT_WITH_MEDIA_APP: {
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+      std::optional<DownloadCommands::Command> media_app_command =
+          MaybeGetMediaAppAction();
+
+      return media_app_command == command && download_->CanOpenDownload() &&
+             !download_crx_util::IsExtensionDownload(*download_);
+#else
+      return false;
+#endif
+    }
     case DownloadCommands::CANCEL:
     case DownloadCommands::RESUME:
     case DownloadCommands::COPY_TO_CLIPBOARD:
@@ -734,7 +801,7 @@ bool DownloadItemModel::IsCommandEnabled(
     case DownloadCommands::CANCEL_DEEP_SCAN:
       return DownloadUIModel::IsCommandEnabled(download_commands, command);
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return false;
 }
 
@@ -774,6 +841,8 @@ bool DownloadItemModel::IsCommandChecked(
     case DownloadCommands::REVIEW:
     case DownloadCommands::RETRY:
     case DownloadCommands::CANCEL_DEEP_SCAN:
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
       return false;
   }
   return false;
@@ -816,8 +885,17 @@ void DownloadItemModel::ExecuteCommand(DownloadCommands* download_commands,
 #if BUILDFLAG(FULL_SAFE_BROWSING)
       CompleteSafeBrowsingScan();
 #endif
-      LogDeepScanEvent(download_,
-                       safe_browsing::DeepScanEvent::kPromptBypassed);
+      if (download_->GetDangerType() ==
+              download::DOWNLOAD_DANGER_TYPE_ASYNC_LOCAL_PASSWORD_SCANNING ||
+          download_->GetDangerType() ==
+              download::
+                  DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING) {
+        safe_browsing::LogLocalDecryptionEvent(
+            safe_browsing::DeepScanEvent::kPromptBypassed);
+      } else {
+        LogDeepScanEvent(download_,
+                         safe_browsing::DeepScanEvent::kPromptBypassed);
+      }
       [[fallthrough]];
     case DownloadCommands::KEEP:
 #if BUILDFLAG(FULL_SAFE_BROWSING)
@@ -866,7 +944,7 @@ void DownloadItemModel::ExecuteCommand(DownloadCommands* download_commands,
             download_, download_commands->GetBrowser());
 #else
       // Should only be getting invoked if we are using safe browsing.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
 #endif
       break;
     }
@@ -881,11 +959,15 @@ void DownloadItemModel::ExecuteCommand(DownloadCommands* download_commands,
     case DownloadCommands::COPY_TO_CLIPBOARD:
     case DownloadCommands::REVIEW:
     case DownloadCommands::RETRY:
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
       DownloadUIModel::ExecuteCommand(download_commands, command);
       break;
     case DownloadCommands::DEEP_SCAN: {
       safe_browsing::DownloadProtectionService::UploadForConsumerDeepScanning(
-          download_, /*password=*/std::nullopt);
+          download_,
+          DownloadItemWarningData::DeepScanTrigger::TRIGGER_CONSUMER_PROMPT,
+          /*password=*/std::nullopt);
       break;
     }
     case DownloadCommands::CANCEL_DEEP_SCAN: {
@@ -931,6 +1013,78 @@ TailoredWarningType DownloadItemModel::GetTailoredWarningType() const {
   }
 
   return TailoredWarningType::kNoTailoredWarning;
+}
+
+DangerUiPattern DownloadItemModel::GetDangerUiPattern() const {
+  // Keep logic here in sync with DownloadBubbleRowViewInfo and
+  // IconAndColor code in download_bubble_info_utils.cc, and
+  // chrome://downloads WebUI frontend code.
+  DownloadItem::DownloadState state = GetState();
+
+  // Error conditions, including cancellations, have a "download off" icon or
+  // some combination of "info" icon and red or gray.
+  if (state == DownloadItem::CANCELLED || state == DownloadItem::INTERRUPTED) {
+    return DangerUiPattern::kOther;
+  } else if (state == DownloadItem::MAX_DOWNLOAD_STATE) {
+    NOTREACHED_NORETURN();
+  }
+
+  switch (GetInsecureDownloadStatus()) {
+    case DownloadItem::InsecureDownloadStatus::BLOCK:
+    case DownloadItem::InsecureDownloadStatus::WARN:
+      return DangerUiPattern::kSuspicious;
+    case DownloadItem::InsecureDownloadStatus::UNKNOWN:
+    case DownloadItem::InsecureDownloadStatus::SAFE:
+    case DownloadItem::InsecureDownloadStatus::VALIDATED:
+    case DownloadItem::InsecureDownloadStatus::SILENT_BLOCK:
+      break;
+  }
+
+  switch (GetTailoredWarningType()) {
+    case TailoredWarningType::kCookieTheft:
+    case TailoredWarningType::kCookieTheftWithAccountInfo:
+      return DangerUiPattern::kDangerous;
+    case TailoredWarningType::kSuspiciousArchive:
+      return DangerUiPattern::kSuspicious;
+    case TailoredWarningType::kNoTailoredWarning:
+      break;
+  }
+
+  switch (GetDangerType()) {
+    case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT:
+    case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_HOST:
+    case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_ACCOUNT_COMPROMISE:
+    case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_URL:
+    case download::DOWNLOAD_DANGER_TYPE_POTENTIALLY_UNWANTED:
+      return DangerUiPattern::kDangerous;
+    case download::DOWNLOAD_DANGER_TYPE_UNCOMMON_CONTENT:
+    case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE:
+    case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_SCANNING:
+    case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
+    case download::DOWNLOAD_DANGER_TYPE_ASYNC_SCANNING:
+    case download::DOWNLOAD_DANGER_TYPE_ASYNC_LOCAL_PASSWORD_SCANNING:
+    case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_FAILED:
+      return DangerUiPattern::kSuspicious;
+    case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_WARNING:
+    case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK:
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_PASSWORD_PROTECTED:
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_TOO_LARGE:
+      return DangerUiPattern::kOther;
+    // TODO(crbug.com/329254526): The following two may be wrong.
+    case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_OPENED_DANGEROUS:
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
+    case download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS:
+    case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_SAFE:
+    case download::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT:
+    case download::DOWNLOAD_DANGER_TYPE_USER_VALIDATED:
+    case download::DOWNLOAD_DANGER_TYPE_ALLOWLISTED_BY_POLICY:
+      break;
+    case download::DOWNLOAD_DANGER_TYPE_MAX:
+      NOTREACHED_IN_MIGRATION();
+      break;
+  }
+
+  return DangerUiPattern::kNormal;
 }
 
 bool DownloadItemModel::ShouldShowInBubble() const {
@@ -1003,10 +1157,10 @@ bool DownloadItemModel::IsEphemeralWarning() const {
     case download::DOWNLOAD_DANGER_TYPE_ASYNC_SCANNING:
     case download::DOWNLOAD_DANGER_TYPE_ASYNC_LOCAL_PASSWORD_SCANNING:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_SAFE:
-    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE:
     case download::DOWNLOAD_DANGER_TYPE_BLOCKED_PASSWORD_PROTECTED:
     case download::DOWNLOAD_DANGER_TYPE_BLOCKED_TOO_LARGE:
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK:
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
       return false;
   }
 }
@@ -1078,8 +1232,7 @@ bool DownloadItemModel::ShouldShowDropdown() const {
       GetDangerType() ==
           download::DOWNLOAD_DANGER_TYPE_BLOCKED_PASSWORD_PROTECTED ||
       GetDangerType() == download::DOWNLOAD_DANGER_TYPE_BLOCKED_TOO_LARGE ||
-      GetDangerType() ==
-          download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE) {
+      GetDangerType() == download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED) {
     return false;
   }
 

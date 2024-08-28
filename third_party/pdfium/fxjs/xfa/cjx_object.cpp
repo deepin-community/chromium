@@ -10,6 +10,9 @@
 #include <tuple>
 #include <utility>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_memory.h"
 #include "core/fxcrt/span.h"
@@ -24,13 +27,11 @@
 #include "fxjs/xfa/cjx_draw.h"
 #include "fxjs/xfa/cjx_field.h"
 #include "fxjs/xfa/cjx_instancemanager.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/containers/contains.h"
 #include "v8/include/v8-forward.h"
 #include "v8/include/v8-object.h"
 #include "v8/include/v8-primitive.h"
 #include "xfa/fgas/crt/cfgas_decimal.h"
+#include "xfa/fgas/graphics/cfgas_gecolor.h"
 #include "xfa/fxfa/cxfa_ffnotify.h"
 #include "xfa/fxfa/cxfa_ffwidget.h"
 #include "xfa/fxfa/parser/cxfa_border.h"
@@ -96,6 +97,11 @@ std::tuple<int32_t, int32_t, int32_t> StrToRGB(const WideString& strRGB) {
     }
   }
   return {r, g, b};
+}
+
+v8::Local<v8::String> ColorToV8String(v8::Isolate* isolate, FX_ARGB color) {
+  return fxv8::NewStringHelper(
+      isolate, CFGAS_GEColor::ColorToString(color).AsStringView());
 }
 
 }  // namespace
@@ -234,8 +240,7 @@ void CJX_Object::SetAttributeByEnum(XFA_Attribute eAttr,
       break;
     case XFA_AttributeType::Integer:
       SetInteger(eAttr,
-                 FXSYS_roundf(FXSYS_wcstof(wsValue.c_str(), wsValue.GetLength(),
-                                           nullptr)),
+                 FXSYS_roundf(FXSYS_wcstof(wsValue.AsStringView(), nullptr)),
                  bNotify);
       break;
     case XFA_AttributeType::Measure:
@@ -541,7 +546,7 @@ void CJX_Object::SetContent(const WideString& wsContent,
 
         CXFA_Node* pChildValue = pValue->GetFirstChild();
         pChildValue->JSObject()->SetCData(XFA_Attribute::ContentType,
-                                          L"text/xml");
+                                          WideString::FromASCII("text/xml"));
         pChildValue->JSObject()->SetContent(wsContent, wsContent, bNotify,
                                             bScriptModify, false);
 
@@ -563,8 +568,8 @@ void CJX_Object::SetContent(const WideString& wsContent,
               while (iAddNodes-- > 0) {
                 CXFA_Node* pValueNodes =
                     pBind->CreateSamePacketNode(XFA_Element::DataValue);
-                pValueNodes->JSObject()->SetCData(XFA_Attribute::Name,
-                                                  L"value");
+                pValueNodes->JSObject()->SetCData(
+                    XFA_Attribute::Name, WideString::FromASCII("value"));
                 pValueNodes->CreateXMLMappingNode();
                 pBind->InsertChildAndNotify(pValueNodes, nullptr);
               }
@@ -705,7 +710,8 @@ std::optional<WideString> CJX_Object::TryContent(bool bScriptModify,
         CXFA_Node* pChildValue = pValue->GetFirstChild();
         if (pChildValue && XFA_FieldIsMultiListBox(GetXFANode())) {
           pChildValue->JSObject()->SetAttributeByEnum(
-              XFA_Attribute::ContentType, L"text/xml", false);
+              XFA_Attribute::ContentType, WideString::FromASCII("text/xml"),
+              false);
         }
         if (!pChildValue)
           return std::nullopt;
@@ -1091,13 +1097,7 @@ void CJX_Object::ScriptSomFontColor(v8::Isolate* pIsolate,
     return;
   }
 
-  int32_t a;
-  int32_t r;
-  int32_t g;
-  int32_t b;
-  std::tie(a, r, g, b) = ArgbDecode(font->GetColor());
-  *pValue = fxv8::NewStringHelper(
-      pIsolate, ByteString::Format("%d,%d,%d", r, g, b).AsStringView());
+  *pValue = ColorToV8String(pIsolate, font->GetColor());
 }
 
 void CJX_Object::ScriptSomFillColor(v8::Isolate* pIsolate,
@@ -1120,14 +1120,7 @@ void CJX_Object::ScriptSomFillColor(v8::Isolate* pIsolate,
     return;
   }
 
-  FX_ARGB color = borderfill->GetFillColor();
-  int32_t a;
-  int32_t r;
-  int32_t g;
-  int32_t b;
-  std::tie(a, r, g, b) = ArgbDecode(color);
-  *pValue = fxv8::NewStringHelper(
-      pIsolate, ByteString::Format("%d,%d,%d", r, g, b).AsStringView());
+  *pValue = ColorToV8String(pIsolate, borderfill->GetFillColor());
 }
 
 void CJX_Object::ScriptSomBorderColor(v8::Isolate* pIsolate,
@@ -1154,13 +1147,7 @@ void CJX_Object::ScriptSomBorderColor(v8::Isolate* pIsolate,
 
   CXFA_Edge* edge = border->GetEdgeIfExists(0);
   FX_ARGB color = edge ? edge->GetColor() : CXFA_Edge::kDefaultColor;
-  int32_t a;
-  int32_t r;
-  int32_t g;
-  int32_t b;
-  std::tie(a, r, g, b) = ArgbDecode(color);
-  *pValue = fxv8::NewStringHelper(
-      pIsolate, ByteString::Format("%d,%d,%d", r, g, b).AsStringView());
+  *pValue = ColorToV8String(pIsolate, color);
 }
 
 void CJX_Object::ScriptSomBorderWidth(v8::Isolate* pIsolate,

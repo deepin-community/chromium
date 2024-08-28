@@ -16,11 +16,6 @@ This tooling change will provide a feature-rich and well-supported issue tracker
 Chromium's ecosystem. Chromium has joined other open source projects (Git, Gerrit) on this
 tooling. Existing transparency levels to bugs will be maintained.
 
-### I have a concern or feedback, how do I reach out?
-
-You can reach out at any time to <http://g.co/dev/chromium-issue-tracker-feedback>
-with questions or concerns.
-
 ### What about historic bug links?
 
 Existing Monorail issue links will redirect to the migrated issues in the new issue tracker.
@@ -35,7 +30,9 @@ and how things will generally work in Issue Tracker.*
 ### How do I file an issue?
 
 You can report an issue in the Issue Tracker using the Issue Wizard at
-[issues.chromium.org](https://issues.chromium.org/issues/new)
+[issues.chromium.org](https://issues.chromium.org/issues/new) or see Issue
+Tracker documentation on [how to file an issue](https://developers.google.com/issue-tracker/guides/create-issue-ui).
+
 
 ### How do I file a Security bug?
 
@@ -96,6 +93,22 @@ See Issue Tracker’s documentation on [how to search for a hotlist](https://dev
 
 *Tip:* Autocomplete will help find the hotlist ID if you start typing the name of the
 hotlist in the search bar after `hotlistid:`
+
+### What are the recommended ACLs that I should use for my hotlists in Issue Tracker?
+Unlike labels in Monorail, hotlists in Issue Tracker have ACLs. To ensure your hotlists are
+not overly restricted, we recommend that you add `edit-bug-access@chromium.org` to the
+“View and Append” ACL. If you want to make your hotlist publicly visible, add `Public` to the
+“View only” ACL.
+
+### How do I access the ACLs for my hotlists in Issue Tracker?
+There are two ways to access the Hotlist ACLs:
+
+Option 1:
+Click into your hotlist, then click the pencil next to the hotlist name.
+[<img alt="image" src="/for-testers/faq/SS_17.png">](/for-testers/faq/SS_17.png)
+
+Option 2:
+Use this URL: https<nolink>//issues.chromium.org/hotlists/**&lt;hotlistid>**/edit
 
 ### How do I search by custom fields?
 

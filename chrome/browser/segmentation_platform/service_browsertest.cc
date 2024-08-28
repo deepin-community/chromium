@@ -269,7 +269,7 @@ class SegmentationPlatformTest : public PlatformBrowserTest {
     proto::SegmentationModelMetadata search_user_metadata;
     MetadataWriter writer = MetadataWriter(&search_user_metadata);
     writer.SetSegmentationMetadataConfig(proto::TimeUnit::DAY, 1, 7, 7, 7);
-    writer.AddUmaFeatures(uma_features.begin(), uma_features.size());
+    writer.AddUmaFeatures(uma_features.data(), uma_features.size());
 
     return search_user_metadata;
   }
@@ -681,18 +681,12 @@ class SegmentationPlatformUkmDisabledTest : public SegmentationPlatformTest {
              kSegmentationPlatformOptimizationTargetSegmentationDummy, {})},
         /*disabled_features=*/{
             features::kSegmentationPlatformUkmEngine,
+            features::kSegmentationPlatformUmaFromSqlDb,
         });
   }
 };
 
-// On Android tests are failing because of unrelated browser tests failures.
-// TODO(ssid): Once the issue is resolved, enable the test on Android.
-#if BUILDFLAG(IS_ANDROID)
-#define MAYBE_DatabaseApi DISABLED_DatabaseApi
-#else
-#define MAYBE_DatabaseApi DatabaseApi
-#endif
-IN_PROC_BROWSER_TEST_F(SegmentationPlatformUkmDisabledTest, MAYBE_DatabaseApi) {
+IN_PROC_BROWSER_TEST_F(SegmentationPlatformUkmDisabledTest, DatabaseApi) {
   WaitForPlatformInit();
 
   SegmentationPlatformService* service = GetService();

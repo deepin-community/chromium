@@ -38,10 +38,11 @@ namespace syncer {
 
 class CommitQueue;
 
-// A sync component embedded on the model type's thread that tracks entity
+// A sync component embedded on the model type's sequence that tracks entity
 // metadata in the model store and coordinates communication between sync and
-// model type threads. All changes in flight (either incoming from the server
+// model type sequences. All changes in flight (either incoming from the server
 // or local changes reported by the bridge) must specify a client tag.
+// Lives on the model sequence.
 //
 // See
 // //docs/website/site/developers/design-documents/sync/client-tag-based-model-type-processor/index.md
@@ -60,7 +61,7 @@ class ClientTagBasedModelTypeProcessor : public ModelTypeProcessor,
 
   ~ClientTagBasedModelTypeProcessor() override;
 
-  // Returns true if the handshake with sync thread is complete.
+  // Returns true if the handshake with sync sequence is complete.
   bool IsConnected() const;
 
   // ModelTypeChangeProcessor implementation.
@@ -68,6 +69,7 @@ class ClientTagBasedModelTypeProcessor : public ModelTypeProcessor,
            std::unique_ptr<EntityData> entity_data,
            MetadataChangeList* metadata_change_list) override;
   void Delete(const std::string& storage_key,
+              const DeletionOrigin& origin,
               MetadataChangeList* metadata_change_list) override;
   void UpdateStorageKey(const EntityData& entity_data,
                         const std::string& storage_key,
@@ -76,7 +78,7 @@ class ClientTagBasedModelTypeProcessor : public ModelTypeProcessor,
   void UntrackEntityForClientTagHash(
       const ClientTagHash& client_tag_hash) override;
   std::vector<std::string> GetAllTrackedStorageKeys() const override;
-  bool IsEntityUnsynced(const std::string& storage_key) override;
+  bool IsEntityUnsynced(const std::string& storage_key) const override;
   base::Time GetEntityCreationTime(
       const std::string& storage_key) const override;
   base::Time GetEntityModificationTime(
@@ -116,6 +118,7 @@ class ClientTagBasedModelTypeProcessor : public ModelTypeProcessor,
   void OnSyncStarting(const DataTypeActivationRequest& request,
                       StartCallback callback) override;
   void OnSyncStopping(SyncStopMetadataFate metadata_fate) override;
+  void HasUnsyncedData(base::OnceCallback<void(bool)> callback) override;
   void GetAllNodesForDebugging(AllNodesCallback callback) override;
   void GetTypeEntitiesCountForDebugging(
       base::OnceCallback<void(const TypeEntitiesCount&)> callback)
@@ -135,6 +138,7 @@ class ClientTagBasedModelTypeProcessor : public ModelTypeProcessor,
 
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused. Public for tests.
+  // LINT.IfChange(SyncModelTypeErrorSite)
   enum class ErrorSite {
     kReportedByBridge = 0,
     kApplyFullUpdates = 1,
@@ -143,6 +147,7 @@ class ClientTagBasedModelTypeProcessor : public ModelTypeProcessor,
     kSupportsIncrementalUpdatesMismatch = 4,
     kMaxValue = kSupportsIncrementalUpdatesMismatch,
   };
+  // LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:SyncModelTypeErrorSite)
 
  private:
   friend class ModelTypeDebugInfo;
@@ -186,14 +191,8 @@ class ClientTagBasedModelTypeProcessor : public ModelTypeProcessor,
   // enabled.
   std::optional<ModelError> OnIncrementalUpdateReceived(
       const sync_pb::ModelTypeState& type_state,
-      UpdateResponseDataList updates);
-
-  // ModelTypeSyncBridge::GetData() callback for pending loading data upon
-  // GetLocalChanges call.
-  void OnPendingDataLoaded(size_t max_entries,
-                           GetLocalChangesCallback callback,
-                           std::unordered_set<std::string> storage_keys_to_load,
-                           std::unique_ptr<DataBatch> data_batch);
+      UpdateResponseDataList updates,
+      std::optional<sync_pb::GarbageCollectionDirective> gc_directive);
 
   // Caches EntityData from the |data_batch| in the entity and checks
   // that every entity in |storage_keys_to_load| was successfully loaded (or is
@@ -294,11 +293,9 @@ class ClientTagBasedModelTypeProcessor : public ModelTypeProcessor,
   // The request context passed in as part of OnSyncStarting().
   DataTypeActivationRequest activation_request_;
 
-  // Reference to the CommitQueue.
-  //
-  // The interface hides the posting of tasks across threads as well as the
-  // CommitQueue's implementation.  Both of these features are
-  // useful in tests.
+  // Reference to the CommitQueue. Note that in practice, this is typically a
+  // proxy object to the actual CommitQueue implementation (aka the worker),
+  // which lives on the sync sequence.
   std::unique_ptr<CommitQueue> worker_;
 
   //////////////////
@@ -314,7 +311,7 @@ class ClientTagBasedModelTypeProcessor : public ModelTypeProcessor,
   base::WeakPtrFactory<ClientTagBasedModelTypeProcessor>
       weak_ptr_factory_for_controller_{this};
 
-  // WeakPtrFactory for this processor which will be sent to sync thread.
+  // WeakPtrFactory for this processor which will be sent to sync sequence.
   base::WeakPtrFactory<ClientTagBasedModelTypeProcessor>
       weak_ptr_factory_for_worker_{this};
 };

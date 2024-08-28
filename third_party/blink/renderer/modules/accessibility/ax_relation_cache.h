@@ -35,7 +35,7 @@ class AXRelationCache {
   // Returns true if the given object's position in the tree was due to
   // aria-owns.
   bool IsAriaOwned(AXID) const;
-  bool IsAriaOwned(const AXObject*) const;
+  bool IsAriaOwned(const AXObject*, bool check = true) const;
 
   // Returns the parent of the given object due to aria-owns, if valid,
   // otherwise, removes the child from maps indicating that it is owned.
@@ -190,7 +190,7 @@ class AXRelationCache {
   bool IsValidOwnsRelation(AXObject* owner, Node& child_node) const;
   void UnmapOwnedChildrenWithCleanLayout(const AXObject* owner,
                                          const Vector<AXID>& removed_child_ids,
-                                         const Vector<AXID>& newly_owned_ids);
+                                         Vector<AXID>& unparented_child_ids);
 
   void MapOwnedChildrenWithCleanLayout(const AXObject* owner,
                                        const Vector<AXID>&);
@@ -198,7 +198,7 @@ class AXRelationCache {
       Node*,
       HashMap<String, HashSet<DOMNodeId>>& id_attr_to_node_map,
       HeapVector<Member<AXObject>>& sources);
-  void MaybeRestoreParentOfOwnedChild(AXObject* removed_child);
+  void MaybeRestoreParentOfOwnedChild(AXID removed_child_axid);
 
   // Updates |aria_owner_to_children_mapping_| after calling UpdateAriaOwns for
   // either the content attribute or the attr associated elements.
@@ -245,7 +245,7 @@ class AXRelationCache {
   // For each of these, the new set of owned children
   // will be computed, and if it's different than before, ChildrenChanged
   // will be fired on all affected nodes.
-  HashSet<AXID> owner_ids_to_update_;
+  HashSet<DOMNodeId> owner_ids_to_update_;
 
   // A map from a source AXObject to the id attribute values for relations
   // targets that are not yet in the DOM tree.

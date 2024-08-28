@@ -31,9 +31,9 @@ Link::Link(const std::u16string& title, int text_context, int text_style)
   enabled_changed_subscription_ = AddEnabledChangedCallback(
       base::BindRepeating(&Link::RecalculateFont, base::Unretained(this)));
 
-  SetAccessibilityProperties(ax::mojom::Role::kLink, title);
+  GetViewAccessibility().SetProperties(ax::mojom::Role::kLink, title);
   // Prevent invisible links from being announced by screen reader.
-  GetViewAccessibility().OverrideIsIgnored(title.empty());
+  GetViewAccessibility().SetIsIgnored(title.empty());
 
   // Label() indirectly calls SetText(), but at that point our virtual override
   // will not be reached.  Call it explicitly here to configure focus.
@@ -45,7 +45,7 @@ Link::Link(const std::u16string& title, int text_context, int text_style)
 Link::~Link() = default;
 
 SkColor Link::GetColor() const {
-  // TODO(crbug.com/1446855): Use TypographyProvider::GetColorId().
+  // TODO(crbug.com/40268779): Use TypographyProvider::GetColorId().
   const ui::ColorProvider* color_provider = GetColorProvider();
   DCHECK(color_provider);
   if (!GetEnabled())
@@ -142,9 +142,9 @@ void Link::OnGestureEvent(ui::GestureEvent* event) {
   if (!GetEnabled())
     return;
 
-  if (event->type() == ui::ET_GESTURE_TAP_DOWN) {
+  if (event->type() == ui::EventType::kGestureTapDown) {
     SetPressed(true);
-  } else if (event->type() == ui::ET_GESTURE_TAP) {
+  } else if (event->type() == ui::EventType::kGestureTap) {
     OnClick(*event);
   } else {
     SetPressed(false);
@@ -183,7 +183,7 @@ void Link::SetFontList(const gfx::FontList& font_list) {
 void Link::SetText(const std::u16string& text) {
   Label::SetText(text);
   // Prevent invisible links from being announced by screen reader.
-  GetViewAccessibility().OverrideIsIgnored(text.empty());
+  GetViewAccessibility().SetIsIgnored(text.empty());
   ConfigureFocus();
 }
 

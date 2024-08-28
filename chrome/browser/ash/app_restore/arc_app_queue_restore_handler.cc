@@ -10,6 +10,7 @@
 
 #include "ash/components/arc/arc_util.h"
 #include "ash/components/arc/metrics/arc_metrics_constants.h"
+#include "ash/root_window_controller.h"
 #include "ash/shell.h"
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
@@ -378,6 +379,16 @@ void ArcAppQueueRestoreHandler::AddWindows(const std::string& app_id) {
 void ArcAppQueueRestoreHandler::PrepareLaunchApps() {
   is_shelf_ready_ = true;
 
+  // Explicit check if the root window controller initialized. b/321719023
+  if (RootWindowController::root_window_controllers().empty()) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE,
+        base::BindOnce(&ArcAppQueueRestoreHandler::PrepareLaunchApps,
+                       weak_ptr_factory_.GetWeakPtr()),
+        kAppLaunchCheckingDelay);
+    return;
+  }
+
   if (app_ids_.empty())
     return;
 
@@ -418,7 +429,8 @@ void ArcAppQueueRestoreHandler::PrepareAppLaunching(const std::string& app_id) {
   }
 
   // Activate ARC in case still not active.
-  arc::ArcSessionManager::Get()->AllowActivation();
+  arc::ArcSessionManager::Get()->AllowActivation(
+      arc::ArcSessionManager::AllowActivationReason::kRestoreApps);
 
   for (const auto& [window_id, app_restore_data] : launch_list) {
     handler_->RecordRestoredAppLaunch(apps::AppTypeName::kArc);
@@ -512,8 +524,10 @@ bool ArcAppQueueRestoreHandler::CanLaunchApp() {
   bool is_under_memory_pressure = IsUnderMemoryPressure();
   if (is_under_memory_pressure)
     was_memory_pressured_ = true;
-
-  return !is_under_cpu_usage_limiting && !is_under_memory_pressure;
+  bool is_root_window_controller_initialized =
+      !RootWindowController::root_window_controllers().empty();
+  return !is_under_cpu_usage_limiting && !is_under_memory_pressure &&
+         is_root_window_controller_initialized;
 }
 
 bool ArcAppQueueRestoreHandler::IsUnderMemoryPressure() {

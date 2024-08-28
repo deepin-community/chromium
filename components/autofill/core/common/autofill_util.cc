@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <string_view>
 #include <vector>
 
 #include "base/command_line.h"
@@ -15,7 +16,6 @@
 #include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -30,7 +30,7 @@ using mojom::SubmissionSource;
 
 namespace {
 
-constexpr base::StringPiece16 kSplitCharacters = u" .,-_@";
+constexpr std::u16string_view kSplitCharacters = u" .,-_@";
 
 template <typename Char>
 struct Compare : base::CaseInsensitiveCompareASCII<Char> {
@@ -92,13 +92,14 @@ void SetCheckStatus(FormFieldData* form_field_data,
                     bool isCheckable,
                     bool isChecked) {
   if (isChecked) {
-    form_field_data->check_status = FormFieldData::CheckStatus::kChecked;
+    form_field_data->set_check_status(FormFieldData::CheckStatus::kChecked);
   } else {
     if (isCheckable) {
-      form_field_data->check_status =
-          FormFieldData::CheckStatus::kCheckableButUnchecked;
+      form_field_data->set_check_status(
+          FormFieldData::CheckStatus::kCheckableButUnchecked);
     } else {
-      form_field_data->check_status = FormFieldData::CheckStatus::kNotCheckable;
+      form_field_data->set_check_status(
+          FormFieldData::CheckStatus::kNotCheckable);
     }
   }
 }
@@ -127,15 +128,6 @@ bool SanitizedFieldIsEmpty(const std::u16string& value) {
                     base::kWhitespaceUTF16}));
 
   return base::ContainsOnlyChars(value, *formatting);
-}
-
-bool ShouldAutoselectFirstSuggestionOnArrowDown() {
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS)
-  return true;
-#else
-  return false;
-#endif
 }
 
 bool IsFillable(FocusedFieldType focused_field_type) {
@@ -172,7 +164,7 @@ SubmissionIndicatorEvent ToSubmissionIndicatorEvent(SubmissionSource source) {
       return SubmissionIndicatorEvent::DOM_MUTATION_AFTER_AUTOFILL;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return SubmissionIndicatorEvent::NONE;
 }
 
@@ -208,6 +200,12 @@ bool IsPasswordsAutofillManuallyTriggered(
     AutofillSuggestionTriggerSource trigger_source) {
   return trigger_source ==
          AutofillSuggestionTriggerSource::kManualFallbackPasswords;
+}
+
+bool IsPlusAddressesManuallyTriggered(
+    AutofillSuggestionTriggerSource trigger_source) {
+  return trigger_source ==
+         AutofillSuggestionTriggerSource::kManualFallbackPlusAddresses;
 }
 
 }  // namespace autofill

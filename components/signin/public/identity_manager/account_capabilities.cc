@@ -70,6 +70,10 @@ signin::Tribool AccountCapabilities::GetCapabilityByName(
   return iterator->second ? signin::Tribool::kTrue : signin::Tribool::kFalse;
 }
 
+signin::Tribool AccountCapabilities::can_fetch_family_member_info() const {
+  return GetCapabilityByName(kCanFetchFamilyMemberInfoCapabilityName);
+}
+
 signin::Tribool AccountCapabilities::can_have_email_address_displayed() const {
   return GetCapabilityByName(kCanHaveEmailAddressDisplayedCapabilityName);
 }
@@ -96,6 +100,19 @@ signin::Tribool AccountCapabilities::can_toggle_auto_updates() const {
 
 signin::Tribool AccountCapabilities::can_use_chrome_ip_protection() const {
   return GetCapabilityByName(kCanUseChromeIpProtectionName);
+}
+
+signin::Tribool AccountCapabilities::can_use_devtools_generative_ai_features()
+    const {
+  return GetCapabilityByName(kCanUseDevToolsGenerativeAiFeaturesCapabilityName);
+}
+
+signin::Tribool AccountCapabilities::can_use_edu_features() const {
+  return GetCapabilityByName(kCanUseEduFeaturesCapabilityName);
+}
+
+signin::Tribool AccountCapabilities::can_use_manta_service() const {
+  return GetCapabilityByName(kCanUseMantaServiceName);
 }
 
 signin::Tribool AccountCapabilities::can_use_model_execution_features() const {
@@ -142,10 +159,6 @@ bool AccountCapabilities::operator==(const AccountCapabilities& other) const {
       return false;
   }
   return true;
-}
-
-bool AccountCapabilities::operator!=(const AccountCapabilities& other) const {
-  return !(*this == other);
 }
 
 #if BUILDFLAG(IS_ANDROID)

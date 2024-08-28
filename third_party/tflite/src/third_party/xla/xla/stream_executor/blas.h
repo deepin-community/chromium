@@ -22,9 +22,11 @@ limitations under the License.
 #define XLA_STREAM_EXECUTOR_BLAS_H_
 
 #include <complex>
+#include <cstdint>
 #include <limits>
 #include <ostream>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "absl/status/status.h"
@@ -33,6 +35,7 @@ limitations under the License.
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/numeric_options.h"
 #include "xla/stream_executor/platform/port.h"
+#include "tsl/platform/errors.h"
 #include "tsl/protobuf/dnn.pb.h"
 
 namespace Eigen {
@@ -155,13 +158,15 @@ class ProfileResult {
  public:
   bool is_valid() const { return is_valid_; }
   void set_is_valid(bool val) { is_valid_ = val; }
+  bool warmup_run_executed() const { return warmup_run_executed_; }
+  void set_warmup_run_executed(bool val) { warmup_run_executed_ = val; }
   AlgorithmType algorithm() const { return algorithm_; }
   void set_algorithm(AlgorithmType val) { algorithm_ = val; }
   float elapsed_time_in_ms() const { return elapsed_time_in_ms_; }
   void set_elapsed_time_in_ms(float val) { elapsed_time_in_ms_ = val; }
 
  private:
-  bool is_valid_ = false;
+  bool is_valid_ = false, warmup_run_executed_ = false;
   AlgorithmType algorithm_ = kDefaultAlgorithm;
   float elapsed_time_in_ms_ = std::numeric_limits<float>::max();
 };
@@ -217,16 +222,6 @@ class BlasSupport {
 
   virtual gpu::BlasLt *GetBlasLt() = 0;
 
-  // Performs a BLAS y <- ax+y operation.
-  virtual bool DoBlasAxpy(Stream *stream, uint64_t elem_count, float alpha,
-                          const DeviceMemory<float> &x, int incx,
-                          DeviceMemory<float> *y, int incy) = 0;
-
-  // Copies vector to another vector: y <- x.
-  virtual bool DoBlasCopy(Stream *stream, uint64_t elem_count,
-                          const DeviceMemory<float> &x, int incx,
-                          DeviceMemory<float> *y, int incy) = 0;
-
   // Computes the product of a vector by a scalar: x <- a*x.
   virtual bool DoBlasScal(Stream *stream, uint64_t elem_count, float alpha,
                           DeviceMemory<float> *x, int incx) = 0;
@@ -275,17 +270,6 @@ class BlasSupport {
                           const DeviceMemory<std::complex<double>> &x, int incx,
                           std::complex<double> beta,
                           DeviceMemory<std::complex<double>> *y, int incy) = 0;
-
-  // Computes a matrix-vector product using a symmetric band matrix.
-  //
-  //     y <- alpha * a * x + beta * y,
-  //
-  // alpha and beta are scalars; a is an n-by-n symmetric band matrix, with k
-  // super-diagonals; x and y are n-element vectors.
-  virtual bool DoBlasSbmv(Stream *stream, blas::UpperLower uplo, uint64_t n,
-                          uint64_t k, float alpha, const DeviceMemory<float> &a,
-                          int lda, const DeviceMemory<float> &x, int incx,
-                          float beta, DeviceMemory<float> *y, int incy) = 0;
 
   // Computes a matrix-matrix product with general matrices:
   //
@@ -473,6 +457,103 @@ class BlasSupport {
                       ldb, beta_ptr, c, ldc, numeric_options, context);
   }
 
+  template <typename InputType, typename OutputType>
+  absl::Status BlasGemm(Stream *stream, blas::Transpose transa,
+                        blas::Transpose transb, uint64_t m, uint64 n, uint64 k,
+                        const DeviceMemory<InputType> &a, int lda,
+                        const DeviceMemory<InputType> &b, int ldb,
+                        DeviceMemory<OutputType> *c, int ldc,
+                        const NumericOptions &numeric_options,
+                        blas::CallContext context) {
+    InputType alpha{1.0};
+    InputType beta{0.0};
+    return BlasGemm(stream, transa, transb, m, n, k, alpha, a, lda, b, ldb,
+                    beta, c, ldc, numeric_options, context);
+  }
+
+  template <typename InputType, typename OutputType, typename ConstantType>
+  absl::Status BlasGemmWithAlgorithm(
+      Stream *stream, blas::Transpose transa, blas::Transpose transb,
+      uint64_t m, uint64 n, uint64_t k, ConstantType alpha,
+      const DeviceMemory<InputType> &a, int lda,
+      const DeviceMemory<InputType> &b, int ldb, ConstantType beta,
+      DeviceMemory<OutputType> *c, int ldc,
+      blas::ComputationType computation_type, blas::AlgorithmType algorithm,
+      const NumericOptions &numeric_options,
+      blas::ProfileResult *output_profile_result, blas::CallContext context) {
+    TF_RETURN_IF_ERROR(
+        CheckTypesForExtendedBlas<InputType, OutputType, ConstantType>(
+            computation_type));
+
+    void *alpha_ptr = &alpha;
+    void *beta_ptr = &beta;
+    float alpha_storage, beta_storage;
+    UpcastHalfToFloat<ConstantType>(&alpha_ptr, &beta_ptr, &alpha_storage,
+                                    &beta_storage);
+
+    absl::Status st = DoBlasGemmWithAlgorithm(
+        stream, transa, transb, m, n, k, alpha_ptr, a,
+        blas::ToDataType<InputType>::value, lda, b,
+        blas::ToDataType<InputType>::value, ldb, beta_ptr, c,
+        blas::ToDataType<OutputType>::value, ldc, computation_type, algorithm,
+        numeric_options, output_profile_result, context);
+
+    if (output_profile_result) {
+      // The error is recorded in the profile.
+      return absl::OkStatus();
+    }
+    return st;
+  }
+
+  template <typename InputType, typename OutputType>
+  absl::Status BlasGemmWithAlgorithm(
+      Stream *stream, blas::Transpose transa, blas::Transpose transb,
+      uint64_t m, uint64 n, uint64_t k, const DeviceMemory<InputType> &a,
+      int lda, const DeviceMemory<InputType> &b, int ldb,
+      DeviceMemory<OutputType> *c, int ldc,
+      blas::ComputationType computation_type, blas::AlgorithmType algorithm,
+      blas::ProfileResult *output_profile_result, blas::CallContext context) {
+    OutputType alpha{1};
+    OutputType beta{0};
+
+    return BlasGemmWithAlgorithm(stream, transa, transb, m, n, k, alpha, a, lda,
+                                 b, ldb, beta, c, ldc, computation_type,
+                                 algorithm, NumericOptions{},
+                                 output_profile_result, context);
+  }
+
+  template <typename InputType, typename OutputType, typename ConstantType>
+  absl::Status BlasGemmStridedBatched(
+      Stream *stream, blas::Transpose transa, blas::Transpose transb,
+      uint64_t m, uint64 n, uint64_t k, ConstantType alpha,
+      const DeviceMemory<InputType> &a, int lda, int64_t stride_a,
+      const DeviceMemory<InputType> &b, int ldb, int64_t stride_b,
+      ConstantType beta, DeviceMemory<OutputType> *c, int ldc, int64_t stride_c,
+      int batch_count, const NumericOptions &numeric_options,
+      blas::CallContext context) {
+    static_assert(
+        detail::is_any_of<InputType, int8_t, float, Eigen::half,
+                          Eigen::bfloat16, double, std::complex<float>,
+                          std::complex<double>>(),
+        "Unsupported input type");
+    static_assert(std::is_same_v<ConstantType, InputType> ||
+                      (detail::is_any_of<InputType, int8_t, Eigen::half,
+                                         Eigen::bfloat16>() &&
+                       std::is_same_v<ConstantType, float>),
+                  "Mismatched input and alpha/beta types");
+
+    void *alpha_ptr = &alpha;
+    void *beta_ptr = &beta;
+    float alpha_storage, beta_storage;
+    UpcastHalfToFloat<ConstantType>(&alpha_ptr, &beta_ptr, &alpha_storage,
+                                    &beta_storage);
+
+    return DoBlasGemmStridedBatched(
+        stream, transa, transb, m, n, k, blas::ToDataType<InputType>::value,
+        alpha_ptr, a, lda, stride_a, b, ldb, stride_b, beta_ptr, c, ldc,
+        stride_c, batch_count, numeric_options, context);
+  }
+
   // Solves a triangular matrix equation.
   //
   //     op(a) * x = alpha * b,
@@ -646,12 +727,6 @@ class BlasSupport {
 // Macro used to quickly declare overrides for abstract virtuals in the
 // BlasSupport base class.
 #define TENSORFLOW_STREAM_EXECUTOR_GPU_BLAS_SUPPORT_OVERRIDES                  \
-  bool DoBlasAxpy(Stream *stream, uint64_t elem_count, float alpha,            \
-                  const DeviceMemory<float> &x, int incx,                      \
-                  DeviceMemory<float> *y, int incy) override;                  \
-  bool DoBlasCopy(Stream *stream, uint64_t elem_count,                         \
-                  const DeviceMemory<float> &x, int incx,                      \
-                  DeviceMemory<float> *y, int incy) override;                  \
   bool DoBlasScal(Stream *stream, uint64_t elem_count, float alpha,            \
                   DeviceMemory<float> *x, int incx) override;                  \
   bool DoBlasScal(Stream *stream, uint64_t elem_count, double alpha,           \
@@ -686,10 +761,6 @@ class BlasSupport {
                   const DeviceMemory<std::complex<double>> &x, int incx,       \
                   std::complex<double> beta,                                   \
                   DeviceMemory<std::complex<double>> *y, int incy) override;   \
-  bool DoBlasSbmv(Stream *stream, blas::UpperLower uplo, uint64_t n, uint64 k, \
-                  float alpha, const DeviceMemory<float> &a, int lda,          \
-                  const DeviceMemory<float> &x, int incx, float beta,          \
-                  DeviceMemory<float> *y, int incy) override;                  \
   absl::Status DoBlasGemm(                                                     \
       Stream *stream, blas::Transpose transa, blas::Transpose transb,          \
       uint64_t m, uint64 n, uint64 k, blas::DataType dtype, const void *alpha, \

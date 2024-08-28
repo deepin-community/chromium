@@ -3,8 +3,9 @@
 // found in the LICENSE file.
 
 import {OmniboxElement} from './omnibox_element.js';
+/* eslint-disable-next-line @typescript-eslint/ban-ts-comment */
 // @ts-ignore:next-line
-import sheet from './omnibox_input.css' assert {type : 'css'};
+import sheet from './omnibox_input.css' with {type : 'css'};
 
 export interface QueryInputs {
   inputText: string;

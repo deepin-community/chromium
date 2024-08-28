@@ -92,9 +92,6 @@ base::CommandLine GetUninstallSelfCommandLine(
   if (IsSystemInstall(scope)) {
     command_line.AppendSwitch(kSystemSwitch);
   }
-  command_line.AppendSwitch(kEnableLoggingSwitch);
-  command_line.AppendSwitchASCII(kLoggingModuleSwitch,
-                                 kLoggingModuleSwitchValue);
   return command_line;
 }
 
@@ -113,6 +110,19 @@ void UninstallOtherVersions(UpdaterScope scope) {
     VLOG(1) << __func__ << ": Ran: " << command_line.GetCommandLineString()
             << ": " << output << ": " << exit_code;
   }
+}
+
+void UninstallInThreadPool(UpdaterScope scope,
+                           base::OnceCallback<void(int)> shutdown) {
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock()},
+      base::BindOnce(
+          [](UpdaterScope scope) {
+            UninstallOtherVersions(scope);
+            return Uninstall(scope);
+          },
+          scope),
+      std::move(shutdown));
 }
 
 }  // namespace
@@ -140,7 +150,7 @@ class AppUninstall : public App {
 
 int AppUninstall::Initialize() {
   setup_lock_ =
-      ScopedLock::Create(kSetupMutex, updater_scope(), kWaitForSetupLock);
+      CreateScopedLock(kSetupMutex, updater_scope(), kWaitForSetupLock);
   global_prefs_ = CreateGlobalPrefs(updater_scope());
   if (global_prefs_) {
     config_ = base::MakeRefCounted<Configurator>(global_prefs_,
@@ -163,6 +173,15 @@ void AppUninstall::UninstallAll(int reason) {
     // currently-running version of the updater.
     uninstall_data.version = base::Version(kUpdaterVersion);
   }
+
+  // If the terms of service have not been accepted, don't ping.
+  if (config_->GetUpdaterPersistedData()->GetEulaRequired()) {
+    UninstallInThreadPool(updater_scope(),
+                          base::BindOnce(&AppUninstall::Shutdown, this));
+    return;
+  }
+
+  // Otherwise, send an uninstall ping then uninstall.
   update_client::UpdateClientFactory(config_)->SendPing(
       uninstall_data,
       {.event_type = update_client::protocol_request::kEventUninstall,
@@ -174,15 +193,7 @@ void AppUninstall::UninstallAll(int reason) {
              update_client::Error uninstall_ping_error) {
             VLOG_IF(1, uninstall_ping_error != update_client::Error::NONE)
                 << "Uninstall ping failed: " << uninstall_ping_error;
-            base::ThreadPool::PostTaskAndReplyWithResult(
-                FROM_HERE, {base::MayBlock()},
-                base::BindOnce(
-                    [](UpdaterScope scope) {
-                      UninstallOtherVersions(scope);
-                      return Uninstall(scope);
-                    },
-                    scope),
-                std::move(shutdown));
+            UninstallInThreadPool(scope, std::move(shutdown));
           },
           base::BindOnce(&AppUninstall::Shutdown, this), updater_scope()));
 }
@@ -230,7 +241,7 @@ void AppUninstall::FirstTaskRun() {
     return;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 scoped_refptr<App> MakeAppUninstall() {

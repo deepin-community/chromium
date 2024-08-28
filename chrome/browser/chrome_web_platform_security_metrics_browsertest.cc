@@ -2,16 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <string_view>
+
 #include "base/command_line.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/platform_thread.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "components/metrics/content/subprocess_metrics_provider.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/policy/policy_constants.h"
+#include "components/ukm/test_ukm_recorder.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
@@ -21,11 +25,15 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "net/test/spawned_test_server/spawned_test_server.h"
+#include "net/test/test_data_directory.h"
 #include "pdf/buildflags.h"
 #include "services/network/public/cpp/content_security_policy/content_security_policy.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/cross_origin_opener_policy.mojom.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/mojom/frame/frame.mojom.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
 
 #if BUILDFLAG(ENABLE_PDF)
 #include "base/test/with_feature_override.h"
@@ -69,8 +77,8 @@ class ChromeWebPlatformSecurityMetricsBrowserTest : public policy::PolicyTest {
 
   content::WebContents* OpenPopup(const GURL& url) {
     content::WebContentsAddedObserver new_tab_observer;
-    EXPECT_TRUE(
-        content::ExecJs(web_contents(), "window.open('" + url.spec() + "')"));
+    EXPECT_TRUE(content::ExecJs(web_contents(), "window.open('" + url.spec() +
+                                                    "', '_blank', 'popup')"));
     content::WebContents* web_contents = new_tab_observer.GetWebContents();
     EXPECT_TRUE(content::WaitForLoadStop(web_contents));
     return web_contents;
@@ -114,7 +122,7 @@ class ChromeWebPlatformSecurityMetricsBrowserTest : public policy::PolicyTest {
   // Fetch the |histogram|'s |bucket| in every renderer process until reaching,
   // but not exceeding, |expected_count|.
   template <typename T>
-  void CheckHistogramCount(base::StringPiece histogram,
+  void CheckHistogramCount(std::string_view histogram,
                            T bucket,
                            int expected_count) {
     while (true) {
@@ -136,7 +144,7 @@ class ChromeWebPlatformSecurityMetricsBrowserTest : public policy::PolicyTest {
         // SharedArrayBuffer is needed for these tests.
         features::kSharedArrayBuffer,
         // Some PNA worker feature relies on this.
-        // TODO(https://crbug.com/1430451): Remove this once PNA for workers
+        // TODO(crbug.com/40263073): Remove this once PNA for workers
         // metric logging doesn't rely on kPlzDedicatedWorker
         blink::features::kPlzDedicatedWorker,
     };
@@ -144,14 +152,15 @@ class ChromeWebPlatformSecurityMetricsBrowserTest : public policy::PolicyTest {
 
   virtual std::vector<base::test::FeatureRef> GetDisabledFeatures() const {
     return {
-        // Disabled because some subtests set document.domain and this
-        // feature flag prevents that:
+        // Disabled because some subtests set document.domain and these
+        // feature flags prevent that:
         blink::features::kOriginAgentClusterDefaultEnabled,
+        features::kOriginKeyedProcessesByDefault,
     };
   }
 
- private:
-  void SetUpOnMainThread() final {
+ protected:
+  void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
 
     https_server_.AddDefaultHandlers(GetChromeTestDataDir());
@@ -167,6 +176,7 @@ class ChromeWebPlatformSecurityMetricsBrowserTest : public policy::PolicyTest {
     EXPECT_TRUE(content::NavigateToURL(web_contents(), GURL("about:blank")));
   }
 
+ private:
   void SetUpCommandLine(base::CommandLine* command_line) final {
     // For https_server()
     command_line->AppendSwitch(switches::kIgnoreCertificateErrors);
@@ -178,6 +188,34 @@ class ChromeWebPlatformSecurityMetricsBrowserTest : public policy::PolicyTest {
   base::HistogramTester histogram_;
   WebFeature monitored_feature_;
   base::test::ScopedFeatureList features_;
+};
+
+class PrivateNetworkAccessWebSocketMetricBrowserTest
+    : public ChromeWebPlatformSecurityMetricsBrowserTest {
+ public:
+  PrivateNetworkAccessWebSocketMetricBrowserTest()
+      : ws_server_(net::SpawnedTestServer::TYPE_WS,
+                   net::GetWebSocketTestDataDirectory()) {}
+
+  net::SpawnedTestServer& ws_server() { return ws_server_; }
+
+  std::string WaitAndGetTitle() {
+    return base::UTF16ToUTF8(watcher_->WaitAndGetTitle());
+  }
+
+ private:
+  void SetUpOnMainThread() override {
+    ChromeWebPlatformSecurityMetricsBrowserTest::SetUpOnMainThread();
+
+    watcher_ = std::make_unique<content::TitleWatcher>(
+        browser()->tab_strip_model()->GetActiveWebContents(), u"PASS");
+    watcher_->AlsoWaitForTitle(u"FAIL");
+  }
+
+  void TearDownOnMainThread() override { watcher_.reset(); }
+
+  net::SpawnedTestServer ws_server_;
+  std::unique_ptr<content::TitleWatcher> watcher_;
 };
 
 // Return the child of `parent`.
@@ -375,7 +413,7 @@ IN_PROC_BROWSER_TEST_F(ChromeWebPlatformSecurityMetricsBrowserTest,
                                                       "/private_network_access/"
                                                       "no-favicon.html")));
 
-  base::StringPiece kScriptTemplate = R"(
+  std::string_view kScriptTemplate = R"(
     (async () => {
       const worker = new Worker("/workers/fetcher_treat_as_public.js");
 
@@ -405,6 +443,61 @@ IN_PROC_BROWSER_TEST_F(ChromeWebPlatformSecurityMetricsBrowserTest,
   CheckCounter(WebFeature::kPrivateNetworkAccessPreflightWarning, 1);
 }
 
+// When WebSocket is connected to a more-private ip address space, log a use
+// counter.
+// TODO(crbug.com/336429017): Flaky on Win.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_PrivateNetworkAccessWebSocketConnectedPublicToLocal \
+  DISABLED_PrivateNetworkAccessWebSocketConnectedPublicToLocal
+#else
+#define MAYBE_PrivateNetworkAccessWebSocketConnectedPublicToLocal \
+  PrivateNetworkAccessWebSocketConnectedPublicToLocal
+#endif
+IN_PROC_BROWSER_TEST_F(
+    PrivateNetworkAccessWebSocketMetricBrowserTest,
+    MAYBE_PrivateNetworkAccessWebSocketConnectedPublicToLocal) {
+  // Launch a WebSocket server.
+  ASSERT_TRUE(ws_server().Start());
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), http_server().GetURL(
+                     "a.com",
+                     "/private_network_access/"
+                     "websocket-treat-as-public-address.html"
+                     "?url=" +
+                         ws_server().GetURL("echo-with-no-extension").spec())));
+
+  EXPECT_EQ("PASS", WaitAndGetTitle());
+  CheckCounter(WebFeature::kPrivateNetworkAccessWebSocketConnected, 1);
+}
+
+// When WebSocket is connected to the same ip address space, do not log a use
+// counter.
+// TODO(crbug.com/336429017): Flaky on Win.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_PrivateNetworkAccessWebSocketConnectedLocalToLocal \
+  DISABLED_PrivateNetworkAccessWebSocketConnectedLocalToLocal
+#else
+#define MAYBE_PrivateNetworkAccessWebSocketConnectedLocalToLocal \
+  PrivateNetworkAccessWebSocketConnectedLocalToLocal
+#endif
+IN_PROC_BROWSER_TEST_F(PrivateNetworkAccessWebSocketMetricBrowserTest,
+                       MAYBE_PrivateNetworkAccessWebSocketConnectedLocalToLocal) {
+  // Launch a WebSocket server.
+  ASSERT_TRUE(ws_server().Start());
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), http_server().GetURL(
+                     "a.com",
+                     "/private_network_access/"
+                     "websocket.html"
+                     "?url=" +
+                         ws_server().GetURL("echo-with-no-extension").spec())));
+
+  EXPECT_EQ("PASS", WaitAndGetTitle());
+  CheckCounter(WebFeature::kPrivateNetworkAccessWebSocketConnected, 0);
+}
+
 IN_PROC_BROWSER_TEST_F(ChromeWebPlatformSecurityMetricsBrowserTest,
                        PrivateNetworkAccessFetchInSharedWorker) {
   ASSERT_EQ(true,
@@ -413,7 +506,7 @@ IN_PROC_BROWSER_TEST_F(ChromeWebPlatformSecurityMetricsBrowserTest,
                                                       "/private_network_access/"
                                                       "no-favicon.html")));
 
-  base::StringPiece kScriptTemplate = R"(
+  std::string_view kScriptTemplate = R"(
     (async () => {
       const worker = await new Promise((resolve, reject) => {
         const worker =
@@ -1638,82 +1731,98 @@ IN_PROC_BROWSER_TEST_F(ChromeWebPlatformSecurityMetricsBrowserTest,
     const char* property;
     WebFeature property_access;
     WebFeature property_access_from_other_page;
+    blink::mojom::WindowProxyAccessType access_type;
   } cases[] = {
       {
           "blur",
           "window.top.blur()",
           WebFeature::kWindowProxyCrossOriginAccessBlur,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageBlur,
+          blink::mojom::WindowProxyAccessType::kBlur,
       },
       {
           "closed",
           "window.top.closed",
           WebFeature::kWindowProxyCrossOriginAccessClosed,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageClosed,
+          blink::mojom::WindowProxyAccessType::kClosed,
       },
       {
           "focus",
           "window.top.focus()",
           WebFeature::kWindowProxyCrossOriginAccessFocus,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageFocus,
+          blink::mojom::WindowProxyAccessType::kFocus,
       },
       {
           "frames",
           "window.top.frames",
           WebFeature::kWindowProxyCrossOriginAccessFrames,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageFrames,
+          blink::mojom::WindowProxyAccessType::kFrames,
       },
       {
           "length",
           "window.top.length",
           WebFeature::kWindowProxyCrossOriginAccessLength,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageLength,
+          blink::mojom::WindowProxyAccessType::kLength,
       },
       {
           "location get",
           "window.top.location",
           WebFeature::kWindowProxyCrossOriginAccessLocation,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageLocation,
+          blink::mojom::WindowProxyAccessType::kLocation,
       },
       {
           "opener get",
           "window.top.opener",
           WebFeature::kWindowProxyCrossOriginAccessOpener,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageOpener,
+          blink::mojom::WindowProxyAccessType::kOpener,
       },
       {
           "parent",
           "window.top.parent",
           WebFeature::kWindowProxyCrossOriginAccessParent,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageParent,
+          blink::mojom::WindowProxyAccessType::kParent,
       },
       {
           "postMessage",
           "window.top.postMessage('','*')",
           WebFeature::kWindowProxyCrossOriginAccessPostMessage,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPagePostMessage,
+          blink::mojom::WindowProxyAccessType::kPostMessage,
       },
       {
           "self",
           "window.top.self",
           WebFeature::kWindowProxyCrossOriginAccessSelf,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageSelf,
+          blink::mojom::WindowProxyAccessType::kSelf,
       },
       {
           "top",
           "window.top.top",
           WebFeature::kWindowProxyCrossOriginAccessTop,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageTop,
+          blink::mojom::WindowProxyAccessType::kTop,
       },
       {
           "window",
           "window.top.window",
           WebFeature::kWindowProxyCrossOriginAccessWindow,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageWindow,
+          blink::mojom::WindowProxyAccessType::kWindow,
       }};
 
   for (auto test : cases) {
     SCOPED_TRACE(test.name);
+    std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder =
+        std::make_unique<ukm::TestAutoSetUkmRecorder>();
+
     // Check that a same-origin access does not register use counters.
     EXPECT_TRUE(content::ExecJs(same_origin_subframe, test.property));
     CheckCounter(test.property_access, 0);
@@ -1723,6 +1832,31 @@ IN_PROC_BROWSER_TEST_F(ChromeWebPlatformSecurityMetricsBrowserTest,
     EXPECT_TRUE(content::ExecJs(cross_origin_subframe, test.property));
     CheckCounter(test.property_access, 1);
     CheckCounter(test.property_access_from_other_page, 0);
+    const auto& entries =
+        test_ukm_recorder->GetEntriesByName("WindowProxyUsage");
+    ASSERT_EQ(
+        entries.size(),
+        test.access_type == blink::mojom::WindowProxyAccessType::kPostMessage
+            ? 2u
+            : 1u);
+    const auto& entry = entries.back();
+    test_ukm_recorder->ExpectEntryMetric(entry, "AccessType",
+                                         (int)test.access_type);
+    test_ukm_recorder->ExpectEntryMetric(entry, "IsSamePage", 1);
+    test_ukm_recorder->ExpectEntryMetric(entry, "LocalFrameContext",
+                                         2 /*SubFrameCrossSite*/);
+    test_ukm_recorder->ExpectEntryMetric(entry, "LocalPageContext",
+                                         0 /*Window*/);
+    test_ukm_recorder->ExpectEntryMetric(entry, "LocalUserActivationState",
+                                         0 /*IsActive*/);
+    test_ukm_recorder->ExpectEntryMetric(entry, "RemoteFrameContext",
+                                         0 /*TopFrame*/);
+    test_ukm_recorder->ExpectEntryMetric(entry, "RemotePageContext",
+                                         0 /*Window*/);
+    test_ukm_recorder->ExpectEntryMetric(entry, "RemoteUserActivationState",
+                                         0 /*IsActive*/);
+    test_ukm_recorder->ExpectEntryMetric(entry, "StorageKeyComparison",
+                                         1 /*SameTopSiteCrossOrigin*/);
   }
 }
 
@@ -1891,76 +2025,91 @@ IN_PROC_BROWSER_TEST_F(ChromeWebPlatformSecurityMetricsBrowserTest,
     const char* property;
     WebFeature property_access;
     WebFeature property_access_from_other_page;
+    blink::mojom::WindowProxyAccessType access_type;
   } cases[] = {
       {
           "blur",
           "window.opener.blur()",
           WebFeature::kWindowProxyCrossOriginAccessBlur,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageBlur,
+          blink::mojom::WindowProxyAccessType::kBlur,
       },
       {
           "closed",
           "window.opener.closed",
           WebFeature::kWindowProxyCrossOriginAccessClosed,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageClosed,
+          blink::mojom::WindowProxyAccessType::kClosed,
       },
       {
           "focus",
           "window.opener.focus()",
           WebFeature::kWindowProxyCrossOriginAccessFocus,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageFocus,
+          blink::mojom::WindowProxyAccessType::kFocus,
       },
       {
           "frames",
           "window.opener.frames",
           WebFeature::kWindowProxyCrossOriginAccessFrames,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageFrames,
+          blink::mojom::WindowProxyAccessType::kFrames,
       },
       {
           "length",
           "window.opener.length",
           WebFeature::kWindowProxyCrossOriginAccessLength,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageLength,
+          blink::mojom::WindowProxyAccessType::kLength,
       },
       {
           "location get",
           "window.opener.location",
           WebFeature::kWindowProxyCrossOriginAccessLocation,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageLocation,
+          blink::mojom::WindowProxyAccessType::kLocation,
       },
       {
           "opener get",
           "window.opener.opener",
           WebFeature::kWindowProxyCrossOriginAccessOpener,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageOpener,
+          blink::mojom::WindowProxyAccessType::kOpener,
       },
       {
           "parent",
           "window.opener.parent",
           WebFeature::kWindowProxyCrossOriginAccessParent,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageParent,
+          blink::mojom::WindowProxyAccessType::kParent,
       },
       {
           "postMessage",
           "window.opener.postMessage('','*')",
           WebFeature::kWindowProxyCrossOriginAccessPostMessage,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPagePostMessage,
+          blink::mojom::WindowProxyAccessType::kPostMessage,
       },
       {
           "self",
           "window.opener.self",
           WebFeature::kWindowProxyCrossOriginAccessSelf,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageSelf,
+          blink::mojom::WindowProxyAccessType::kSelf,
       },
       {
           "top",
           "window.opener.top",
           WebFeature::kWindowProxyCrossOriginAccessTop,
           WebFeature::kWindowProxyCrossOriginAccessFromOtherPageTop,
+          blink::mojom::WindowProxyAccessType::kTop,
       }};
 
   for (auto test : cases) {
     SCOPED_TRACE(test.name);
+    std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder =
+        std::make_unique<ukm::TestAutoSetUkmRecorder>();
+
     // Check that a same-origin access does not register use counters.
     EXPECT_TRUE(content::ExecJs(same_origin_popup, test.property));
     CheckCounter(test.property_access, 0);
@@ -1970,6 +2119,31 @@ IN_PROC_BROWSER_TEST_F(ChromeWebPlatformSecurityMetricsBrowserTest,
     EXPECT_TRUE(content::ExecJs(cross_origin_popup, test.property));
     CheckCounter(test.property_access, 1);
     CheckCounter(test.property_access_from_other_page, 1);
+    const auto& entries =
+        test_ukm_recorder->GetEntriesByName("WindowProxyUsage");
+    ASSERT_EQ(
+        entries.size(),
+        test.access_type == blink::mojom::WindowProxyAccessType::kPostMessage
+            ? 2u
+            : 1u);
+    const auto& entry = entries.back();
+    test_ukm_recorder->ExpectEntryMetric(entry, "AccessType",
+                                         (int)test.access_type);
+    test_ukm_recorder->ExpectEntryMetric(entry, "IsSamePage", 0);
+    test_ukm_recorder->ExpectEntryMetric(entry, "LocalFrameContext",
+                                         0 /*TopFrame*/);
+    test_ukm_recorder->ExpectEntryMetric(entry, "LocalPageContext",
+                                         1 /*Popup*/);
+    test_ukm_recorder->ExpectEntryMetric(entry, "LocalUserActivationState",
+                                         0 /*IsActive*/);
+    test_ukm_recorder->ExpectEntryMetric(entry, "RemoteFrameContext",
+                                         0 /*TopFrame*/);
+    test_ukm_recorder->ExpectEntryMetric(entry, "RemotePageContext",
+                                         0 /*Window*/);
+    test_ukm_recorder->ExpectEntryMetric(entry, "RemoteUserActivationState",
+                                         1 /*HasBeenActive*/);
+    test_ukm_recorder->ExpectEntryMetric(entry, "StorageKeyComparison",
+                                         3 /*CrossKey*/);
   }
 }
 
@@ -2257,7 +2431,7 @@ IN_PROC_BROWSER_TEST_F(SameDocumentCrossOriginInitiatorTest, SameSite) {
   EXPECT_TRUE(content::ExecJs(
       web_contents(), "document.querySelector('iframe').src += '#foo';"));
   EXPECT_TRUE(content::WaitForLoadStop(web_contents()));
-  // TODO(https://crbug.com/1408429) It seems the initiator origin is wrong,
+  // TODO(crbug.com/40062719) It seems the initiator origin is wrong,
   // e.g. `child_url` instead of `parent_url`, causing the metrics not to be
   // recorded.
   CheckCounter(WebFeature::kSameDocumentCrossOriginInitiator, 0);
@@ -2420,7 +2594,7 @@ IN_PROC_BROWSER_TEST_F(ChromeWebPlatformSecurityMetricsBrowserTest,
   CheckCounter(WebFeature::kDanglingMarkupInTargetNotEndsWithNewLineOrGT, 0);
 }
 
-// TODO(https://crbug.com/1487325): Fix and reenable the test for Mac.
+// TODO(crbug.com/40283243): Fix and reenable the test for Mac.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_DanglingMarkupInTargetWithNewLineOrGreaterThan \
   DISABLED_DanglingMarkupInTargetWithNewLineOrGreaterThan
@@ -2626,10 +2800,16 @@ class ChromeWebPlatformSecurityMetricsBrowserPdfTest
 
 IN_PROC_BROWSER_TEST_P(ChromeWebPlatformSecurityMetricsBrowserPdfTest,
                        CrossWindowAccessToPluginDocument) {
-  // TODO(crbug.com/1445746): Remove this once the test passes for OOPIF PDF.
-  if (UseOopif()) {
-    GTEST_SKIP();
-  }
+  const char kAccessInnerFrameDocumentScript[] = R"(
+    (() => {
+      try {
+        window.frames[0].frames[0].contentDocument;
+      } catch (e) {
+        return e.name;
+      }
+      return "success";
+    })()
+  )";
 
   EXPECT_TRUE(content::NavigateToURL(web_contents(),
                                      https_server().GetURL("/empty.html")));
@@ -2650,20 +2830,16 @@ IN_PROC_BROWSER_TEST_P(ChromeWebPlatformSecurityMetricsBrowserPdfTest,
   // count as a "plugin document".
   CheckCounter(WebFeature::kCrossWindowAccessToBrowserGeneratedDocument, 0);
 
-  // Accessing the inner frame throws a `SecurityError`, however.
-  EXPECT_EQ("SecurityError", content::EvalJs(web_contents(), R"(
-    (() => {
-      try {
-        window.frames[0].frames[0].contentDocument;
-      } catch (e) {
-        return e.name;
-      }
-      return "success";
-    })()
-  )"));
+  // For OOPIF PDF viewer, accessing the inner frame throws a `TypeError` due to
+  // shadow DOM. For GuestView PDF viewer, accessing the inner frame throws a
+  // `SecurityError`.
+  const std::string expected = UseOopif() ? "TypeError" : "SecurityError";
+  content::EvalJsResult actual =
+      content::EvalJs(web_contents(), kAccessInnerFrameDocumentScript);
+  EXPECT_EQ(expected, actual);
 }
 
-// TODO(crbug.com/1445746): Stop testing both modes after OOPIF PDF viewer
+// TODO(crbug.com/40268279): Stop testing both modes after OOPIF PDF viewer
 // launches.
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
     ChromeWebPlatformSecurityMetricsBrowserPdfTest);

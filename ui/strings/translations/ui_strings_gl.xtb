@@ -49,6 +49,7 @@
 <translation id="2295140143284145483">Enquisa</translation>
 <translation id="2297836609126180313"><ph name="QUANTITY" /> TB/s</translation>
 <translation id="2353636109065292463">Comprobando a túa conexión a Internet</translation>
+<translation id="2359808026110333948">Continuar</translation>
 <translation id="2388990488038464401">Queres chamar a este número desde o teu teléfono?</translation>
 <translation id="2435457462613246316">Mostrar contrasinal</translation>
 <translation id="24452542372838207">Despregar notificación</translation>
@@ -65,7 +66,6 @@
 <translation id="2653844658857826081">NOVO</translation>
 <translation id="2666092431469916601">Parte superior</translation>
 <translation id="2701330563083355633">Contido compartido desde <ph name="DEVICE_NAME" /></translation>
-<translation id="271033894570825754">Novo</translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{Hai un ano}other{Hai # anos}}</translation>
 <translation id="2878511608894704031">Eliminar todo</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{en 1 d}other{en # d}}</translation>
@@ -130,6 +130,7 @@
 <translation id="5574202486608032840">Sistema <ph name="IDS_SHORT_PRODUCT_OS_NAME" /></translation>
 <translation id="5583640892426849032">Retroceso</translation>
 <translation id="5613020302032141669">Frecha para a esquerda</translation>
+<translation id="5633029987065897167">Baleiro</translation>
 <translation id="5754277640426581776">{MINUTES,plural, =1{Un minuto}other{# minutos}}</translation>
 <translation id="5763338081255973061">{DAYS,plural, =0{Dispositivo activo hoxe}=1{Dispositivo activo hai 1 día}other{Dispositivo activo hai # días}}</translation>
 <translation id="5768079895599174203">{DAYS,plural, =1{Un día e }other{# días e }}</translation>

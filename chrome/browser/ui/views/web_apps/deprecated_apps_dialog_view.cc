@@ -22,7 +22,7 @@
 #include "extensions/browser/extension_icon_image.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/extension_icon_set.h"
+#include "extensions/common/icons/extension_icon_set.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -32,6 +32,7 @@
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/link.h"
@@ -204,15 +205,17 @@ void DeprecatedAppsDialogView::InitDialog() {
       l10n_util::GetStringUTF16(IDS_DEPRECATED_APPS_LEARN_MORE)));
   learn_more->SetCallback(base::BindRepeating(
       [](content::WebContents* web_contents, const ui::Event& event) {
-        web_contents->OpenURL(content::OpenURLParams(
-            GURL(chrome::kChromeAppsDeprecationLearnMoreURL),
-            content::Referrer(),
-            ui::DispositionFromEventFlags(
-                event.flags(), WindowOpenDisposition::NEW_FOREGROUND_TAB),
-            ui::PAGE_TRANSITION_LINK, /*is_renderer_initiated=*/false));
+        web_contents->OpenURL(
+            content::OpenURLParams(
+                GURL(chrome::kChromeAppsDeprecationLearnMoreURL),
+                content::Referrer(),
+                ui::DispositionFromEventFlags(
+                    event.flags(), WindowOpenDisposition::NEW_FOREGROUND_TAB),
+                ui::PAGE_TRANSITION_LINK, /*is_renderer_initiated=*/false),
+            /*navigation_handle_callback=*/{});
       },
       web_contents_));
-  learn_more->SetAccessibleName(
+  learn_more->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_DEPRECATED_APPS_LEARN_MORE_AX_LABEL));
   learn_more->SetHorizontalAlignment(gfx::ALIGN_LEFT);
 

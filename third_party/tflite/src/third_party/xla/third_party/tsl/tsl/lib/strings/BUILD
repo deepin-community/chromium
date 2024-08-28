@@ -1,9 +1,9 @@
-load("//tsl:tsl.bzl", "set_external_visibility")
-load("//tsl:tsl.default.bzl", "filegroup")
 load(
     "@local_tsl//tsl/platform:rules_cc.bzl",
     "cc_library",
 )
+load("@local_xla//xla/tsl:tsl.bzl", "internal_visibility")
+load("@local_xla//xla/tsl:tsl.default.bzl", "filegroup")
 
 # copybara:uncomment package(default_applicable_licenses = ["//tensorflow:license"])
 
@@ -29,7 +29,7 @@ filegroup(
         "proto_serialization.cc",
         "proto_serialization.h",
     ],
-    visibility = ["//visibility:public"],
+    visibility = internal_visibility(["//tensorflow/core/lib/strings:__pkg__"]),
 )
 
 filegroup(
@@ -37,7 +37,7 @@ filegroup(
     srcs = [
         "proto_serialization.h",
     ],
-    visibility = ["//visibility:public"],
+    visibility = internal_visibility(["//tensorflow/core/lib/strings:__pkg__"]),
 )
 
 filegroup(
@@ -45,7 +45,7 @@ filegroup(
     srcs = [
         "proto_serialization.h",
     ],
-    visibility = ["//visibility:public"],
+    visibility = internal_visibility(["//tensorflow/core/lib/strings:__pkg__"]),
 )
 
 filegroup(
@@ -53,5 +53,5 @@ filegroup(
     srcs = [
         "proto_serialization.h",
     ],
-    visibility = ["//visibility:public"],
+    visibility = internal_visibility(["//tensorflow/core/lib/strings:__pkg__"]),
 )

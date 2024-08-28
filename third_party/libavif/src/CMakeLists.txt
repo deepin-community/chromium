@@ -8,13 +8,30 @@ if(POLICY CMP0092)
     cmake_policy(SET CMP0092 NEW)
 endif()
 
+# Prevent warnings in CMake>=3.24 for ExternalProject_Add()
+# see https://cmake.org/cmake/help/latest/policy/CMP0135.html
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW) # valid for DOWNLOAD_EXTRACT_TIMESTAMP option in CMake 3.24 and later
+endif()
+
+# New in CMake version 3.30. FetchContent_Populate(<name>) is deprecated, call
+# FetchContent_MakeAvailable(<name>) instead.
+if(POLICY CMP0169)
+    cmake_policy(SET CMP0169 OLD)
+endif()
+
+project(libavif LANGUAGES C VERSION 1.1.0)
+
 # The root directory of the avif source
 set(AVIF_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Specify search path for CMake modules to be loaded by include() and find_package()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules")
 
-project(libavif LANGUAGES C VERSION 1.0.4)
+include(ExternalProject)
+include(FetchContent)
+include(FindPkgConfig)
+include(AvifExternalProjectUtils)
 
 # Set C99 as the default
 set(CMAKE_C_STANDARD 99)
@@ -27,21 +44,22 @@ set(CMAKE_C_STANDARD 99)
 #   If the source code was changed, but there were no interface changes:
 #     Increment PATCH.
 set(LIBRARY_VERSION_MAJOR 16)
-set(LIBRARY_VERSION_MINOR 0)
-set(LIBRARY_VERSION_PATCH 4)
+set(LIBRARY_VERSION_MINOR 1)
+set(LIBRARY_VERSION_PATCH 0)
 set(LIBRARY_VERSION "${LIBRARY_VERSION_MAJOR}.${LIBRARY_VERSION_MINOR}.${LIBRARY_VERSION_PATCH}")
 set(LIBRARY_SOVERSION ${LIBRARY_VERSION_MAJOR})
 
 option(BUILD_SHARED_LIBS "Build shared avif library" ON)
 
 option(AVIF_ENABLE_WERROR "Treat all compiler warnings as errors" OFF)
-option(AVIF_ENABLE_WUNUSED_RESULT "Add [[nodiscard]] to some functions. CMake must be at least 3.21 to force C23" OFF)
+option(AVIF_ENABLE_NODISCARD "Add [[nodiscard]] to some functions. CMake must be at least 3.21 to force C23" OFF)
 
 option(AVIF_ENABLE_EXPERIMENTAL_YCGCO_R "Enable experimental YCgCo-R matrix code" OFF)
 option(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP
        "Enable experimental gain map code (for HDR images that look good both on HDR and SDR displays)" OFF
 )
-option(AVIF_ENABLE_EXPERIMENTAL_AVIR "Enable experimental reduced header" OFF)
+option(AVIF_ENABLE_EXPERIMENTAL_METAV1 "Enable experimental reduced header" OFF)
+option(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM "Enable experimental sample transform code" OFF)
 
 set(AVIF_PKG_CONFIG_EXTRA_LIBS_PRIVATE "")
 set(AVIF_PKG_CONFIG_EXTRA_REQUIRES_PRIVATE "")
@@ -54,6 +72,7 @@ function(set_local_or_system_option VAR DEFAULT TEXT)
         else()
             set(DEFAULT "SYSTEM")
         endif()
+        message(WARNING "Setting AVIF_LOCAL_${VAR} is deprecated. " "Set AVIF_${VAR} to ${DEFAULT} instead.")
     elseif(DEFINED AVIF_${VAR})
         set(DEFAULT ${AVIF_${VAR}})
     endif()
@@ -99,8 +118,9 @@ cmake_dependent_option(
     AVIF_CODEC_AOM_ENCODE "if AVIF_CODEC_AOM is on, use/offer libaom's encoder" ON "NOT AVIF_CODEC_AOM STREQUAL OFF" OFF
 )
 
-option(AVIF_LOCAL_GTEST
-       "Build the GoogleTest framework by providing your own copy of the repo in ext/googletest (see Local Builds in README)" OFF
+set_local_or_system_option(
+    "GTEST" OFF
+    "Build the GoogleTest framework by providing your own copy of the repo in ext/googletest (see Local Builds in README)"
 )
 option(AVIF_LOCAL_FUZZTEST
        "Build the Google FuzzTest framework by providing your own copy of the repo in ext/fuzztest (see Local Builds in README)"
@@ -142,8 +162,8 @@ add_library(avif_obj OBJECT)
 add_library(avif)
 
 # Adds <target> to avif_obj's public link libraries for build, and adds
-# the <target> library as an install link library for export if a consumer
-# would need to include that library alongside libavif when linking.
+# the <target> library as an install link library for export in case a consumer
+# needs to include that library alongside libavif when statically linking.
 function(avif_target_link_library target)
     target_link_libraries(avif_obj PUBLIC $<BUILD_INTERFACE:${target}>)
     get_target_property(target_is_local ${target} AVIF_LOCAL)
@@ -154,10 +174,8 @@ function(avif_target_link_library target)
     if(NOT install_target)
         set(install_target ${target})
     endif()
-    # The transitive dependency is an export link library if it is a shared
-    # library, or if it is a static library in a static build
-    get_target_property(target_type ${target} TYPE)
-    if(target_type STREQUAL "SHARED_LIBRARY" OR NOT BUILD_SHARED_LIBS)
+    # The transitive dependency needs to be an export link library in a static build.
+    if(NOT BUILD_SHARED_LIBS)
         target_link_libraries(avif PUBLIC $<INSTALL_INTERFACE:${install_target}>)
     endif()
 endfunction()
@@ -201,7 +219,9 @@ if(AVIF_JPEG STREQUAL "LOCAL")
     include(LocalJpeg)
 endif()
 
-set_local_or_system_option("LIBYUV" "OFF" "Use libyuv.")
+set_local_or_system_option("LIBYUV" "SYSTEM" "Use libyuv.")
+# check_avif_option libyuv must precede libaom because the latter needs to link against the former
+# when building libaom locally
 check_avif_option(AVIF_LIBYUV TARGET yuv::yuv PKG_NAME libyuv)
 if(AVIF_LIBYUV_ENABLED)
     # libyuv 1755 exposed all of the I*Matrix() functions, which libavif relies on.
@@ -235,71 +255,81 @@ if(AVIF_LIBSHARPYUV_ENABLED)
     avif_target_link_library(sharpyuv::sharpyuv)
 endif(AVIF_LIBSHARPYUV_ENABLED)
 
-option(AVIF_LOCAL_LIBXML2 "Build libxml2 by providing your own copy inside the ext subdir. \
-libxml2 is used when AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP is ON" OFF
+set_local_or_system_option(
+    "LIBXML2" "OFF" "Build libxml2 by providing your own copy inside the ext subdir. \
+libxml2 is used when AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP is ON"
 )
+
 if(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
-    if(NOT TARGET LibXml2::LibXml2)
-        if(AVIF_LOCAL_LIBXML2)
-            include(LocalLibXml2)
-        else()
-            find_package(LibXml2 QUIET)
-        endif()
-    endif()
+    check_avif_option(AVIF_LIBXML2 TARGET LibXml2::LibXml2 PKG_NAME LibXml2)
 endif()
 # ---------------------------------------------------------------------------------------
 
 # Enable all warnings
 include(CheckCCompilerFlag)
-if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+if(MSVC)
+    message(STATUS "libavif: Enabling warnings for MSVC")
+    target_compile_options(
+        avif_obj
+        PUBLIC $<BUILD_INTERFACE: /W4 # For clang-cl, /W4 enables -Wall and -Wextra
+               /wd4324 # Disable: structure was padded due to alignment specifier
+               >
+    )
+    # clang-cl documentation says:
+    #   /execution-charset:<value>
+    #                           Runtime encoding, supports only UTF-8
+    #   ...
+    #   /source-charset:<value> Source encoding, supports only UTF-8
+    # So we don't need to pass /source-charset:utf-8 to clang-cl, and we cannot pass /execution-charset:us-ascii to clang-cl.
+    if(CMAKE_C_COMPILER_ID MATCHES "MSVC")
+        target_compile_options(
+            avif_obj
+            PUBLIC $<BUILD_INTERFACE:
+                   # This tells MSVC to read source code as UTF-8 and assume console can only use ASCII (minimal safe).
+                   # libavif uses ANSI API to print to console, which is not portable between systems using different
+                   # languages and results in mojibake unless we only use codes shared by every code page: ASCII.
+                   # A C4556 warning will be generated on violation.
+                   # Commonly used /utf-8 flag assumes UTF-8 for both source and console, which is usually not the case.
+                   # Warnings can be suppressed but there will still be random characters printed to the console.
+                   /source-charset:utf-8
+                   /execution-charset:us-ascii
+                   >
+        )
+    endif()
+elseif(CMAKE_C_COMPILER_ID MATCHES "Clang")
     message(STATUS "libavif: Enabling warnings for Clang")
     target_compile_options(avif_obj PUBLIC $<BUILD_INTERFACE:-Wall -Wextra -Wshorten-64-to-32>)
 elseif(CMAKE_C_COMPILER_ID MATCHES "GNU")
     message(STATUS "libavif: Enabling warnings for GCC")
     target_compile_options(avif_obj PUBLIC $<BUILD_INTERFACE:-Wall -Wextra>)
-elseif(CMAKE_C_COMPILER_ID MATCHES "MSVC")
-    message(STATUS "libavif: Enabling warnings for MSVC")
-    target_compile_options(
-        avif_obj
-        PUBLIC $<BUILD_INTERFACE:
-               /W4
-               /wd4324 # Disable: structure was padded due to alignment specifier
-               /wd4996 # Disable: potentially unsafe stdlib methods
-               # This tells MSVC to read source code as UTF-8 and assume console can only use ASCII (minimal safe).
-               # libavif uses ANSI API to print to console, which is not portable between systems using different
-               # languages and results in mojibake unless we only use codes shared by every code page: ASCII.
-               # A C4556 warning will be generated on violation.
-               # Commonly used /utf-8 flag assumes UTF-8 for both source and console, which is usually not the case.
-               # Warnings can be suppressed but there will still be random characters printed to the console.
-               /source-charset:utf-8
-               /execution-charset:us-ascii
-               >
-    )
 else()
     message(FATAL_ERROR "libavif: Unknown compiler, bailing out")
 endif()
 
 if(AVIF_ENABLE_WERROR)
     # Warnings as errors
-    if(CMAKE_C_COMPILER_ID MATCHES "Clang" OR CMAKE_C_COMPILER_ID MATCHES "GNU")
-        target_compile_options(avif_obj PUBLIC $<BUILD_INTERFACE:-Werror>)
-    elseif(CMAKE_C_COMPILER_ID MATCHES "MSVC")
+    if(MSVC)
         target_compile_options(avif_obj PUBLIC $<BUILD_INTERFACE:/WX>)
+    elseif(CMAKE_C_COMPILER_ID MATCHES "Clang" OR CMAKE_C_COMPILER_ID MATCHES "GNU")
+        target_compile_options(avif_obj PUBLIC $<BUILD_INTERFACE:-Werror>)
     else()
         message(FATAL_ERROR "libavif: Unknown compiler, bailing out")
     endif()
 endif()
 
-if(AVIF_ENABLE_WUNUSED_RESULT)
+if(AVIF_ENABLE_NODISCARD)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.21.0)
         set(CMAKE_C_STANDARD 23)
         set_property(TARGET avif_obj PROPERTY C_STANDARD 23)
     else()
         unset(CMAKE_C_STANDARD)
         set_property(TARGET avif_obj PROPERTY C_STANDARD)
-        target_compile_options(avif_obj PUBLIC $<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:C>:-std=gnu2x>>)
+        if(CMAKE_C_COMPILER_ID MATCHES "Clang" OR CMAKE_C_COMPILER_ID MATCHES "GNU")
+            target_compile_options(avif_obj PUBLIC $<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:C>:-std=gnu2x>>)
+        elseif(CMAKE_C_COMPILER_ID MATCHES "MSVC")
+            target_compile_options(avif_obj PUBLIC $<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:C>:/std:clatest>>)
+        endif()
     endif()
-    target_compile_options(avif_obj PUBLIC $<BUILD_INTERFACE:-Wunused-result>)
     target_compile_definitions(avif_obj PUBLIC $<BUILD_INTERFACE:AVIF_ENABLE_NODISCARD=1>)
 endif()
 
@@ -316,6 +346,13 @@ if(AVIF_ENABLE_COVERAGE)
     endif()
 endif()
 
+if(MSVC)
+    # Disable deprecation warnings about POSIX function names such as setmode (replaced by the ISO C and C++ conformant name _setmode).
+    add_compile_definitions(_CRT_NONSTDC_NO_WARNINGS)
+    # Disable deprecation warnings about unsafe CRT library functions such as fopen (replaced by fopen_s).
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+endif()
+
 if(AVIF_ENABLE_EXPERIMENTAL_YCGCO_R)
     add_compile_definitions(AVIF_ENABLE_EXPERIMENTAL_YCGCO_R)
 endif()
@@ -324,8 +361,12 @@ if(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
     add_compile_definitions(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
 endif()
 
-if(AVIF_ENABLE_EXPERIMENTAL_AVIR)
-    add_compile_definitions(AVIF_ENABLE_EXPERIMENTAL_AVIR)
+if(AVIF_ENABLE_EXPERIMENTAL_METAV1)
+    add_compile_definitions(AVIF_ENABLE_EXPERIMENTAL_METAV1)
+endif()
+
+if(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+    add_compile_definitions(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
 endif()
 
 set(AVIF_SRCS
@@ -350,6 +391,9 @@ set(AVIF_SRCS
 )
 if(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
     list(APPEND AVIF_SRCS src/gainmap.c)
+endif()
+if(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+    list(APPEND AVIF_SRCS src/sampletransform.c)
 endif()
 
 if(AVIF_ENABLE_COMPLIANCE_WARDEN)
@@ -450,10 +494,13 @@ if(AVIF_CODEC_RAV1E_ENABLED)
     target_sources(avif_obj PRIVATE src/codec_rav1e.c)
 
     # Unfortunately, rav1e requires a few more libraries
-    if(WIN32)
-        target_link_libraries(rav1e::rav1e INTERFACE ntdll.lib userenv.lib ws2_32.lib bcrypt.lib)
-    elseif(UNIX AND NOT APPLE)
-        target_link_libraries(rav1e::rav1e INTERFACE ${CMAKE_DL_LIBS}) # for backtrace
+    # first check that RAV1E_LIBRARIES hasn't been populated by the LocalRav1e module
+    if(NOT RAV1E_LIBRARIES)
+        if(WIN32)
+            target_link_libraries(rav1e::rav1e INTERFACE ntdll.lib userenv.lib ws2_32.lib bcrypt.lib)
+        elseif(UNIX AND NOT APPLE)
+            target_link_libraries(rav1e::rav1e INTERFACE ${CMAKE_DL_LIBS}) # for backtrace
+        endif()
     endif()
 
     avif_target_link_library(rav1e::rav1e)
@@ -600,7 +647,11 @@ endif()
 
 if(AVIF_USE_CXX)
     enable_language(CXX)
-    set(CMAKE_CXX_STANDARD 14)
+    if(AVIF_ENABLE_NODISCARD)
+        set(CMAKE_CXX_STANDARD 17)
+    else()
+        set(CMAKE_CXX_STANDARD 14)
+    endif()
 endif()
 
 option(AVIF_BUILD_APPS "Build avif apps." OFF)
@@ -717,33 +768,31 @@ if(AVIF_BUILD_APPS)
     endif()
     if(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
         include(LocalLibargparse)
-        if(TARGET libargparse)
-            set(AVIF_ENABLE_AVIFGAINMAPUTIL TRUE)
+        set(AVIF_ENABLE_AVIFGAINMAPUTIL TRUE)
 
-            set(AVIFGAINMAPUTIL_SRCS
-                apps/avifgainmaputil/avifgainmaputil.cc
-                apps/avifgainmaputil/convert_command.cc
-                apps/avifgainmaputil/combine_command.cc
-                apps/avifgainmaputil/extractgainmap_command.cc
-                apps/avifgainmaputil/imageio.cc
-                apps/avifgainmaputil/printmetadata_command.cc
-                apps/avifgainmaputil/tonemap_command.cc
-                apps/avifgainmaputil/program_command.cc
-                apps/avifgainmaputil/swapbase_command.cc
-            )
+        set(AVIFGAINMAPUTIL_SRCS
+            apps/avifgainmaputil/avifgainmaputil.cc
+            apps/avifgainmaputil/convert_command.cc
+            apps/avifgainmaputil/combine_command.cc
+            apps/avifgainmaputil/extractgainmap_command.cc
+            apps/avifgainmaputil/imageio.cc
+            apps/avifgainmaputil/printmetadata_command.cc
+            apps/avifgainmaputil/tonemap_command.cc
+            apps/avifgainmaputil/program_command.cc
+            apps/avifgainmaputil/swapbase_command.cc
+        )
 
-            add_executable(avifgainmaputil "${AVIFGAINMAPUTIL_SRCS}")
-            if(WIN32)
-                target_sources(avifgainmaputil PRIVATE apps/utf8.rc)
-                if(NOT MINGW)
-                    target_link_options(avifgainmaputil PRIVATE /MANIFEST:NO)
-                endif()
+        add_executable(avifgainmaputil "${AVIFGAINMAPUTIL_SRCS}")
+        if(WIN32)
+            target_sources(avifgainmaputil PRIVATE apps/utf8.rc)
+            if(NOT MINGW)
+                target_link_options(avifgainmaputil PRIVATE /MANIFEST:NO)
             endif()
-            set_target_properties(avifgainmaputil PROPERTIES LINKER_LANGUAGE "CXX")
-            target_include_directories(avifgainmaputil PRIVATE apps/avifgainmaputil/)
-            target_link_libraries(avifgainmaputil libargparse avif_apps)
-            # Don't add avifgainmaputil to installed apps for now.
         endif()
+        set_target_properties(avifgainmaputil PROPERTIES LINKER_LANGUAGE "CXX")
+        target_include_directories(avifgainmaputil PRIVATE apps/avifgainmaputil/)
+        target_link_libraries(avifgainmaputil libargparse avif_apps)
+        # Don't add avifgainmaputil to installed apps for now.
     endif()
 endif()
 
@@ -865,10 +914,10 @@ if(WIN32)
         avif_exclude_safe(genfiles)
         avif_exclude_safe(minigzip)
     endif()
-    if(AVIF_LOCAL_JPEG)
+    if(AVIF_JPEG STREQUAL "LOCAL")
         avif_set_folder_safe(JPEG::JPEG "ext/libjpeg-turbo")
     endif()
-    if(AVIF_LOCAL_LIBXML2)
+    if(AVIF_LIBXML2 STREQUAL "LOCAL")
         avif_set_folder_safe(xml2 "ext/libxml2")
     endif()
 endif()

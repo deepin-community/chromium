@@ -131,6 +131,7 @@ class MockEntropyProviders : public EntropyProviders {
   struct Results {
     double low_entropy = kAlwaysUseLastGroup;
     std::optional<double> high_entropy = std::nullopt;
+    std::optional<double> limited_entropy = std::nullopt;
   };
   explicit MockEntropyProviders(Results results,
                                 uint32_t low_entropy_domain = 8000);
@@ -138,10 +139,12 @@ class MockEntropyProviders : public EntropyProviders {
 
   const base::FieldTrial::EntropyProvider& low_entropy() const override;
   const base::FieldTrial::EntropyProvider& default_entropy() const override;
+  const base::FieldTrial::EntropyProvider& limited_entropy() const override;
 
  private:
   base::MockEntropyProvider low_provider_;
   base::MockEntropyProvider high_provider_;
+  base::MockEntropyProvider limited_provider_;
 };
 
 // Returns a hex string of the GZipped, base64 encoded, and serialized seed.
@@ -150,6 +153,13 @@ std::string GZipAndB64EncodeToHexString(const VariationsSeed& seed);
 // Returns whether the active group ids includes the given trial name.
 bool ContainsTrialName(const std::vector<ActiveGroupId>& active_group_ids,
                        std::string_view trial_name);
+
+// Returns whether the active group ids includes the given trial name with the
+// given group name.
+bool ContainsTrialAndGroupName(
+    const std::vector<ActiveGroupId>& active_group_ids,
+    std::string_view trial_name,
+    std::string_view group_name);
 
 }  // namespace variations
 

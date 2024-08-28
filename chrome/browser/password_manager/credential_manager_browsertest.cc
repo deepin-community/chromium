@@ -36,6 +36,9 @@
 namespace {
 
 using password_manager::MatchesFormExceptStore;
+using ::testing::ElementsAre;
+using ::testing::Pair;
+using ::testing::SizeIs;
 
 class CredentialManagerBrowserTest : public PasswordManagerBrowserTestBase {
  public:
@@ -182,8 +185,9 @@ class CredentialManagerBrowserTest : public PasswordManagerBrowserTestBase {
     // ContentCredentialManager should have closed the underlying interface
     // connection in response to DidCommitProvisionalLoad in Step 3, and the
     // method call should be ignored.
-    if (!client->was_store_ever_called())
+    if (!client->was_store_ever_called()) {
       return;
+    }
 
     BubbleObserver prompt_observer(WebContents());
     prompt_observer.WaitForAutomaticSavePrompt();
@@ -746,10 +750,8 @@ IN_PROC_BROWSER_TEST_F(CredentialManagerBrowserTest,
   // Wait for the migration logic to actually touch the password store.
   WaitForPasswordStore();
   // Only HTTPS passwords should be present.
-  EXPECT_TRUE(
-      password_store->stored_passwords().at(http_origin.spec()).empty());
-  EXPECT_FALSE(
-      password_store->stored_passwords().at(https_origin.spec()).empty());
+  EXPECT_THAT(password_store->stored_passwords(),
+              ElementsAre(Pair(https_origin.spec(), SizeIs(1))));
 }
 
 IN_PROC_BROWSER_TEST_F(CredentialManagerBrowserTest,
@@ -1134,8 +1136,9 @@ void CredentialManagerAvatarTest::AddPasswordForURL(const GURL& url) {
 }
 
 void CredentialManagerAvatarTest::WaitForAvatarCounter(size_t expected) {
-  if (avatar_request_counter_ == expected)
+  if (avatar_request_counter_ == expected) {
     return;
+  }
   // The logic doesn't support increments by more than one.
   EXPECT_EQ(expected, avatar_request_counter_ + 1);
   base::RunLoop loop;

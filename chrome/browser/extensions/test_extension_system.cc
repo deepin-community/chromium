@@ -125,7 +125,7 @@ ExtensionService* TestExtensionSystem::CreateExtensionService(
   if (CWSInfoService::Get(profile_) == nullptr) {
     Profile* profile = profile_;
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-    // TODO(crbug.com/1414225): Refactor this convenience upstream to test
+    // TODO(crbug.com/40891982): Refactor this convenience upstream to test
     // callers. Possibly just BuiltInAppTest.BuildGuestMode.
     if (profile_->IsGuestSession()) {
       profile = profile_->GetOriginalProfile();
@@ -226,7 +226,7 @@ void TestExtensionSystem::InstallUpdate(
     const base::FilePath& temp_dir,
     bool install_immediately,
     InstallUpdateCallback install_update_callback) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void TestExtensionSystem::PerformActionBasedOnOmahaAttributes(
@@ -236,7 +236,7 @@ void TestExtensionSystem::PerformActionBasedOnOmahaAttributes(
 bool TestExtensionSystem::FinishDelayedInstallationIfReady(
     const std::string& extension_id,
     bool install_immediately) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return false;
 }
 

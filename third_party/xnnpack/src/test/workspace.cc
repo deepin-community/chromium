@@ -14,11 +14,12 @@
 #include <random>
 #include <vector>
 
-#include <xnnpack.h>
-#include <xnnpack/math.h>
-#include <xnnpack/subgraph.h>
-
 #include <gtest/gtest.h>
+#include "xnnpack.h"
+#include "xnnpack/allocation-type.h"
+#include "xnnpack/math.h"
+#include "xnnpack/subgraph.h"
+#include "replicable_random_device.h"
 
 namespace {
 void DefineGraphWithoutInternalTensors(xnn_subgraph_t* subgraph, std::array<size_t, 4> dims)
@@ -806,8 +807,7 @@ TEST(WORKSPACE, internally_allocated_dynamic_quantization_parameters)
   ASSERT_EQ(xnn_status_success, xnn_create_subgraph(/*external_value_ids=*/4, /*flags=*/0, &subgraph));
   std::unique_ptr<xnn_subgraph, decltype(&xnn_delete_subgraph)> auto_subgraph(subgraph, xnn_delete_subgraph);
   uint32_t input_id = XNN_INVALID_NODE_ID;
-  std::random_device random_device;
-  auto rng = std::mt19937(random_device());
+  xnnpack::ReplicableRandomDevice rng;
   auto scalerng = std::bind(std::uniform_real_distribution<float>(0.5f, 2.f), std::ref(rng));
   const size_t batch_size = 3;
   const size_t input_channels = 4;

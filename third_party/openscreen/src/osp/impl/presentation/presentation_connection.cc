@@ -40,19 +40,19 @@ Connection::~Connection() {
 }
 
 void Connection::OnConnecting() {
-  OSP_DCHECK(!protocol_connection_);
+  OSP_CHECK(!protocol_connection_);
   state_ = State::kConnecting;
 }
 
 void Connection::OnConnected(
     uint64_t connection_id,
-    uint64_t endpoint_id,
+    uint64_t instance_id,
     std::unique_ptr<ProtocolConnection> protocol_connection) {
   if (state_ != State::kConnecting) {
     return;
   }
   connection_id_ = connection_id;
-  endpoint_id_ = endpoint_id;
+  instance_id_ = instance_id;
   protocol_connection_ = std::move(protocol_connection);
   state_ = State::kConnected;
   delegate_->OnConnected();
@@ -68,7 +68,7 @@ bool Connection::OnClosed() {
   return true;
 }
 
-void Connection::OnClosedByError(Error cause) {
+void Connection::OnClosedByError(const Error& cause) {
   if (OnClosed()) {
     std::ostringstream stream;
     stream << cause;
@@ -141,14 +141,14 @@ void Connection::Terminate(TerminationSource source, TerminationReason reason) {
   parent_delegate_->OnPresentationTerminated(presentation_.id, source, reason);
 }
 
-ConnectionManager::ConnectionManager(MessageDemuxer* demuxer) {
-  message_watch_ = demuxer->SetDefaultMessageTypeWatch(
+ConnectionManager::ConnectionManager(MessageDemuxer& demuxer) {
+  message_watch_ = demuxer.SetDefaultMessageTypeWatch(
       msgs::Type::kPresentationConnectionMessage, this);
 
-  close_request_watch_ = demuxer->SetDefaultMessageTypeWatch(
+  close_request_watch_ = demuxer.SetDefaultMessageTypeWatch(
       msgs::Type::kPresentationConnectionCloseRequest, this);
 
-  close_event_watch_ = demuxer->SetDefaultMessageTypeWatch(
+  close_event_watch_ = demuxer.SetDefaultMessageTypeWatch(
       msgs::Type::kPresentationConnectionCloseEvent, this);
 }
 
@@ -156,7 +156,7 @@ void ConnectionManager::AddConnection(Connection* connection) {
   auto emplace_result =
       connections_.emplace(connection->connection_id(), connection);
 
-  OSP_DCHECK(emplace_result.second);
+  OSP_CHECK(emplace_result.second);
 }
 
 void ConnectionManager::RemoveConnection(Connection* connection) {
@@ -170,7 +170,7 @@ void ConnectionManager::RemoveConnection(Connection* connection) {
 // TODO(jophba): refine the RegisterWatch/OnStreamMessage API. We
 // should add a layer between the message logic and the parse/dispatch
 // logic, and remove the CBOR information from ConnectionManager.
-ErrorOr<size_t> ConnectionManager::OnStreamMessage(uint64_t endpoint_id,
+ErrorOr<size_t> ConnectionManager::OnStreamMessage(uint64_t instance_id,
                                                    uint64_t connection_id,
                                                    msgs::Type message_type,
                                                    const uint8_t* buffer,
@@ -216,23 +216,22 @@ ErrorOr<size_t> ConnectionManager::OnStreamMessage(uint64_t endpoint_id,
         return Error::Code::kCborInvalidMessage;
       }
 
-      msgs::PresentationConnectionCloseResponse response;
-      response.request_id = request.request_id;
+      msgs::PresentationConnectionCloseResponse response = {
+          .request_id = request.request_id,
+          .result = msgs::PresentationConnectionCloseResponse_result::
+              kInvalidConnectionId};
 
       Connection* connection = GetConnection(request.connection_id);
       if (connection) {
         response.result =
             msgs::PresentationConnectionCloseResponse_result::kSuccess;
         connection->OnClosedByRemote();
-      } else {
-        response.result = msgs::PresentationConnectionCloseResponse_result::
-            kInvalidConnectionId;
       }
 
       std::unique_ptr<ProtocolConnection> protocol_connection =
           NetworkServiceManager::Get()
               ->GetProtocolConnectionServer()
-              ->CreateProtocolConnection(endpoint_id);
+              ->CreateProtocolConnection(instance_id);
       if (protocol_connection) {
         protocol_connection->WriteMessage(
             response, &msgs::EncodePresentationConnectionCloseResponse);

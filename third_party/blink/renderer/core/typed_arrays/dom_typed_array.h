@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TYPED_ARRAYS_DOM_TYPED_ARRAY_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TYPED_ARRAYS_DOM_TYPED_ARRAY_H_
 
@@ -32,10 +37,14 @@ class DOMTypedArray final : public DOMArrayBufferView {
     return Create(buffer, 0, length);
   }
 
+  static ThisType* Create(base::span<const ValueType> array) {
+    DOMArrayBuffer* buffer = DOMArrayBuffer::Create(base::as_bytes(array));
+    return Create(buffer, 0, array.size());
+  }
+
   static ThisType* Create(const ValueType* array, size_t length) {
-    DOMArrayBuffer* buffer =
-        DOMArrayBuffer::Create(array, length * sizeof(ValueType));
-    return Create(buffer, 0, length);
+    // SAFETY: Caller guarantees that `array` contains `length` elements.
+    return Create(UNSAFE_BUFFERS(base::span(array, length)));
   }
 
   static ThisType* CreateOrNull(size_t length) {

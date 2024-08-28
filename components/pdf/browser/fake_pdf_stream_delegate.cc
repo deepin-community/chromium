@@ -45,6 +45,8 @@ FakePdfStreamDelegate::GetStreamInfo(content::RenderFrameHost* embedder_frame) {
   return stream_info_;
 }
 
+void FakePdfStreamDelegate::OnPdfEmbedderSandboxed(int frame_tree_node_id) {}
+
 bool FakePdfStreamDelegate::ShouldAllowPdfFrameNavigation(
     content::NavigationHandle* navigation_handle) {
   return should_allow_pdf_frame_navigation_;

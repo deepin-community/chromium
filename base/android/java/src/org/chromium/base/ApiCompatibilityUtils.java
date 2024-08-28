@@ -290,12 +290,26 @@ public class ApiCompatibilityUtils {
     }
 
     /**
-     * Sets the bottom handwriting bounds offset of the given view to 0.
-     * See https://crbug.com/1427112
+     * Sets the mode {@link ActivityOptions#MODE_BACKGROUND_ACTIVITY_START_ALLOWED} to the given
+     * {@link ActivityOptions}. The options can be used to create {@link PendingIntent}.
+     *
+     * @param options {@ActivityOptions} to set the required mode to.
+     */
+    public static void setCreatorActivityOptionsBackgroundActivityStartMode(
+            @NonNull ActivityOptions options) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return;
+        options.setPendingIntentCreatorBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+    }
+
+    /**
+     * Sets the bottom handwriting bounds offset of the given view to 0. See
+     * https://crbug.com/1427112
+     *
      * @param view The view on which to set the handwriting bounds.
      */
     public static void clearHandwritingBoundsOffsetBottom(View view) {
-        // TODO(crbug.com/1427112): Replace uses of this method with direct calls once the API is
+        // TODO(crbug.com/40261637): Replace uses of this method with direct calls once the API is
         // available.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return;
         // Set the bottom handwriting bounds offset to 0 so that the view doesn't intercept
@@ -339,7 +353,7 @@ public class ApiCompatibilityUtils {
         } catch (Exception e) {
             // If fallback logic is ever needed, refer to:
             // https://chromium-review.googlesource.com/c/chromium/src/+/905563/1
-            throw new RuntimeException(e);
+            throw JavaUtils.throwUnchecked(e);
         }
     }
 

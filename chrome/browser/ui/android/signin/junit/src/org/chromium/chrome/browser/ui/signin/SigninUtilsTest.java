@@ -10,7 +10,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.notNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
@@ -23,7 +22,6 @@ import android.content.Context;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.InOrder;
 import org.mockito.Mock;
@@ -33,7 +31,6 @@ import org.mockito.quality.Strictness;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.signin.services.SigninManager;
@@ -51,7 +48,6 @@ import org.chromium.ui.modelutil.PropertyModel;
 @RunWith(BaseRobolectricTestRunner.class)
 @EnableFeatures(SigninFeatures.ENTERPRISE_POLICY_ON_SIGNIN)
 public class SigninUtilsTest {
-    @Rule public final TestRule mFeaturesProcessorRule = new Features.JUnitProcessor();
 
     @Rule
     public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.LENIENT);
@@ -101,7 +97,7 @@ public class SigninUtilsTest {
         SigninUtils.checkAccountManagementAndSignIn(
                 mCoreAccountInfo, mSigninManager, accessPoint, null, mContext, mModalDialogManager);
 
-        verify(mSigninManager).signin(eq(mCoreAccountInfo), eq(accessPoint), isNull());
+        verify(mSigninManager).signin(eq(mCoreAccountInfo), eq(accessPoint), any());
         verify(mSigninManager, never()).setUserAcceptedAccountManagement(anyBoolean());
         verify(mModalDialogManager, never()).showDialog(any(), anyInt());
     }
@@ -223,7 +219,7 @@ public class SigninUtilsTest {
                 mCallback,
                 mContext,
                 mModalDialogManager);
-        verify(mSigninManager).signin(eq(mCoreAccountInfo), eq(accessPoint), eq(mCallback));
+        verify(mSigninManager).signin(eq(mCoreAccountInfo), eq(accessPoint), notNull());
         verify(mSigninManager, never()).setUserAcceptedAccountManagement(anyBoolean());
         verify(mModalDialogManager, never()).showDialog(any(), anyInt());
     }

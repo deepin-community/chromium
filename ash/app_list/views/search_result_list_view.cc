@@ -68,7 +68,7 @@ SearchResultListView::SearchResultListType CategoryToListType(
     case ash::AppListSearchResultCategory::kGames:
       return SearchResultListView::SearchResultListType::kGames;
     case ash::AppListSearchResultCategory::kUnknown:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return SearchResultListView::SearchResultListType::kBestMatch;
   }
 }
@@ -201,9 +201,11 @@ void SearchResultListView::SetListType(SearchResultListType list_type) {
 
   // A valid role must be set prior to setting the name.
   GetViewAccessibility().SetRole(ax::mojom::Role::kListBox);
-  GetViewAccessibility().OverrideName(l10n_util::GetStringFUTF16(
-      IDS_ASH_SEARCH_RESULT_CATEGORY_LABEL_ACCESSIBLE_NAME,
-      title_label_->GetText()));
+  GetViewAccessibility().SetName(
+      l10n_util::GetStringFUTF16(
+          IDS_ASH_SEARCH_RESULT_CATEGORY_LABEL_ACCESSIBLE_NAME,
+          title_label_->GetText()),
+      ax::mojom::NameFrom::kAttribute);
 
 #if DCHECK_IS_ON()
   switch (list_type_.value()) {
@@ -292,11 +294,12 @@ int SearchResultListView::DoUpdate() {
 
   auto* notifier = view_delegate()->GetNotifier();
 
-  // TODO(crbug/1216097): replace metrics with something more meaningful.
+  // TODO(crbug.com/40184658): replace metrics with something more meaningful.
   if (notifier) {
     std::vector<AppListNotifier::Result> notifier_results;
     for (const auto* result : displayed_results)
-      notifier_results.emplace_back(result->id(), result->metrics_type());
+      notifier_results.emplace_back(result->id(), result->metrics_type(),
+                                    result->continue_file_suggestion_type());
     notifier->NotifyResultsUpdated(
         list_type_ == SearchResultListType::kAnswerCard
             ? SearchResultDisplayType::kAnswerCard
@@ -331,8 +334,9 @@ void SearchResultListView::Layout(PassKey) {
   results_container_->SetBoundsRect(GetLocalBounds());
 }
 
-gfx::Size SearchResultListView::CalculatePreferredSize() const {
-  return results_container_->GetPreferredSize();
+gfx::Size SearchResultListView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  return results_container_->GetPreferredSize(available_size);
 }
 
 int SearchResultListView::GetHeightForWidth(int w) const {
@@ -381,7 +385,7 @@ SearchResult::Category SearchResultListView::GetSearchCategory() {
     case SearchResultListType::kAnswerCard:
       // Categories are undefined for |KBestMatch|, and
       // |kAnswerCard| list types.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return SearchResult::Category::kUnknown;
     case SearchResultListType::kApps:
       return SearchResult::Category::kApps;

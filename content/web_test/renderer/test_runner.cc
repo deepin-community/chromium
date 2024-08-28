@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/web_test/renderer/test_runner.h"
 
 #include <stddef.h>
@@ -9,22 +14,23 @@
 #include <algorithm>
 #include <clocale>
 #include <limits>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "base/command_line.h"
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "build/build_config.h"
 #include "cc/paint/paint_canvas.h"
+#include "cc/paint/skia_paint_canvas.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "content/renderer/render_thread_impl.h"
@@ -33,7 +39,6 @@
 #include "content/web_test/renderer/app_banner_service.h"
 #include "content/web_test/renderer/blink_test_helpers.h"
 #include "content/web_test/renderer/fake_subresource_filter.h"
-#include "content/web_test/renderer/pixel_dump.h"
 #include "content/web_test/renderer/spell_check_client.h"
 #include "content/web_test/renderer/test_preferences.h"
 #include "content/web_test/renderer/web_frame_test_proxy.h"
@@ -45,7 +50,11 @@
 #include "gin/wrappable.h"
 #include "mojo/public/mojom/base/text_direction.mojom-forward.h"
 #include "net/base/filename_util.h"
+#include "printing/metafile_skia.h"
+#include "printing/mojom/print.mojom.h"
+#include "printing/page_number.h"
 #include "printing/page_range.h"
+#include "printing/print_settings.h"
 #include "services/network/public/mojom/cors.mojom.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
@@ -71,6 +80,7 @@
 #include "third_party/blink/public/web/web_input_element.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_manifest_manager.h"
+#include "third_party/blink/public/web/web_print_params.h"
 #include "third_party/blink/public/web/web_render_theme.h"
 #include "third_party/blink/public/web/web_script_source.h"
 #include "third_party/blink/public/web/web_security_policy.h"
@@ -232,7 +242,7 @@ class TestRunnerBindings : public gin::Wrappable<TestRunnerBindings> {
     void OnDestruct() override { bindings_->OnFrameDestroyed(); }
 
    private:
-    const raw_ptr<TestRunnerBindings, ExperimentalRenderer> bindings_;
+    const raw_ptr<TestRunnerBindings> bindings_;
   };
 
   explicit TestRunnerBindings(TestRunner* test_runner,
@@ -338,7 +348,6 @@ class TestRunnerBindings : public gin::Wrappable<TestRunnerBindings> {
   void SetEffectiveConnectionType(const std::string& connection_type);
   void SetFilePathForMockFileDialog(const std::string& path);
   void SetMockSpellCheckerEnabled(bool enabled);
-  void SetImagesAllowed(bool allowed);
   void SetIsolatedWorldInfo(int world_id,
                             v8::Local<v8::Value> security_origin,
                             v8::Local<v8::Value> content_security_policy);
@@ -346,6 +355,7 @@ class TestRunnerBindings : public gin::Wrappable<TestRunnerBindings> {
   void SetMockScreenOrientation(const std::string& orientation);
   void SetPOSIXLocale(const std::string& locale);
   void SetMainWindowHidden(bool hidden);
+  void SetFrameWindowHidden(bool hidden);
   void SetWindowRect(const gin::Dictionary& rect);
   void SetPermission(const std::string& name,
                      const std::string& value,
@@ -359,6 +369,9 @@ class TestRunnerBindings : public gin::Wrappable<TestRunnerBindings> {
   void SetPrinting();
   void SetPrintingForFrame(const std::string& frame_name);
   void SetPrintingSize(int width, int height);
+  void SetPrintingMargin(int);
+  void SetShouldCenterAndShrinkToFitPaper(bool);
+  void SetPrintingScaleFactor(float);
   void SetShouldGeneratePixelResults(bool);
   void SetShouldStayOnPageAfterHandlingBeforeUnload(bool value);
   void SetSpellCheckResolvedCallback(v8::Local<v8::Function> callback);
@@ -418,9 +431,9 @@ class TestRunnerBindings : public gin::Wrappable<TestRunnerBindings> {
   // Observer for the |frame_| the TestRunningBindings is bound to.
   TestRunnerBindingsRenderFrameObserver frame_observer_;
 
-  raw_ptr<TestRunner, ExperimentalRenderer> runner_;
-  raw_ptr<WebFrameTestProxy, ExperimentalRenderer> frame_;
-  const raw_ptr<SpellCheckClient, ExperimentalRenderer> spell_check_;
+  raw_ptr<TestRunner, DanglingUntriaged> runner_;
+  raw_ptr<WebFrameTestProxy, DanglingUntriaged> frame_;
+  const raw_ptr<SpellCheckClient, DanglingUntriaged> spell_check_;
   TestPreferences prefs_;
   std::unique_ptr<AppBannerService> app_banner_service_;
 
@@ -477,7 +490,7 @@ void TestRunnerBindings::Install(TestRunner* test_runner,
         R"(if (!window.testRunner._wpt_reftest_setup) {
           window.testRunner._wpt_reftest_setup = true;
 
-          window.addEventListener('load', function() {
+          function observeRefTestFinished() {
             if (window.assert_equals) // In case of a testharness test.
               return;
             window.testRunner.waitUntilDone();
@@ -505,6 +518,15 @@ void TestRunnerBindings::Install(TestRunner* test_runner,
               target.dispatchEvent(event);
             } else {
               document.fonts.ready.then(() => window.testRunner.notifyDone());
+            }
+          };
+
+          window.addEventListener('load', () => {
+            if (document.prerendering) {
+              document.addEventListener('prerenderingchange',
+                  observeRefTestFinished);
+            } else {
+              observeRefTestFinished();
             }
           });
         })")));
@@ -746,7 +768,6 @@ gin::ObjectTemplateBuilder TestRunnerBindings::GetObjectTemplateBuilder(
       .SetMethod("setMockSpellCheckerEnabled",
                  &TestRunnerBindings::SetMockSpellCheckerEnabled)
       .SetMethod("setIconDatabaseEnabled", &TestRunnerBindings::NotImplemented)
-      .SetMethod("setImagesAllowed", &TestRunnerBindings::SetImagesAllowed)
       .SetMethod("setIsolatedWorldInfo",
                  &TestRunnerBindings::SetIsolatedWorldInfo)
       .SetMethod("setJavaScriptCanAccessClipboard",
@@ -758,9 +779,15 @@ gin::ObjectTemplateBuilder TestRunnerBindings::GetObjectTemplateBuilder(
       // Calls setlocale(LC_ALL, ...) for a specified locale.
       .SetMethod("setPOSIXLocale", &TestRunnerBindings::SetPOSIXLocale)
       // Hide or show the main window. Watch for the |document.visibilityState|
-      // to change in order to wait for the side effects of calling this.
+      // on the primary window's Document to change in order to wait for the
+      // side effects of calling this.
       .SetMethod("setMainWindowHidden",
                  &TestRunnerBindings::SetMainWindowHidden)
+      // Hide or show the window displaying this frame. Watch for the
+      // |document.visibilityState| to change in order to wait for the side
+      // effects of calling this.
+      .SetMethod("setFrameWindowHidden",
+                 &TestRunnerBindings::SetFrameWindowHidden)
       .SetMethod("setWindowRect", &TestRunnerBindings::SetWindowRect)
       // Sets the permission's |name| to |value| for a given {origin, embedder}
       // tuple. Sends a message to the WebTestPermissionManager in order for it
@@ -774,6 +801,11 @@ gin::ObjectTemplateBuilder TestRunnerBindings::GetObjectTemplateBuilder(
       .SetMethod("setPrintingForFrame",
                  &TestRunnerBindings::SetPrintingForFrame)
       .SetMethod("setPrintingSize", &TestRunnerBindings::SetPrintingSize)
+      .SetMethod("setPrintingMargin", &TestRunnerBindings::SetPrintingMargin)
+      .SetMethod("setShouldCenterAndShrinkToFitPaper",
+                 &TestRunnerBindings::SetShouldCenterAndShrinkToFitPaper)
+      .SetMethod("setPrintingScaleFactor",
+                 &TestRunnerBindings::SetPrintingScaleFactor)
       .SetMethod("setRphRegistrationMode",
                  &TestRunnerBindings::SetRphRegistrationMode)
       .SetMethod("setScrollbarPolicy", &TestRunnerBindings::NotImplemented)
@@ -1096,7 +1128,7 @@ void TestRunnerBindings::SetEffectiveConnectionType(
   else if (connection_type == "Type4G")
     web_type = blink::WebEffectiveConnectionType::kType4G;
   else
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
 
   if (runner_)
     runner_->SetEffectiveConnectionType(web_type);
@@ -1333,6 +1365,15 @@ void TestRunnerBindings::SetMainWindowHidden(bool hidden) {
     return;
   }
   frame_->GetWebTestControlHostRemote()->SetMainWindowHidden(hidden);
+}
+
+void TestRunnerBindings::SetFrameWindowHidden(bool hidden) {
+  if (!frame_) {
+    return;
+  }
+
+  frame_->GetWebTestControlHostRemote()->SetFrameWindowHidden(
+      frame_->GetWebFrame()->GetLocalFrameToken(), hidden);
 }
 
 void TestRunnerBindings::SetWindowRect(const gin::Dictionary& bounds) {
@@ -1656,13 +1697,6 @@ void TestRunnerBindings::SetCaretBrowsingEnabled() {
   web_view->GetSettings()->SetCaretBrowsingEnabled(true);
 }
 
-void TestRunnerBindings::SetImagesAllowed(bool allowed) {
-  if (!frame_) {
-    return;
-  }
-  runner_->SetImagesAllowed(allowed, *frame_);
-}
-
 void TestRunnerBindings::SetStorageAllowed(bool allowed) {
   if (!frame_) {
     return;
@@ -1727,6 +1761,27 @@ void TestRunnerBindings::SetPrintingSize(int width, int height) {
     return;
   }
   runner_->SetPrintingSize(width, height, *frame_);
+}
+
+void TestRunnerBindings::SetPrintingMargin(int margin) {
+  if (!frame_) {
+    return;
+  }
+  runner_->SetPrintingMargin(margin, *frame_);
+}
+
+void TestRunnerBindings::SetShouldCenterAndShrinkToFitPaper(bool b) {
+  if (!frame_) {
+    return;
+  }
+  runner_->SetShouldCenterAndShrinkToFitPaper(b);
+}
+
+void TestRunnerBindings::SetPrintingScaleFactor(float factor) {
+  if (!frame_) {
+    return;
+  }
+  runner_->SetPrintingScaleFactor(factor);
 }
 
 void TestRunnerBindings::ClearTrustTokenState(
@@ -2096,10 +2151,7 @@ void TestRunnerBindings::CapturePrintingPixelsThen(
     return;
   }
   blink::WebLocalFrame* frame = GetWebFrame();
-  SkBitmap bitmap = PrintFrameToBitmap(
-      frame, runner_->GetPrintingPageSize(frame), runner_->GetPrintingMargin(),
-      runner_->GetPrintingPageRanges(frame));
-
+  SkBitmap bitmap = runner_->PrintFrameToBitmap(frame);
   v8::Isolate* isolate = frame->GetAgentGroupScheduler()->Isolate();
   v8::HandleScope handle_scope(isolate);
 
@@ -2127,7 +2179,7 @@ void TestRunnerBindings::CopyImageThen(int x,
     return;
   }
   mojo::Remote<blink::mojom::ClipboardHost> remote_clipboard;
-  frame_->GetBrowserInterfaceBroker()->GetInterface(
+  frame_->GetBrowserInterfaceBroker().GetInterface(
       remote_clipboard.BindNewPipeAndPassReceiver());
 
   blink::ClipboardSequenceNumberToken sequence_number_before;
@@ -2136,7 +2188,7 @@ void TestRunnerBindings::CopyImageThen(int x,
   GetWebFrame()->CopyImageAtForTesting(gfx::Point(x, y));
   auto sequence_number_after = sequence_number_before;
   while (sequence_number_before.value() == sequence_number_after.value()) {
-    // TODO(crbug.com/872076): Ideally we would CHECK here that the mojo call
+    // TODO(crbug.com/40588468): Ideally we would CHECK here that the mojo call
     // succeeded, but this crashes under some circumstances (crbug.com/1232810).
     remote_clipboard->GetSequenceNumber(ui::ClipboardBuffer::kCopyPaste,
                                         &sequence_number_after);
@@ -2304,13 +2356,14 @@ void TestRunnerBindings::ZoomPageIn() {
     return;
   }
 
-  blink::WebView* web_view = GetWebFrame()->View();
+  blink::WebFrameWidget* web_frame_widget =
+      frame_->GetLocalRootWebFrameWidget();
   // TODO(danakj): This should be an async call through the browser process.
   // JS can wait for `matchMedia("screen and (min-resolution: 2dppx)").matches`
   // for the operation to complete, if it can tell which number to use in
   // min-resolution.
-  frame_->GetLocalRootWebFrameWidget()->SetZoomLevelForTesting(
-      web_view->ZoomLevel() + 1);
+  web_frame_widget->SetZoomLevelForTesting(web_frame_widget->GetZoomLevel() +
+                                           1);
 }
 
 void TestRunnerBindings::ZoomPageOut() {
@@ -2324,13 +2377,14 @@ void TestRunnerBindings::ZoomPageOut() {
   if (!frame_->IsMainFrame())
     return;
 
-  blink::WebView* web_view = GetWebFrame()->View();
+  blink::WebFrameWidget* web_frame_widget =
+      frame_->GetLocalRootWebFrameWidget();
   // TODO(danakj): This should be an async call through the browser process.
   // JS can wait for `matchMedia("screen and (min-resolution: 2dppx)").matches`
   // for the operation to complete, if it can tell which number to use in
   // min-resolution.
-  frame_->GetLocalRootWebFrameWidget()->SetZoomLevelForTesting(
-      web_view->ZoomLevel() - 1);
+  web_frame_widget->SetZoomLevelForTesting(web_frame_widget->GetZoomLevel() -
+                                           1);
 }
 
 void TestRunnerBindings::SetPageZoomFactor(double zoom_factor) {
@@ -2350,7 +2404,7 @@ void TestRunnerBindings::SetPageZoomFactor(double zoom_factor) {
   // for the operation to complete, if it can tell which number to use in
   // min-resolution.
   frame_->GetLocalRootWebFrameWidget()->SetZoomLevelForTesting(
-      blink::PageZoomFactorToZoomLevel(zoom_factor));
+      blink::ZoomFactorToZoomLevel(zoom_factor));
 }
 
 std::string TestRunnerBindings::TooltipText() {
@@ -2451,11 +2505,11 @@ class TestRunner::MainWindowTracker : public blink::WebViewObserver {
       : blink::WebViewObserver(view), test_runner_(test_runner) {}
 
   void OnDestruct() override {
-    EraseIf(test_runner_->main_windows_, base::MatchesUniquePtr(this));
+    std::erase_if(test_runner_->main_windows_, base::MatchesUniquePtr(this));
   }
 
  private:
-  const raw_ptr<TestRunner, ExperimentalRenderer> test_runner_;
+  const raw_ptr<TestRunner> test_runner_;
 };
 
 TestRunner::WorkQueue::WorkQueue(TestRunner* controller)
@@ -2541,7 +2595,7 @@ bool TestRunner::WorkQueue::ProcessWorkItemInternal(
       source.GetWebTestControlHostRemote()->Reload();
       return true;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return false;
 }
 
@@ -2721,6 +2775,10 @@ bool TestRunner::CanDumpPixelsFromRenderer() const {
          web_test_runtime_flags_.is_printing();
 }
 
+bool TestRunner::IsPrinting() const {
+  return web_test_runtime_flags_.is_printing();
+}
+
 #if BUILDFLAG(ENABLE_PRINTING)
 gfx::Size TestRunner::GetPrintingPageSize(blink::WebLocalFrame* frame) const {
   const int printing_width = web_test_runtime_flags_.printing_width();
@@ -2765,15 +2823,15 @@ static std::string GetPageRangesStringFromMetadata(
 printing::PageRanges TestRunner::GetPrintingPageRanges(
     blink::WebLocalFrame* frame) const {
   const std::string page_ranges_string = GetPageRangesStringFromMetadata(frame);
-  const std::vector<base::StringPiece> range_strings =
+  const std::vector<std::string_view> range_strings =
       base::SplitStringPiece(page_ranges_string, ",", base::TRIM_WHITESPACE,
                              base::SPLIT_WANT_NONEMPTY);
   printing::PageRanges result;
 
-  for (const base::StringPiece& range_string : range_strings) {
+  for (std::string_view range_string : range_strings) {
     // The format for each range is "<int> | <int>? - <int>?" where the page
     // numbers are 1-indexed.
-    const std::vector<base::StringPiece> page_strings = base::SplitStringPiece(
+    const std::vector<std::string_view> page_strings = base::SplitStringPiece(
         range_string, "-", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
     bool invalid = false;
 
@@ -2814,7 +2872,51 @@ printing::PageRanges TestRunner::GetPrintingPageRanges(
   printing::PageRange::Normalize(result);
   return result;
 }
-#endif
+
+SkBitmap TestRunner::PrintFrameToBitmap(blink::WebLocalFrame* frame) {
+  // Page size and margins are in CSS pixels.
+  auto print_params =
+      blink::WebPrintParams(gfx::SizeF(GetPrintingPageSize(frame)));
+  int default_margin = GetPrintingMargin();
+  print_params.default_page_description.margin_top = default_margin;
+  print_params.default_page_description.margin_right = default_margin;
+  print_params.default_page_description.margin_bottom = default_margin;
+  print_params.default_page_description.margin_left = default_margin;
+  print_params.scale_factor = printing_scale_factor_;
+  print_params.print_scaling_option =
+      should_center_and_shrink_to_fit_paper_
+          ? printing::mojom::PrintScalingOption::kCenterShrinkToFitPaper
+          : printing::mojom::PrintScalingOption::kSourceSize;
+
+  auto* frame_widget = frame->LocalRoot()->FrameWidget();
+  frame_widget->UpdateAllLifecyclePhases(blink::DocumentUpdateReason::kTest);
+
+  uint32_t page_count = frame->PrintBegin(print_params, blink::WebNode());
+
+  const printing::PageRanges& page_ranges = GetPrintingPageRanges(frame);
+  blink::WebVector<uint32_t> pages(
+      printing::PageNumber::GetPages(page_ranges, page_count));
+  gfx::Size spool_size = frame->SpoolSizeInPixelsForTesting(pages);
+
+  bool is_opaque = false;
+
+  SkBitmap bitmap;
+  if (!bitmap.tryAllocN32Pixels(spool_size.width(), spool_size.height(),
+                                is_opaque)) {
+    LOG(ERROR) << "Failed to create bitmap width=" << spool_size.width()
+               << " height=" << spool_size.height();
+    return SkBitmap();
+  }
+
+  printing::MetafileSkia metafile(printing::mojom::SkiaDocumentType::kMSKP,
+                                  printing::PrintSettings::NewCookie());
+  cc::SkiaPaintCanvas canvas(bitmap);
+  canvas.SetPrintingMetafile(&metafile);
+  frame->PrintPagesForTesting(&canvas, spool_size, &pages);
+  frame->PrintEnd();
+  return bitmap;
+}
+#endif  // BUILDFLAG(ENABLE_PRINTING)
 
 SkBitmap TestRunner::DumpPixelsInRenderer(blink::WebLocalFrame* main_frame) {
   DCHECK(!main_frame->Parent());
@@ -2841,11 +2943,10 @@ SkBitmap TestRunner::DumpPixelsInRenderer(blink::WebLocalFrame* main_frame) {
     if (frame_to_print && frame_to_print->IsWebLocalFrame())
       target_frame = frame_to_print->ToWebLocalFrame();
   }
-  return PrintFrameToBitmap(target_frame, GetPrintingPageSize(target_frame),
-                            GetPrintingMargin(),
-                            GetPrintingPageRanges(target_frame));
+
+  return PrintFrameToBitmap(target_frame);
 #else
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return SkBitmap();
 #endif
 }
@@ -2944,7 +3045,7 @@ void TestRunner::RemoveLoadingFrame(blink::WebLocalFrame* frame) {
   // flakiness due to inconsistent state management across renderers.
   // See https://crbug.com/1100223 for details.
 
-  base::Erase(loading_frames_, frame);
+  std::erase(loading_frames_, frame);
   if (!loading_frames_.empty())
     return;
 
@@ -2994,6 +3095,7 @@ void TestRunner::OnFrameReactivated(WebFrameTestProxy& frame) {
     return;
 
   DCHECK(frame.IsMainFrame());
+  DCHECK(!frame.GetWebFrame()->GetDocument().IsPrerendering());
 
   if (frame.GetWebFrame()->IsLoading()) {
     AddLoadingFrame(frame.GetWebFrame());
@@ -3107,6 +3209,11 @@ bool TestRunner::ShouldDumpNavigationPolicy() const {
 
 WebFrameTestProxy* TestRunner::FindInProcessMainWindowMainFrame() {
   for (WebFrameTestProxy* main_frame : main_frames_) {
+    // Prerendering frames are marked as being in the main window but
+    // expect the active main frame from this method.
+    if (main_frame->GetWebFrame()->GetDocument().IsPrerendering()) {
+      continue;
+    }
     if (IsFrameInMainWindow(main_frame->GetWebFrame()))
       return main_frame;
   }
@@ -3443,11 +3550,6 @@ void TestRunner::DumpUserGestureInFrameLoadCallbacks(
 
 void TestRunner::DumpTitleChanges(WebFrameTestProxy& source) {
   web_test_runtime_flags_.set_dump_title_changes(true);
-  OnWebTestRuntimeFlagsChanged(source);
-}
-
-void TestRunner::SetImagesAllowed(bool allowed, WebFrameTestProxy& source) {
-  web_test_runtime_flags_.set_images_allowed(allowed);
   OnWebTestRuntimeFlagsChanged(source);
 }
 

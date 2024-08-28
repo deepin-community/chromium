@@ -71,7 +71,7 @@ ContentSetting AutoPipSettingHelper::GetEffectiveContentSetting() {
 
 void AutoPipSettingHelper::UpdateContentSetting(ContentSetting new_setting) {
   content_settings::ContentSettingConstraints constraints;
-  constraints.set_session_model(content_settings::SessionModel::Durable);
+  constraints.set_session_model(content_settings::mojom::SessionModel::DURABLE);
 
   settings_map_->SetContentSettingDefaultScope(
       origin_, /*secondary_url=*/GURL(),
@@ -111,7 +111,7 @@ AutoPipSettingHelper::CreateOverlayViewIfNeeded(
       std::move(close_pip_cb).Run();
       return nullptr;
     default:
-      NOTREACHED() << " AutoPiP unknown effective content setting";
+      NOTREACHED_IN_MIGRATION() << " AutoPiP unknown effective content setting";
       std::move(close_pip_cb).Run();
       return nullptr;
   }
@@ -119,7 +119,7 @@ AutoPipSettingHelper::CreateOverlayViewIfNeeded(
 
 void AutoPipSettingHelper::OnUiResult(base::OnceClosure close_pip_cb,
                                       AutoPipSettingView::UiResult result) {
-  // The UI was both shown and acknoweledged, so we don't have to worry about it
+  // The UI was both shown and acknowledged, so we don't have to worry about it
   // being dismissed without being acted on for the permission embargo.
   ui_was_shown_but_not_acknowledged_ = false;
   switch (result) {

@@ -135,7 +135,7 @@ void ServiceWorkerContextAdapter::UnregisterServiceWorker(
 void ServiceWorkerContextAdapter::UnregisterServiceWorkerImmediately(
     const GURL& scope,
     const blink::StorageKey& key,
-    ResultCallback callback) {
+    StatusCodeCallback callback) {
   NOTIMPLEMENTED();
 }
 
@@ -235,6 +235,11 @@ ServiceWorkerContextAdapter::GetRemoteInterfaces(
 blink::AssociatedInterfaceProvider&
 ServiceWorkerContextAdapter::GetRemoteAssociatedInterfaces(
     int64_t service_worker_version_id) {
+  NOTREACHED_NORETURN();
+}
+
+void ServiceWorkerContextAdapter::SetForceUpdateOnPageLoadForTesting(
+    bool force_update_on_page_load) {
   NOTREACHED_NORETURN();
 }
 
@@ -350,7 +355,7 @@ void ServiceWorkerContextAdapter::OnControlleeAdded(
   bool inserted =
       service_worker_clients_[version_id].insert(client_uuid).second;
   if (!inserted) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return;
   }
 
@@ -365,13 +370,13 @@ void ServiceWorkerContextAdapter::OnControlleeRemoved(
   // notification is dropped.
   auto it = service_worker_clients_.find(version_id);
   if (it == service_worker_clients_.end()) {
-    DUMP_WILL_BE_NOTREACHED_NORETURN();
+    DUMP_WILL_BE_NOTREACHED();
     return;
   }
 
   size_t removed = it->second.erase(client_uuid);
   if (!removed) {
-    DUMP_WILL_BE_NOTREACHED_NORETURN();
+    DUMP_WILL_BE_NOTREACHED();
     return;
   }
 
@@ -398,12 +403,12 @@ void ServiceWorkerContextAdapter::OnControlleeNavigationCommitted(
   // not already a client of |version_id|.
   auto it = service_worker_clients_.find(version_id);
   if (it == service_worker_clients_.end()) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return;
   }
 
   if (it->second.find(client_uuid) == it->second.end()) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return;
   }
 

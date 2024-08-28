@@ -29,17 +29,6 @@ enum PressureLevelChrome {
   CRITICAL = 2,
 };
 
-enum class PressureLevelArcvm {
-  // There is enough memory to use.
-  NONE = 0,
-  // ARCVM is advised to kill cached processes to free memory.
-  CACHED = 1,
-  // ARCVM is advised to kill perceptible processes to free memory.
-  PERCEPTIBLE = 2,
-  // ARCVM is advised to kill foreground processes to free memory.
-  FOREGROUND = 3,
-};
-
 enum class PressureLevelArcContainer {
   // There is enough memory to use.
   NONE = 0,
@@ -49,6 +38,24 @@ enum class PressureLevelArcContainer {
   PERCEPTIBLE = 2,
   // ARC container is advised to kill foreground processes to free memory.
   FOREGROUND = 3,
+};
+
+enum class ProcessState {
+  // The process is normal.
+  kNormal = 0,
+  // The process is background.
+  kBackground = 1,
+};
+
+enum class ThreadState {
+  kUrgentBursty = 0,
+  kUrgent = 1,
+  kBalanced = 2,
+  kEco = 3,
+  kUtility = 4,
+  kBackground = 5,
+  kUrgentBurstyServer = 6,
+  kUrgentBurstyClient = 7,
 };
 
 // Methods.
@@ -63,8 +70,9 @@ const char kSetGameModeWithTimeoutMethod[] = "SetGameModeWithTimeout";
 const char kSetMemoryMarginsBps[] = "SetMemoryMarginsBps";
 const char kSetFullscreenVideoWithTimeout[] = "SetFullscreenVideoWithTimeout";
 const char kSetVmBootModeWithTimeoutMethod[] = "SetVmBootModeWithTimeout";
-const char kReportBackgroundProcessesMethod[] = "ReportBackgroundProcesses";
 const char kReportBrowserProcessesMethod[] = "ReportBrowserProcesses";
+const char kSetProcessStateMethod[] = "SetProcessState";
+const char kSetThreadStateMethod[] = "SetThreadState";
 
 // Signals.
 
@@ -76,15 +84,6 @@ const char kReportBrowserProcessesMethod[] = "ReportBrowserProcesses";
 //   10000 KB to leave the critical memory pressure level (to moderate pressure
 //   level).
 const char kMemoryPressureChrome[] = "MemoryPressureChrome";
-
-// MemoryPressureArcvm signal contains 2 arguments:
-//   1. pressure_level, BYTE, see also enum PressureLevelArcvm.
-//   2. delta, UINT64, memory amount to free in KB to leave the current
-//   pressure level.
-//   E.g. argument (PressureLevelArcvm::FOREGROUND, 10000): ARCVM should free
-//   10000 KB to leave the foreground memory pressure level (to perceptible
-//   pressure level).
-const char kMemoryPressureArcvm[] = "MemoryPressureArcvm";
 
 // MemoryPressureArcContainer signal contains 2 arguments:
 //   1. pressure_level, BYTE, see also enum PressureLevelArcContainer.

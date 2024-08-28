@@ -53,11 +53,10 @@ import java.util.Arrays;
 import javax.annotation.concurrent.GuardedBy;
 
 /**
- * Used by the NetworkChangeNotifier to listens to platform changes in connectivity.
- * Note that use of this class requires that the app have the platform
- * ACCESS_NETWORK_STATE permission.
+ * Used by the NetworkChangeNotifier to listens to platform changes in connectivity. Note that use
+ * of this class requires that the app have the platform ACCESS_NETWORK_STATE permission.
  */
-// TODO(crbug.com/635567): Fix this properly.
+// TODO(crbug.com/40479664): Fix this properly.
 @SuppressLint("NewApi")
 public class NetworkChangeNotifierAutoDetect extends BroadcastReceiver {
     /** Immutable class representing the state of a device's network. */
@@ -497,7 +496,7 @@ public class NetworkChangeNotifierAutoDetect extends BroadcastReceiver {
                         }
                     }
                     if (defaultNetwork != null) {
-                        // TODO(https://crbug.com/1361170): Investigate why there are multiple
+                        // TODO(crbug.com/40060873): Investigate why there are multiple
                         // connected networks.
                         Log.e(
                                 TAG,
@@ -555,7 +554,7 @@ public class NetworkChangeNotifierAutoDetect extends BroadcastReceiver {
                                     .checkPermission(
                                             permission.ACCESS_WIFI_STATE, mContext.getPackageName())
                             == PackageManager.PERMISSION_GRANTED;
-            // TODO(crbug.com/635567): Fix lint properly.
+            // TODO(crbug.com/40479664): Fix lint properly.
             mWifiManager =
                     mHasWifiPermission
                             ? (WifiManager) mContext.getSystemService(Context.WIFI_SERVICE)
@@ -760,18 +759,15 @@ public class NetworkChangeNotifierAutoDetect extends BroadcastReceiver {
 
         /**
          * Should changes to connected network {@code network} be ignored?
+         *
          * @param network Network to possibly consider ignoring changes to.
          * @param capabilities {@code NetworkCapabilities} for {@code network} if known, otherwise
-         *         {@code null}.
+         *     {@code null}.
          * @return {@code true} when either: {@code network} is an inaccessible VPN, or has already
-         *         disconnected.
+         *     disconnected.
          */
         private boolean ignoreConnectedInaccessibleVpn(
                 Network network, NetworkCapabilities capabilities) {
-            // Fetch capabilities if not provided.
-            if (capabilities == null) {
-                capabilities = mConnectivityManagerDelegate.getNetworkCapabilities(network);
-            }
             // Ignore inaccessible VPNs as they don't apply to Chrome.
             return capabilities == null
                     || capabilities.hasTransport(TRANSPORT_VPN)
@@ -850,7 +846,9 @@ public class NetworkChangeNotifierAutoDetect extends BroadcastReceiver {
         @Override
         public void onLosing(Network network, int maxMsToLive) {
             try (TraceEvent e = TraceEvent.scoped("NetworkChangeNotifierCallback::onLosing")) {
-                if (ignoreConnectedNetwork(network, null)) {
+                final NetworkCapabilities capabilities =
+                        mConnectivityManagerDelegate.getNetworkCapabilities(network);
+                if (ignoreConnectedNetwork(network, capabilities)) {
                     return;
                 }
                 final long netId = networkToNetId(network);
@@ -1216,7 +1214,7 @@ public class NetworkChangeNotifierAutoDetect extends BroadcastReceiver {
 
     /**
      * Updates internally stored network state by querying the current state from the system.
-     * TODO(crbug/1493005): migrate external callers to getCurrentNetworkState() and make this
+     * TODO(crbug.com/40936429): migrate external callers to getCurrentNetworkState() and make this
      * method private (to be called only when updates are received from the system.)
      */
     public void updateCurrentNetworkState() {
@@ -1419,9 +1417,8 @@ public class NetworkChangeNotifierAutoDetect extends BroadcastReceiver {
 
     /**
      * Extracts NetID of Network on Lollipop and NetworkHandle (which is munged NetID) on
-     * Marshmallow and newer releases.
-     * TODO(crbug.com/1489183): Rename networkToNetId to something meaningful and update
-     * javadoc comment.
+     * Marshmallow and newer releases. TODO(crbug.com/40283930): Rename networkToNetId to something
+     * meaningful and update javadoc comment.
      */
     public static long networkToNetId(Network network) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {

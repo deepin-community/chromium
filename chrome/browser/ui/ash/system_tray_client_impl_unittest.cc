@@ -18,6 +18,9 @@ namespace {
 
 constexpr const char kShowTouchpadSettingsPage[] = "ShowTouchpadSettingsPage";
 constexpr const char kShowMouseSettingsPage[] = "ShowMouseSettingsPage";
+constexpr const char kShowKeyboardSettingsPage[] = "ShowKeyboardSettingsPage";
+constexpr const char kShowPointingStickSettingsPage[] =
+    "ShowPointingStickSettingsPage";
 constexpr const char kShowGraphicsTabletSettingsPage[] =
     "ShowGraphicsTabletSettingsPage";
 constexpr const char kShowRemapKeysSettingsSubpage[] =
@@ -27,8 +30,12 @@ class TestSettingsWindowManager : public chrome::SettingsWindowManager {
  public:
   void ShowChromePageForProfile(Profile* profile,
                                 const GURL& gurl,
-                                int64_t display_id) override {
+                                int64_t display_id,
+                                apps::LaunchCallback callback) override {
     last_url_ = gurl;
+    if (callback) {
+      std::move(callback).Run(apps::LaunchResult(apps::State::kSuccess));
+    }
   }
 
   const GURL& last_url() { return last_url_; }
@@ -81,7 +88,9 @@ TEST_F(SystemTrayClientImplTest, ShowTouchpadSettings) {
 
 TEST_F(SystemTrayClientImplTest, ShowMouseSettings) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(ash::features::kPeripheralCustomization);
+  feature_list.InitWithFeatures({ash::features::kInputDeviceSettingsSplit,
+                                 ash::features::kPeripheralCustomization},
+                                {});
   base::UserActionTester user_action_tester;
   client_impl_->ShowMouseSettings();
   EXPECT_EQ(settings_window_manager_->last_url(),
@@ -92,7 +101,9 @@ TEST_F(SystemTrayClientImplTest, ShowMouseSettings) {
 
 TEST_F(SystemTrayClientImplTest, ShowGraphicsTabletSettings) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(ash::features::kPeripheralCustomization);
+  feature_list.InitWithFeatures({ash::features::kInputDeviceSettingsSplit,
+                                 ash::features::kPeripheralCustomization},
+                                {});
   base::UserActionTester user_action_tester;
   client_impl_->ShowGraphicsTabletSettings();
   EXPECT_EQ(settings_window_manager_->last_url(),
@@ -126,6 +137,35 @@ TEST_F(SystemTrayClientImplTest, ShowApnSubpage) {
                               chromeos::settings::mojom::kApnSubpagePath)
                               .spec(),
                           "?guid=guid"}));
+}
+
+TEST_F(SystemTrayClientImplTest, ShowKeyboardSettings) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({ash::features::kInputDeviceSettingsSplit,
+                                 ash::features::kPeripheralCustomization,
+                                 ash::features::kWelcomeExperience},
+                                {});
+  base::UserActionTester user_action_tester;
+  client_impl_->ShowKeyboardSettings();
+  EXPECT_EQ(settings_window_manager_->last_url(),
+            chrome::GetOSSettingsUrl(
+                chromeos::settings::mojom::kPerDeviceKeyboardSubpagePath));
+  EXPECT_EQ(1, user_action_tester.GetActionCount(kShowKeyboardSettingsPage));
+}
+
+TEST_F(SystemTrayClientImplTest, ShowPointingStickSettings) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({ash::features::kInputDeviceSettingsSplit,
+                                 ash::features::kPeripheralCustomization,
+                                 ash::features::kWelcomeExperience},
+                                {});
+  base::UserActionTester user_action_tester;
+  client_impl_->ShowPointingStickSettings();
+  EXPECT_EQ(settings_window_manager_->last_url(),
+            chrome::GetOSSettingsUrl(
+                chromeos::settings::mojom::kPerDevicePointingStickSubpagePath));
+  EXPECT_EQ(1,
+            user_action_tester.GetActionCount(kShowPointingStickSettingsPage));
 }
 
 }  // namespace

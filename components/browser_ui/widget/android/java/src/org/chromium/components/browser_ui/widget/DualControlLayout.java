@@ -58,33 +58,32 @@ public final class DualControlLayout extends ViewGroup {
         int APART = 2;
     }
 
-    @IntDef({ButtonType.PRIMARY_FILLED, ButtonType.PRIMARY_TEXT, ButtonType.SECONDARY})
+    @IntDef({
+        ButtonType.PRIMARY_FILLED,
+        ButtonType.PRIMARY_TEXT,
+        ButtonType.SECONDARY_TEXT,
+        ButtonType.PRIMARY_OUTLINED,
+        ButtonType.SECONDARY_OUTLINED
+    })
     @Retention(RetentionPolicy.SOURCE)
     public @interface ButtonType {
+        // Buttons will have the primary button ID with a filled container.
         int PRIMARY_FILLED = 0;
-        int PRIMARY_TEXT = 1;
-        int SECONDARY = 2;
-    }
 
-    /**
-     * Creates a standardized Button that can be used for DualControlLayouts showing buttons.
-     *
-     * @param isPrimary Whether or not the button is meant to act as a "Confirm" button.
-     * @param text Text to display on the button.
-     * @param listener Listener to alert when the button has been clicked.
-     * @return Button that can be used in the view.
-     * @deprecated Use the Button createButtonForLayout( Context context, @ButtonType int
-     *     buttonType, String text, OnClickListener listener) version instead.
-     */
-    @Deprecated
-    public static Button createButtonForLayout(
-            Context context, boolean isPrimary, String text, OnClickListener listener) {
-        // TODO(b/325429764): migrate clients and remove this deprecated method.
-        if (isPrimary) {
-            return createButtonForLayout(context, ButtonType.PRIMARY_FILLED, text, listener);
-        } else {
-            return createButtonForLayout(context, ButtonType.SECONDARY, text, listener);
-        }
+        //  Buttons will have the primary button ID without an outlined border or a filled container
+        int PRIMARY_TEXT = 1;
+
+        // Buttons will have the primary button ID with an outlined border but without a filled
+        // container.
+        int PRIMARY_OUTLINED = 2;
+
+        // Buttons will have the secondary button ID without an outlined border or a filled
+        // container (same style as PRIMARY_TEXT)
+        int SECONDARY_TEXT = 3;
+
+        // Buttons will have the secondary button ID with an outlined border but without a filled
+        // container (same style as PRIMARY_OUTLINED)
+        int SECONDARY_OUTLINED = 4;
     }
 
     /**
@@ -101,6 +100,14 @@ public final class DualControlLayout extends ViewGroup {
         button.setId(getButtonId(buttonType));
         button.setOnClickListener(listener);
         button.setText(text);
+
+        if (buttonType == ButtonType.PRIMARY_OUTLINED
+                || buttonType == ButtonType.SECONDARY_OUTLINED) {
+            // TODO(crbug.com/346931122) By default R.style.OutlinedButton capitalizes the text
+            // labels.
+            button.setAllCaps(false);
+        }
+
         return button;
     }
 
@@ -109,9 +116,11 @@ public final class DualControlLayout extends ViewGroup {
             case ButtonType.PRIMARY_FILLED:
                 return R.style.FilledButtonThemeOverlay_Flat;
             case ButtonType.PRIMARY_TEXT:
+            case ButtonType.SECONDARY_TEXT:
                 return R.style.TextButtonThemeOverlay;
-            case ButtonType.SECONDARY:
-                return R.style.TextButtonThemeOverlay;
+            case ButtonType.PRIMARY_OUTLINED:
+            case ButtonType.SECONDARY_OUTLINED:
+                return R.style.OutlinedButton;
             default:
                 throw new IllegalArgumentException("Unknown button type");
         }
@@ -120,10 +129,11 @@ public final class DualControlLayout extends ViewGroup {
     private static @IdRes int getButtonId(@ButtonType int buttonType) {
         switch (buttonType) {
             case ButtonType.PRIMARY_FILLED:
-                return R.id.button_primary;
             case ButtonType.PRIMARY_TEXT:
+            case ButtonType.PRIMARY_OUTLINED:
                 return R.id.button_primary;
-            case ButtonType.SECONDARY:
+            case ButtonType.SECONDARY_TEXT:
+            case ButtonType.SECONDARY_OUTLINED:
                 return R.id.button_secondary;
             default:
                 throw new IllegalArgumentException("Unknown button type");
@@ -342,7 +352,9 @@ public final class DualControlLayout extends ViewGroup {
             primaryButtonText = a.getString(R.styleable.DualControlLayout_primaryButtonText);
         }
         if (!TextUtils.isEmpty(primaryButtonText)) {
-            addView(createButtonForLayout(getContext(), true, primaryButtonText, null));
+            addView(
+                    createButtonForLayout(
+                            getContext(), ButtonType.PRIMARY_FILLED, primaryButtonText, null));
         }
 
         // Build the secondary button, but only if there's a primary button set.
@@ -351,7 +363,9 @@ public final class DualControlLayout extends ViewGroup {
             secondaryButtonText = a.getString(R.styleable.DualControlLayout_secondaryButtonText);
         }
         if (!TextUtils.isEmpty(primaryButtonText) && !TextUtils.isEmpty(secondaryButtonText)) {
-            addView(createButtonForLayout(getContext(), false, secondaryButtonText, null));
+            addView(
+                    createButtonForLayout(
+                            getContext(), ButtonType.SECONDARY_TEXT, secondaryButtonText, null));
         }
 
         // Set the alignment.

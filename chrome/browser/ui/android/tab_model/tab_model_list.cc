@@ -57,7 +57,7 @@ void TabModelList::HandlePopupNavigation(NavigateParams* params) {
 
   // NOTE: If this fails contact dtrainor@.
   DCHECK(tab);
-  TabModel* model = FindTabModelWithId(tab->window_id());
+  TabModel* model = FindTabModelWithId(tab->GetWindowId());
   if (model)
     model->HandlePopupNavigation(tab, params);
 }
@@ -115,7 +115,7 @@ TabModel* TabModelList::FindNativeTabModelForJavaObject(
 }
 
 bool TabModelList::IsOffTheRecordSessionActive() {
-  // TODO(https://crbug.com/1023759): This function should return true for
+  // TODO(crbug.com/40107157): This function should return true for
   // incognito CCTs.
   for (TabModel* model : models()) {
     if (model->IsOffTheRecord() && model->GetTabCount() > 0)

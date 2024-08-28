@@ -28,10 +28,12 @@ import org.jni_zero.NativeMethods;
 import org.chromium.base.JavaExceptionReporter;
 import org.chromium.base.Log;
 import org.chromium.base.ObserverList;
+import org.chromium.base.TerminationStatus;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.UserData;
 import org.chromium.base.UserDataHost;
 import org.chromium.blink_public.input.SelectionGranularity;
+import org.chromium.cc.input.BrowserControlsOffsetTagsInfo;
 import org.chromium.content.browser.AppWebMessagePort;
 import org.chromium.content.browser.GestureListenerManagerImpl;
 import org.chromium.content.browser.MediaSessionImpl;
@@ -60,6 +62,7 @@ import org.chromium.content_public.browser.Visibility;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsInternals;
 import org.chromium.content_public.browser.WebContentsObserver;
+import org.chromium.content_public.browser.back_forward_transition.AnimationStage;
 import org.chromium.ui.OverscrollRefreshHandler;
 import org.chromium.ui.base.EventForwarder;
 import org.chromium.ui.base.ViewAndroidDelegate;
@@ -75,8 +78,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * The WebContentsImpl Java wrapper to allow communicating with the native WebContentsImpl
- * object.
+ * The WebContentsImpl Java wrapper to allow communicating with the native WebContentsImpl object.
  */
 @JNINamespace("content")
 public class WebContentsImpl implements WebContents, RenderFrameHostDelegate, WindowEventObserver {
@@ -99,10 +101,10 @@ public class WebContentsImpl implements WebContents, RenderFrameHostDelegate, Wi
     }
 
     /**
-     * A {@link android.os.Parcelable.Creator} instance that is used to build
-     * {@link WebContentsImpl} objects from a {@link Parcel}.
+     * A {@link android.os.Parcelable.Creator} instance that is used to build {@link
+     * WebContentsImpl} objects from a {@link Parcel}.
      */
-    // TODO(crbug.com/635567): Fix this properly.
+    // TODO(crbug.com/40479664): Fix this properly.
     @SuppressLint("ParcelClassLoader")
     public static final Parcelable.Creator<WebContents> CREATOR =
             new Parcelable.Creator<WebContents>() {
@@ -232,7 +234,7 @@ public class WebContentsImpl implements WebContents, RenderFrameHostDelegate, Wi
     }
 
     @Override
-    public void initialize(
+    public void setDelegates(
             String productVersion,
             ViewAndroidDelegate viewDelegate,
             InternalAccessDelegate accessDelegate,
@@ -486,14 +488,6 @@ public class WebContentsImpl implements WebContents, RenderFrameHostDelegate, Wi
     }
 
     @Override
-    public List<WebContentsImpl> getInnerWebContents() {
-        checkNotDestroyed();
-        WebContentsImpl[] innerWebContents =
-                WebContentsImplJni.get().getInnerWebContents(mNativeWebContentsAndroid);
-        return Collections.unmodifiableList(Arrays.asList(innerWebContents));
-    }
-
-    @Override
     public @Visibility int getVisibility() {
         checkNotDestroyed();
         return WebContentsImplJni.get().getVisibility(mNativeWebContentsAndroid);
@@ -540,6 +534,13 @@ public class WebContentsImpl implements WebContents, RenderFrameHostDelegate, Wi
     public boolean shouldShowLoadingUI() {
         checkNotDestroyed();
         return WebContentsImplJni.get().shouldShowLoadingUI(mNativeWebContentsAndroid);
+    }
+
+    @Override
+    public boolean hasUncommittedNavigationInPrimaryMainFrame() {
+        checkNotDestroyed();
+        return WebContentsImplJni.get()
+                .hasUncommittedNavigationInPrimaryMainFrame(mNativeWebContentsAndroid);
     }
 
     @Override
@@ -780,6 +781,12 @@ public class WebContentsImpl implements WebContents, RenderFrameHostDelegate, Wi
         return WebContentsImplJni.get().hasAccessedInitialDocument(mNativeWebContentsAndroid);
     }
 
+    @Override
+    public boolean hasViewTransitionOptIn() {
+        checkNotDestroyed();
+        return WebContentsImplJni.get().hasViewTransitionOptIn(mNativeWebContentsAndroid);
+    }
+
     @CalledByNative
     private static void onEvaluateJavaScriptResult(String jsonResult, JavaScriptCallback callback) {
         callback.handleJavaScriptResult(jsonResult);
@@ -789,6 +796,12 @@ public class WebContentsImpl implements WebContents, RenderFrameHostDelegate, Wi
     public int getThemeColor() {
         checkNotDestroyed();
         return WebContentsImplJni.get().getThemeColor(mNativeWebContentsAndroid);
+    }
+
+    @Override
+    public int getBackgroundColor() {
+        checkNotDestroyed();
+        return WebContentsImplJni.get().getBackgroundColor(mNativeWebContentsAndroid);
     }
 
     @Override
@@ -846,7 +859,7 @@ public class WebContentsImpl implements WebContents, RenderFrameHostDelegate, Wi
 
     public void simulateRendererKilledForTesting() {
         if (mObserverProxy != null) {
-            mObserverProxy.renderProcessGone();
+            mObserverProxy.primaryMainFrameRenderProcessGone(TerminationStatus.PROCESS_WAS_KILLED);
         }
     }
 
@@ -1205,6 +1218,36 @@ public class WebContentsImpl implements WebContents, RenderFrameHostDelegate, Wi
         mTearDownDialogOverlaysHandlers.removeObserver(handler);
     }
 
+    @Override
+    public void onContentForNavigationEntryShown() {
+        checkNotDestroyed();
+        WebContentsImplJni.get().onContentForNavigationEntryShown(mNativeWebContentsAndroid);
+    }
+
+    @Override
+    @AnimationStage
+    public int getCurrentBackForwardTransitionStage() {
+        checkNotDestroyed();
+        return WebContentsImplJni.get()
+                .getCurrentBackForwardTransitionStage(mNativeWebContentsAndroid);
+    }
+
+    @Override
+    public void setLongPressLinkSelectText(boolean enabled) {
+        checkNotDestroyed();
+        WebContentsImplJni.get().setLongPressLinkSelectText(mNativeWebContentsAndroid, enabled);
+    }
+
+    @Override
+    public void notifyControlsConstraintsChanged(
+            BrowserControlsOffsetTagsInfo oldOffsetTagsInfo,
+            BrowserControlsOffsetTagsInfo offsetTagsInfo) {
+        if (mNativeWebContentsAndroid == 0) return;
+        WebContentsImplJni.get()
+                .notifyControlsConstraintsChanged(
+                        mNativeWebContentsAndroid, oldOffsetTagsInfo, offsetTagsInfo);
+    }
+
     private void checkNotDestroyed() {
         if (mNativeWebContentsAndroid != 0) return;
         throw new IllegalStateException(
@@ -1239,8 +1282,6 @@ public class WebContentsImpl implements WebContents, RenderFrameHostDelegate, Wi
 
         RenderWidgetHostViewImpl getRenderWidgetHostView(long nativeWebContentsAndroid);
 
-        WebContentsImpl[] getInnerWebContents(long nativeWebContentsAndroid);
-
         @Visibility
         int getVisibility(long nativeWebContentsAndroid);
 
@@ -1257,6 +1298,8 @@ public class WebContentsImpl implements WebContents, RenderFrameHostDelegate, Wi
         boolean isLoading(long nativeWebContentsAndroid);
 
         boolean shouldShowLoadingUI(long nativeWebContentsAndroid);
+
+        boolean hasUncommittedNavigationInPrimaryMainFrame(long nativeWebContentsAndroid);
 
         void dispatchBeforeUnload(long nativeWebContentsAndroid, boolean autoCancel);
 
@@ -1334,7 +1377,11 @@ public class WebContentsImpl implements WebContents, RenderFrameHostDelegate, Wi
 
         boolean hasAccessedInitialDocument(long nativeWebContentsAndroid);
 
+        boolean hasViewTransitionOptIn(long nativeWebContentsAndroid);
+
         int getThemeColor(long nativeWebContentsAndroid);
+
+        int getBackgroundColor(long nativeWebContentsAndroid);
 
         float getLoadProgress(long nativeWebContentsAndroid);
 
@@ -1403,5 +1450,17 @@ public class WebContentsImpl implements WebContents, RenderFrameHostDelegate, Wi
         boolean isBeingDestroyed(long nativeWebContentsAndroid);
 
         boolean needToFireBeforeUnloadOrUnloadEvents(long nativeWebContentsAndroid);
+
+        void onContentForNavigationEntryShown(long nativeWebContentsAndroid);
+
+        @AnimationStage
+        int getCurrentBackForwardTransitionStage(long nativeWebContentsAndroid);
+
+        void setLongPressLinkSelectText(long nativeWebContentsAndroid, boolean enabled);
+
+        void notifyControlsConstraintsChanged(
+                long nativeWebContentsAndroid,
+                BrowserControlsOffsetTagsInfo oldOffsetTagsInfo,
+                BrowserControlsOffsetTagsInfo offsetTagsInfo);
     }
 }

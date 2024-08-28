@@ -171,7 +171,7 @@
 
 .timeline-details-view-row {
   padding-left: 10px;
-  line-height: 20px;
+  min-height: 20px;
 }
 
 .timeline-details-view-block .timeline-details-stack-values {
@@ -179,10 +179,14 @@
 }
 
 .timeline-details-chip-title {
-  font-size: 13px;
+  font-size: 12px;
   padding: 8px;
   display: flex;
   align-items: center;
+}
+
+.timeline-details-view-block:first-child > .timeline-details-chip-title {
+  font-size: 13px;
 }
 
 .timeline-details-view-row-title:not(:empty) {
@@ -190,6 +194,7 @@
   overflow: hidden;
   padding-right: 10px;
   display: inline-block;
+  vertical-align: top;
 }
 
 .timeline-details-warning {
@@ -198,8 +203,8 @@
   background-color: var(--override-details-warning-background-color);
 }
 
-.-theme-with-dark-background .timeline-details-warning,
-:host-context(.-theme-with-dark-background) .timeline-details-warning {
+.theme-with-dark-background .timeline-details-warning,
+:host-context(.theme-with-dark-background) .timeline-details-warning {
   --override-details-warning-background-color: rgb(87 10 10 / 48%);
 }
 
@@ -210,7 +215,6 @@
 .timeline-details-view-row-value {
   display: inline-block;
   user-select: text;
-  white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
   padding: 0 3px;
@@ -222,21 +226,12 @@
   text-overflow: ellipsis;
 }
 
-.timeline-details-view-row-value .stack-preview-container {
-  line-height: 11px;
-}
-
 .timeline-details-view-pie-chart-wrapper {
   margin: 4px 0;
 }
 
 .timeline-details-view-pie-chart {
   margin-top: 5px;
-}
-
-.timeline-details-view-row-stack-trace {
-  padding: 4px 0;
-  line-height: inherit;
 }
 
 .timeline-flamechart {
@@ -503,6 +498,9 @@
 .timeline-landing-page {
   position: absolute;
   background-color: var(--sys-color-cdt-base-container);
+}
+
+.timeline-landing-page.legacy {
   justify-content: center;
   align-items: center;
   overflow: auto;
@@ -532,20 +530,9 @@
   }
 }
 
-.timeline-details-view-row-stack-trace div {
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  line-height: 12px;
-}
-
 .timeline-details-view-body > div {
   overflow-y: hidden;
   overflow-x: hidden;
-}
-
-.timeline-landing-page > div {
-  max-width: 450px;
-  margin: 10px;
 }
 
 .timeline-details-chip-title > div {
@@ -555,6 +542,11 @@
   display: inline-block;
   margin-right: 4px;
   content: " ";
+}
+
+.timeline-landing-page.legacy > div {
+  max-width: 450px;
+  margin: 10px;
 }
 
 .timeline-paint-profiler-log-split > div:last-child {
@@ -571,7 +563,7 @@
   pointer-events: auto;
 }
 
-.timeline-landing-page > div > p {
+.timeline-landing-page.legacy > div > p {
   flex: none;
   white-space: pre-line;
   line-height: 18px;

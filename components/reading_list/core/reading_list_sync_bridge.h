@@ -17,6 +17,7 @@
 
 namespace base {
 class Clock;
+class Location;
 }  // namespace base
 
 namespace syncer {
@@ -53,6 +54,7 @@ class ReadingListSyncBridge : public syncer::ModelTypeSyncBridge {
   void DidAddOrUpdateEntry(const ReadingListEntry& entry,
                            syncer::MetadataChangeList* metadata_change_list);
   void DidRemoveEntry(const ReadingListEntry& entry,
+                      const base::Location& location,
                       syncer::MetadataChangeList* metadata_change_list);
 
   // Exposes whether the underlying ModelTypeChangeProcessor is tracking
@@ -130,11 +132,12 @@ class ReadingListSyncBridge : public syncer::ModelTypeSyncBridge {
   static bool CompareEntriesForSync(const sync_pb::ReadingListSpecifics& lhs,
                                     const sync_pb::ReadingListSpecifics& rhs);
 
-  // Asynchronously retrieve the corresponding sync data for |storage_keys|.
-  void GetData(StorageKeyList storage_keys, DataCallback callback) override;
+  // Retrieve the corresponding sync data for |storage_keys|.
+  std::unique_ptr<syncer::DataBatch> GetDataForCommit(
+      StorageKeyList storage_keys) override;
 
-  // Asynchronously retrieve all of the local sync data.
-  void GetAllDataForDebugging(DataCallback callback) override;
+  // Retrieve all of the local sync data.
+  std::unique_ptr<syncer::DataBatch> GetAllDataForDebugging() override;
 
   // Get or generate a client tag for |entity_data|. This must be the same tag
   // that was/would have been generated in the SyncableService/Directory world

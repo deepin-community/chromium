@@ -173,7 +173,7 @@ void OpenXrGraphicsBindingD3D11::CreateSharedImages(
     gpu_memory_buffer_handle.dxgi_token = gfx::DXGIHandleToken();
     gpu_memory_buffer_handle.type = gfx::DXGI_SHARED_HANDLE;
 
-    // TODO(https://crbug.com/1458256): This size is the size of the texture
+    // TODO(crbug.com/40918787): This size is the size of the texture
     // from the OpenXr runtime, which is fine but does not work properly if the
     // page requests any kind of framebuffer scaling, because then the image
     // size that the page uses would be different than this size, which can
@@ -184,17 +184,17 @@ void OpenXrGraphicsBindingD3D11::CreateSharedImages(
     // The SharedImages created here will eventually be transferred to other
     // processes to have their contents written by WebGL and read via GL by
     // OpenXR.
-    const uint32_t shared_image_usage = gpu::SHARED_IMAGE_USAGE_SCANOUT |
-                                        gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
-                                        gpu::SHARED_IMAGE_USAGE_GLES2_READ |
-                                        gpu::SHARED_IMAGE_USAGE_GLES2_WRITE;
+    const gpu::SharedImageUsageSet shared_image_usage =
+        gpu::SHARED_IMAGE_USAGE_SCANOUT | gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
+        gpu::SHARED_IMAGE_USAGE_GLES2_READ |
+        gpu::SHARED_IMAGE_USAGE_GLES2_WRITE;
 
     swap_chain_info.shared_image = sii->CreateSharedImage(
-        viz::SinglePlaneFormat::kRGBA_8888, buffer_size,
-        gfx::ColorSpace(gfx::ColorSpace::PrimaryID::BT709,
-                        gfx::ColorSpace::TransferID::LINEAR),
-        kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, shared_image_usage,
-        "OpenXrSwapChain", std::move(gpu_memory_buffer_handle));
+        {viz::SinglePlaneFormat::kRGBA_8888, buffer_size,
+         gfx::ColorSpace(gfx::ColorSpace::PrimaryID::BT709,
+                         gfx::ColorSpace::TransferID::LINEAR),
+         shared_image_usage, "OpenXrSwapChain"},
+        std::move(gpu_memory_buffer_handle));
     CHECK(swap_chain_info.shared_image);
     swap_chain_info.sync_token = sii->GenVerifiedSyncToken();
   }
@@ -309,11 +309,16 @@ void OpenXrGraphicsBindingD3D11::SetWebXrTexture(
 }
 
 bool OpenXrGraphicsBindingD3D11::SetOverlayTexture(
-    mojo::PlatformHandle texture_handle,
+    gfx::GpuMemoryBufferHandle texture,
     const gpu::SyncToken& sync_token,
     const gfx::RectF& left,
     const gfx::RectF& right) {
-  return texture_helper_->SetOverlayTexture(texture_handle.TakeHandle(),
+  if (texture.is_null()) {
+    return false;
+  }
+
+  CHECK(texture.type == gfx::DXGI_SHARED_HANDLE);
+  return texture_helper_->SetOverlayTexture(std::move(texture.dxgi_handle),
                                             sync_token, left, right);
 }
 

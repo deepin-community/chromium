@@ -26,7 +26,8 @@ enum class OverviewStartAction {
   // Partial overview shows automatically on one window snapped.
   kFasterSplitScreenSetup,
   kPine,
-  kMaxValue = kPine,
+  kWallpaper,
+  kMaxValue = kWallpaper,
 };
 void RecordOverviewStartAction(OverviewStartAction type);
 
@@ -66,6 +67,8 @@ inline constexpr char kEnterOverviewPresentationHistogram[] =
     "Ash.Overview.Enter.PresentationTime";
 inline constexpr char kExitOverviewPresentationHistogram[] =
     "Ash.Overview.Exit.PresentationTime";
+inline constexpr char kOverviewDelayedDeskBarPresentationHistogram[] =
+    "Ash.Overview.DelayedDeskBar.PresentationTime";
 
 }  // namespace ash
 

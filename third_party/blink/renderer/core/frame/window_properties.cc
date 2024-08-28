@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/frame/window_properties.h"
 
+#include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/binding_security.h"
 #include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
 #include "third_party/blink/renderer/bindings/core/v8/window_proxy_manager.h"
@@ -63,7 +64,8 @@ v8::Local<v8::Value> WindowProperties::AnonymousNamedGetter(
     window->ReportCoopAccess("named");
     window->RecordWindowProxyAccessMetrics(
         WebFeature::kWindowProxyCrossOriginAccessNamedGetter,
-        WebFeature::kWindowProxyCrossOriginAccessFromOtherPageNamedGetter);
+        WebFeature::kWindowProxyCrossOriginAccessFromOtherPageNamedGetter,
+        mojom::blink::WindowProxyAccessType::kAnonymousNamedGetter);
     UseCounter::Count(CurrentExecutionContext(isolate),
                       WebFeature::kNamedAccessOnWindow_ChildBrowsingContext);
 
@@ -74,8 +76,8 @@ v8::Local<v8::Value> WindowProperties::AnonymousNamedGetter(
     if (frame->GetSecurityContext()->GetSecurityOrigin()->CanAccess(
             child->GetSecurityContext()->GetSecurityOrigin()) ||
         name == child->Owner()->BrowsingContextContainerName()) {
-      return ToV8Traits<DOMWindow>::ToV8(
-          ScriptState::From(isolate->GetCurrentContext()), child->DomWindow());
+      return ToV8Traits<DOMWindow>::ToV8(ScriptState::ForCurrentRealm(isolate),
+                                         child->DomWindow());
     }
 
     UseCounter::Count(
@@ -106,7 +108,8 @@ v8::Local<v8::Value> WindowProperties::AnonymousNamedGetter(
   window->ReportCoopAccess("named");
   window->RecordWindowProxyAccessMetrics(
       WebFeature::kWindowProxyCrossOriginAccessNamedGetter,
-      WebFeature::kWindowProxyCrossOriginAccessFromOtherPageNamedGetter);
+      WebFeature::kWindowProxyCrossOriginAccessFromOtherPageNamedGetter,
+      mojom::blink::WindowProxyAccessType::kAnonymousNamedGetter);
 
   // If we've reached this point, we know that we're accessing an element (or
   // collection of elements) in this window, and that this window is local. Wrap
@@ -116,13 +119,13 @@ v8::Local<v8::Value> WindowProperties::AnonymousNamedGetter(
                                             DOMWrapperWorld::Current(isolate));
   if (!has_named_item && has_id_item &&
       !doc->ContainsMultipleElementsWithId(name)) {
-    UseCounter::Count(doc, WebFeature::kDOMClobberedVariableAccessed);
+    UseCounter::Count(doc, WebFeature::kDOMClobberedWindowPropertyAccessed);
     return ToV8Traits<Element>::ToV8(script_state, doc->getElementById(name));
   }
 
   HTMLCollection* items = doc->WindowNamedItems(name);
   if (!items->IsEmpty()) {
-    UseCounter::Count(doc, WebFeature::kDOMClobberedVariableAccessed);
+    UseCounter::Count(doc, WebFeature::kDOMClobberedWindowPropertyAccessed);
 
     // TODO(esprehn): Firefox doesn't return an HTMLCollection here if there's
     // multiple with the same name, but Chrome and Safari does. What's the

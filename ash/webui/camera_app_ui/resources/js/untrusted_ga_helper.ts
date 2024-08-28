@@ -90,6 +90,11 @@ export enum GaMetricDimension {
   DEVICE_PIXEL_RATIO = 39,
   CAMERA_MODULE_ID = 40,
   WIFI_SECURITY_TYPE = 41,
+  ZOOM_RATIO = 42,
+  IS_PRIMARY_LANGUAGE = 43,
+  LINE_COUNT = 44,
+  WORD_COUNT = 45,
+  PRESSURE = 46,
 }
 
 export enum Ga4MetricDimension {
@@ -112,17 +117,20 @@ export enum Ga4MetricDimension {
   GIF_RESULT = 'gif_result',
   GRID = 'grid',
   INTENT_RESULT = 'intent_result',
+  IS_PRIMARY_LANGUAGE = 'is_primary_language',
   IS_SECURE = 'is_secure',
   IS_TEST_IMAGE = 'is_test_image',
   IS_VIDEO_SNAPSHOT = 'is_video_snapshot',
   LANGUAGE = 'language',
   LAUNCH_TYPE = 'launch_type',
+  LINE_COUNT = 'line_count',
   LINE_NO = 'line_no',
   MAXIMIZED = 'maximized',
   MEMORY_USAGE = 'memory_usage',
   MICROPHONE = 'microphone',
   MIRROR = 'mirror',
   OS_VERSION = 'os_version',
+  PRESSURE = 'pressure',
   RECORD_TYPE = 'record_type',
   RESOLUTION = 'resolution',
   RESOLUTION_LEVEL = 'resolution_level',
@@ -140,6 +148,8 @@ export enum Ga4MetricDimension {
   TIME_LAPSE_SPEED = 'time_lapse_speed',
   TIMER = 'timer',
   WIFI_SECURITY_TYPE = 'wifi_security_type',
+  WORD_COUNT = 'word_count',
+  ZOOM_RATIO = 'zoom_ratio',
 }
 
 export type Ga4EventParams =

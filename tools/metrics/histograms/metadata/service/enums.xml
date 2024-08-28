@@ -237,11 +237,6 @@ chromium-metrics-reviews@google.com.
   <int value="2" label="Read data error"/>
 </enum>
 
-<enum name="ServiceWorkerRendererStartWorker">
-  <int value="0" label="Received on installed service worker."/>
-  <int value="1" label="Received on uninstalled service worker."/>
-</enum>
-
 <enum name="ServiceWorkerRouterEvaluatorErrorEnums">
   <int value="0" label="kNoError"/>
   <int value="1" label="kInvalidType"/>
@@ -253,13 +248,7 @@ chromium-metrics-reviews@google.com.
   <int value="7" label="kInvalidCondition"/>
   <int value="8" label="kExceedMaxConditionDepth"/>
   <int value="9" label="kExceedMaxRouterSize"/>
-</enum>
-
-<enum name="ServiceWorkerRouterSourceType">
-  <int value="0" label="kNetwork"/>
-  <int value="1" label="kRace"/>
-  <int value="2" label="kFetchEvent"/>
-  <int value="3" label="kCache"/>
+  <int value="10" label="kFetchSourceWithoutFetchHandler"/>
 </enum>
 
 <enum name="ServiceWorkerWriteResponseResult">

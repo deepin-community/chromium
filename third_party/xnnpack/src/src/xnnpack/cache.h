@@ -7,10 +7,11 @@
 
 #include <stddef.h>          // For size_t.
 #include <stdint.h>          // For uint32_t.
-#include <xnnpack.h>         // For xnn_status.
-#include <xnnpack/common.h>  // For XNN_INLINE.
-#include <xnnpack/memory.h>  // For xnn_code_buffer.
-#include <xnnpack/mutex.h>   // For xnn_mutex.
+
+#include "xnnpack.h"         // For xnn_status.
+#include "xnnpack/common.h"  // For XNN_INLINE.
+#include "xnnpack/memory.h"  // For xnn_code_buffer.
+#include "xnnpack/mutex.h"   // For xnn_mutex.
 
 #ifdef __cplusplus
 extern "C" {
@@ -127,9 +128,6 @@ size_t xnn_internal_weights_cache_look_up(
 void* xnn_internal_weights_cache_offset_to_addr(struct xnn_internal_weights_cache* weights_cache, size_t offset);
 
 enum xnn_status xnn_internal_delete_weights_cache(struct xnn_internal_weights_cache* weights_cache);
-
-// Wrapper function of the function pointers in `xnn_weights_cache_t`.
-bool xnn_weights_cache_is_finalized(xnn_weights_cache_t cache);
 
 size_t xnn_look_up_or_insert_weights_cache(
   xnn_weights_cache_t cache, const struct xnn_weights_cache_look_up_key* cache_key, void* ptr, size_t size);

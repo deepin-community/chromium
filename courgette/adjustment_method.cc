@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "courgette/adjustment_method.h"
 
 #include <stddef.h>
@@ -152,7 +157,7 @@ struct Node {
   typedef std::map<LabelInfo*, Node*> Edges;
   Edges edges_;
   std::vector<int> places_;   // Indexes into sequence of this item.
-  std::list<Node*> edges_in_frequency_order;
+  std::list<raw_ptr<Node, CtnExperimental>> edges_in_frequency_order;
 
   bool in_queue_;
   bool Extended() const { return !edges_.empty(); }
@@ -633,7 +638,7 @@ class GraphAdjuster : public AdjustmentMethod {
       prev = curr;
 
       if (curr->positions_.size() != curr->refs_)
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
   }
 

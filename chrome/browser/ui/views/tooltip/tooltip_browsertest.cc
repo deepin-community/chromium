@@ -216,8 +216,16 @@ class TooltipBrowserTest : public InProcessBrowserTest {
   base::test::ScopedFeatureList scoped_feature_list_;
 };  // class TooltipBrowserTest
 
+// TOOD(crbug.com/40768202): Flakily fails on Windows
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_ShowTooltipFromWebContentWithCursor \
+  DISABLED_ShowTooltipFromWebContentWithCursor
+#else
+#define MAYBE_ShowTooltipFromWebContentWithCursor \
+  ShowTooltipFromWebContentWithCursor
+#endif
 IN_PROC_BROWSER_TEST_F(TooltipBrowserTest,
-                       ShowTooltipFromWebContentWithCursor) {
+                       MAYBE_ShowTooltipFromWebContentWithCursor) {
   NavigateToURL("/tooltip.html");
   std::u16string expected_text = u"my tooltip";
 
@@ -265,19 +273,12 @@ IN_PROC_BROWSER_TEST_F(TooltipBrowserTest,
   helper()->HideAndReset();
 }
 
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
 // https://crbug.com/1212403. Flaky on linux-chromeos-rel.
 // https://crbug.com/1241736. Flaky on Win.
 // TODO(elkurin): Keyboard triggered tooltip needs command line switch on server
 // side while Lacros cannot set Ash flag.
-#define MAYBE_ShowTooltipFromIFrameWithKeyboard \
-  DISABLED_ShowTooltipFromIFrameWithKeyboard
-#else
-#define MAYBE_ShowTooltipFromIFrameWithKeyboard \
-  ShowTooltipFromIFrameWithKeyboard
-#endif
 IN_PROC_BROWSER_TEST_F(TooltipBrowserTest,
-                       MAYBE_ShowTooltipFromIFrameWithKeyboard) {
+                       DISABLED_ShowTooltipFromIFrameWithKeyboard) {
   // There are two tooltips in this file: one above the iframe and one inside
   // the iframe.
   NavigateToURL("/tooltip_in_iframe.html");

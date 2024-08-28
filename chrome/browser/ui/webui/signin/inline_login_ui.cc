@@ -125,9 +125,12 @@ void CreateAndAddWebUIDataSource(Profile* profile) {
       source,
       base::make_span(kGaiaAuthHostResources, kGaiaAuthHostResourcesSize),
       IDR_INLINE_LOGIN_INLINE_LOGIN_HTML);
-  // TODO(crbug.com/1399912): Remove this when saml_password_attributes.js is
+  // TODO(crbug.com/40250068): Remove this when saml_password_attributes.js is
   // made TrustedTypes compliant.
   source->DisableTrustedTypesCSP();
+  // Necessary since this UI sends XML Http requests.
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::ConnectSrc, "connect-src *;");
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   source->AddResourcePaths(base::make_span(kArcAccountPickerResources,
@@ -347,7 +350,7 @@ bool IsValidChromeSigninReason(const GURL& url) {
     case signin_metrics::Reason::kUnknownReason:
       return false;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 

@@ -7,13 +7,13 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_store.h"
@@ -147,11 +147,11 @@ class SupervisedUserSettingsService : public KeyedService,
   void SaveItem(const std::string& key, base::Value value);
 
   // Sets the setting with the given `key` to `value`.
-  void SetLocalSetting(base::StringPiece key, base::Value value);
-  void SetLocalSetting(base::StringPiece key, base::Value::Dict dict);
+  void SetLocalSetting(std::string_view key, base::Value value);
+  void SetLocalSetting(std::string_view key, base::Value::Dict dict);
 
   // Removes the setting for `key`.
-  void RemoveLocalSetting(base::StringPiece key);
+  void RemoveLocalSetting(std::string_view key);
 
   // Public for testing.
   static syncer::SyncData CreateSyncDataForSetting(const std::string& name,
@@ -174,7 +174,6 @@ class SupervisedUserSettingsService : public KeyedService,
   base::WeakPtr<SyncableService> AsWeakPtr() override;
 
   // PrefStore::Observer implementation:
-  void OnPrefValueChanged(const std::string& key) override;
   void OnInitializationCompleted(bool success) override;
 
   bool IsCustomPassphraseAllowed() const;

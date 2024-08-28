@@ -17,23 +17,26 @@ import org.chromium.components.safe_browsing.SafeBrowsingApiHandler.LookupResult
 /**
  * Helper for calling GMSCore APIs from native code to perform Safe Browsing checks.
  *
- * {@link #setSafetyNetApiHandler(SafetyNetApiHandler)} and {@link
- * #setSafeBrowsingApiHandler(SafeBrowsingApiHandler)} must be invoked first. After that
- * {@link #startUriLookupBySafetyNetApi(long, String, int[])}, {@link
+ * <p>{@link #setSafetyNetApiHandler(SafetyNetApiHandler)} and {@link
+ * #setSafeBrowsingApiHandler(SafeBrowsingApiHandler)} must be invoked first. After that {@link
+ * #startUriLookupBySafetyNetApi(long, String, int[])}, {@link
  * #startUriLookupBySafeBrowsingApi(long, String, int[], int)} and {@link
  * #startAllowlistLookup(String, int)} can be used to check the URLs. The SafetyNetApiHandler is
  * initialized lazily on the first URL check. There is no extra step needed to initialize the
  * SafeBrowsingApiHandler.
  *
- * Optionally calling {@link #ensureSafetyNetApiInitialized()} allows to initialize the
- * SafetyNetApiHandler eagerly.
+ * <p>Optionally calling {@link #ensureSafetyNetApiInitialized()} allows initializing the
+ * SafetyNetApiHandler eagerly. Calling {@link #initSafeBrowsingApi()} allows initializing the
+ * SafeBrowsingApiHandler eagerly.
  *
- * All of these methods can be called on any thread.
+ * <p>All of these methods can be called on any thread.
  */
 @JNINamespace("safe_browsing")
 public final class SafeBrowsingApiBridge {
     private static final String TAG = "SBApiBridge";
     private static final boolean DEBUG = false;
+    // A fake callback id used to init the Safe Browsing API.
+    private static final long CALLBACK_ID_FOR_STARTUP = -1;
 
     private static final Object sSafetyNetApiHandlerLock = new Object();
 
@@ -99,10 +102,10 @@ public final class SafeBrowsingApiBridge {
     }
 
     /**
-     * Initializes the singleton SafetyNetApiHandler instance on the first call. On subsequent
-     * calls it does nothing, returns the same value as returned on the first call.
+     * Initializes the singleton SafetyNetApiHandler instance on the first call. On subsequent calls
+     * it does nothing, returns the same value as returned on the first call.
      *
-     * The caller must {@link #setSafetyNetApiHandler(SafetyNetApiHandler)} first.
+     * <p>The caller must call {@link #setSafetyNetApiHandler(SafetyNetApiHandler)} first.
      *
      * @return true iff the initialization succeeded.
      */
@@ -111,6 +114,17 @@ public final class SafeBrowsingApiBridge {
         synchronized (sSafetyNetApiHandlerLock) {
             return getSafetyNetApiHandler() != null;
         }
+    }
+
+    /**
+     * Make a fake lookupUri request to the Safe Browsing API to accelerate subsequent calls. It is
+     * optional to call this function before sending a real request.
+     *
+     * <p>The caller must call {@link #setSafeBrowsingApiHandler(SafeBrowsingApiHandler)} first.
+     */
+    public static void initSafeBrowsingApi() {
+        // Use an empty URL so GMSCore won't send a real request to Safe Browsing.
+        startUriLookupBySafeBrowsingApi(CALLBACK_ID_FOR_STARTUP, "", new int[0], 0);
     }
 
     /** Observer to record latency from requests to GmsCore. */
@@ -200,6 +214,13 @@ public final class SafeBrowsingApiBridge {
                                 callbackId, resultStatus, metadata, checkDelta);
             }
         }
+
+        @Override
+        public void onVerifyAppsEnabledDone(long callbackId, int result) {
+            synchronized (sSafetyNetApiHandlerLock) {
+                SafeBrowsingApiBridgeJni.get().onVerifyAppsEnabledDone(callbackId, result);
+            }
+        }
     }
 
     private static class SafeBrowsingApiLookupDoneObserver
@@ -212,6 +233,12 @@ public final class SafeBrowsingApiBridge {
                 int[] threatAttributes,
                 int responseStatus,
                 long checkDelta) {
+            if (callbackId == CALLBACK_ID_FOR_STARTUP) {
+                // Not delivering the callback result to native if this is the call for startup. The
+                // native library may not be ready, and there is no one on the native side listening
+                // to the call for startup anyway.
+                return;
+            }
             synchronized (sSafeBrowsingApiHandlerLock) {
                 if (sSafeBrowsingApiUrlCheckTimeObserver != null) {
                     sSafeBrowsingApiUrlCheckTimeObserver.onUrlCheckTime(checkDelta);
@@ -281,12 +308,51 @@ public final class SafeBrowsingApiBridge {
         synchronized (sSafeBrowsingApiHandlerLock) {
             if (sSafeBrowsingApiHandler == null) {
                 // sSafeBrowsingApiHandler can only be null in tests.
-                SafeBrowsingApiBridgeJni.get()
-                        .onUrlCheckDoneBySafeBrowsingApi(
-                                callbackId, LookupResult.FAILURE_HANDLER_NULL, 0, new int[0], 0, 0);
+                // Not delivering the callback result to native if this is the call for startup. The
+                // native library may not be ready, and there is no one on the native side listening
+                // to the call for startup anyway.
+                // This is handled the same way as in onUrlCheckDone.
+                if (callbackId != CALLBACK_ID_FOR_STARTUP) {
+                    SafeBrowsingApiBridgeJni.get()
+                            .onUrlCheckDoneBySafeBrowsingApi(
+                                    callbackId,
+                                    LookupResult.FAILURE_HANDLER_NULL,
+                                    0,
+                                    new int[0],
+                                    0,
+                                    0);
+                }
                 return;
             }
             sSafeBrowsingApiHandler.startUriLookup(callbackId, uri, threatTypes, protocol);
+        }
+    }
+
+    /**
+     * Check if app verification is enabled through the SafetyNet API.
+     *
+     * <p>Must only be called if {@link #ensureSafetyNetApiInitialized()} returns true.
+     */
+    @CalledByNative
+    public static void isVerifyAppsEnabled(long callbackId) {
+        synchronized (sSafetyNetApiHandlerLock) {
+            assert sSafetyNetApiHandlerInitCalled;
+            assert sSafetyNetApiHandler != null;
+            sSafetyNetApiHandler.isVerifyAppsEnabled(callbackId);
+        }
+    }
+
+    /**
+     * Prompt the user to enable app verification through the SafetyNet API.
+     *
+     * <p>Must only be called if {@link #ensureSafetyNetApiInitialized()} returns true.
+     */
+    @CalledByNative
+    public static void enableVerifyApps(long callbackId) {
+        synchronized (sSafetyNetApiHandlerLock) {
+            assert sSafetyNetApiHandlerInitCalled;
+            assert sSafetyNetApiHandler != null;
+            sSafetyNetApiHandler.enableVerifyApps(callbackId);
         }
     }
 
@@ -302,5 +368,7 @@ public final class SafeBrowsingApiBridge {
                 int[] threatAttributes,
                 int responseStatus,
                 long checkDelta);
+
+        void onVerifyAppsEnabledDone(long callbackId, int result);
     }
 }

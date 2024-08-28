@@ -144,7 +144,8 @@ DemoSetupController::DemoSetupError CreateFromClientStatus(
       return DemoSetupController::DemoSetupError(
           ErrorCode::kArcError, RecoveryMethod::kUnknown, debug_message);
   }
-  NOTREACHED() << "Demo mode setup received unsupported client status";
+  NOTREACHED_IN_MIGRATION()
+      << "Demo mode setup received unsupported client status";
   return DemoSetupController::DemoSetupError(
       ErrorCode::kUnexpectedError, RecoveryMethod::kUnknown, debug_message);
 }
@@ -172,7 +173,8 @@ DemoSetupController::DemoSetupError CreateFromLockStatus(
       return DemoSetupController::DemoSetupError(
           ErrorCode::kAlreadyLocked, RecoveryMethod::kPowerwash, debug_message);
   }
-  NOTREACHED() << "Demo mode setup received unsupported lock status";
+  NOTREACHED_IN_MIGRATION()
+      << "Demo mode setup received unsupported lock status";
   return DemoSetupController::DemoSetupError(
       ErrorCode::kUnexpectedError, RecoveryMethod::kUnknown, debug_message);
 }
@@ -235,7 +237,8 @@ DemoSetupController::DemoSetupError::CreateFromEnrollmentStatus(
       return DemoSetupError(ErrorCode::kUnexpectedError,
                             RecoveryMethod::kUnknown, debug_message);
   }
-  NOTREACHED() << "Demo mode setup received unsupported enrollment status";
+  NOTREACHED_IN_MIGRATION()
+      << "Demo mode setup received unsupported enrollment status";
   return DemoSetupError(ErrorCode::kUnexpectedError, RecoveryMethod::kUnknown,
                         debug_message);
 }
@@ -254,7 +257,8 @@ DemoSetupController::DemoSetupError::CreateFromOtherEnrollmentError(
       return DemoSetupError(ErrorCode::kUnexpectedError,
                             RecoveryMethod::kUnknown, debug_message);
   }
-  NOTREACHED() << "Demo mode setup received unsupported enrollment error";
+  NOTREACHED_IN_MIGRATION()
+      << "Demo mode setup received unsupported enrollment error";
   return DemoSetupError(ErrorCode::kUnexpectedError, RecoveryMethod::kUnknown,
                         debug_message);
 }
@@ -262,7 +266,7 @@ DemoSetupController::DemoSetupError::CreateFromOtherEnrollmentError(
 // static
 DemoSetupController::DemoSetupError
 DemoSetupController::DemoSetupError::CreateFromComponentError(
-    component_updater::CrOSComponentManager::Error error,
+    component_updater::ComponentManagerAsh::Error error,
     std::string component_name) {
   const std::string debug_message =
       base::StringPrintf("Failed to load '%s' CrOS component with error: %d",
@@ -359,7 +363,8 @@ std::u16string DemoSetupController::DemoSetupError::GetLocalizedErrorMessage()
     case ErrorCode::kUnexpectedError:
       return l10n_util::GetStringUTF16(IDS_DEMO_SETUP_UNEXPECTED_ERROR);
   }
-  NOTREACHED() << "No localized error message available for demo setup error.";
+  NOTREACHED_IN_MIGRATION()
+      << "No localized error message available for demo setup error.";
   return std::u16string();
 }
 
@@ -379,7 +384,7 @@ DemoSetupController::DemoSetupError::GetLocalizedRecoveryMessage() const {
     case RecoveryMethod::kUnknown:
       return l10n_util::GetStringUTF16(IDS_DEMO_SETUP_RECOVERY_FATAL);
   }
-  NOTREACHED()
+  NOTREACHED_IN_MIGRATION()
       << "No localized error message available for demo setup recovery method.";
   return std::u16string();
 }
@@ -479,7 +484,7 @@ std::string DemoSetupController::GetDemoSetupStepString(
       return "complete";
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 DemoSetupController::DemoSetupController() = default;
@@ -518,7 +523,7 @@ void DemoSetupController::Enroll(
       return;
     case DemoSession::DemoModeConfig::kNone:
     case DemoSession::DemoModeConfig::kOfflineDeprecated:
-      NOTREACHED() << "No valid demo mode config specified";
+      NOTREACHED_IN_MIGRATION() << "No valid demo mode config specified";
   }
 }
 
@@ -555,7 +560,8 @@ void DemoSetupController::LoadDemoComponents() {
   if (is_growth_campaigns_enabled_in_demo_mode) {
     // Growth campaign is enabled in demo mode, also load growth campaigns
     // component.
-    growth::CampaignsManager::Get()->LoadCampaigns(barrier_closure);
+    growth::CampaignsManager::Get()->LoadCampaigns(barrier_closure,
+                                                   /*in_oobe=*/true);
   }
 }
 
@@ -570,18 +576,18 @@ void DemoSetupController::OnDemoComponentsLoaded() {
 
   auto resources_component_error =
       demo_components_->resources_component_error().value_or(
-          component_updater::CrOSComponentManager::Error::NOT_FOUND);
+          component_updater::ComponentManagerAsh::Error::NOT_FOUND);
   if (resources_component_error !=
-      component_updater::CrOSComponentManager::Error::NONE) {
+      component_updater::ComponentManagerAsh::Error::NONE) {
     SetupFailed(DemoSetupError::CreateFromComponentError(
         resources_component_error,
         DemoComponents::kDemoModeResourcesComponentName));
     return;
   }
   auto app_component_error = demo_components_->app_component_error().value_or(
-      component_updater::CrOSComponentManager::Error::NOT_FOUND);
+      component_updater::ComponentManagerAsh::Error::NOT_FOUND);
   if (app_component_error !=
-      component_updater::CrOSComponentManager::Error::NONE) {
+      component_updater::ComponentManagerAsh::Error::NONE) {
     SetupFailed(DemoSetupError::CreateFromComponentError(
         app_component_error, DemoComponents::kDemoModeAppComponentName));
     return;
@@ -599,14 +605,15 @@ void DemoSetupController::OnDemoComponentsLoaded() {
   policy::EnrollmentConfig config;
   config.mode = policy::EnrollmentConfig::MODE_ATTESTATION;
   config.management_domain = policy::kDemoModeDomain;
+  config.license_type = policy::LicenseType::kEnterprise;
 
-  enrollment_launcher_ = EnrollmentLauncher::Create(
-      this, config, policy::kDemoModeDomain, policy::LicenseType::kEnterprise);
+  enrollment_launcher_ =
+      EnrollmentLauncher::Create(this, config, policy::kDemoModeDomain);
   enrollment_launcher_->EnrollUsingAttestation();
 }
 
 void DemoSetupController::OnAuthError(const GoogleServiceAuthError& error) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void DemoSetupController::OnEnrollmentError(policy::EnrollmentStatus status) {
@@ -634,15 +641,15 @@ void DemoSetupController::OnDeviceEnrolled() {
 }
 
 void DemoSetupController::OnDeviceAttributeUploadCompleted(bool success) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void DemoSetupController::OnDeviceAttributeUpdatePermission(bool granted) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void DemoSetupController::SetCrOSComponentLoadErrorForTest(
-    component_updater::CrOSComponentManager::Error error) {
+    component_updater::ComponentManagerAsh::Error error) {
   component_error_for_tests_ = error;
 }
 

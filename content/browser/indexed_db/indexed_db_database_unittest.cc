@@ -25,7 +25,6 @@
 #include "components/services/storage/indexed_db/locks/partitioned_lock_manager.h"
 #include "components/services/storage/privileged/mojom/indexed_db_client_state_checker.mojom.h"
 #include "components/services/storage/public/cpp/buckets/bucket_locator.h"
-#include "content/browser/indexed_db/indexed_db.h"
 #include "content/browser/indexed_db/indexed_db_backing_store.h"
 #include "content/browser/indexed_db/indexed_db_bucket_context.h"
 #include "content/browser/indexed_db/indexed_db_connection.h"
@@ -67,7 +66,7 @@ class IndexedDBDatabaseTest : public ::testing::Test {
         base::SingleThreadTaskRunner::GetCurrentDefault().get());
 
     IndexedDBBucketContext::Delegate delegate;
-    delegate.on_ready_for_destruction = base::BindRepeating(
+    delegate.on_ready_for_destruction = base::BindOnce(
         &IndexedDBDatabaseTest::OnBucketContextReadyForDestruction,
         weak_factory_.GetWeakPtr());
 
@@ -165,17 +164,10 @@ TEST_F(IndexedDBDatabaseTest, ForcedClose) {
 
   EXPECT_EQ(db_, request.connection()->database().get());
 
-  const int64_t transaction_id = 123;
-  const std::vector<int64_t> scope;
-  IndexedDBTransaction* transaction = request.connection()->CreateTransaction(
-      mojo::NullAssociatedReceiver(), transaction_id,
-      std::set<int64_t>(scope.begin(), scope.end()),
-      blink::mojom::IDBTransactionMode::ReadOnly,
-      new IndexedDBBackingStore::Transaction(
-          bucket_context_->backing_store()->AsWeakPtr(),
-          blink::mojom::IDBTransactionDurability::Relaxed,
-          blink::mojom::IDBTransactionMode::ReadWrite));
-  db_->RegisterAndScheduleTransaction(transaction);
+  request.connection()->CreateTransaction(
+      mojo::NullAssociatedReceiver(), /*transaction_id=*/123,
+      /*object_store_ids=*/{}, blink::mojom::IDBTransactionMode::ReadOnly,
+      blink::mojom::IDBTransactionDurability::Relaxed);
   db_ = nullptr;
 
   base::RunLoop run_loop;
@@ -493,8 +485,11 @@ class IndexedDBDatabaseOperationTest : public IndexedDBDatabaseTest {
 
  protected:
   MockIndexedDBFactoryClient request_;
-  raw_ptr<IndexedDBTransaction, AcrossTasksDanglingUntriaged> transaction_ =
-      nullptr;
+
+  // As this is owned by `IndexedDBConnection`, tests that cause the transaction
+  // to be committed must manually reset this to null to avoid triggering
+  // dangling pointer warnings.
+  raw_ptr<IndexedDBTransaction> transaction_ = nullptr;
   leveldb::Status commit_success_;
 };
 
@@ -506,6 +501,7 @@ TEST_F(IndexedDBDatabaseOperationTest, CreateObjectStore) {
                                       /*auto_increment=*/false, transaction_);
   EXPECT_TRUE(s.ok());
   transaction_->SetCommitFlag();
+  transaction_ = nullptr;
   RunPostedTasks();
   EXPECT_TRUE(bucket_context_);
   EXPECT_EQ(1ULL, db_->metadata().object_stores.size());
@@ -528,6 +524,7 @@ TEST_F(IndexedDBDatabaseOperationTest, CreateIndex) {
       1ULL,
       db_->metadata().object_stores.find(store_id)->second.indexes.size());
   transaction_->SetCommitFlag();
+  transaction_ = nullptr;
   RunPostedTasks();
   EXPECT_TRUE(bucket_context_);
   EXPECT_EQ(1ULL, db_->metadata().object_stores.size());
@@ -622,6 +619,7 @@ TEST_F(IndexedDBDatabaseOperationTest, CreatePutDelete) {
   EXPECT_EQ(0ULL, db_->metadata().object_stores.size());
 
   transaction_->SetCommitFlag();
+  transaction_ = nullptr;
   RunPostedTasks();
   // A transaction error would have resulted in a deleted db.
   EXPECT_FALSE(bucket_context_->GetDatabasesForTesting().empty());

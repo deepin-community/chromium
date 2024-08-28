@@ -17,6 +17,8 @@ Interceptor& GetMutableInterceptor() {
   return *s_callback;
 }
 
+bool s_has_interceptor = false;
+
 }  // namespace
 
 const Interceptor& GetTestingInterceptor() {
@@ -31,6 +33,18 @@ void SetInterceptorForTesting(const Interceptor& interceptor) {
       << "It is not expected that this is called with non-null callback when "
       << "another overriding callback is already set.";
   GetMutableInterceptor() = interceptor;
+}
+
+bool HasInterceptorOnIOThreadForTesting() {
+  CHECK(!BrowserThread::IsThreadInitialized(BrowserThread::IO) ||
+        BrowserThread::CurrentlyOn(BrowserThread::IO));
+  return s_has_interceptor;
+}
+
+void SetHasInterceptorOnIOThreadForTesting(bool has_interceptor) {
+  CHECK(!BrowserThread::IsThreadInitialized(BrowserThread::IO) ||
+        BrowserThread::CurrentlyOn(BrowserThread::IO));
+  s_has_interceptor = has_interceptor;
 }
 
 TerminalParams::TerminalParams(
@@ -127,6 +141,7 @@ ContentClientParams::ContentClientParams(
     RenderFrameHost* frame,
     int render_process_id,
     const url::Origin& request_initiator,
+    const net::IsolationInfo& isolation_info,
     ukm::SourceIdObj ukm_source_id,
     bool* bypass_redirect_checks,
     std::optional<int64_t> navigation_id,
@@ -135,6 +150,7 @@ ContentClientParams::ContentClientParams(
       frame_(frame),
       render_process_id_(render_process_id),
       request_initiator_(request_initiator),
+      isolation_info_(isolation_info),
       ukm_source_id_(ukm_source_id),
       bypass_redirect_checks_(bypass_redirect_checks),
       navigation_id_(navigation_id),
@@ -155,10 +171,10 @@ void ContentClientParams::Run(
     network::mojom::URLLoaderFactoryOverridePtr* factory_override) {
   GetContentClient()->browser()->WillCreateURLLoaderFactory(
       browser_context_.get(), frame_.get(), render_process_id_, type,
-      request_initiator_.get(), std::move(navigation_id_),
-      std::move(ukm_source_id_), factory_builder, header_client,
-      bypass_redirect_checks_.get(), disable_secure_dns, factory_override,
-      std::move(navigation_response_task_runner_));
+      request_initiator_.get(), isolation_info_.get(),
+      std::move(navigation_id_), std::move(ukm_source_id_), factory_builder,
+      header_client, bypass_redirect_checks_.get(), disable_secure_dns,
+      factory_override, std::move(navigation_response_task_runner_));
 }
 
 namespace {
@@ -181,7 +197,7 @@ std::tuple<bool, bool> GetIsNavigationAndDownload(
 
     // The following cases are not reached just because `devtools_params` is
     // always `std::nullopt` for the current `Create*` callers.
-    // TODO(crbug.com/1506871): Return proper values once non-nullopt
+    // TODO(crbug.com/40947547): Return proper values once non-nullopt
     // `devtools_params` is given.
     case ContentBrowserClient::URLLoaderFactoryType::kPrefetch:
     case ContentBrowserClient::URLLoaderFactoryType::kDevTools:

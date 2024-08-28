@@ -147,7 +147,7 @@ bool ChromeBrowserPolicyConnector::IsDeviceEnterpriseManaged() const {
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
   return chromeos::BrowserParamsProxy::Get()->IsDeviceEnterprisedManaged();
 #else
-  NOTREACHED() << "This method is only defined for ChromeOS";
+  NOTREACHED_IN_MIGRATION() << "This method is only defined for ChromeOS";
   return false;
 #endif
 }
@@ -361,6 +361,8 @@ ChromeBrowserPolicyConnector::CreatePlatformProvider() {
   // app's bundle ID actually is. All channels of Chrome should obey the same
   // policies.
   CFStringRef bundle_id = CFSTR("com.google.Chrome");
+#elif BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
+  CFStringRef bundle_id = CFSTR("com.google.ChromeForTesting");
 #else
   base::apple::ScopedCFTypeRef<CFStringRef> bundle_id_scoper =
       base::SysUTF8ToCFStringRef(base::apple::BaseBundleID());

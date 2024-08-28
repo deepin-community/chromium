@@ -27,6 +27,9 @@
 #include "chrome/browser/ui/login/login_handler.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/view_ids.h"
+#include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
+#include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
+#include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -40,6 +43,7 @@
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/embedder_support/switches.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "components/javascript_dialogs/app_modal_dialog_controller.h"
 #include "components/javascript_dialogs/app_modal_dialog_manager.h"
 #include "components/javascript_dialogs/app_modal_dialog_view.h"
@@ -60,7 +64,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_features.h"
-#include "content/public/common/input/native_web_keyboard_event.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
@@ -74,6 +77,7 @@
 #include "printing/buildflags/buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 
@@ -85,8 +89,8 @@
 #include "chrome/browser/printing/print_preview_dialog_controller.h"
 #endif
 
-using content::NativeWebKeyboardEvent;
 using content::WebContents;
+using input::NativeWebKeyboardEvent;
 using testing::_;
 using testing::Return;
 
@@ -219,10 +223,13 @@ class PopupBlockerBrowserTest : public InProcessBrowserTest {
     std::map<int32_t, GURL> blocked_requests =
         popup_blocker_helper->GetBlockedPopupRequests();
     std::map<int32_t, GURL>::const_iterator iter = blocked_requests.begin();
+    ui_test_utils::BrowserChangeObserver popup_observer(
+        nullptr, ui_test_utils::BrowserChangeObserver::ChangeType::kAdded);
     popup_blocker_helper->ShowBlockedPopup(iter->first, disposition);
 
     Browser* new_browser;
     if (what_to_expect == kExpectPopup || what_to_expect == kExpectNewWindow) {
+      ui_test_utils::WaitForBrowserSetLastActive(popup_observer.Wait());
       new_browser = BrowserList::GetInstance()->GetLastActive();
       EXPECT_NE(browser, new_browser);
       web_contents = new_browser->tab_strip_model()->GetActiveWebContents();
@@ -255,7 +262,7 @@ IN_PROC_BROWSER_TEST_F(PopupBlockerBrowserTest, BlockWebContentsCreation) {
                kDontCheckTitle);
 }
 
-// TODO(crbug.com/1115886): Flaky on Mac ASAN and Chrome OS.
+// TODO(crbug.com/40144522): Flaky on Mac ASAN and Chrome OS.
 #if (BUILDFLAG(IS_MAC) && defined(ADDRESS_SANITIZER)) || \
     BUILDFLAG(IS_CHROMEOS_ASH)
 #define MAYBE_BlockWebContentsCreationIncognito \
@@ -448,7 +455,8 @@ IN_PROC_BROWSER_TEST_F(PopupBlockerBrowserTest,
 // https://codereview.chromium.org/23903056
 // BUG=https://code.google.com/p/chromium/issues/detail?id=295299
 // TODO(ananta). Debug and fix this test.
-#if defined(USE_AURA) && (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
+#if defined(USE_AURA) && \
+    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN))
 #define MAYBE_WindowFeatures DISABLED_WindowFeatures
 #else
 #define MAYBE_WindowFeatures WindowFeatures
@@ -670,8 +678,35 @@ IN_PROC_BROWSER_TEST_F(PopupBlockerBrowserTest, MAYBE_PrintPreviewPopUnder) {
 }
 #endif  // BUILDFLAG(ENABLE_PRINT_PREVIEW)
 
+class PopupBlockerBrowserTestWithWebApps : public PopupBlockerBrowserTest {
+ private:
+  web_app::OsIntegrationTestOverrideBlockingRegistration faked_os_integration_;
+};
+
+// Reentrancy regression test for PopunderPreventer attempting to activate a
+// fullscreen web app window that is being closed; see crbug.com/331095620.
+// TODO(crbug.com/335493696): Mac shims don't work with faked fullscreen.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_CloseFullscreenStandaloneWebApp \
+  DISABLED_CloseFullscreenStandaloneWebApp
+#else
+#define MAYBE_CloseFullscreenStandaloneWebApp CloseFullscreenStandaloneWebApp
+#endif
+IN_PROC_BROWSER_TEST_F(PopupBlockerBrowserTestWithWebApps,
+                       MAYBE_CloseFullscreenStandaloneWebApp) {
+  GURL url = embedded_test_server()->GetURL("/web_apps/basic.html");
+  webapps::AppId id = web_app::InstallWebAppFromPage(browser(), url);
+  Browser* app = web_app::LaunchWebAppBrowserAndWait(browser()->profile(), id);
+  WebContents* tab = app->tab_strip_model()->GetActiveWebContents();
+  tab->GetDelegate()->EnterFullscreenModeForTab(tab->GetPrimaryMainFrame(), {});
+  ui_test_utils::FullscreenWaiter(app, {.tab_fullscreen = true}).Wait();
+
+  app->window()->Close();
+  ui_test_utils::WaitForBrowserToClose(app);
+}
+
 // Tests that Ctrl+Enter/Cmd+Enter keys on a link open the background tab.
-// TODO(crbug.com/1430472): Re-enable this test
+// TODO(crbug.com/40901768): Re-enable this test
 IN_PROC_BROWSER_TEST_F(PopupBlockerBrowserTest, DISABLED_CtrlEnterKey) {
   WebContents* tab = browser()->tab_strip_model()->GetActiveWebContents();
 

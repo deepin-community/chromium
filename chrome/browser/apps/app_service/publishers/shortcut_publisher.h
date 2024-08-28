@@ -9,8 +9,8 @@
 
 #include "base/memory/raw_ptr.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/apps/app_service/app_icon/compressed_icon_getter.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_forward.h"
-#include "chrome/browser/apps/app_service/publishers/compressed_icon_getter.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
 #include "components/services/app_service/public/cpp/shortcut/shortcut.h"
@@ -39,7 +39,7 @@ class ShortcutPublisher : public CompressedIconGetter {
   void RegisterShortcutPublisher(AppType app_type);
 
   // Launches a shortcut identified by `local_shortcut_id` in the app identified
-  // by 'host_app_id`. `display_id` contains the id of the display from which
+  // by `host_app_id`. `display_id` contains the id of the display from which
   // the shortcut will be launched. display::kInvalidDisplayId means that the
   // default display for new windows will be used. See `display::Screen` for
   // details.
@@ -48,7 +48,7 @@ class ShortcutPublisher : public CompressedIconGetter {
                               int64_t display_id) = 0;
 
   // Removes the shortcut identified by `local_shortcut_id` in the app
-  // identified by 'host_app_id`. This request will be sent to shortcut
+  // identified by `host_app_id`. This request will be sent to shortcut
   // publisher to remove shortcut from the platform published it.
   virtual void RemoveShortcut(const std::string& host_app_id,
                               const std::string& local_shortcut_id,

@@ -53,21 +53,13 @@ constexpr int kLocalNavigationTimestampsSizeThreshold = 5;
 
 }  // namespace
 
-class AsyncCheckTrackerTest : public content::RenderViewHostTestHarness,
-                              public testing::WithParamInterface<bool> {
+class AsyncCheckTrackerTest : public content::RenderViewHostTestHarness {
  protected:
   AsyncCheckTrackerTest()
       : RenderViewHostTestHarness(
             content::BrowserTaskEnvironment::REAL_IO_THREAD,
             base::test::TaskEnvironment::TimeSource::MOCK_TIME) {
-    bool sb_on_ui_thread_enabled = GetParam();
-    if (sb_on_ui_thread_enabled) {
-      feature_list_.InitWithFeatures(
-          {kSafeBrowsingAsyncRealTimeCheck, kSafeBrowsingOnUIThread}, {});
-    } else {
-      feature_list_.InitWithFeatures({kSafeBrowsingAsyncRealTimeCheck},
-                                     {kSafeBrowsingOnUIThread});
-    }
+    feature_list_.InitWithFeatures({kSafeBrowsingAsyncRealTimeCheck}, {});
   }
 
   void SetUp() override {
@@ -102,7 +94,7 @@ class AsyncCheckTrackerTest : public content::RenderViewHostTestHarness,
       // load_post_commit_error_page is false.
       UnsafeResource resource;
       resource.url = url_;
-      resource.threat_type = SB_THREAT_TYPE_URL_PHISHING;
+      resource.threat_type = SBThreatType::SB_THREAT_TYPE_URL_PHISHING;
       resource.navigation_id = navigation_id;
       ui_manager_->AddUnsafeResource(url_, resource);
     }
@@ -128,7 +120,7 @@ class AsyncCheckTrackerTest : public content::RenderViewHostTestHarness,
         /*hash_realtime_service=*/nullptr,
         /*hash_realtime_selection=*/
         hash_realtime_utils::HashRealTimeSelection::kNone,
-        /*is_async_check=*/true);
+        /*is_async_check=*/true, SessionID::InvalidValue());
     checker->AddUrlInRedirectChainForTesting(url_);
     tracker_->TransferUrlChecker(std::move(checker));
   }
@@ -141,11 +133,7 @@ class AsyncCheckTrackerTest : public content::RenderViewHostTestHarness,
   raw_ptr<AsyncCheckTracker> tracker_;
 };
 
-INSTANTIATE_TEST_SUITE_P(SafeBrowsingOnUIThreadEnabled,
-                         AsyncCheckTrackerTest,
-                         testing::Bool());
-
-TEST_P(AsyncCheckTrackerTest,
+TEST_F(AsyncCheckTrackerTest,
        DisplayBlockingPageNotCalled_PendingCheckNotFound) {
   content::MockNavigationHandle handle(url_, main_rfh());
   // This can happen when the complete callback is scheduled before the checker
@@ -158,7 +146,7 @@ TEST_P(AsyncCheckTrackerTest,
   EXPECT_EQ(ui_manager_->DisplayBlockingPageCalledTimes(), 0);
 }
 
-TEST_P(AsyncCheckTrackerTest,
+TEST_F(AsyncCheckTrackerTest,
        DisplayBlockingPageNotCalled_PendingCheckNotCompleted) {
   content::MockNavigationHandle handle(url_, main_rfh());
   CallTransferUrlChecker(handle.GetNavigationId());
@@ -166,7 +154,7 @@ TEST_P(AsyncCheckTrackerTest,
   EXPECT_EQ(ui_manager_->DisplayBlockingPageCalledTimes(), 0);
 }
 
-TEST_P(AsyncCheckTrackerTest,
+TEST_F(AsyncCheckTrackerTest,
        DisplayBlockingPageNotCalled_PendingCheckProceed) {
   base::HistogramTester histograms;
   content::MockNavigationHandle handle(url_, main_rfh());
@@ -182,7 +170,7 @@ TEST_P(AsyncCheckTrackerTest,
       /*expected_count=*/0);
 }
 
-TEST_P(AsyncCheckTrackerTest,
+TEST_F(AsyncCheckTrackerTest,
        DisplayBlockingPageNotCalled_PostCommitInterstitialNotSkipped) {
   base::HistogramTester histograms;
   content::MockNavigationHandle handle(url_, main_rfh());
@@ -199,7 +187,7 @@ TEST_P(AsyncCheckTrackerTest,
       /*expected_bucket_count=*/1);
 }
 
-TEST_P(AsyncCheckTrackerTest,
+TEST_F(AsyncCheckTrackerTest,
        DisplayBlockingPageNotCalled_NavigationNotCommitted) {
   content::MockNavigationHandle handle(url_, main_rfh());
   CallTransferUrlChecker(handle.GetNavigationId());
@@ -210,7 +198,7 @@ TEST_P(AsyncCheckTrackerTest,
   EXPECT_EQ(ui_manager_->DisplayBlockingPageCalledTimes(), 0);
 }
 
-TEST_P(AsyncCheckTrackerTest, DisplayBlockingPageCalled) {
+TEST_F(AsyncCheckTrackerTest, DisplayBlockingPageCalled) {
   base::HistogramTester histograms;
   content::MockNavigationHandle handle(url_, main_rfh());
   CallTransferUrlChecker(handle.GetNavigationId());
@@ -220,11 +208,10 @@ TEST_P(AsyncCheckTrackerTest, DisplayBlockingPageCalled) {
   CallDidFinishNavigation(handle, /*has_committed=*/true);
   EXPECT_EQ(ui_manager_->DisplayBlockingPageCalledTimes(), 1);
   UnsafeResource resource = ui_manager_->GetDisplayedResource();
-  EXPECT_EQ(resource.threat_type, SB_THREAT_TYPE_URL_PHISHING);
+  EXPECT_EQ(resource.threat_type, SBThreatType::SB_THREAT_TYPE_URL_PHISHING);
   EXPECT_EQ(resource.url, url_);
   EXPECT_EQ(resource.render_process_id, main_rfh()->GetGlobalId().child_id);
   EXPECT_EQ(resource.render_frame_token, main_rfh()->GetFrameToken().value());
-  EXPECT_FALSE(resource.should_send_reports);
 
   histograms.ExpectUniqueSample(
       "SafeBrowsing.AsyncCheck.HasPostCommitInterstitialSkipped",
@@ -232,7 +219,7 @@ TEST_P(AsyncCheckTrackerTest, DisplayBlockingPageCalled) {
       /*expected_bucket_count=*/1);
 }
 
-TEST_P(AsyncCheckTrackerTest,
+TEST_F(AsyncCheckTrackerTest,
        DisplayBlockingPageCalled_DidFinishNavigationCalledFirst) {
   content::MockNavigationHandle handle(url_, main_rfh());
   CallTransferUrlChecker(handle.GetNavigationId());
@@ -246,18 +233,17 @@ TEST_P(AsyncCheckTrackerTest,
                               /*all_checks_completed=*/true);
   EXPECT_EQ(ui_manager_->DisplayBlockingPageCalledTimes(), 1);
   UnsafeResource resource = ui_manager_->GetDisplayedResource();
-  EXPECT_EQ(resource.threat_type, SB_THREAT_TYPE_URL_PHISHING);
+  EXPECT_EQ(resource.threat_type, SBThreatType::SB_THREAT_TYPE_URL_PHISHING);
   EXPECT_EQ(resource.url, url_);
   EXPECT_EQ(resource.render_process_id, main_rfh()->GetGlobalId().child_id);
   EXPECT_EQ(resource.render_frame_token, main_rfh()->GetFrameToken().value());
-  EXPECT_FALSE(resource.should_send_reports);
 }
 
-TEST_P(AsyncCheckTrackerTest, IsMainPageLoadPending) {
+TEST_F(AsyncCheckTrackerTest, IsMainPageLoadPending) {
   base::HistogramTester histograms;
   content::MockNavigationHandle handle(web_contents());
   UnsafeResource resource;
-  resource.threat_type = SB_THREAT_TYPE_URL_PHISHING;
+  resource.threat_type = SBThreatType::SB_THREAT_TYPE_URL_PHISHING;
   resource.frame_tree_node_id = main_rfh()->GetFrameTreeNodeId();
   resource.navigation_id = handle.GetNavigationId();
 
@@ -282,10 +268,10 @@ TEST_P(AsyncCheckTrackerTest, IsMainPageLoadPending) {
       /*expected_count=*/1);
 }
 
-TEST_P(AsyncCheckTrackerTest, IsMainPageLoadPending_NoNavigationId) {
+TEST_F(AsyncCheckTrackerTest, IsMainPageLoadPending_NoNavigationId) {
   content::MockNavigationHandle handle(web_contents());
   UnsafeResource resource;
-  resource.threat_type = SB_THREAT_TYPE_URL_PHISHING;
+  resource.threat_type = SBThreatType::SB_THREAT_TYPE_URL_PHISHING;
   resource.frame_tree_node_id = main_rfh()->GetFrameTreeNodeId();
 
   EXPECT_TRUE(AsyncCheckTracker::IsMainPageLoadPending(resource));
@@ -293,16 +279,16 @@ TEST_P(AsyncCheckTrackerTest, IsMainPageLoadPending_NoNavigationId) {
   // If there is no navigation id associated with the resource, whether the
   // main page load is pending is determined by
   // UnsafeResource::IsMainPageLoadPendingWithSyncCheck.
-  resource.threat_type = SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING;
+  resource.threat_type = SBThreatType::SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING;
   EXPECT_FALSE(AsyncCheckTracker::IsMainPageLoadPending(resource));
 }
 
-TEST_P(AsyncCheckTrackerTest,
+TEST_F(AsyncCheckTrackerTest,
        IsMainPageLoadPending_DeleteExpiredNavigationTimestamps) {
   tracker_->SetNavigationTimestampsSizeThresholdForTesting(
       kLocalNavigationTimestampsSizeThreshold);
   UnsafeResource resource;
-  resource.threat_type = SB_THREAT_TYPE_URL_PHISHING;
+  resource.threat_type = SBThreatType::SB_THREAT_TYPE_URL_PHISHING;
   resource.frame_tree_node_id = main_rfh()->GetFrameTreeNodeId();
 
   std::vector<int64_t> old_navigation_ids;
@@ -341,13 +327,13 @@ TEST_P(AsyncCheckTrackerTest,
   EXPECT_FALSE(AsyncCheckTracker::IsMainPageLoadPending(resource));
 }
 
-TEST_P(
+TEST_F(
     AsyncCheckTrackerTest,
     IsMainPageLoadPending_DeleteExpiredNavigationTimestamps_NotReachingThreshold) {
   tracker_->SetNavigationTimestampsSizeThresholdForTesting(
       kLocalNavigationTimestampsSizeThreshold);
   UnsafeResource resource;
-  resource.threat_type = SB_THREAT_TYPE_URL_PHISHING;
+  resource.threat_type = SBThreatType::SB_THREAT_TYPE_URL_PHISHING;
   resource.frame_tree_node_id = main_rfh()->GetFrameTreeNodeId();
 
   content::MockNavigationHandle handle(url_, main_rfh());
@@ -371,10 +357,10 @@ TEST_P(
   EXPECT_TRUE(AsyncCheckTracker::IsMainPageLoadPending(resource));
 }
 
-TEST_P(AsyncCheckTrackerTest, GetBlockedPageCommittedTimestamp) {
+TEST_F(AsyncCheckTrackerTest, GetBlockedPageCommittedTimestamp) {
   content::MockNavigationHandle handle(web_contents());
   UnsafeResource resource;
-  resource.threat_type = SB_THREAT_TYPE_URL_PHISHING;
+  resource.threat_type = SBThreatType::SB_THREAT_TYPE_URL_PHISHING;
   resource.frame_tree_node_id = main_rfh()->GetFrameTreeNodeId();
   resource.navigation_id = handle.GetNavigationId();
 
@@ -394,7 +380,7 @@ TEST_P(AsyncCheckTrackerTest, GetBlockedPageCommittedTimestamp) {
                   .has_value());
 }
 
-TEST_P(AsyncCheckTrackerTest,
+TEST_F(AsyncCheckTrackerTest,
        PendingCheckersManagement_TransferWithSameNavigationId) {
   EXPECT_EQ(tracker_->PendingCheckersSizeForTesting(), 0u);
   CallTransferUrlChecker(/*navigation_id=*/1);
@@ -409,7 +395,7 @@ TEST_P(AsyncCheckTrackerTest,
   EXPECT_EQ(tracker_->PendingCheckersSizeForTesting(), 2u);
 }
 
-TEST_P(AsyncCheckTrackerTest,
+TEST_F(AsyncCheckTrackerTest,
        PendingCheckersManagement_DeleteOldCheckersAfterDidFinishNavigation) {
   base::HistogramTester histograms;
   content::MockNavigationHandle handle_1(url_, main_rfh());
@@ -443,7 +429,7 @@ TEST_P(AsyncCheckTrackerTest,
   EXPECT_EQ(tracker_->PendingCheckersSizeForTesting(), 0u);
 }
 
-TEST_P(AsyncCheckTrackerTest,
+TEST_F(AsyncCheckTrackerTest,
        PendingCheckersManagement_CheckerNotDeletedIfAllChecksCompletedFalse) {
   CallTransferUrlChecker(/*navigation_id=*/1);
   EXPECT_EQ(tracker_->PendingCheckersSizeForTesting(), 1u);
@@ -462,7 +448,7 @@ TEST_P(AsyncCheckTrackerTest,
   EXPECT_EQ(tracker_->PendingCheckersSizeForTesting(), 0u);
 }
 
-TEST_P(AsyncCheckTrackerTest,
+TEST_F(AsyncCheckTrackerTest,
        PendingCheckersManagement_DestructWithPendingCheckers) {
   CallTransferUrlChecker(/*navigation_id=*/1);
   CallTransferUrlChecker(/*navigation_id=*/2);
@@ -472,6 +458,70 @@ TEST_P(AsyncCheckTrackerTest,
   DeleteContents();
   // Tracker is deleted together with the WebContents. pending checkers that the
   // tracker currently owns should also be deleted on the SB thread.
+}
+
+class AsyncCheckTrackerTestObserver : public AsyncCheckTracker::Observer {
+ public:
+  void OnAsyncSafeBrowsingCheckCompleted() override {
+    async_check_completed_times_++;
+  }
+  void OnAsyncSafeBrowsingCheckTrackerDestructed() override {
+    tracker_destructed_times_++;
+  }
+  int AsyncCheckCompletedTimes() { return async_check_completed_times_; }
+  int TrackerDestructedTimes() { return tracker_destructed_times_; }
+
+ private:
+  int async_check_completed_times_ = 0;
+  int tracker_destructed_times_ = 0;
+};
+
+class AsyncCheckTrackerObserverTest : public AsyncCheckTrackerTest {
+ protected:
+  AsyncCheckTrackerTestObserver observer_;
+};
+
+TEST_F(AsyncCheckTrackerObserverTest, OnAsyncSafeBrowsingCheckCompleted) {
+  tracker_->AddObserver(&observer_);
+
+  CallTransferUrlChecker(/*navigation_id=*/1);
+  CallPendingCheckerCompleted(/*navigation_id=*/1, /*proceed=*/true,
+                              /*has_post_commit_interstitial_skipped=*/false,
+                              /*all_checks_completed=*/false);
+  // Observer not notified, because all_checks_completed is false.
+  EXPECT_EQ(observer_.AsyncCheckCompletedTimes(), 0);
+
+  CallPendingCheckerCompleted(/*navigation_id=*/1, /*proceed=*/true,
+                              /*has_post_commit_interstitial_skipped=*/false,
+                              /*all_checks_completed=*/true);
+  EXPECT_EQ(observer_.AsyncCheckCompletedTimes(), 1);
+  CallTransferUrlChecker(/*navigation_id=*/2);
+  CallPendingCheckerCompleted(/*navigation_id=*/2, /*proceed=*/true,
+                              /*has_post_commit_interstitial_skipped=*/false,
+                              /*all_checks_completed=*/true);
+  EXPECT_EQ(observer_.AsyncCheckCompletedTimes(), 2);
+
+  tracker_->RemoveObserver(&observer_);
+
+  CallTransferUrlChecker(/*navigation_id=*/3);
+  CallPendingCheckerCompleted(/*navigation_id=*/3, /*proceed=*/true,
+                              /*has_post_commit_interstitial_skipped=*/false,
+                              /*all_checks_completed=*/true);
+  // Observer not notified, because it has removed itself.
+  EXPECT_EQ(observer_.AsyncCheckCompletedTimes(), 2);
+}
+
+TEST_F(AsyncCheckTrackerObserverTest, AsyncCheckTrackerDeletedWhileObserving) {
+  std::unique_ptr<content::WebContents> web_contents = CreateTestWebContents();
+  auto* tracker = AsyncCheckTracker::GetOrCreateForWebContents(
+      web_contents.get(), ui_manager_.get());
+  tracker->AddObserver(&observer_);
+  EXPECT_TRUE(observer_.IsInObserverList());
+
+  web_contents.reset();
+  // Ensure that the observer is auto removed after the tracker is deleted.
+  EXPECT_FALSE(observer_.IsInObserverList());
+  EXPECT_EQ(observer_.TrackerDestructedTimes(), 1);
 }
 
 }  // namespace safe_browsing

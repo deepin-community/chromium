@@ -26,13 +26,19 @@
 #include "core/fpdfapi/parser/cpdf_stream.h"
 #include "core/fpdfapi/parser/cpdf_stream_acc.h"
 #include "core/fxcrt/cfx_bitstream.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fx_2d_size.h"
 #include "core/fxcrt/fx_coordinates.h"
 #include "core/fxcrt/fx_memory.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxcrt/notreached.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
+#include "core/fxcrt/ptr_util.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/stl_util.h"
+#include "core/fxge/agg/cfx_agg_imagerenderer.h"
 #include "core/fxge/cfx_defaultrenderdevice.h"
 #include "core/fxge/cfx_fillrenderoptions.h"
 #include "core/fxge/cfx_font.h"
@@ -42,15 +48,9 @@
 #include "core/fxge/cfx_substfont.h"
 #include "core/fxge/cfx_textrenderoptions.h"
 #include "core/fxge/dib/cfx_dibitmap.h"
-#include "core/fxge/dib/cfx_imagerenderer.h"
 #include "core/fxge/dib/cstretchengine.h"
 #include "core/fxge/dib/fx_dib.h"
 #include "core/fxge/text_char_pos.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/memory/ptr_util.h"
-#include "third_party/base/notreached.h"
-#include "third_party/base/numerics/safe_conversions.h"
 #include "third_party/skia/include/core/SkBlendMode.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkClipOp.h"
@@ -125,10 +125,9 @@ void DebugShowCanvasClip(CFX_SkiaDeviceDriver* driver, const SkCanvas* canvas) {
          local.fBottom);
   printf("device bounds %d %d %d %d\n", device.fLeft, device.fTop,
          device.fRight, device.fBottom);
-  FX_RECT clipBox;
-  driver->GetClipBox(&clipBox);
-  printf("reported bounds %d %d %d %d\n", clipBox.left, clipBox.top,
-         clipBox.right, clipBox.bottom);
+  FX_RECT clip_box = driver->GetClipBox();
+  printf("reported bounds %d %d %d %d\n", clip_box.left, clip_box.top,
+         clip_box.right, clip_box.bottom);
 #endif  // SHOW_SKIA_PATH
 }
 
@@ -282,7 +281,7 @@ SkBlendMode GetSkiaBlendMode(BlendMode blend_type) {
 bool AddColors(const CPDF_ExpIntFunc* func,
                DataVector<SkColor>& colors,
                bool is_encode_reversed) {
-  if (func->CountInputs() != 1) {
+  if (func->InputCount() != 1) {
     return false;
   }
   if (func->GetExponent() != 1) {
@@ -316,10 +315,10 @@ uint8_t FloatToByte(float f) {
 bool AddSamples(const CPDF_SampledFunc* func,
                 DataVector<SkColor>& colors,
                 DataVector<SkScalar>& pos) {
-  if (func->CountInputs() != 1) {
+  if (func->InputCount() != 1) {
     return false;
   }
-  if (func->CountOutputs() != 3) {  // expect rgb
+  if (func->OutputCount() != 3) {  // expect rgb
     return false;
   }
   if (func->GetEncodeInfo().empty()) {
@@ -342,27 +341,28 @@ bool AddSamples(const CPDF_SampledFunc* func,
     return false;
   }
 
-  float colors_min[3];
-  float colors_max[3];
+  std::array<float, 3> colors_min;
+  std::array<float, 3> colors_max;
   for (int i = 0; i < 3; ++i) {
     colors_min[i] = func->GetRange(i * 2);
     colors_max[i] = func->GetRange(i * 2 + 1);
   }
-  pdfium::span<const uint8_t> sample_data = func->GetSampleStream()->GetSpan();
-  CFX_BitStream bitstream(sample_data);
-  for (uint32_t i = 0; i < sample_count; ++i) {
-    float float_colors[3];
-    for (uint32_t j = 0; j < 3; ++j) {
-      float sample = static_cast<float>(bitstream.GetBits(sample_size));
-      float interp = sample / (sample_count - 1);
-      float_colors[j] =
-          colors_min[j] + (colors_max[j] - colors_min[j]) * interp;
+    pdfium::span<const uint8_t> sample_data =
+        func->GetSampleStream()->GetSpan();
+    CFX_BitStream bitstream(sample_data);
+    for (uint32_t i = 0; i < sample_count; ++i) {
+      std::array<float, 3> float_colors;
+      for (uint32_t j = 0; j < 3; ++j) {
+        float sample = static_cast<float>(bitstream.GetBits(sample_size));
+        float interp = sample / (sample_count - 1);
+        float_colors[j] =
+            colors_min[j] + (colors_max[j] - colors_min[j]) * interp;
+      }
+      colors.push_back(SkPackARGB32(0xFF, FloatToByte(float_colors[0]),
+                                    FloatToByte(float_colors[1]),
+                                    FloatToByte(float_colors[2])));
+      pos.push_back(static_cast<float>(i) / (sample_count - 1));
     }
-    colors.push_back(SkPackARGB32NoCheck(0xFF, FloatToByte(float_colors[0]),
-                                         FloatToByte(float_colors[1]),
-                                         FloatToByte(float_colors[2])));
-    pos.push_back(static_cast<float>(i) / (sample_count - 1));
-  }
   return true;
 }
 
@@ -394,8 +394,9 @@ bool AddStitching(const CPDF_StitchFunc* func,
 
 // see https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
 SkScalar LineSide(const SkPoint line[2], const SkPoint& pt) {
-  return (line[1].fY - line[0].fY) * pt.fX - (line[1].fX - line[0].fX) * pt.fY +
-         line[1].fX * line[0].fY - line[1].fY * line[0].fX;
+  return UNSAFE_TODO((line[1].fY - line[0].fY) * pt.fX -
+                     (line[1].fX - line[0].fX) * pt.fY +
+                     line[1].fX * line[0].fY - line[1].fY * line[0].fX);
 }
 
 SkPoint IntersectSides(const SkPoint& parallelPt,
@@ -425,74 +426,83 @@ void ClipAngledGradient(const SkPoint pts[2],
   SkScalar maxPerpDist = SK_ScalarMin;
   int minPerpPtIndex = -1;
   int maxPerpPtIndex = -1;
-  SkVector slope = pts[1] - pts[0];
-  SkPoint startPerp[2] = {pts[0], {pts[0].fX + slope.fY, pts[0].fY - slope.fX}};
-  SkPoint endPerp[2] = {pts[1], {pts[1].fX + slope.fY, pts[1].fY - slope.fX}};
-  for (int i = 0; i < 4; ++i) {
-    SkScalar sDist = LineSide(startPerp, rectPts[i]);
-    SkScalar eDist = LineSide(endPerp, rectPts[i]);
-    if (sDist * eDist <= 0)  // if the signs are different,
-      continue;              // the point is inside the gradient
-    if (sDist < 0) {
-      SkScalar smaller = std::min(sDist, eDist);
-      if (minPerpDist > smaller) {
-        minPerpDist = smaller;
-        minPerpPtIndex = i;
+  UNSAFE_TODO({
+    SkVector slope = pts[1] - pts[0];
+    SkPoint startPerp[2] = {pts[0],
+                            {pts[0].fX + slope.fY, pts[0].fY - slope.fX}};
+    SkPoint endPerp[2] = {pts[1], {pts[1].fX + slope.fY, pts[1].fY - slope.fX}};
+    for (int i = 0; i < 4; ++i) {
+      SkScalar sDist = LineSide(startPerp, rectPts[i]);
+      SkScalar eDist = LineSide(endPerp, rectPts[i]);
+      if (sDist * eDist <= 0) {  // if the signs are different,
+        continue;                // the point is inside the gradient
       }
-    } else {
-      SkScalar larger = std::max(sDist, eDist);
-      if (maxPerpDist < larger) {
-        maxPerpDist = larger;
-        maxPerpPtIndex = i;
+      if (sDist < 0) {
+        SkScalar smaller = std::min(sDist, eDist);
+        if (minPerpDist > smaller) {
+          minPerpDist = smaller;
+          minPerpPtIndex = i;
+        }
+      } else {
+        SkScalar larger = std::max(sDist, eDist);
+        if (maxPerpDist < larger) {
+          maxPerpDist = larger;
+          maxPerpPtIndex = i;
+        }
       }
     }
-  }
-  if (minPerpPtIndex < 0 && maxPerpPtIndex < 0)  // nothing's outside
-    return;
-
-  // determine if negative distances are before start or after end
-  SkPoint beforeStart = {pts[0].fX * 2 - pts[1].fX, pts[0].fY * 2 - pts[1].fY};
-  bool beforeNeg = LineSide(startPerp, beforeStart) < 0;
-
-  int noClipStartIndex = maxPerpPtIndex;
-  int noClipEndIndex = minPerpPtIndex;
-  if (beforeNeg)
-    std::swap(noClipStartIndex, noClipEndIndex);
-  if ((!clipStart && noClipStartIndex < 0) ||
-      (!clipEnd && noClipEndIndex < 0)) {
-    return;
-  }
-
-  const SkPoint& startEdgePt = clipStart ? pts[0] : rectPts[noClipStartIndex];
-  const SkPoint& endEdgePt = clipEnd ? pts[1] : rectPts[noClipEndIndex];
-
-  // find the corners that bound the gradient
-  SkScalar minDist = SK_ScalarMax;
-  SkScalar maxDist = SK_ScalarMin;
-  int minBounds = -1;
-  int maxBounds = -1;
-  for (int i = 0; i < 4; ++i) {
-    SkScalar dist = LineSide(pts, rectPts[i]);
-    if (minDist > dist) {
-      minDist = dist;
-      minBounds = i;
+    if (minPerpPtIndex < 0 && maxPerpPtIndex < 0) {  // nothing's outside
+      return;
     }
-    if (maxDist < dist) {
-      maxDist = dist;
-      maxBounds = i;
+
+    // determine if negative distances are before start or after end
+    SkPoint beforeStart = {pts[0].fX * 2 - pts[1].fX,
+                           pts[0].fY * 2 - pts[1].fY};
+    bool beforeNeg = LineSide(startPerp, beforeStart) < 0;
+
+    int noClipStartIndex = maxPerpPtIndex;
+    int noClipEndIndex = minPerpPtIndex;
+    if (beforeNeg) {
+      std::swap(noClipStartIndex, noClipEndIndex);
     }
-  }
-  if (minBounds < 0 || maxBounds < 0)
-    return;
-  if (minBounds == maxBounds)
-    return;
-  // construct a clip parallel to the gradient that goes through
-  // rectPts[minBounds] and rectPts[maxBounds] and perpendicular to the
-  // gradient that goes through startEdgePt, endEdgePt.
-  clip->moveTo(IntersectSides(rectPts[minBounds], slope, startEdgePt));
-  clip->lineTo(IntersectSides(rectPts[minBounds], slope, endEdgePt));
-  clip->lineTo(IntersectSides(rectPts[maxBounds], slope, endEdgePt));
-  clip->lineTo(IntersectSides(rectPts[maxBounds], slope, startEdgePt));
+    if ((!clipStart && noClipStartIndex < 0) ||
+        (!clipEnd && noClipEndIndex < 0)) {
+      return;
+    }
+
+    const SkPoint& startEdgePt = clipStart ? pts[0] : rectPts[noClipStartIndex];
+    const SkPoint& endEdgePt = clipEnd ? pts[1] : rectPts[noClipEndIndex];
+
+    // find the corners that bound the gradient
+    SkScalar minDist = SK_ScalarMax;
+    SkScalar maxDist = SK_ScalarMin;
+    int minBounds = -1;
+    int maxBounds = -1;
+    for (int i = 0; i < 4; ++i) {
+      SkScalar dist = LineSide(pts, rectPts[i]);
+      if (minDist > dist) {
+        minDist = dist;
+        minBounds = i;
+      }
+      if (maxDist < dist) {
+        maxDist = dist;
+        maxBounds = i;
+      }
+    }
+    if (minBounds < 0 || maxBounds < 0) {
+      return;
+    }
+    if (minBounds == maxBounds) {
+      return;
+    }
+    // construct a clip parallel to the gradient that goes through
+    // rectPts[minBounds] and rectPts[maxBounds] and perpendicular to the
+    // gradient that goes through startEdgePt, endEdgePt.
+    clip->moveTo(IntersectSides(rectPts[minBounds], slope, startEdgePt));
+    clip->lineTo(IntersectSides(rectPts[minBounds], slope, endEdgePt));
+    clip->lineTo(IntersectSides(rectPts[maxBounds], slope, endEdgePt));
+    clip->lineTo(IntersectSides(rectPts[maxBounds], slope, startEdgePt));
+  });
 }
 
 // Converts a stroking path to scanlines
@@ -555,7 +565,7 @@ void PaintStroke(SkPaint* spaint,
       intervals[i * 2 + 1] = off;
     }
     spaint->setPathEffect(SkDashPathEffect::Make(
-        intervals.data(), pdfium::base::checked_cast<int>(intervals.size()),
+        intervals.data(), pdfium::checked_cast<int>(intervals.size()),
         graph_state->m_DashPhase));
   }
   spaint->setStyle(SkPaint::kStroke_Style);
@@ -1117,8 +1127,7 @@ bool CFX_SkiaDeviceDriver::DrawPath(
     }
     skPaint.setStyle(SkPaint::kFill_Style);
     skPaint.setColor(fill_color);
-    DebugShowSkiaDrawPath(this, m_pCanvas, skPaint, *fillPath);
-    m_pCanvas->drawPath(*fillPath, skPaint);
+    DrawPathImpl(*fillPath, skPaint);
   }
   if (stroke_alpha && do_stroke) {
     skPaint.setStyle(SkPaint::kStroke_Style);
@@ -1131,8 +1140,7 @@ bool CFX_SkiaDeviceDriver::DrawPath(
       // Do nothing. A closed 0-length closed path can be rendered only if
       // its line cap type is round.
     } else {
-      DebugShowSkiaDrawPath(this, m_pCanvas, skPaint, skia_path);
-      m_pCanvas->drawPath(skia_path, skPaint);
+      DrawPathImpl(skia_path, skPaint);
     }
   }
   return true;
@@ -1308,65 +1316,61 @@ bool CFX_SkiaDeviceDriver::DrawShading(const CPDF_ShadingPattern* pPattern,
     if (!skClip.isEmpty())
       m_pCanvas->clipPath(skClip, SkClipOp::kIntersect, true);
     m_pCanvas->concat(skMatrix);
-    while (!stream.IsEOF()) {
-      uint32_t flag = stream.ReadFlag();
-      size_t start_point = flag ? 4 : 0;
-      size_t start_color = flag ? 2 : 0;
-      if (flag) {
-        SkPoint temp_cubics[4];
-        for (size_t i = 0; i < std::size(temp_cubics); ++i) {
-          temp_cubics[i] = cubics[(flag * 3 + i) % 12];
+    UNSAFE_TODO({
+      while (!stream.IsEOF()) {
+        uint32_t flag = stream.ReadFlag();
+        size_t start_point = flag ? 4 : 0;
+        size_t start_color = flag ? 2 : 0;
+        if (flag) {
+          SkPoint temp_cubics[4];
+          for (size_t i = 0; i < std::size(temp_cubics); ++i) {
+            temp_cubics[i] = cubics[(flag * 3 + i) % 12];
+          }
+          std::copy(std::begin(temp_cubics), std::end(temp_cubics),
+                    std::begin(cubics));
+          SkColor temp_colors[2] = {colors[flag % 4], colors[(flag + 1) % 4]};
+          std::copy(std::begin(temp_colors), std::end(temp_colors),
+                    std::begin(colors));
         }
-        std::copy(std::begin(temp_cubics), std::end(temp_cubics),
-                  std::begin(cubics));
-        SkColor temp_colors[2] = {colors[flag % 4], colors[(flag + 1) % 4]};
-        std::copy(std::begin(temp_colors), std::end(temp_colors),
-                  std::begin(colors));
+        for (size_t i = start_point; i < std::size(cubics); ++i) {
+          CFX_PointF point = stream.ReadCoords();
+          cubics[i].fX = point.x;
+          cubics[i].fY = point.y;
+        }
+        for (size_t i = start_color; i < std::size(colors); ++i) {
+          FX_RGB_STRUCT<float> rgb = stream.ReadColor();
+          colors[i] =
+              SkColorSetARGB(0xFF, (U8CPU)(rgb.red * 255),
+                             (U8CPU)(rgb.green * 255), (U8CPU)(rgb.blue * 255));
+        }
+        m_pCanvas->drawPatch(cubics, colors, /*texCoords=*/nullptr,
+                             SkBlendMode::kDst, paint);
       }
-      for (size_t i = start_point; i < std::size(cubics); ++i) {
-        CFX_PointF point = stream.ReadCoords();
-        cubics[i].fX = point.x;
-        cubics[i].fY = point.y;
-      }
-      for (size_t i = start_color; i < std::size(colors); ++i) {
-        float r;
-        float g;
-        float b;
-        std::tie(r, g, b) = stream.ReadColor();
-        colors[i] = SkColorSetARGB(0xFF, (U8CPU)(r * 255), (U8CPU)(g * 255),
-                                   (U8CPU)(b * 255));
-      }
-      m_pCanvas->drawPatch(cubics, colors, /*texCoords=*/nullptr,
-                           SkBlendMode::kDst, paint);
-    }
+    });
     return true;
   }
   SkAutoCanvasRestore scoped_save_restore(m_pCanvas, /*doSave=*/true);
   if (!skClip.isEmpty())
     m_pCanvas->clipPath(skClip, SkClipOp::kIntersect, true);
   m_pCanvas->concat(skMatrix);
-  m_pCanvas->drawPath(skPath, paint);
+  DrawPathImpl(skPath, paint);
   return true;
 }
 
-bool CFX_SkiaDeviceDriver::GetClipBox(FX_RECT* pRect) {
+FX_RECT CFX_SkiaDeviceDriver::GetClipBox() const {
   SkIRect clip = m_pCanvas->getDeviceClipBounds();
-  pRect->left = clip.fLeft;
-  pRect->top = clip.fTop;
-  pRect->right = clip.fRight;
-  pRect->bottom = clip.fBottom;
-  return true;
+  return FX_RECT(clip.fLeft, clip.fTop, clip.fRight, clip.fBottom);
 }
 
-bool CFX_SkiaDeviceDriver::GetDIBits(const RetainPtr<CFX_DIBitmap>& pBitmap,
+bool CFX_SkiaDeviceDriver::GetDIBits(RetainPtr<CFX_DIBitmap> bitmap,
                                      int left,
-                                     int top) {
+                                     int top) const {
   const uint8_t* input_buffer = m_pBitmap->GetBuffer().data();
   if (!input_buffer) {
     return true;
   }
 
-  uint8_t* output_buffer = pBitmap->GetWritableBuffer().data();
+  uint8_t* output_buffer = bitmap->GetWritableBuffer().data();
   DCHECK(output_buffer);
 
   SkImageInfo input_info =
@@ -1377,16 +1381,16 @@ bool CFX_SkiaDeviceDriver::GetDIBits(const RetainPtr<CFX_DIBitmap>& pBitmap,
       /*rasterReleaseProc=*/nullptr, /*releaseContext=*/nullptr);
 
   SkImageInfo output_info = SkImageInfo::Make(
-      pBitmap->GetWidth(), pBitmap->GetHeight(),
+      bitmap->GetWidth(), bitmap->GetHeight(),
       Get32BitSkColorType(m_bRgbByteOrder), kPremul_SkAlphaType);
   sk_sp<SkSurface> output =
-      SkSurfaces::WrapPixels(output_info, output_buffer, pBitmap->GetPitch());
+      SkSurfaces::WrapPixels(output_info, output_buffer, bitmap->GetPitch());
 
   output->getCanvas()->drawImage(input, left, top, SkSamplingOptions());
   return true;
 }
 
-RetainPtr<CFX_DIBitmap> CFX_SkiaDeviceDriver::GetBackDrop() {
+RetainPtr<const CFX_DIBitmap> CFX_SkiaDeviceDriver::GetBackDrop() const {
   return m_pBackdropBitmap;
 }
 
@@ -1439,22 +1443,17 @@ bool CFX_SkiaDeviceDriver::StretchDIBits(RetainPtr<const CFX_DIBBase> bitmap,
                          sampling_options, blend_type);
 }
 
-bool CFX_SkiaDeviceDriver::StartDIBits(
+RenderDeviceDriverIface::StartResult CFX_SkiaDeviceDriver::StartDIBits(
     RetainPtr<const CFX_DIBBase> bitmap,
     float alpha,
     uint32_t color,
     const CFX_Matrix& matrix,
     const FXDIB_ResampleOptions& options,
-    std::unique_ptr<CFX_ImageRenderer>* handle,
     BlendMode blend_type) {
   FX_RECT rect(0, 0, bitmap->GetWidth(), bitmap->GetHeight());
-  return StartDIBitsSkia(std::move(bitmap), rect, alpha, color, matrix, options,
-                         blend_type);
-}
-
-bool CFX_SkiaDeviceDriver::ContinueDIBits(CFX_ImageRenderer* handle,
-                                          PauseIndicatorIface* pPause) {
-  return false;
+  return {StartDIBitsSkia(std::move(bitmap), rect, alpha, color, matrix,
+                          options, blend_type),
+          nullptr};
 }
 
 void CFX_DIBitmap::UnPreMultiply() {
@@ -1603,8 +1602,8 @@ bool CFX_SkiaDeviceDriver::StartDIBitsSkia(RetainPtr<const CFX_DIBBase> bitmap,
     if (!use_interpolate_bilinear) {
       float dest_width = ceilf(matrix.GetXUnit());
       float dest_height = ceilf(matrix.GetYUnit());
-      if (pdfium::base::IsValueInRangeForNumericType<int>(dest_width) &&
-          pdfium::base::IsValueInRangeForNumericType<int>(dest_height)) {
+      if (pdfium::IsValueInRangeForNumericType<int>(dest_width) &&
+          pdfium::IsValueInRangeForNumericType<int>(dest_height)) {
         use_interpolate_bilinear = CStretchEngine::UseInterpolateBilinear(
             options, static_cast<int>(dest_width),
             static_cast<int>(dest_height), width, height);
@@ -1626,6 +1625,12 @@ bool CFX_SkiaDeviceDriver::StartDIBitsSkia(RetainPtr<const CFX_DIBBase> bitmap,
 
   DebugValidate(m_pBitmap);
   return true;
+}
+
+void CFX_SkiaDeviceDriver::DrawPathImpl(const SkPath& path,
+                                        const SkPaint& paint) {
+  DebugShowSkiaDrawPath(this, m_pCanvas, paint, path);
+  m_pCanvas->drawPath(path, paint);
 }
 
 CFX_SkiaDeviceDriver::CharDetail::CharDetail() = default;

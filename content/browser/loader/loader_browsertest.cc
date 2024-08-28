@@ -275,8 +275,8 @@ std::unique_ptr<net::test_server::HttpResponse> CancelOnRequest(
   if (request.relative_url != relative_url)
     return nullptr;
 
-  content::GetUIThreadTaskRunner({})->PostTask(FROM_HERE,
-                                               crash_network_service_callback);
+  GetUIThreadTaskRunner({})->PostTask(FROM_HERE,
+                                      crash_network_service_callback);
 
   return std::make_unique<net::test_server::HungResponse>();
 }
@@ -833,7 +833,7 @@ IN_PROC_BROWSER_TEST_F(RequestDataBrowserTest, LinkRelPrefetchReferrerPolicy) {
   EXPECT_TRUE(image_request->load_flags & net::LOAD_PREFETCH);
 }
 
-// TODO(crbug.com/1271868): Flaky on all platforms.
+// TODO(crbug.com/40805845): Flaky on all platforms.
 IN_PROC_BROWSER_TEST_F(RequestDataBrowserTest, DISABLED_BasicCrossSite) {
   GURL top_url(embedded_test_server()->GetURL(
       "a.com", "/nested_page_with_subresources.html"));
@@ -1237,6 +1237,40 @@ IN_PROC_BROWSER_TEST_F(LoaderBrowserTest, URLLoaderThrottleRedirectModify) {
     ASSERT_EQ(header_map[expected_url]["ExemptFoo"], "ExemptBarRedirect");
     ASSERT_NE(urls_requested.find(expected_url), urls_requested.end());
   }
+}
+
+class LoaderNoScriptStreamingBrowserTest : public ContentBrowserTest {
+ public:
+  LoaderNoScriptStreamingBrowserTest() = default;
+  LoaderNoScriptStreamingBrowserTest(
+      const LoaderNoScriptStreamingBrowserTest&) = delete;
+  LoaderNoScriptStreamingBrowserTest& operator=(
+      const LoaderNoScriptStreamingBrowserTest&) = delete;
+  ~LoaderNoScriptStreamingBrowserTest() override = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    command_line->AppendSwitchASCII("js-flags", "--no-script-streaming");
+  }
+};
+
+// Regression test for https://crbug.com/348520461
+// Loading a script should not cause a crash even when Script Streaming
+// is disabled on V8 side.
+IN_PROC_BROWSER_TEST_F(LoaderNoScriptStreamingBrowserTest, LoadScript) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  EXPECT_TRUE(NavigateToURL(
+      shell(), embedded_test_server()->GetURL("/loader/blank.html")));
+  std::string expected_title("DONE");
+  std::u16string expected_title16(ASCIIToUTF16(expected_title));
+  TitleWatcher title_watcher(shell()->web_contents(), expected_title16);
+  ASSERT_TRUE(ExecJs(shell(), R"(
+      (() => {
+        const script = document.createElement('script');
+        script.src = './change_title.js';
+        document.body.appendChild(script);
+      })();
+    )"));
+  EXPECT_EQ(expected_title16, title_watcher.WaitAndGetTitle());
 }
 
 }  // namespace content

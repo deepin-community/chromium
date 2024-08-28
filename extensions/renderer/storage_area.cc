@@ -204,7 +204,7 @@ class SessionStorageArea final : public gin::Wrappable<SessionStorageArea> {
         .SetMethod("remove", &SessionStorageArea::Remove)
         .SetMethod("clear", &SessionStorageArea::Clear)
         .SetMethod("getBytesInUse", &SessionStorageArea::GetBytesInUse)
-        // TODO(crbug.com/1227410): Only expose `setAccessLevel` in privileged
+        // TODO(crbug.com/40189208): Only expose `setAccessLevel` in privileged
         // contexts.
         .SetMethod("setAccessLevel", &SessionStorageArea::SetAccessLevel)
         .SetProperty("onChanged", &SessionStorageArea::GetOnChangedEvent)
@@ -326,7 +326,7 @@ v8::Local<v8::Value> StorageArea::GetOnChangedEvent(
       isolate, gin::StringToSymbol(isolate, "onChangedEvent"));
   v8::Local<v8::Value> event;
   if (!wrapper->GetPrivate(context, key).ToLocal(&event)) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return v8::Local<v8::Value>();
   }
 
@@ -340,7 +340,7 @@ v8::Local<v8::Value> StorageArea::GetOnChangedEvent(
         context);
     v8::Maybe<bool> set_result = wrapper->SetPrivate(context, key, event);
     if (!set_result.IsJust() || !set_result.FromJust()) {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return v8::Local<v8::Value>();
     }
   }

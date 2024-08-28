@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/json/json_writer.h"
 #include "base/notreached.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
@@ -132,7 +133,7 @@ const sync_pb::PreferenceSpecifics& GetPreferenceFromEntity(
     case syncer::OS_PRIORITY_PREFERENCES:
       return entity.specifics().os_priority_preference().preference();
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return entity.specifics().preference();
   }
 }
@@ -151,6 +152,13 @@ std::optional<sync_pb::PreferenceSpecifics> GetPreferenceInFakeServer(
   }
 
   return std::nullopt;
+}
+
+std::string ConvertPrefValueToValueInSpecifics(const base::Value& value) {
+  std::string result;
+  bool success = base::JSONWriter::Write(value, &result);
+  DCHECK(success);
+  return result;
 }
 
 }  // namespace preferences_helper

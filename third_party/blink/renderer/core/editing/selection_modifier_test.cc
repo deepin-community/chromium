@@ -12,7 +12,6 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
@@ -173,7 +172,7 @@ TEST_F(SelectionModifierTest, PreviousLineWithDisplayNone) {
 TEST_F(SelectionModifierTest, PreviousSentenceWithNull) {
   InsertStyleElement("b {display:inline-block}");
   const SelectionInDOMTree selection =
-      SetSelectionTextToBody("<b><ruby><a>|</a></ruby></b>");
+      SetSelectionTextToBody("<b><b><a>|</a></b></b>");
   SelectionModifier modifier(GetFrame(), selection);
   // We call |PreviousSentence()| with null-position.
   EXPECT_FALSE(modifier.Modify(SelectionModifyAlteration::kMove,
@@ -185,7 +184,7 @@ TEST_F(SelectionModifierTest, PreviousSentenceWithNull) {
 TEST_F(SelectionModifierTest, StartOfSentenceWithNull) {
   InsertStyleElement("b {display:inline-block}");
   const SelectionInDOMTree selection =
-      SetSelectionTextToBody("|<b><ruby><a></a></ruby></b>");
+      SetSelectionTextToBody("|<b><b><a></a></b></b>");
   SelectionModifier modifier(GetFrame(), selection);
   // We call |StartOfSentence()| with null-position.
   EXPECT_FALSE(modifier.Modify(SelectionModifyAlteration::kMove,
@@ -211,7 +210,7 @@ TEST_F(SelectionModifierTest, MoveCaretWithShadow) {
   SetBodyContent(body_content);
   Element* host = GetDocument().getElementById(AtomicString("host"));
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
   shadow_root.setInnerHTML(shadow_content);
   UpdateAllLifecyclePhasesForTest();
 

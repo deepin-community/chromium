@@ -7,7 +7,9 @@
 
 #include <vector>
 
+#include "base/check.h"
 #include "base/containers/span.h"
+#include "base/notreached.h"
 #include "components/web_package/mojom/web_bundle_parser.mojom-forward.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_signature_stack_entry.h"
@@ -45,12 +47,6 @@ class SignedWebBundleSignatureStack {
   // Returns the number of entries in the signature stack. This is guaranteed to
   // be at least 1.
   size_t size() const { return entries().size(); }
-
-  // Returns the Web Bundle ID derived from the signature stack.
-  SignedWebBundleId derived_web_bundle_id() const {
-    return SignedWebBundleId::CreateForEd25519PublicKey(
-        entries()[0].public_key());
-  }
 
  private:
   explicit SignedWebBundleSignatureStack(

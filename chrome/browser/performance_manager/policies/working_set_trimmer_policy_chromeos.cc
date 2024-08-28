@@ -29,7 +29,7 @@ namespace performance_manager {
 namespace policies {
 
 namespace {
-// TODO(crbug.com/1189677): Remove the global static variable and make it
+// TODO(crbug.com/40755583): Remove the global static variable and make it
 // GraphOwned once performance_manager code is migrated to UI thread.
 WorkingSetTrimmerPolicyChromeOS::ArcVmDelegate* g_arcvm_delegate_for_testing =
     nullptr;
@@ -144,7 +144,7 @@ void WorkingSetTrimmerPolicyChromeOS::set_arcvm_delegate_for_testing(
 
 void WorkingSetTrimmerPolicyChromeOS::TrimNodesOnGraph() {
   const base::TimeTicks now_ticks = base::TimeTicks::Now();
-  for (const PageNode* page_node : graph_->GetAllPageNodes()) {
+  for (const PageNode* page_node : GetOwningGraph()->GetAllPageNodes()) {
     if (!page_node->IsVisible() &&
         page_node->GetTimeSinceLastVisibilityChange() >
             params_.node_invisible_time) {
@@ -291,7 +291,7 @@ void WorkingSetTrimmerPolicyChromeOS::TrimArcProcesses() {
 void WorkingSetTrimmerPolicyChromeOS::TrimArcVmProcesses(
     base::MemoryPressureListener::MemoryPressureLevel level) {
   DCHECK_NE(level, base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE);
-  // TODO(crbug.com/1189677): Remove the PostTask once performance_manager code
+  // TODO(crbug.com/40755583): Remove the PostTask once performance_manager code
   // is migrated to UI thread.
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(&TrimArcVmProcessesOnUIThread, level, params_,
@@ -304,7 +304,7 @@ void WorkingSetTrimmerPolicyChromeOS::TrimArcVmProcessesOnUIThread(
     features::TrimOnMemoryPressureParams params,
     base::WeakPtr<WorkingSetTrimmerPolicyChromeOS> ptr) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  // TODO(crbug.com/1189677): Let the policy own WorkingSetTrimmerPolicyArcVm
+  // TODO(crbug.com/40755583): Let the policy own WorkingSetTrimmerPolicyArcVm
   // instance once performance_manager code is migrated to UI thread.
   auto* arcvm_delegate = g_arcvm_delegate_for_testing
                              ? g_arcvm_delegate_for_testing
@@ -370,7 +370,7 @@ void WorkingSetTrimmerPolicyChromeOS::OnTrimArcVmProcesses(
     }
   }
 
-  // TODO(crbug.com/1189677): Remove the PostTask once performance_manager code
+  // TODO(crbug.com/40755583): Remove the PostTask once performance_manager code
   // is migrated to UI thread.
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindRepeating(&DoTrimArcVmOnUIThread,
@@ -430,7 +430,6 @@ void WorkingSetTrimmerPolicyChromeOS::OnArcVmTrimEnded(
 
 void WorkingSetTrimmerPolicyChromeOS::OnTakenFromGraph(Graph* graph) {
   memory_pressure_listener_.reset();
-  graph_ = nullptr;
   WorkingSetTrimmerPolicy::OnTakenFromGraph(graph);
 }
 
@@ -450,7 +449,6 @@ void WorkingSetTrimmerPolicyChromeOS::OnPassedToGraph(Graph* graph) {
       base::BindRepeating(&WorkingSetTrimmerPolicyChromeOS::OnMemoryPressure,
                           base::Unretained(this)));
 
-  graph_ = graph;
   WorkingSetTrimmerPolicy::OnPassedToGraph(graph);
 }
 

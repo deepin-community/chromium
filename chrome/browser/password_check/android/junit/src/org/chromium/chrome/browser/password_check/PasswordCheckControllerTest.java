@@ -44,7 +44,6 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.test.core.app.ApplicationProvider;
 
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
@@ -55,9 +54,7 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.base.metrics.UmaRecorderHolder;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
 import org.chromium.chrome.browser.password_check.PasswordCheckProperties.ItemType;
 import org.chromium.chrome.browser.password_check.helper.PasswordCheckChangePasswordHelper;
 import org.chromium.chrome.browser.password_check.helper.PasswordCheckIconHelper;
@@ -129,8 +126,6 @@ public class PasswordCheckControllerTest {
     private static final String PASSWORD_CHECK_COMPROMISED_CREDENTIALS_AFTER_CHECK_HISTOGRAM =
             "PasswordManager.BulkCheck.CompromisedCredentialsCountAfterCheckAndroid";
 
-    @Rule public Features.JUnitProcessor mFeaturesProcessor = new Features.JUnitProcessor();
-
     @Mock private PasswordCheckComponentUi.Delegate mDelegate;
     @Mock private PasswordCheckChangePasswordHelper mChangePasswordDelegate;
     @Mock private PasswordCheck mPasswordCheck;
@@ -145,7 +140,6 @@ public class PasswordCheckControllerTest {
 
     @Before
     public void setUp() {
-        UmaRecorderHolder.resetForTesting();
         MockitoAnnotations.initMocks(this);
         mModel = PasswordCheckProperties.createDefaultModel();
         mMediator =

@@ -214,18 +214,6 @@ export class DesktopAutomationHandler extends DesktopAutomationInterface {
    */
   onAlert_(evt) {
     const node = evt.target;
-
-    if (node.role === RoleType.ALERT && node.root.role === RoleType.DESKTOP) {
-      // Exclude alerts in the desktop tree that are inside of menus.
-      let ancestor = node;
-      while (ancestor) {
-        if (ancestor.role === RoleType.MENU) {
-          return;
-        }
-        ancestor = ancestor.parent;
-      }
-    }
-
     const range = CursorRange.fromNode(node);
     const output = new Output();
     // Whenever chromevox is running together with dictation, we want to
@@ -682,7 +670,8 @@ export class DesktopAutomationHandler extends DesktopAutomationInterface {
 
       // TableView fires selection events on rows/cells
       // and we want to ignore those because it also fires focus events.
-      const skip = AutomationPredicate.roles([RoleType.CELL, RoleType.ROW]);
+      const skip = AutomationPredicate.roles(
+          [RoleType.CELL, RoleType.GRID_CELL, RoleType.ROW]);
       if (isDesktop && skip(target)) {
         return;
       }
@@ -958,12 +947,5 @@ DesktopAutomationHandler.MIN_VALUE_CHANGE_DELAY_MS = 50;
  * @const {number}
  */
 DesktopAutomationHandler.MIN_ALERT_DELAY_MS = 50;
-
-/**
- * Time to wait before announcing attribute changes that are otherwise too
- * disruptive.
- * @const {number}
- */
-DesktopAutomationHandler.ATTRIBUTE_DELAY_MS = 1500;
 
 TestImportManager.exportForTesting(DesktopAutomationHandler);

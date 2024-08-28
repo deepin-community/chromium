@@ -18,6 +18,7 @@
 #include "components/constrained_window/constrained_window_views.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/color/color_id.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/link.h"
@@ -74,7 +75,8 @@ void CardUnmaskOtpInputDialogViews::ShowInvalidState(
   otp_input_textfield_invalid_label_->SetVisible(true);
   otp_input_textfield_invalid_label_->SetText(invalid_label_text);
   otp_input_textfield_invalid_label_padding_->SetVisible(false);
-  otp_input_textfield_->SetAccessibleName(otp_input_textfield_invalid_label_);
+  otp_input_textfield_->GetViewAccessibility().SetName(
+      *otp_input_textfield_invalid_label_);
 }
 
 void CardUnmaskOtpInputDialogViews::Dismiss(
@@ -192,7 +194,8 @@ void CardUnmaskOtpInputDialogViews::CreateOtpInputView() {
   otp_input_textfield_invalid_label_padding_ =
       otp_input_textfield_view->AddChildView(std::make_unique<views::View>());
   otp_input_textfield_invalid_label_padding_->SetPreferredSize(
-      otp_input_textfield_invalid_label_->GetPreferredSize());
+      otp_input_textfield_invalid_label_->GetPreferredSize(
+          views::SizeBounds(otp_input_textfield_invalid_label_->width(), {})));
 
   // Adds footer.
   footer_label_ =
@@ -251,7 +254,8 @@ void CardUnmaskOtpInputDialogViews::HideInvalidState() {
   otp_input_textfield_->SetInvalid(false);
   otp_input_textfield_invalid_label_->SetText(std::u16string());
   otp_input_textfield_invalid_label_->SetVisible(false);
-  otp_input_textfield_->SetAccessibleName(otp_input_textfield_invalid_label_);
+  otp_input_textfield_->GetViewAccessibility().SetName(
+      *otp_input_textfield_invalid_label_);
   otp_input_textfield_invalid_label_padding_->SetVisible(true);
 }
 

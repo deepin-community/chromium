@@ -24,7 +24,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
@@ -50,7 +49,7 @@
 #include "net/spdy/spdy_stream.h"
 #include "net/spdy/spdy_write_queue.h"
 #include "net/ssl/ssl_config_service.h"
-#include "net/third_party/quiche/src/quiche/spdy/core/http2_header_block.h"
+#include "net/third_party/quiche/src/quiche/common/http/http_header_block.h"
 #include "net/third_party/quiche/src/quiche/spdy/core/spdy_alt_svc_wire_format.h"
 #include "net/third_party/quiche/src/quiche/spdy/core/spdy_framer.h"
 #include "net/third_party/quiche/src/quiche/spdy/core/spdy_protocol.h"
@@ -442,7 +441,7 @@ class NET_EXPORT SpdySession
       spdy::SpdyStreamId stream_id,
       RequestPriority priority,
       spdy::SpdyControlFlags flags,
-      spdy::Http2HeaderBlock headers,
+      quiche::HttpHeaderBlock headers,
       NetLogSource source_dependency);
 
   // Creates and returns a SpdyBuffer holding a data frame with the given data.
@@ -488,7 +487,7 @@ class NET_EXPORT SpdySession
   // MultiplexedSession methods:
   int GetRemoteEndpoint(IPEndPoint* endpoint) override;
   bool GetSSLInfo(SSLInfo* ssl_info) const override;
-  base::StringPiece GetAcceptChViaAlps(
+  std::string_view GetAcceptChViaAlps(
       const url::SchemeHostPort& scheme_host_port) const override;
 
   // Returns the protocol negotiated via ALPN for the underlying socket.
@@ -627,7 +626,7 @@ class NET_EXPORT SpdySession
   using PendingStreamRequestQueue =
       base::circular_deque<base::WeakPtr<SpdyStreamRequest>>;
   using ActiveStreamMap = std::map<spdy::SpdyStreamId, SpdyStream*>;
-  using CreatedStreamSet = std::set<raw_ptr<SpdyStream, SetExperimental>>;
+  using CreatedStreamSet = std::set<raw_ptr<SpdyStream>>;
 
   enum AvailabilityState {
     // The session is available in its socket pool and can be used
@@ -873,7 +872,7 @@ class NET_EXPORT SpdySession
                    spdy::SpdyErrorCode error_code) override;
   void OnGoAway(spdy::SpdyStreamId last_accepted_stream_id,
                 spdy::SpdyErrorCode error_code,
-                base::StringPiece debug_data) override;
+                std::string_view debug_data) override;
   void OnDataFrameHeader(spdy::SpdyStreamId stream_id,
                          size_t length,
                          bool fin) override;
@@ -890,17 +889,17 @@ class NET_EXPORT SpdySession
                       int delta_window_size) override;
   void OnPushPromise(spdy::SpdyStreamId stream_id,
                      spdy::SpdyStreamId promised_stream_id,
-                     spdy::Http2HeaderBlock headers) override;
+                     quiche::HttpHeaderBlock headers) override;
   void OnHeaders(spdy::SpdyStreamId stream_id,
                  bool has_priority,
                  int weight,
                  spdy::SpdyStreamId parent_stream_id,
                  bool exclusive,
                  bool fin,
-                 spdy::Http2HeaderBlock headers,
+                 quiche::HttpHeaderBlock headers,
                  base::TimeTicks recv_first_byte_time) override;
   void OnAltSvc(spdy::SpdyStreamId stream_id,
-                base::StringPiece origin,
+                std::string_view origin,
                 const spdy::SpdyAltSvcWireFormat::AlternativeServiceVector&
                     altsvc_vector) override;
   bool OnUnknownFrame(spdy::SpdyStreamId stream_id,

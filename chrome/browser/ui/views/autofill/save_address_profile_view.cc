@@ -12,7 +12,6 @@
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/autofill/save_update_address_profile_bubble_controller.h"
 #include "chrome/browser/ui/hats/hats_service.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/views/accessibility/theme_tracking_non_accessible_image_view.h"
@@ -38,6 +37,7 @@
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/image/canvas_image_source.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/editable_combobox/editable_combobox.h"
@@ -96,7 +96,7 @@ void AddAddressSection(views::View* parent_view,
                        int a11y_label_string_id) {
   auto text_label =
       std::make_unique<views::Label>(text, views::style::CONTEXT_LABEL);
-  text_label->SetAccessibleName(
+  text_label->GetViewAccessibility().SetName(
       l10n_util::GetStringFUTF16(a11y_label_string_id, text));
   text_label->SetMultiLine(true);
   text_label->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
@@ -118,8 +118,8 @@ std::unique_ptr<views::View> CreateStreetAddressView(
 }
 
 std::unique_ptr<views::EditableCombobox> CreateNicknameEditableCombobox() {
-  // TODO(crbug.com/1167060): Update the icons
-  // TODO(crbug.com/1167060): Use internationalized string.
+  // TODO(crbug.com/40164487): Update the icons
+  // TODO(crbug.com/40164487): Use internationalized string.
   ui::SimpleComboboxModel::Item home(
       /*text=*/u"Home",
       /*dropdown_secondary_text=*/std::u16string(),
@@ -145,34 +145,29 @@ std::unique_ptr<views::EditableCombobox> CreateNicknameEditableCombobox() {
       views::kFlexBehaviorKey,
       views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
                                views::MaximumFlexSizeRule::kUnbounded));
-  // TODO(crbug.com/1167060): Use internationalized string.
-  combobox->SetAccessibleName(u"Address Label");
+  // TODO(crbug.com/40164487): Use internationalized string.
+  combobox->GetViewAccessibility().SetName(u"Address Label");
   return combobox;
 }
 
 }  // namespace
 
 SaveAddressProfileView::SaveAddressProfileView(
+    std::unique_ptr<SaveAddressBubbleController> controller,
     views::View* anchor_view,
-    content::WebContents* web_contents,
-    SaveUpdateAddressProfileBubbleController* controller)
-    : LocationBarBubbleDelegateView(anchor_view, web_contents),
-      controller_(controller) {
-  // Since this is a save prompt, original profile must not be set. Otherwise,
-  // it would have been an update prompt.
-  DCHECK(!controller_->GetOriginalProfile());
-
-  // TODO(crbug.com/1167060): Accept action should consider the selected
+    content::WebContents* web_contents)
+    : AddressBubbleBaseView(anchor_view, web_contents),
+      controller_(std::move(controller)) {
+  // TODO(crbug.com/40164487): Accept action should consider the selected
   // nickname when saving the address.
   SetAcceptCallback(base::BindOnce(
-      &SaveUpdateAddressProfileBubbleController::OnUserDecision,
-      base::Unretained(controller_),
-      AutofillClient::SaveAddressProfileOfferUserDecision::kAccepted,
-      std::nullopt));
-  SetCancelCallback(
-      base::BindOnce(&SaveUpdateAddressProfileBubbleController::OnUserDecision,
-                     base::Unretained(controller_),
-                     controller_->GetCancelCallbackValue(), std::nullopt));
+      &SaveAddressBubbleController::OnUserDecision,
+      base::Unretained(controller_.get()),
+      AutofillClient::AddressPromptUserDecision::kAccepted, std::nullopt));
+  SetCancelCallback(base::BindOnce(&SaveAddressBubbleController::OnUserDecision,
+                                   base::Unretained(controller_.get()),
+                                   controller_->GetCancelCallbackValue(),
+                                   std::nullopt));
 
   SetProperty(views::kElementIdentifierKey, kTopViewId);
   SetTitle(controller_->GetWindowTitle());
@@ -186,12 +181,16 @@ SaveAddressProfileView::SaveAddressProfileView(
       views::LayoutProvider::Get()->GetDistanceMetric(
           views::DISTANCE_UNRELATED_CONTROL_VERTICAL)));
 
-  std::u16string description = controller->GetBodyText();
+  std::u16string description = controller_->GetBodyText();
   if (!description.empty()) {
     AddChildView(
         views::Builder<views::Label>()
             .SetText(description)
             .SetTextStyle(views::style::STYLE_SECONDARY)
+            // The preferred size is set to prevent the long description text
+            // from affecting the bubble width. Using `set_fixed_width()` for
+            // the popup doesn't work as the popup should accommodate
+            // potentially long user input nicely.
             .SetPreferredSize(
                 gfx::Size(views::LayoutProvider::Get()->GetDistanceMetric(
                               views::DISTANCE_BUBBLE_PREFERRED_WIDTH) -
@@ -227,10 +226,9 @@ SaveAddressProfileView::SaveAddressProfileView(
                   DISTANCE_CONTROL_LIST_VERTICAL))
           .Build());
 
-  edit_button_ =
-      details_section->AddChildView(CreateEditButton(base::BindRepeating(
-          &SaveUpdateAddressProfileBubbleController::OnEditButtonClicked,
-          base::Unretained(controller_))));
+  edit_button_ = details_section->AddChildView(CreateEditButton(
+      base::BindRepeating(&SaveAddressBubbleController::OnEditButtonClicked,
+                          base::Unretained(controller_.get()))));
   edit_button_->SetProperty(views::kElementIdentifierKey, kEditButtonViewId);
 
   std::u16string address = controller_->GetAddressSummary();
@@ -264,7 +262,7 @@ SaveAddressProfileView::SaveAddressProfileView(
 
   if (base::FeatureList::IsEnabled(
           features::kAutofillAddressProfileSavePromptNicknameSupport)) {
-    // TODO(crbug.com/1167060): Make sure the icon is vertically centered with
+    // TODO(crbug.com/40164487): Make sure the icon is vertically centered with
     // the editable combobox.
     AddAddressSection(/*parent_view=*/address_components_view_,
                       CreateAddressSectionIcon(vector_icons::kExtensionIcon),
@@ -324,7 +322,7 @@ void SaveAddressProfileView::Hide() {
 }
 
 void SaveAddressProfileView::AddedToWidget() {
-  std::optional<SaveUpdateAddressProfileBubbleController::HeaderImages> images =
+  std::optional<SaveAddressBubbleController::HeaderImages> images =
       controller_->GetHeaderImages();
   if (images) {
     GetBubbleFrameView()->SetHeaderView(

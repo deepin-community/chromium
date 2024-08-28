@@ -35,9 +35,14 @@
 
 #include "base/compiler_specific.h"
 #include "third_party/blink/renderer/platform/geometry/layout_point.h"
+#include "third_party/blink/renderer/platform/geometry/layout_size.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "ui/gfx/geometry/rect.h"
+
+namespace WTF {
+class String;
+}  // namespace WTF
 
 namespace blink {
 
@@ -69,7 +74,7 @@ class PLATFORM_EXPORT DeprecatedLayoutRect {
   constexpr LayoutUnit Width() const { return size_.Width(); }
   constexpr LayoutUnit Height() const { return size_.Height(); }
 
-  String ToString() const;
+  WTF::String ToString() const;
 
  private:
   LayoutPoint location_;

@@ -4,11 +4,10 @@
 
 #include "ui/accessibility/platform/inspect/ax_inspect_utils_win.h"
 
-#include <uiautomation.h>
-
 #include <map>
 #include <string>
 
+#include "base/containers/heap_array.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
 #include "base/strings/pattern.h"
@@ -18,6 +17,8 @@
 #include "base/win/scoped_bstr.h"
 #include "third_party/iaccessible2/ia2_api_all.h"
 #include "ui/accessibility/platform/inspect/ax_inspect.h"
+
+#include <uiautomation.h>
 
 namespace ui {
 namespace {
@@ -880,8 +881,8 @@ MSAAChildren::MSAAChildren(IAccessible* parent) {
   if (FAILED(parent->get_accChildCount(&count_)))
     return;
 
-  std::unique_ptr<VARIANT[]> children_variants(new VARIANT[count_]);
-  if (FAILED(AccessibleChildren(parent, 0, count_, children_variants.get(),
+  auto children_variants = base::HeapArray<VARIANT>::Uninit(count_);
+  if (FAILED(AccessibleChildren(parent, 0, count_, children_variants.data(),
                                 &count_))) {
     count_ = 0;
     return;

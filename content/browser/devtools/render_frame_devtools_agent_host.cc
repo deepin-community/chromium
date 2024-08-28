@@ -362,8 +362,7 @@ bool RenderFrameDevToolsAgentHost::AttachSession(DevToolsSession* session,
       base::BindRepeating(
           &RenderFrameDevToolsAgentHost::UpdateResourceLoaderFactories,
           base::Unretained(this)),
-      session->GetClient()->MayReadLocalFiles(),
-      session->GetClient()->IsTrusted());
+      session->GetClient());
   session->CreateAndAddHandler<protocol::FetchHandler>(
       GetIOContext(), base::BindRepeating(
                           [](RenderFrameDevToolsAgentHost* self,
@@ -376,19 +375,14 @@ bool RenderFrameDevToolsAgentHost::AttachSession(DevToolsSession* session,
   const bool may_attach_to_brower = session->GetClient()->IsTrusted();
   session->CreateAndAddHandler<protocol::ServiceWorkerHandler>(
       /* allow_inspect_worker= */ may_attach_to_brower);
-  session->CreateAndAddHandler<protocol::StorageHandler>(
-      session->GetClient()->IsTrusted());
+  session->CreateAndAddHandler<protocol::StorageHandler>(session->GetClient());
   session->CreateAndAddHandler<protocol::SystemInfoHandler>(
       /* is_browser_session= */ false);
-  auto* target_handler = session->CreateAndAddHandler<protocol::TargetHandler>(
+  session->CreateAndAddHandler<protocol::TargetHandler>(
       may_attach_to_brower
           ? protocol::TargetHandler::AccessMode::kRegular
           : protocol::TargetHandler::AccessMode::kAutoAttachOnly,
       GetId(), auto_attacher_.get(), session);
-  if (session->session_mode() !=
-      DevToolsSession::Mode::kDoesNotSupportTabTarget) {
-    target_handler->DisableAutoAttachOfPortals();
-  }
   session->CreateAndAddHandler<protocol::PreloadHandler>();
   session->CreateAndAddHandler<protocol::PageHandler>(
       emulation_handler, browser_handler,
@@ -442,7 +436,7 @@ void RenderFrameDevToolsAgentHost::InspectElement(RenderFrameHost* frame_host,
   // so we need to transform the coordinates from the root space
   // to the local frame root widget's space.
   if (host->frame_host_) {
-    if (RenderWidgetHostView* view = host->frame_host_->GetView()) {
+    if (RenderWidgetHostViewBase* view = host->frame_host_->GetView()) {
       point = gfx::ToRoundedPoint(
           view->TransformRootPointToViewCoordSpace(gfx::PointF(point)));
     }
@@ -698,10 +692,6 @@ void RenderFrameDevToolsAgentHost::OnNavigationRequestWillBeSent(
   }
   if (!restricted_sessions.empty())
     ForceDetachRestrictedSessions(restricted_sessions);
-}
-
-void RenderFrameDevToolsAgentHost::UpdatePortals() {
-  auto_attacher_->UpdatePages();
 }
 
 void RenderFrameDevToolsAgentHost::DidCreateFencedFrame(

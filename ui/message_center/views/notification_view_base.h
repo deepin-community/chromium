@@ -22,6 +22,7 @@
 #include "ui/views/animation/ink_drop_observer.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/layout/box_layout_view.h"
+#include "ui/views/layout/delegating_layout_manager.h"
 #include "ui/views/layout/fill_layout.h"
 
 namespace views {
@@ -41,7 +42,8 @@ class ProportionalImageView;
 
 // CompactTitleMessageView shows notification title and message in a single
 // line. This view is used for NOTIFICATION_TYPE_PROGRESS.
-class CompactTitleMessageView : public views::View {
+class CompactTitleMessageView : public views::View,
+                                public views::LayoutDelegate {
   METADATA_HEADER(CompactTitleMessageView, views::View)
 
  public:
@@ -50,8 +52,12 @@ class CompactTitleMessageView : public views::View {
   CompactTitleMessageView& operator=(const CompactTitleMessageView&) = delete;
   ~CompactTitleMessageView() override;
 
-  gfx::Size CalculatePreferredSize() const override;
-  void Layout(PassKey) override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& /*available_size*/) const override;
+
+  // Overridden from views::LayoutDelegate:
+  views::ProposedLayout CalculateProposedLayout(
+      const views::SizeBounds& size_bounds) const override;
 
   void set_title(const std::u16string& title);
   void set_message(const std::u16string& message);
@@ -93,8 +99,6 @@ class MESSAGE_CENTER_EXPORT NotificationViewBase
   NotificationViewBase(const NotificationViewBase&) = delete;
   NotificationViewBase& operator=(const NotificationViewBase&) = delete;
   ~NotificationViewBase() override;
-
-  void Activate();
 
   // MessageView:
   void OnFocus() override;
@@ -395,8 +399,6 @@ class MESSAGE_CENTER_EXPORT NotificationViewBase
   // Counter for view layouting, which is used during the CreateOrUpdate*
   // phases to keep track of the view ordering. See crbug.com/901045
   size_t left_content_count_;
-
-  std::unique_ptr<ui::EventHandler> click_activator_;
 
   base::TimeTicks last_mouse_pressed_timestamp_;
 

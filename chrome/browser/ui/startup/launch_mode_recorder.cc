@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/startup/launch_mode_recorder.h"
 
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -75,8 +76,9 @@ OldLaunchMode GetOldLaunchModeSlow() {
       base::i18n::ToLower(base::WideToUTF16(shortcut_path.value())));
 
   // The windows quick launch path is not localized.
-  if (shortcut.find(u"\\quick launch\\") != base::StringPiece16::npos)
+  if (shortcut.find(u"\\quick launch\\") != std::u16string_view::npos) {
     return OldLaunchMode::kShortcutTaskbar;
+  }
 
   // Check the common shortcut locations.
   static constexpr struct {
@@ -132,7 +134,7 @@ OldLaunchMode GetOldLaunchModeFast() {
 }
 
 OldLaunchMode GetOldLaunchModeSlow() {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return OldLaunchMode::kToBeDecided;
 }
 #else                    // BUILDFLAG(IS_WIN)
@@ -141,7 +143,7 @@ OldLaunchMode GetOldLaunchModeFast() {
 }
 
 OldLaunchMode GetOldLaunchModeSlow() {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return OldLaunchMode::kOtherOS;
 }
 #endif                   // BUILDFLAG(IS_WIN)
@@ -186,8 +188,9 @@ std::optional<int> GetShortcutLocation(const std::wstring& shortcut_path) {
   // The windows quick launch path is not localized.
   const std::u16string shortcut(
       base::i18n::ToLower(base::AsStringPiece16(shortcut_path)));
-  if (shortcut.find(u"\\quick launch\\") != base::StringPiece16::npos)
+  if (shortcut.find(u"\\quick launch\\") != std::u16string_view::npos) {
     return base::DIR_TASKBAR_PINS;
+  }
 
   // Check the common shortcut locations.
   constexpr int kPathKeys[] = {base::DIR_COMMON_START_MENU,
@@ -373,7 +376,7 @@ std::optional<LaunchMode> GetLaunchModeFast(
 #elif BUILDFLAG(IS_MAC)
 std::optional<LaunchMode> GetLaunchModeSlow(
     const base::CommandLine command_line) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return std::nullopt;
 }
 
@@ -411,7 +414,7 @@ std::optional<LaunchMode> GetLaunchModeFast(
 #else  //  !IS_WIN && !IS_MAC
 std::optional<LaunchMode> GetLaunchModeSlow(
     const base::CommandLine command_line) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return std::nullopt;
 }
 

@@ -258,7 +258,7 @@ releasing. The other target produces test binaries, which are suffixed by
 behavior of the updater to facilitate testing it.
 
 Some tests require two versions of the updater. For this reason, an older
-version of the updater is checked into `//third_party/updater`. Updaters for
+version of the updater is checked into `//third_party/updater/*/cipd`. Updaters for
 each architecture and platform, Google-branded and Chromium-branded, are
 available there. These versions of the updater are sourced from Chromium or
 Google's official build output, brought in through CIPD and 3pp.
@@ -277,12 +277,12 @@ Google's signing infrastructure unpacks the updater.zip and operates on it to
 generate signed executables, which are then released through Omaha similar to
 Chrome.
 
-TODO(crbug.com/1035895): Decide on and document branching & versioning.
+TODO(crbug.com/40664480): Decide on and document branching & versioning.
 
-TODO(crbug.com/1035895): Document A/B release qualification process.
+TODO(crbug.com/40664480): Document A/B release qualification process.
 
 ## Tools
-TODO(crbug.com/1035895): Document tagger.
+TODO(crbug.com/40664480): Document tagger.
 
 ## Windows-Specific Notes
 
@@ -449,7 +449,7 @@ install.
 
 For example, here is a command line for the Updater on Windows that includes:
 ```
-UpdaterSetup.exe --install --tag="appguid=YourAppID&needsadmin=False"
+UpdaterSetup.exe --install="appguid=YourAppID&needsadmin=False"
 ```
 
 In this case, the updater client understands that the application installer
@@ -658,7 +658,7 @@ Windows utilizes the Task Scheduler and the Windows Task Scheduler API to create
 a scheduler.
 
 ### Legacy State
-TODO(crbug.com/1035895): Document usage of O3 registry on Windows.
+TODO(crbug.com/40664480): Document usage of O3 registry on Windows.
 
 ### COM on Windows
 
@@ -936,7 +936,7 @@ the active version of the updater. --wakeall will then --wake every version of
 the updater that is present in the base install directory.
 
 ### Legacy State
-TODO(crbug.com/1035895): Document usage of Keystone tickets on macOS.
+TODO(crbug.com/40664480): Document usage of Keystone tickets on macOS.
 
 ### IPC
 On macOS, the updater uses mojo for IPC.

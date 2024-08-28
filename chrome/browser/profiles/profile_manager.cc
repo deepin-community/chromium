@@ -28,6 +28,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/not_fatal_until.h"
 #include "base/observer_list.h"
 #include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
@@ -66,7 +67,9 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/primary_account_policy_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
-#include "chrome/browser/ui/sync/sync_promo_ui.h"
+#include "chrome/browser/supervised_user/child_accounts/child_account_service_factory.h"
+#include "chrome/browser/supervised_user/child_accounts/list_family_members_service_factory.h"
+#include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/ui/tabs/organization/tab_organization_service_factory.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/unified_consent/unified_consent_service_factory.h"
@@ -92,8 +95,10 @@
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/primary_account_mutator.h"
-#include "components/supervised_user/core/common/buildflags.h"
+#include "components/supervised_user/core/browser/child_account_service.h"
+#include "components/supervised_user/core/browser/supervised_user_service.h"
 #include "components/supervised_user/core/common/pref_names.h"
+#include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "components/sync/base/stop_source.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -117,14 +122,6 @@
 #include "chrome/browser/sessions/session_service_factory.h"
 #endif
 
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-#include "chrome/browser/supervised_user/child_accounts/child_account_service_factory.h"
-#include "chrome/browser/supervised_user/supervised_user_service_factory.h"
-#include "components/supervised_user/core/browser/child_account_service.h"
-#include "components/supervised_user/core/browser/supervised_user_service.h"
-#include "components/supervised_user/core/common/supervised_user_constants.h"
-#endif
-
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/accessibility/live_caption/live_caption_controller_factory.h"
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
@@ -136,6 +133,7 @@
 #include "components/optimization_guide/core/model_execution/model_execution_features.h"
 #else
 #include "chrome/browser/profiles/profile_manager_android.h"
+#include "chrome/browser/signin/signin_manager_android_factory.h"
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -242,6 +240,10 @@ void ProfileSizeTask(const base::FilePath& path, int enabled_app_count) {
   int64_t size = ComputeFilesSize(path, FILE_PATH_LITERAL("*"));
   int size_MB = static_cast<int>(size / kBytesInOneMB);
   UMA_HISTOGRAM_COUNTS_10000("Profile.TotalSize", size_MB);
+
+  size = base::ComputeDirectorySize(path);
+  size_MB = static_cast<int>(size / kBytesInOneMB);
+  UMA_HISTOGRAM_COUNTS_10000("Profile.TotalSizeRecursive", size_MB);
 
   size = ComputeFilesSize(path, FILE_PATH_LITERAL("History"));
   size_MB = static_cast<int>(size / kBytesInOneMB);
@@ -409,15 +411,14 @@ void RunCallbacks(std::vector<base::OnceCallback<void(Profile*)>>& callbacks,
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
 void ClearPrimaryAccountForProfile(
     base::WeakPtr<Profile> weak_profile,
-    signin_metrics::ProfileSignout signout_source_metric,
-    signin_metrics::SignoutDelete signout_delete_metric) {
+    signin_metrics::ProfileSignout signout_source_metric) {
   Profile* profile = weak_profile.get();
   if (!profile)
     return;
 
   IdentityManagerFactory::GetForProfile(profile)
       ->GetPrimaryAccountMutator()
-      ->ClearPrimaryAccount(signout_source_metric, signout_delete_metric);
+      ->ClearPrimaryAccount(signout_source_metric);
 }
 #endif
 
@@ -521,7 +522,7 @@ Profile* ProfileManager::GetLastUsedProfile() {
       ash::BrowserContextHelper::Get()->GetBrowserContextPathByUserIdHash(
           user->username_hash()));
 #else
-  // TODO(crbug.com/1363933): Once Lacros is launched pre-login, we should
+  // TODO(crbug.com/40238900): Once Lacros is launched pre-login, we should
   // probably do something analogous to the !IsLoggedIn() check above.
   Profile* profile =
       profile_manager->GetProfile(profile_manager->GetLastUsedProfileDir());
@@ -629,7 +630,7 @@ Profile* ProfileManager::GetPrimaryUserProfile() {
                   "this message.";
 
     // Taking metrics to make sure this code path is not used in production.
-    // TODO(crbug.com/1325210): Remove the following code, once we made sure
+    // TODO(crbug.com/40225390): Remove the following code, once we made sure
     // they are not used in the production.
     if (base::SysInfo::IsRunningOnChromeOS()) {
       base::UmaHistogramBoolean(
@@ -877,11 +878,7 @@ bool ProfileManager::IsAllowedProfilePath(const base::FilePath& path) const {
 }
 
 bool ProfileManager::CanCreateProfileAtPath(const base::FilePath& path) const {
-  bool is_allowed_path = IsAllowedProfilePath(path) ||
-                         base::CommandLine::ForCurrentProcess()->HasSwitch(
-                             switches::kAllowProfilesOutsideUserDir);
-
-  if (!is_allowed_path) {
+  if (!IsAllowedProfilePath(path)) {
     LOG(ERROR) << "Cannot create profile at path " << path.AsUTF8Unsafe();
     return false;
   }
@@ -912,7 +909,7 @@ Profile* ProfileManager::GetProfileFromProfileKey(ProfileKey* profile_key) {
       return otr;
   }
 
-  NOTREACHED() << "An invalid profile key is passed.";
+  NOTREACHED_IN_MIGRATION() << "An invalid profile key is passed.";
   return nullptr;
 }
 
@@ -970,7 +967,7 @@ void ProfileManager::CreateMultiProfileAsync(
 
   // As another check, make sure the generated path is not present in the file
   // system (there could be orphan profile dirs).
-  // TODO(crbug.com/1277948): There can be a theoretical race condition with a
+  // TODO(crbug.com/40809920): There can be a theoretical race condition with a
   // direct CreateProfileAsync() call that can create the directory before
   // adding an entry to ProfileAttributesStorage. Creating a new
   // ProfileAttributesEntry consistently before writing the profile folder to
@@ -1202,7 +1199,7 @@ void ProfileManager::InitProfileUserPrefs(Profile* profile) {
     }
   }
 
-  // TODO(https://crbug.com/1194607): investigate whether these prefs are
+  // TODO(crbug.com/40175703): investigate whether these prefs are
   // actually useful.
   if (!profile->GetPrefs()->HasPrefPath(prefs::kProfileAvatarIndex))
     profile->GetPrefs()->SetInteger(prefs::kProfileAvatarIndex, avatar_index);
@@ -1214,12 +1211,8 @@ void ProfileManager::InitProfileUserPrefs(Profile* profile) {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   bool force_supervised_user_id =
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-      g_browser_process->platform_part()
-              ->profile_helper()
-              ->GetSigninProfileDir() != profile->GetPath() &&
-      g_browser_process->platform_part()
-              ->profile_helper()
-              ->GetLockScreenAppProfilePath() != profile->GetPath() &&
+      !ash::IsSigninBrowserContext(profile) &&
+      !ash::IsLockScreenAppBrowserContext(profile) &&
 #endif
       command_line->HasSwitch(switches::kSupervisedUserId);
 
@@ -1427,9 +1420,9 @@ void ProfileManager::UnloadProfileIfNoKeepAlive(const ProfileInfo* info) {
     return;
 
   if (!info->GetCreatedProfile()) {
-    NOTREACHED() << "Attempted to unload profile "
-                 << info->GetRawProfile()->GetDebugName()
-                 << " before it was loaded. This is not valid.";
+    NOTREACHED_IN_MIGRATION() << "Attempted to unload profile "
+                              << info->GetRawProfile()->GetDebugName()
+                              << " before it was loaded. This is not valid.";
   }
 
   VLOG(1) << "Unloading profile " << info->GetCreatedProfile()->GetDebugName();
@@ -1530,12 +1523,12 @@ void ProfileManager::DoFinalInitForServices(Profile* profile,
 #endif
 
 #endif
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
   // Initialization needs to happen after extension system initialization (for
   // extension::ManagementPolicy) and InitProfileUserPrefs (for setting the
   // initializing the supervised flag if necessary).
   ChildAccountServiceFactory::GetForProfile(profile)->Init();
   SupervisedUserServiceFactory::GetForProfile(profile)->Init();
+  ListFamilyMembersServiceFactory::GetForProfile(profile)->Init();
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   // After the ManagementPolicy has been set, update it for the Supervised User
   // Extension Delegate, which has been created before the profile
@@ -1545,7 +1538,6 @@ void ProfileManager::DoFinalInitForServices(Profile* profile,
       ->GetSupervisedUserExtensionsDelegate()
       ->UpdateManagementPolicyRegistration();
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
-#endif
 
   // Ensure NavigationPredictorKeyedService is started.
   NavigationPredictorKeyedServiceFactory::GetForProfile(profile);
@@ -1555,6 +1547,10 @@ void ProfileManager::DoFinalInitForServices(Profile* profile,
 
   IdentityManagerFactory::GetForProfile(profile)->OnNetworkInitialized();
   AccountReconcilorFactory::GetForProfile(profile);
+#if BUILDFLAG(IS_ANDROID)
+  // Should be after IdentityManager::OnNetworkInitialized.
+  SigninManagerAndroidFactory::GetForProfile(profile);
+#endif
 
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
   BoundSessionCookieRefreshServiceFactory::GetForProfile(profile);
@@ -1579,7 +1575,7 @@ void ProfileManager::DoFinalInitForServices(Profile* profile,
   ash::AccountManagerPolicyControllerFactory::GetForBrowserContext(profile);
 #endif
 
-  // TODO(crbug.com/1031477): Remove once getting this created with the browser
+  // TODO(crbug.com/40110472): Remove once getting this created with the browser
   // context does not change dependency initialization order to cause crashes.
   AdaptiveQuietNotificationPermissionUiEnabler::GetForProfile(profile);
 }
@@ -1711,9 +1707,9 @@ bool ProfileManager::AddProfile(std::unique_ptr<Profile> profile) {
   // Make sure that we're not loading a profile with the same ID as a profile
   // that's already loaded.
   if (GetProfileByPathInternal(profile->GetPath())) {
-    NOTREACHED() << "Attempted to add profile with the same path ("
-                 << profile->GetPath().value()
-                 << ") as an already-loaded profile.";
+    NOTREACHED_IN_MIGRATION()
+        << "Attempted to add profile with the same path ("
+        << profile->GetPath().value() << ") as an already-loaded profile.";
     return false;
   }
 
@@ -1746,11 +1742,11 @@ void ProfileManager::UnloadProfile(const base::FilePath& profile_dir) {
   // If the profile is ephemeral or deleted via ScheduleProfileForDeletion(),
   // also do some cleanup.
 
-  // TODO(crbug.com/88586): There could still be pending tasks that write to
+  // TODO(crbug.com/40594327): There could still be pending tasks that write to
   // disk, and don't need the Profile. If they run after
   // NukeProfileFromDisk(), they may still leave files behind.
   //
-  // TODO(crbug.com/1191455): This can also fail if an object is holding a lock
+  // TODO(crbug.com/40756611): This can also fail if an object is holding a lock
   // to a file in the profile directory. This happens flakily, e.g. with the
   // LevelDB for GCMStore. The locked files don't get deleted properly.
   base::ThreadPool::PostTask(
@@ -1825,7 +1821,7 @@ void ProfileManager::OnProfileCreationFinished(Profile* profile,
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   auto iter = profiles_info_.find(profile->GetPath());
-  DCHECK(iter != profiles_info_.end());
+  CHECK(iter != profiles_info_.end(), base::NotFatalUntil::M130);
   ProfileInfo* info = iter->second.get();
 
   if (create_mode == Profile::CREATE_MODE_SYNCHRONOUS) {
@@ -2003,8 +1999,7 @@ void ProfileManager::AddProfileToStorage(Profile* profile) {
             base::BindOnce(&ClearPrimaryAccountForProfile,
                            profile->GetWeakPtr(),
                            signin_metrics::ProfileSignout::
-                               kAuthenticationFailedWithForceSignin,
-                           signin_metrics::SignoutDelete::kIgnoreMetric));
+                               kAuthenticationFailedWithForceSignin));
       }
 #endif
       return;

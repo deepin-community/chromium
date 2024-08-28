@@ -7,8 +7,8 @@
 
 #include <optional>
 
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/modules/credentialmanagement/credentials_container.h"
-#include "third_party/blink/renderer/modules/credentialmanagement/web_identity_requester.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -22,7 +22,6 @@ class CredentialRequestOptions;
 class IdentityCredentialRequestOptions;
 class ExceptionState;
 class Navigator;
-class ScriptPromise;
 class ScriptState;
 
 class MODULES_EXPORT AuthenticationCredentialsContainer final
@@ -34,30 +33,31 @@ class MODULES_EXPORT AuthenticationCredentialsContainer final
   explicit AuthenticationCredentialsContainer(Navigator&);
 
   // CredentialsContainer:
-  ScriptPromise get(ScriptState*,
-                    const CredentialRequestOptions*,
-                    ExceptionState&) override;
-  ScriptPromise store(ScriptState*, Credential* = nullptr) override;
-  ScriptPromise create(ScriptState*,
-                       const CredentialCreationOptions*,
-                       ExceptionState&) override;
-  ScriptPromise preventSilentAccess(ScriptState*) override;
-
+  ScriptPromise<IDLNullable<Credential>> get(ScriptState*,
+                                             const CredentialRequestOptions*,
+                                             ExceptionState&) override;
+  ScriptPromise<Credential> store(ScriptState*,
+                                  Credential*,
+                                  ExceptionState& exception_state) override;
+  ScriptPromise<IDLNullable<Credential>> create(
+      ScriptState*,
+      const CredentialCreationOptions*,
+      ExceptionState&) override;
+  ScriptPromise<IDLUndefined> preventSilentAccess(ScriptState*) override;
+  ScriptPromise<IDLUndefined> report(ScriptState*,
+                                     const CredentialReportOptions*,
+                                     ExceptionState&) override;
   void Trace(Visitor*) const override;
 
  private:
   // get() implementation for FedCM and WebIdentityDigitalCredential.
-  ScriptPromise GetForIdentity(ScriptState*,
-                               ScriptPromiseResolver* resolver,
-                               const ScriptPromise& promise,
-                               const CredentialRequestOptions&,
-                               const IdentityCredentialRequestOptions&,
-                               ExceptionState&);
+  void GetForIdentity(ScriptState*,
+                      ScriptPromiseResolver<IDLNullable<Credential>>*,
+                      const CredentialRequestOptions&,
+                      const IdentityCredentialRequestOptions&);
 
   class OtpRequestAbortAlgorithm;
   class PublicKeyRequestAbortAlgorithm;
-
-  Member<WebIdentityRequester> web_identity_requester_;
 };
 
 }  // namespace blink

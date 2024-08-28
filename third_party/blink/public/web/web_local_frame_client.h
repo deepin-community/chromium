@@ -55,6 +55,7 @@
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/common/use_counter/use_counter_feature.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+#include "third_party/blink/public/mojom/browser_interface_broker.mojom-shared.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-forward.h"
 #include "third_party/blink/public/mojom/fenced_frame/fenced_frame.mojom-shared.h"
 #include "third_party/blink/public/mojom/frame/blocked_navigation_types.mojom-shared.h"
@@ -74,6 +75,7 @@
 #include "third_party/blink/public/platform/web_content_settings_client.h"
 #include "third_party/blink/public/platform/web_effective_connection_type.h"
 #include "third_party/blink/public/platform/web_file_system_type.h"
+#include "third_party/blink/public/platform/web_media_player.h"
 #include "third_party/blink/public/platform/web_prescient_networking.h"
 #include "third_party/blink/public/platform/web_set_sink_id_callbacks.h"
 #include "third_party/blink/public/platform/web_source_location.h"
@@ -94,6 +96,7 @@
 #include "third_party/blink/public/web/web_navigation_type.h"
 #include "ui/accessibility/ax_enums.mojom-shared.h"
 #include "ui/accessibility/ax_event.h"
+#include "ui/accessibility/ax_tree_update.h"
 #include "ui/events/types/scroll_types.h"
 #include "v8/include/v8.h"
 
@@ -115,7 +118,6 @@ enum class TreeScopeType;
 }  // namespace mojom
 
 class AssociatedInterfaceProvider;
-class BrowserInterfaceBrokerProxy;
 class WebBackgroundResourceFetchAssets;
 class WebComputedAXTree;
 class WebContentDecryptionModule;
@@ -140,6 +142,7 @@ class URLLoader;
 class WebURLRequest;
 class WebURLResponse;
 class WebView;
+class WebLinkPreviewTriggerer;
 struct FramePolicy;
 struct Impression;
 struct JavaScriptFrameworkDetectionResult;
@@ -184,7 +187,7 @@ class BLINK_EXPORT WebLocalFrameClient {
 
   // May return null.
   // WebContentDecryptionModule* may be null if one has not yet been set.
-  virtual WebMediaPlayer* CreateMediaPlayer(
+  virtual std::unique_ptr<WebMediaPlayer> CreateMediaPlayer(
       const WebMediaPlayerSource&,
       WebMediaPlayerClient*,
       blink::MediaInspectorContext*,
@@ -242,10 +245,6 @@ class BLINK_EXPORT WebLocalFrameClient {
 
   // Services ------------------------------------------------------------
 
-  // Returns a BrowserInterfaceBrokerProxy the frame can use to request
-  // interfaces from the browser.
-  virtual blink::BrowserInterfaceBrokerProxy* GetBrowserInterfaceBroker();
-
   // Returns an AssociatedInterfaceProvider the frame can use to request
   // navigation-associated interfaces from the browser. See also
   // LocalFrame::GetRemoteNavigationAssociatedInterfaces().
@@ -259,14 +258,17 @@ class BLINK_EXPORT WebLocalFrameClient {
   // should create a new WebLocalFrame, insert it into the frame tree, call
   // `complete_creation()`, and return the created frame.
   //
-  // `complete_creation` takes the newly-created `WebLocalFrame` and the
-  // `DocumentToken` to use for its initial empty document as arguments.
+  // `complete_creation` takes the newly-created `WebLocalFrame` as well as the
+  // `DocumentToken` and `BrowserInterfaceBroker` to use for the initial empty
+  // document.
   //
   // `document_ukm_source_id` is the UKM source id to be used for the new
   // document in the frame. If `ukm::kInvalidSourceId` is passed, a new UKM
   // source id will be generated.
-  using FinishChildFrameCreationFn =
-      base::FunctionRef<void(WebLocalFrame*, const DocumentToken&)>;
+  using FinishChildFrameCreationFn = base::FunctionRef<void(
+      WebLocalFrame*,
+      const DocumentToken&,
+      CrossVariantMojoRemote<mojom::BrowserInterfaceBrokerInterfaceBase>)>;
   virtual WebLocalFrame* CreateChildFrame(
       mojom::TreeScopeType,
       const WebString& name,
@@ -446,11 +448,15 @@ class BLINK_EXPORT WebLocalFrameClient {
   // |is_synchronously_committed| is true if the navigation is synchronously
   // committed from within Blink, as opposed to being driven by the browser's
   // navigation stack.
+  // `screenshot_destination`, if non-empty, tags the destination of the
+  // viewport screenshot.
   virtual void DidFinishSameDocumentNavigation(
       WebHistoryCommitType,
       bool is_synchronously_committed,
       mojom::SameDocumentNavigationType,
-      bool is_client_redirect) {}
+      bool is_client_redirect,
+      const std::optional<blink::SameDocNavigationScreenshotDestinationToken>&
+          screenshot_destination) {}
 
   // Called when an async same-document navigation fails before commit. This is
   // used in the case where a same-document navigation was instructed to commit
@@ -465,7 +471,7 @@ class BLINK_EXPORT WebLocalFrameClient {
   virtual void DidOpenDocumentInputStream(const WebURL&) {}
 
   // Called when a frame's page lifecycle state gets updated.
-  virtual void DidSetPageLifecycleState() {}
+  virtual void DidSetPageLifecycleState(bool restoring_from_bfcache) {}
 
   // Immediately notifies the browser of a change in the current HistoryItem.
   // Prefer DidUpdateCurrentHistoryItem().
@@ -560,8 +566,10 @@ class BLINK_EXPORT WebLocalFrameClient {
   using ForRedirect = base::StrongAlias<class ForRedirectTag, bool>;
   // A request is about to be sent out, and the client may modify it.  Request
   // is writable, and changes to the URL, for example, will change the request
-  // made.
-  virtual void WillSendRequest(WebURLRequest&, ForRedirect) {}
+  // made. `upstream_url` is the URL of the frame that initiated the request.
+  virtual void WillSendRequest(WebURLRequest&,
+                               ForRedirect,
+                               const WebURL& upstream_url) {}
 
   // The specified request was satified from WebCore's memory cache.
   virtual void DidLoadResourceFromMemoryCache(const WebURLRequest&,
@@ -578,13 +586,15 @@ class BLINK_EXPORT WebLocalFrameClient {
   // an input to next frame latency. This reports the timings of the max
   // input-to-frame latency for each interaction. `max_event_start` is when
   // input was received, `max_event_end` is when the next frame was
-  // presented and `max_event_queued_main_thread` is when the input was queued.
-  // See https://web.dev/inp/#whats-in-an-interaction for more
+  // presented, `max_event_queued_main_thread` is when the input was queued and
+  // `max_event_commit_finish` is when the next commit finished after event has
+  // been processed. See https://web.dev/inp/#whats-in-an-interaction for more
   // detailed motivation and explanation.
   virtual void DidObserveUserInteraction(
       base::TimeTicks max_event_start,
-      base::TimeTicks max_event_end,
       base::TimeTicks max_event_queued_main_thread,
+      base::TimeTicks max_event_commit_finish,
+      base::TimeTicks max_event_end,
       UserInteractionType interaction_type,
       uint64_t interaction_offset) {}
 
@@ -646,9 +656,6 @@ class BLINK_EXPORT WebLocalFrameClient {
   // The main frame scrolled.
   virtual void DidChangeScrollOffset() {}
 
-  // Informs the browser that the draggable regions have been updated.
-  virtual void DraggableRegionsChanged() {}
-
   // MediaStream -----------------------------------------------------
 
   virtual WebMediaStreamDeviceObserver* MediaStreamDeviceObserver() {
@@ -682,7 +689,14 @@ class BLINK_EXPORT WebLocalFrameClient {
 
   // Called when accessibility is ready to serialize.
   // Returns true if a serialization occurs.
-  virtual bool AXReadyCallback() { return false; }
+  virtual bool SendAccessibilitySerialization(
+      std::vector<ui::AXTreeUpdate> updates,
+      std::vector<ui::AXEvent> events,
+      bool had_load_complete_messages) {
+    return false;
+  }
+
+  virtual bool IsAccessibilityEnabled() const { return false; }
 
   // Audio Output Devices API --------------------------------------------
 
@@ -705,12 +719,12 @@ class BLINK_EXPORT WebLocalFrameClient {
   // Loading --------------------------------------------------------------
 
   virtual scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return nullptr;
   }
 
   virtual blink::ChildURLLoaderFactoryBundle* GetLoaderFactoryBundle() {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return nullptr;
   }
 
@@ -750,6 +764,10 @@ class BLINK_EXPORT WebLocalFrameClient {
     return false;
   }
 
+  // Specifies whether to disable DOM storage interfaces such as localStorage
+  // and sessionStorage.
+  virtual bool IsDomStorageDisabled() const { return false; }
+
   // Returns a scriptable object for the given plugin element. This is used for
   // having an external handler implement certain customized APIs for the
   // plugin element (e.g., to expose postMessage).
@@ -787,11 +805,6 @@ class BLINK_EXPORT WebLocalFrameClient {
   virtual void AssociateInputAndOutputForAec(
       const base::UnguessableToken& input_stream_id,
       const std::string& output_device_id) {}
-
-  // Notifies the observers of the origins for which subresource redirect
-  // optimizations can be preloaded.
-  virtual void PreloadSubresourceOptimizationsForOrigins(
-      const std::vector<WebSecurityOrigin>& origins) {}
 
   // Called immediately following the first compositor-driven (frame-generating)
   // layout that happened after an interesting document lifecycle change (see
@@ -862,6 +875,11 @@ class BLINK_EXPORT WebLocalFrameClient {
       const WebURL& base_url) {
     return nullptr;
   }
+
+  virtual std::unique_ptr<WebLinkPreviewTriggerer> CreateLinkPreviewTriggerer();
+
+  virtual void SetLinkPreviewTriggererForTesting(
+      std::unique_ptr<WebLinkPreviewTriggerer> trigger);
 };
 
 }  // namespace blink

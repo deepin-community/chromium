@@ -42,12 +42,11 @@
 #include "absl/types/span.h"
 #include "internal/account/account_manager_impl.h"
 #include "internal/flags/nearby_flags.h"
-#include "internal/network/http_client_factory.h"
 #include "internal/test/fake_account_manager.h"
 #include "internal/test/fake_device_info.h"
 #include "internal/test/fake_task_runner.h"
 #include "sharing/advertisement.h"
-#include "sharing/attachment.h"
+#include "sharing/attachment_container.h"
 #include "sharing/certificates/fake_nearby_share_certificate_manager.h"
 #include "sharing/certificates/nearby_share_certificate_manager_impl.h"
 #include "sharing/certificates/nearby_share_decrypted_public_certificate.h"
@@ -65,6 +64,8 @@
 #include "sharing/fast_initiation/nearby_fast_initiation_impl.h"
 #include "sharing/file_attachment.h"
 #include "sharing/flags/generated/nearby_sharing_feature_flags.h"
+#include "sharing/incoming_share_session.h"
+#include "sharing/internal/api/mock_app_info.h"
 #include "sharing/internal/api/mock_sharing_platform.h"
 #include "sharing/internal/api/preference_manager.h"
 #include "sharing/internal/public/connectivity_manager.h"
@@ -72,6 +73,7 @@
 #include "sharing/internal/test/fake_connectivity_manager.h"
 #include "sharing/internal/test/fake_context.h"
 #include "sharing/internal/test/fake_preference_manager.h"
+#include "sharing/internal/test/fake_wifi_adapter.h"
 #include "sharing/local_device_data/fake_nearby_share_local_device_data_manager.h"
 #include "sharing/local_device_data/nearby_share_local_device_data_manager_impl.h"
 #include "sharing/nearby_connections_manager.h"
@@ -87,6 +89,7 @@
 #include "sharing/text_attachment.h"
 #include "sharing/transfer_metadata.h"
 #include "sharing/transfer_update_callback.h"
+#include "sharing/wifi_credentials_attachment.h"
 #include "google/protobuf/repeated_ptr_field.h"
 
 namespace nearby {
@@ -96,6 +99,7 @@ namespace {
 using ConnectionType = ::nearby::ConnectivityManager::ConnectionType;
 using SendSurfaceState =
     ::nearby::sharing::NearbySharingService::SendSurfaceState;
+using ::nearby::sharing::api::MockAppInfo;
 using ::nearby::sharing::api::PreferenceManager;
 using ::nearby::sharing::proto::DataUsage;
 using ::nearby::sharing::proto::DeviceVisibility;
@@ -110,6 +114,8 @@ using ::nearby::sharing::service::proto::V1Frame;
 using ::testing::InSequence;
 using ::testing::NiceMock;
 using ::testing::ReturnRef;
+using ::testing::StrictMock;
+using ::testing::UnorderedElementsAre;
 
 class MockTransferUpdateCallback : public TransferUpdateCallback {
  public:
@@ -117,6 +123,7 @@ class MockTransferUpdateCallback : public TransferUpdateCallback {
 
   MOCK_METHOD(void, OnTransferUpdate,
               (const ShareTarget& shareTarget,
+               const AttachmentContainer& attachmentContainer,
                const TransferMetadata& transferMetadata),
               (override));
 };
@@ -129,6 +136,8 @@ class MockShareTargetDiscoveredCallback : public ShareTargetDiscoveredCallback {
               (override));
   MOCK_METHOD(void, OnShareTargetLost, (const ShareTarget& share_target),
               (override));
+  MOCK_METHOD(void, OnShareTargetUpdated, (const ShareTarget& share_target),
+              (override));
 };
 
 class MockNearbySharingDecoder : public NearbySharingDecoder {
@@ -136,9 +145,9 @@ class MockNearbySharingDecoder : public NearbySharingDecoder {
   ~MockNearbySharingDecoder() override = default;
 
   MOCK_METHOD(std::unique_ptr<Advertisement>, DecodeAdvertisement,
-              (absl::Span<const uint8_t> data), (override));
+              (absl::Span<const uint8_t> data), (const, override));
   MOCK_METHOD(std::unique_ptr<Frame>, DecodeFrame,
-              (absl::Span<const uint8_t> data), (override));
+              (absl::Span<const uint8_t> data), (const, override));
 };
 
 class MockAccountObserver : public ::nearby::AccountManager::Observer {
@@ -169,15 +178,19 @@ constexpr char kEndpointId[] = "test_endpoint_id";
 constexpr char kTextPayload[] = "Test text payload";
 constexpr char kFourDigitToken[] = "1953";
 constexpr absl::string_view kTestAccountId = "test_account";
+constexpr uint8_t kVendorId = 0;
 
 constexpr int64_t kFreeDiskSpace = 10000;
 
-const std::vector<uint8_t>& GetValidV1EndpointInfo() {
-  static std::vector<uint8_t>* valid_v1_endpoint_info =
-      new std::vector<uint8_t>({0,   0,   0,  0,   0,  0,  0,   0,  0,   0,
-                                0,   0,   0,  0,   0,  0,  0,   10, 100, 101,
-                                118, 105, 99, 101, 78, 97, 109, 101});
-  return *valid_v1_endpoint_info;
+std::vector<uint8_t> GetValidV1EndpointInfoWithVendor(uint8_t vendor_id) {
+  auto advertisement = Advertisement::NewInstance(
+      {0, 0}, std::vector<uint8_t>(14, 0), ShareTargetType::kPhone,
+      "deviceName", vendor_id);
+  return advertisement->ToEndpointInfo();
+}
+
+std::vector<uint8_t> GetValidV1EndpointInfo() {
+  return GetValidV1EndpointInfoWithVendor(kVendorId);
 }
 
 const std::vector<uint8_t>& GetToken() {
@@ -322,26 +335,35 @@ std::unique_ptr<Frame> GetCancelFrame() {
   return std::unique_ptr<Frame>(frame);
 }
 
-std::vector<std::unique_ptr<Attachment>> CreateTextAttachments(
+std::unique_ptr<AttachmentContainer> CreateTextAttachments(
     std::vector<std::string> texts) {
-  std::vector<std::unique_ptr<Attachment>> attachments;
+  auto attachment_container = std::make_unique<AttachmentContainer>();
   for (auto& text : texts) {
-    attachments.push_back(std::make_unique<TextAttachment>(
-        service::proto::TextMetadata::TEXT, std::move(text),
-        /*text_title=*/std::nullopt,
-        /*mime_type=*/std::nullopt));
+    attachment_container->AddTextAttachment(
+        TextAttachment(service::proto::TextMetadata::TEXT, std::move(text),
+                       /*text_title=*/std::nullopt,
+                       /*mime_type=*/std::nullopt));
   }
-  return attachments;
+  return attachment_container;
 }
 
-std::vector<std::unique_ptr<Attachment>> CreateFileAttachments(
+std::unique_ptr<AttachmentContainer> CreateFileAttachments(
     std::vector<std::filesystem::path> file_paths) {
-  std::vector<std::unique_ptr<Attachment>> attachments;
+  auto attachment_container = std::make_unique<AttachmentContainer>();
   for (auto& file_path : file_paths) {
-    attachments.push_back(
-        std::make_unique<FileAttachment>(std::move(file_path)));
+    attachment_container->AddFileAttachment(
+        FileAttachment(std::move(file_path)));
   }
-  return attachments;
+  return attachment_container;
+}
+
+std::unique_ptr<AttachmentContainer> CreateWifiCredentialAttachments(
+    std::string ssid, std::string password) {
+  auto attachment_container = std::make_unique<AttachmentContainer>();
+  attachment_container->AddWifiCredentialsAttachment(WifiCredentialsAttachment(
+      std::move(ssid), service::proto::WifiCredentialsMetadata::WPA_PSK,
+      std::move(password)));
+  return attachment_container;
 }
 
 class NearbySharingServiceImplTest : public testing::Test {
@@ -356,48 +378,42 @@ class NearbySharingServiceImplTest : public testing::Test {
         .WillByDefault(ReturnRef(preference_manager_));
     ON_CALL(mock_sharing_platform_, GetAccountManager)
         .WillByDefault(ReturnRef(fake_account_manager_));
+    auto mock_app_info = std::make_unique<StrictMock<MockAppInfo>>();
+    mock_app_info_ = mock_app_info.get();
+    EXPECT_CALL(mock_sharing_platform_, CreateAppInfo())
+        .WillOnce(Return(std::move(mock_app_info)));
     NearbyShareLocalDeviceDataManagerImpl::Factory::SetFactoryForTesting(
         &local_device_data_manager_factory_);
     NearbyShareContactManagerImpl::Factory::SetFactoryForTesting(
         &contact_manager_factory_);
     NearbyShareCertificateManagerImpl::Factory::SetFactoryForTesting(
         &certificate_manager_factory_);
-    AccountManagerImpl::Factory::SetFactoryForTesting([]() {
-      return std::make_unique<FakeAccountManager>();
-    });
+    AccountManagerImpl::Factory::SetFactoryForTesting(
+        []() { return std::make_unique<FakeAccountManager>(); });
     nearby_fast_initiation_factory_ =
         std::make_unique<FakeNearbyFastInitiation::Factory>();
     NearbyFastInitiationImpl::Factory::SetFactoryForTesting(
         nearby_fast_initiation_factory_.get());
-
-    NearbyFlags::GetInstance().OverrideBoolFlagValue(
-        config_package_nearby::nearby_sharing_feature::
-            kEnableBackgroundScanning,
-        true);
-    NearbyFlags::GetInstance().OverrideBoolFlagValue(
-        config_package_nearby::nearby_sharing_feature::kEnableSelfShare, true);
     NearbyFlags::GetInstance().OverrideBoolFlagValue(
         config_package_nearby::nearby_sharing_feature::kEnableMediumWifiLan,
         true);
 
     prefs::RegisterNearbySharingPrefs(preference_manager_);
+    auto fake_task_runner =
+        std::make_unique<FakeTaskRunner>(fake_context_.fake_clock(), 1);
+    sharing_service_task_runner_ = fake_task_runner.get();
+    connection_ =
+        std::make_unique<FakeNearbyConnection>(fake_task_runner.get());
     SetBluetoothIsPresent(true);
     SetBluetoothIsPowered(true);
     SetScreenLocked(false);
     SetConnectionType(ConnectionType::kWifi);
 
-    service_ = CreateService();
+    service_ = CreateService(std::move(fake_task_runner));
   }
 
   void TearDown() override {
     if (service_) Shutdown();
-
-    NearbyFlags::GetInstance().OverrideBoolFlagValue(
-        config_package_nearby::nearby_sharing_feature::
-            kEnableBackgroundScanning,
-        true);
-    NearbyFlags::GetInstance().OverrideBoolFlagValue(
-        config_package_nearby::nearby_sharing_feature::kEnableSelfShare, true);
     NearbyFlags::GetInstance().OverrideBoolFlagValue(
         config_package_nearby::nearby_sharing_feature::kEnableMediumWifiLan,
         true);
@@ -416,27 +432,17 @@ class NearbySharingServiceImplTest : public testing::Test {
     connectivity_manager->SetConnectionType(type);
   }
 
-  std::unique_ptr<NearbySharingServiceImpl> CreateService() {
-    preference_manager_.SetBoolean(prefs::kNearbySharingEnabledName, true);
-
+  std::unique_ptr<NearbySharingServiceImpl> CreateService(
+      std::unique_ptr<FakeTaskRunner> task_runner) {
     fake_nearby_connections_manager_ = new FakeNearbyConnectionsManager();
-    auto service = std::make_unique<NearbySharingServiceImpl>(
-        &fake_context_, mock_sharing_platform_, &fake_decoder_,
+    return std::make_unique<NearbySharingServiceImpl>(
+        /*vendor_id=*/0, std::move(task_runner), &fake_context_,
+        mock_sharing_platform_, &fake_decoder_,
         absl::WrapUnique(fake_nearby_connections_manager_));
-
-    return service;
   }
 
   void SetVisibility(DeviceVisibility visibility) {
     service_->GetSettings()->SetVisibility(visibility);
-    FlushTesting();
-  }
-
-  void SetIsEnabled(bool is_enabled) {
-    if (is_enabled) {
-      service_->GetSettings()->SetIsOnboardingComplete(is_enabled, []() {});
-    }
-    service_->GetSettings()->SetEnabled(is_enabled);
     FlushTesting();
   }
 
@@ -460,6 +466,28 @@ class NearbySharingServiceImplTest : public testing::Test {
     FlushTesting();
   }
 
+  void SetWifiIsPresent(bool present) {
+    FakeWifiAdapter& wifi_adapter =
+        down_cast<FakeWifiAdapter&>(fake_context_.GetWifiAdapter());
+    wifi_adapter.ReceivedAdapterPresentChangedFromOs(present);
+    FlushTesting();
+  }
+
+  void SetWifiIsPowered(bool powered) {
+    FakeWifiAdapter& wifi_adapter =
+        down_cast<FakeWifiAdapter&>(fake_context_.GetWifiAdapter());
+    wifi_adapter.ReceivedAdapterPoweredChangedFromOs(powered);
+    FlushTesting();
+  }
+
+  void SetLanIsConnected(bool connected) {
+    FakeConnectivityManager* connectivity_manager =
+        down_cast<FakeConnectivityManager*>(
+            fake_context_.GetConnectivityManager());
+    connectivity_manager->SetLanConnected(connected);
+    FlushTesting();
+  }
+
   void FastForward(absl::Duration duration) {
     fake_context_.fake_clock()->FastForward(duration);
     FlushTesting();
@@ -470,20 +498,16 @@ class NearbySharingServiceImplTest : public testing::Test {
     FlushTesting();
   }
 
-  void DisableSelfshareFeature() {
-    NearbyFlags::GetInstance().OverrideBoolFlagValue(
-        config_package_nearby::nearby_sharing_feature::kEnableSelfShare, false);
-  }
-
   NearbySharingService::StatusCodes RegisterSendSurface(
       TransferUpdateCallback* transfer_callback,
-      ShareTargetDiscoveredCallback* discovery_callback,
-      SendSurfaceState state) {
+      ShareTargetDiscoveredCallback* discovery_callback, SendSurfaceState state,
+      Advertisement::BlockedVendorId vendor_id =
+          static_cast<Advertisement::BlockedVendorId>(kVendorId)) {
     NearbySharingService::StatusCodes result =
         NearbySharingService::StatusCodes::kError;
     absl::Notification notification;
     service_->RegisterSendSurface(
-        transfer_callback, discovery_callback, state,
+        transfer_callback, discovery_callback, state, vendor_id,
         [&](NearbySharingService::StatusCodes status_codes) {
           result = status_codes;
           notification.Notify();
@@ -494,14 +518,12 @@ class NearbySharingServiceImplTest : public testing::Test {
   }
 
   NearbySharingService::StatusCodes UnregisterSendSurface(
-      TransferUpdateCallback* transfer_callback,
-      ShareTargetDiscoveredCallback* discovery_callback) {
+      TransferUpdateCallback* transfer_callback) {
     NearbySharingService::StatusCodes result =
         NearbySharingService::StatusCodes::kError;
     absl::Notification notification;
     service_->UnregisterSendSurface(
-        transfer_callback, discovery_callback,
-        [&](NearbySharingService::StatusCodes status_codes) {
+        transfer_callback, [&](NearbySharingService::StatusCodes status_codes) {
           result = status_codes;
           notification.Notify();
         });
@@ -512,12 +534,14 @@ class NearbySharingServiceImplTest : public testing::Test {
 
   NearbySharingService::StatusCodes RegisterReceiveSurface(
       TransferUpdateCallback* transfer_callback,
-      NearbySharingService::ReceiveSurfaceState state) {
+      NearbySharingService::ReceiveSurfaceState state,
+      uint8_t vendor_id = kVendorId) {
     NearbySharingService::StatusCodes result =
         NearbySharingService::StatusCodes::kError;
     absl::Notification notification;
     service_->RegisterReceiveSurface(
         transfer_callback, state,
+        static_cast<Advertisement::BlockedVendorId>(vendor_id),
         [&](NearbySharingService::StatusCodes status_codes) {
           result = status_codes;
           notification.Notify();
@@ -543,13 +567,13 @@ class NearbySharingServiceImplTest : public testing::Test {
   }
 
   NearbySharingService::StatusCodes SendAttachments(
-      const ShareTarget& share_target,
-      std::vector<std::unique_ptr<Attachment>> attachments) {
+      int64_t share_target_id,
+      std::unique_ptr<AttachmentContainer> attachment_container) {
     NearbySharingService::StatusCodes result =
         NearbySharingService::StatusCodes::kError;
     absl::Notification notification;
     service_->SendAttachments(
-        share_target, std::move(attachments),
+        share_target_id, std::move(attachment_container),
         [&](NearbySharingService::StatusCodes status_codes) {
           result = status_codes;
           notification.Notify();
@@ -653,7 +677,7 @@ class NearbySharingServiceImplTest : public testing::Test {
           return std::unique_ptr<Frame>(frame);
         }));
 
-    connection_.AppendReadableData(encryption_bytes);
+    connection_->AppendReadableData(encryption_bytes);
     FlushTesting();
 
     std::string encryption_result = "test_encryption_result";
@@ -675,7 +699,7 @@ class NearbySharingServiceImplTest : public testing::Test {
           return std::unique_ptr<Frame>(frame);
         }));
 
-    connection_.AppendReadableData(result_bytes);
+    connection_->AppendReadableData(result_bytes);
     FlushTesting();
   }
 
@@ -685,9 +709,11 @@ class NearbySharingServiceImplTest : public testing::Test {
                                  size_t expected_number_of_calls) {
     EXPECT_CALL(fake_decoder_, DecodeAdvertisement(testing::Eq(endpoint_info)))
         .Times(expected_number_of_calls)
-        .WillRepeatedly(testing::Invoke([=](absl::Span<const uint8_t> data) {
+        .WillRepeatedly(testing::Invoke([this, return_empty_advertisement,
+                                         return_empty_device_name](
+                                            absl::Span<const uint8_t> data) {
           if (return_empty_advertisement) {
-            connection_.AppendReadableData({});
+            connection_->AppendReadableData({});
             FlushTesting();
             return std::unique_ptr<Advertisement>(nullptr);
           }
@@ -698,7 +724,7 @@ class NearbySharingServiceImplTest : public testing::Test {
           return Advertisement::NewInstance(
               GetNearbyShareTestEncryptedMetadataKey().salt(),
               GetNearbyShareTestEncryptedMetadataKey().encrypted_key(),
-              kDeviceType, device_name);
+              kDeviceType, device_name, kVendorId);
         }));
   }
 
@@ -715,7 +741,7 @@ class NearbySharingServiceImplTest : public testing::Test {
           return GetValidIntroductionFrame();
         }));
 
-    connection_.AppendReadableData(bytes);
+    connection_->AppendReadableData(bytes);
     FlushTesting();
   }
 
@@ -726,7 +752,7 @@ class NearbySharingServiceImplTest : public testing::Test {
         .WillOnce(testing::Invoke([=](absl::Span<const uint8_t> data) {
           return GetConnectionResponseFrame(status);
         }));
-    connection_.AppendReadableData(bytes);
+    connection_->AppendReadableData(bytes);
     FlushTesting();
   }
 
@@ -736,11 +762,11 @@ class NearbySharingServiceImplTest : public testing::Test {
     EXPECT_CALL(fake_decoder_, DecodeFrame(testing::Eq(bytes)))
         .WillOnce(testing::Invoke(
             [=](absl::Span<const uint8_t> data) { return GetCancelFrame(); }));
-    connection_.AppendReadableData(bytes);
+    connection_->AppendReadableData(bytes);
     FlushTesting();
   }
 
-  ShareTarget SetUpIncomingConnection(
+  int64_t SetUpIncomingConnection(
       NiceMock<MockTransferUpdateCallback>& callback, bool is_foreground = true,
       bool for_self_share = false) {
     fake_nearby_connections_manager_->SetRawAuthenticationToken(kEndpointId,
@@ -752,20 +778,18 @@ class NearbySharingServiceImplTest : public testing::Test {
 
     SetUpIntroductionFrameDecoder(/*return_empty_introduction_frame=*/false);
 
-    ShareTarget share_target;
+    int64_t share_target_id;
     SetConnectionType(ConnectionType::kWifi);
     absl::Notification notification;
 
-    EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
+    EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
         .WillOnce(testing::Invoke([&](const ShareTarget& incoming_share_target,
+                                      const AttachmentContainer& container,
                                       const TransferMetadata& metadata) {
           EXPECT_FALSE(metadata.is_final_status());
           TransferMetadata::Status expected_status;
 
-          if (for_self_share &&
-              NearbyFlags::GetInstance().GetBoolFlag(
-                  config_package_nearby::nearby_sharing_feature::
-                      kEnableSelfShare)) {
+          if (for_self_share) {
             expected_status =
                 TransferMetadata::Status::kAwaitingRemoteAcceptance;
           } else {
@@ -774,7 +798,7 @@ class NearbySharingServiceImplTest : public testing::Test {
           }
 
           EXPECT_EQ(metadata.status(), expected_status);
-          share_target = incoming_share_target;
+          share_target_id = incoming_share_target.id;
           notification.Notify();
         }));
 
@@ -785,18 +809,19 @@ class NearbySharingServiceImplTest : public testing::Test {
     } else {
       SetUpBackgroundReceiveSurface(callback);
     }
+    EXPECT_CALL(*mock_app_info_, SetActiveFlag());
     service_->OnIncomingConnection(kEndpointId, GetValidV1EndpointInfo(),
-                                   &connection_);
+                                   connection_.get());
     ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
                                              /*success=*/true, for_self_share);
     EXPECT_TRUE(
         fake_nearby_connections_manager_->DidUpgradeBandwidth(kEndpointId));
 
     EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
-    return share_target;
+    return share_target_id;
   }
 
-  ShareTarget SetUpOutgoingShareTarget(
+  int64_t SetUpOutgoingShareTarget(
       MockTransferUpdateCallback& transfer_callback,
       MockShareTargetDiscoveredCallback& discovery_callback) {
     SetUpKeyVerification(
@@ -804,12 +829,12 @@ class NearbySharingServiceImplTest : public testing::Test {
 
     fake_nearby_connections_manager_->SetRawAuthenticationToken(kEndpointId,
                                                                 GetToken());
-    fake_nearby_connections_manager_->set_nearby_connection(&connection_);
+    fake_nearby_connections_manager_->set_nearby_connection(connection_.get());
 
     return DiscoverShareTarget(transfer_callback, discovery_callback);
   }
 
-  ShareTarget DiscoverShareTarget(
+  int64_t DiscoverShareTarget(
       MockTransferUpdateCallback& transfer_callback,
       MockShareTargetDiscoveredCallback& discovery_callback) {
     SetConnectionType(ConnectionType::kWifi);
@@ -826,11 +851,11 @@ class NearbySharingServiceImplTest : public testing::Test {
               NearbySharingService::StatusCodes::kOk);
     EXPECT_TRUE(fake_nearby_connections_manager_->IsDiscovering());
 
-    ShareTarget discovered_target;
+    int64_t discovered_target_id;
     // Discover a new endpoint, with fields set up a valid certificate.
     EXPECT_CALL(discovery_callback, OnShareTargetDiscovered)
-        .WillOnce([&discovered_target](ShareTarget share_target) {
-          discovered_target = share_target;
+        .WillOnce([&discovered_target_id](ShareTarget share_target) {
+          discovered_target_id = share_target.id;
         });
 
     auto endpoint_info = std::make_unique<DiscoveredEndpointInfo>(
@@ -840,13 +865,13 @@ class NearbySharingServiceImplTest : public testing::Test {
     FlushTesting();
     ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
                                              /*success=*/true);
-    return discovered_target;
+    return discovered_target_id;
   }
 
   Frame GetWrittenFrame() {
     EXPECT_TRUE(
-        FakeTaskRunner::WaitForRunningTasksWithTimeout(absl::Seconds(2)));
-    std::vector<uint8_t> data = connection_.GetWrittenData();
+        sharing_service_task_runner_->SyncWithTimeout(absl::Seconds(2)));
+    std::vector<uint8_t> data = connection_->GetWrittenData();
     Frame frame;
     frame.ParseFromArray(data.data(), data.size());
     return frame;
@@ -937,26 +962,25 @@ class NearbySharingServiceImplTest : public testing::Test {
   // Optionally, |new_share_target| is updated with the ShareTargets sent to
   // OnTransferUpdate() calls.
   void ExpectTransferUpdates(
-      MockTransferUpdateCallback& transfer_callback, const ShareTarget& target,
+      MockTransferUpdateCallback& transfer_callback, int64_t share_target_id,
       const std::vector<TransferMetadata::Status>& updates,
-      std::function<void()> callback, ShareTarget* new_share_target = nullptr) {
+      std::function<void()> callback) {
     expect_transfer_updates_count_ = 0;
     expect_transfer_updates_callback_ = std::move(callback);
     auto& expectation =
         EXPECT_CALL(transfer_callback, OnTransferUpdate).Times(updates.size());
 
     for (TransferMetadata::Status status : updates) {
-      expectation.WillOnce(
-          testing::Invoke([=](const ShareTarget& share_target,
-                              const TransferMetadata& metadata) {
-            EXPECT_EQ(share_target.id, target.id);
+      expectation.WillOnce(testing::Invoke(
+          [this, share_target_id, status, update_size = updates.size()](
+              const ShareTarget& share_target,
+              const AttachmentContainer& container,
+              const TransferMetadata& metadata) {
+            EXPECT_EQ(share_target.id, share_target_id);
             EXPECT_EQ(metadata.status(), status);
-            if (new_share_target) {
-              *new_share_target = share_target;
-            }
 
             ++expect_transfer_updates_count_;
-            if (expect_transfer_updates_count_ == updates.size()) {
+            if (expect_transfer_updates_count_ == update_size) {
               expect_transfer_updates_callback_();
             }
           }));
@@ -964,21 +988,18 @@ class NearbySharingServiceImplTest : public testing::Test {
   }
 
   // Returns the modified ShareTarget received from a TransferUpdate.
-  std::optional<ShareTarget> SetUpOutgoingConnectionUntilAccept(
-      MockTransferUpdateCallback& transfer_callback,
-      const ShareTarget& target) {
-    ShareTarget new_share_target;
-    ExpectTransferUpdates(
-        transfer_callback, target,
-        {TransferMetadata::Status::kConnecting,
-         TransferMetadata::Status::kAwaitingLocalConfirmation,
-         TransferMetadata::Status::kAwaitingRemoteAcceptance},
-        [] {}, &new_share_target);
+  void SetUpOutgoingConnectionUntilAccept(
+      MockTransferUpdateCallback& transfer_callback, int64_t share_target_id) {
+    ExpectTransferUpdates(transfer_callback, share_target_id,
+                          {TransferMetadata::Status::kConnecting,
+                           TransferMetadata::Status::kAwaitingRemoteAcceptance},
+                          [] {});
 
     absl::Notification send_notification;
     NearbySharingServiceImpl::StatusCodes send_result;
+    EXPECT_CALL(*mock_app_info_, SetActiveFlag());
     service_->SendAttachments(
-        target, CreateTextAttachments({kTextPayload}),
+        share_target_id, CreateTextAttachments({kTextPayload}),
         [&](NearbySharingServiceImpl::StatusCodes status_codes) {
           send_result = status_codes;
           send_notification.Notify();
@@ -988,20 +1009,19 @@ class NearbySharingServiceImplTest : public testing::Test {
         send_notification.WaitForNotificationWithTimeout(kTaskWaitTimeout));
     EXPECT_EQ(send_result, NearbySharingServiceImpl::StatusCodes::kOk);
 
+    FlushTesting();
     // Verify data sent to the remote device so far.
     if (!ExpectPairedKeyEncryptionFrame()) {
-      return std::nullopt;
+      return;
     }
 
     if (!ExpectPairedKeyResultFrame()) {
-      return std::nullopt;
+      return;
     }
 
     if (!ExpectIntroductionFrame().has_value()) {
-      return std::nullopt;
+      return;
     }
-
-    return new_share_target;
   }
 
   struct PayloadInfo {
@@ -1010,8 +1030,7 @@ class NearbySharingServiceImplTest : public testing::Test {
   };
 
   PayloadInfo AcceptAndSendPayload(
-      MockTransferUpdateCallback& transfer_callback,
-      const ShareTarget& target) {
+      MockTransferUpdateCallback& transfer_callback, int64_t share_target_id) {
     PayloadInfo info = {};
     fake_nearby_connections_manager_->set_send_payload_callback(
         [&](std::unique_ptr<Payload> payload,
@@ -1026,7 +1045,7 @@ class NearbySharingServiceImplTest : public testing::Test {
 
     // We're now waiting for the remote device to respond with the accept
     // result.
-    ExpectTransferUpdates(transfer_callback, target,
+    ExpectTransferUpdates(transfer_callback, share_target_id,
                           {TransferMetadata::Status::kInProgress}, [] {});
 
     // Kick off send process by accepting the transfer from the remote device.
@@ -1035,20 +1054,23 @@ class NearbySharingServiceImplTest : public testing::Test {
   }
 
   void FinishOutgoingTransfer(MockTransferUpdateCallback& transfer_callback,
-                              const ShareTarget& target,
+                              int64_t share_target_id,
                               const PayloadInfo& info) {
     // Simulate a successful transfer via Nearby Connections.
-    ExpectTransferUpdates(transfer_callback, target,
+    ExpectTransferUpdates(transfer_callback, share_target_id,
                           {TransferMetadata::Status::kComplete}, [] {});
 
-    auto payload_transfer_update = std::make_unique<PayloadTransferUpdate>(
-        info.payload_id, PayloadStatus::kSuccess,
-        /*total_bytes=*/strlen(kTextPayload),
-        /*bytes_transferred=*/strlen(kTextPayload));
-    if (auto listener = info.listener.lock()) {
-      listener->OnStatusUpdate(std::move(payload_transfer_update),
-                               /*upgraded_medium=*/std::nullopt);
-    }
+    sharing_service_task_runner_->PostTask([info = info]() {
+      auto payload_transfer_update = std::make_unique<PayloadTransferUpdate>(
+          info.payload_id, PayloadStatus::kSuccess,
+          /*total_bytes=*/strlen(kTextPayload),
+          /*bytes_transferred=*/strlen(kTextPayload));
+      if (auto listener = info.listener.lock()) {
+        listener->OnStatusUpdate(std::move(payload_transfer_update),
+                                 /*upgraded_medium=*/std::nullopt);
+      }
+    });
+    EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kWaitTimeout));
   }
 
   std::unique_ptr<Advertisement> GetCurrentAdvertisement() {
@@ -1061,9 +1083,15 @@ class NearbySharingServiceImplTest : public testing::Test {
   }
 
   void FindEndpoint(absl::string_view endpoint_id) {
+    FindEndpointWithVendorId(endpoint_id, kVendorId);
+  }
+
+  void FindEndpointWithVendorId(absl::string_view endpoint_id,
+                                uint8_t vendor_id) {
     fake_nearby_connections_manager_->OnEndpointFound(
-        endpoint_id, std::make_unique<DiscoveredEndpointInfo>(
-                         GetValidV1EndpointInfo(), kServiceId));
+        endpoint_id,
+        std::make_unique<DiscoveredEndpointInfo>(
+            GetValidV1EndpointInfoWithVendor(vendor_id), kServiceId));
     FlushTesting();
   }
 
@@ -1075,34 +1103,32 @@ class NearbySharingServiceImplTest : public testing::Test {
   // This method sets up an incoming connection and performs the steps
   // required to simulate a successful incoming transfer.
   void SuccessfullyReceiveTransfer() {
-    for (int64_t payload_id : GetValidIntroductionFramePayloadIds()) {
-      fake_nearby_connections_manager_->SetPayloadPathStatus(payload_id,
-                                                             Status::kSuccess);
-    }
-
     NiceMock<MockTransferUpdateCallback> callback;
-    ShareTarget share_target = SetUpIncomingConnection(callback);
+    int64_t share_target_id = SetUpIncomingConnection(callback);
 
     absl::Notification notification;
-    EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-        .WillOnce(testing::Invoke(
-            [](const ShareTarget& share_target, TransferMetadata metadata) {
-              EXPECT_FALSE(metadata.is_final_status());
-              EXPECT_EQ(metadata.status(),
-                        TransferMetadata::Status::kAwaitingRemoteAcceptance);
-            }));
+    EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+        .WillOnce(testing::Invoke([](const ShareTarget& share_target,
+                                     const AttachmentContainer& container,
+                                     TransferMetadata metadata) {
+          EXPECT_FALSE(metadata.is_final_status());
+          EXPECT_EQ(metadata.status(),
+                    TransferMetadata::Status::kAwaitingRemoteAcceptance);
+        }));
 
-    service_->Accept(
-        share_target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
-          EXPECT_EQ(status_code, NearbySharingServiceImpl::StatusCodes::kOk);
-          notification.Notify();
-        });
+    service_->Accept(share_target_id,
+                     [&](NearbySharingServiceImpl::StatusCodes status_code) {
+                       EXPECT_EQ(status_code,
+                                 NearbySharingServiceImpl::StatusCodes::kOk);
+                       notification.Notify();
+                     });
 
     EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
     // Fail to accept again.
     service_->Accept(
-        share_target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
+        share_target_id,
+        [&](NearbySharingServiceImpl::StatusCodes status_code) {
           EXPECT_EQ(status_code,
                     NearbySharingServiceImpl::StatusCodes::kOutOfOrderApiCall);
         });
@@ -1123,23 +1149,27 @@ class NearbySharingServiceImplTest : public testing::Test {
 
       absl::Notification progress_notification;
 
-      EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
+      EXPECT_CALL(callback,
+                  OnTransferUpdate(testing::_, testing::_, testing::_))
           .WillOnce(testing::Invoke([&](const ShareTarget& share_target,
+                                        const AttachmentContainer& container,
                                         TransferMetadata metadata) {
             EXPECT_FALSE(metadata.is_final_status());
             EXPECT_EQ(metadata.status(), TransferMetadata::Status::kInProgress);
             progress_notification.Notify();
           }));
 
-      PayloadTransferUpdate payload =
-          PayloadTransferUpdate(id, PayloadStatus::kSuccess,
-                                /*total_bytes=*/kPayloadSize,
-                                /*bytes_transferred=*/kPayloadSize);
-      if (auto locked_listener = listener.lock()) {
-        locked_listener->OnStatusUpdate(
-            std::make_unique<PayloadTransferUpdate>(payload),
-            /*upgraded_medium=*/std::nullopt);
-      }
+      sharing_service_task_runner_->PostTask([id, listener = listener]() {
+        PayloadTransferUpdate payload =
+            PayloadTransferUpdate(id, PayloadStatus::kSuccess,
+                                  /*total_bytes=*/kPayloadSize,
+                                  /*bytes_transferred=*/kPayloadSize);
+        if (auto locked_listener = listener.lock()) {
+          locked_listener->OnStatusUpdate(
+              std::make_unique<PayloadTransferUpdate>(payload),
+              /*upgraded_medium=*/std::nullopt);
+        }
+      });
 
       EXPECT_TRUE(
           progress_notification.WaitForNotificationWithTimeout(kWaitTimeout));
@@ -1148,40 +1178,43 @@ class NearbySharingServiceImplTest : public testing::Test {
 
     std::filesystem::path file_path;
     absl::Notification success_notification;
-    EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-        .WillOnce(testing::Invoke(
-            [&](const ShareTarget& share_target, TransferMetadata metadata) {
-              EXPECT_TRUE(metadata.is_final_status());
-              EXPECT_EQ(metadata.status(), TransferMetadata::Status::kComplete);
+    EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+        .WillOnce(testing::Invoke([&](const ShareTarget& share_target,
+                                      const AttachmentContainer& container,
+                                      TransferMetadata metadata) {
+          EXPECT_TRUE(metadata.is_final_status());
+          EXPECT_EQ(metadata.status(), TransferMetadata::Status::kComplete);
 
-              ASSERT_TRUE(share_target.has_attachments());
-              EXPECT_EQ(1u, share_target.file_attachments.size());
-              for (const FileAttachment& file : share_target.file_attachments) {
-                EXPECT_TRUE(file.file_path());
-                file_path = *file.file_path();
-              }
+          ASSERT_TRUE(container.HasAttachments());
+          EXPECT_EQ(1u, container.GetFileAttachments().size());
+          for (const FileAttachment& file : container.GetFileAttachments()) {
+            EXPECT_TRUE(file.file_path());
+            file_path = *file.file_path();
+          }
 
-              EXPECT_EQ(3u, share_target.text_attachments.size());
-              for (const TextAttachment& text : share_target.text_attachments) {
-                EXPECT_EQ(text.text_body(), kTextPayload);
-              }
+          EXPECT_EQ(3u, container.GetTextAttachments().size());
+          for (const TextAttachment& text : container.GetTextAttachments()) {
+            EXPECT_EQ(text.text_body(), kTextPayload);
+          }
 
-              success_notification.Notify();
-            }));
+          success_notification.Notify();
+        }));
 
-    std::weak_ptr<NearbyConnectionsManager::PayloadStatusListener> listener =
-        fake_nearby_connections_manager_->GetRegisteredPayloadStatusListener(
-            kFilePayloadId);
+    sharing_service_task_runner_->PostTask([this]() {
+      std::weak_ptr<NearbyConnectionsManager::PayloadStatusListener> listener =
+          fake_nearby_connections_manager_->GetRegisteredPayloadStatusListener(
+              kFilePayloadId);
 
-    PayloadTransferUpdate payload =
-        PayloadTransferUpdate(kFilePayloadId, PayloadStatus::kSuccess,
-                              /*total_bytes=*/kPayloadSize,
-                              /*bytes_transferred=*/kPayloadSize);
-    if (auto locked_listener = listener.lock()) {
-      locked_listener->OnStatusUpdate(
-          std::make_unique<PayloadTransferUpdate>(payload),
-          /*upgraded_medium=*/std::nullopt);
-    }
+      PayloadTransferUpdate payload =
+          PayloadTransferUpdate(kFilePayloadId, PayloadStatus::kSuccess,
+                                /*total_bytes=*/kPayloadSize,
+                                /*bytes_transferred=*/kPayloadSize);
+      if (auto locked_listener = listener.lock()) {
+        locked_listener->OnStatusUpdate(
+            std::make_unique<PayloadTransferUpdate>(payload),
+            /*upgraded_medium=*/std::nullopt);
+      }
+    });
 
     EXPECT_TRUE(
         success_notification.WaitForNotificationWithTimeout(kWaitTimeout));
@@ -1199,7 +1232,8 @@ class NearbySharingServiceImplTest : public testing::Test {
 
   void FlushTesting() {
     absl::SleepFor(absl::Milliseconds(200));
-    FakeTaskRunner::WaitForRunningTasksWithTimeout(absl::Milliseconds(200));
+    EXPECT_TRUE(
+        sharing_service_task_runner_->SyncWithTimeout(absl::Milliseconds(200)));
   }
 
   void SetDiskSpace(size_t size) {
@@ -1207,9 +1241,7 @@ class NearbySharingServiceImplTest : public testing::Test {
         std::filesystem::temp_directory_path(), size);
   }
 
-  void ResetDiskSpace() {
-    fake_device_info_.ResetDiskSpace();
-  }
+  void ResetDiskSpace() { fake_device_info_.ResetDiskSpace(); }
 
  protected:
   FakeNearbyShareLocalDeviceDataManager* local_device_data_manager() {
@@ -1222,9 +1254,7 @@ class NearbySharingServiceImplTest : public testing::Test {
     return certificate_manager_factory_.instances().back();
   }
 
-  FakeAccountManager& account_manager() {
-    return fake_account_manager_;
-  }
+  FakeAccountManager& account_manager() { return fake_account_manager_; }
 
   std::filesystem::path CreateTestFile(absl::string_view name,
                                        const std::vector<uint8_t>& content) {
@@ -1249,11 +1279,13 @@ class NearbySharingServiceImplTest : public testing::Test {
   FakeNearbyShareCertificateManager::Factory certificate_manager_factory_;
   std::unique_ptr<FakeNearbyFastInitiation::Factory>
       nearby_fast_initiation_factory_;
-  FakeNearbyConnection connection_;
+  std::unique_ptr<FakeNearbyConnection> connection_;
   MockNearbySharingDecoder fake_decoder_;
+  StrictMock<MockAppInfo>* mock_app_info_ = nullptr;
   std::unique_ptr<NearbySharingServiceImpl> service_;
   int expect_transfer_updates_count_ = 0;
   std::function<void()> expect_transfer_updates_callback_;
+  FakeTaskRunner* sharing_service_task_runner_ = nullptr;
 };
 
 struct ValidSendSurfaceTestData {
@@ -1333,6 +1365,14 @@ class TestObserver : public NearbySharingService::Observer {
     scanning_stopped_called_ = true;
   }
 
+  void OnBluetoothStatusChanged(AdapterState state) override {
+    bluetooth_state_ = state;
+  }
+
+  void OnWifiStatusChanged(AdapterState state) override { wifi_state_ = state; }
+
+  void OnLanStatusChanged(AdapterState state) override { lan_state_ = state; }
+
   void OnShutdown() override {
     shutdown_called_ = true;
     service_->RemoveObserver(this);
@@ -1345,14 +1385,10 @@ class TestObserver : public NearbySharingService::Observer {
   bool devices_not_detected_called_ = false;
   bool scanning_stopped_called_ = false;
   NearbySharingService* service_;
+  AdapterState bluetooth_state_ = AdapterState::INVALID;
+  AdapterState wifi_state_ = AdapterState::INVALID;
+  AdapterState lan_state_ = AdapterState::INVALID;
 };
-
-TEST_F(NearbySharingServiceImplTest, DisableNearbyShutdownConnections) {
-  SetConnectionType(ConnectionType::kWifi);
-  preference_manager().SetBoolean(prefs::kNearbySharingEnabledName, false);
-  FlushTesting();
-  EXPECT_TRUE(fake_nearby_connections_manager_->is_shutdown());
-}
 
 TEST_F(NearbySharingServiceImplTest, StartFastInitiationAdvertising) {
   FakeNearbyFastInitiation* fast_initiation =
@@ -1369,7 +1405,7 @@ TEST_F(NearbySharingServiceImplTest, StartFastInitiationAdvertising) {
   // not called again.
   EXPECT_EQ(RegisterSendSurface(&transfer_callback, &discovery_callback,
                                 SendSurfaceState::kForeground),
-            NearbySharingService::StatusCodes::kError);
+            NearbySharingService::StatusCodes::kInvalidArgument);
   EXPECT_EQ(fast_initiation->StartAdvertisingCount(), 1);
 }
 
@@ -1429,7 +1465,7 @@ TEST_F(NearbySharingServiceImplTest, StopFastInitiationAdvertising) {
                                 SendSurfaceState::kForeground),
             NearbySharingService::StatusCodes::kOk);
   EXPECT_EQ(fast_initiation->StartAdvertisingCount(), 1);
-  EXPECT_EQ(UnregisterSendSurface(&transfer_callback, &discovery_callback),
+  EXPECT_EQ(UnregisterSendSurface(&transfer_callback),
             NearbySharingService::StatusCodes::kOk);
   EXPECT_EQ(fast_initiation->StartAdvertisingCount(),
             fast_initiation->StopAdvertisingCount());
@@ -1480,45 +1516,7 @@ TEST_F(NearbySharingServiceImplTest, FastInitiationScanning_StartAndStop) {
 
   // Trigger a call to StartFastInitiationScanning().
   SetBluetoothIsPowered(true);
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
-  EXPECT_EQ(fast_initiation->StartScanningCount(), 2);
-  EXPECT_EQ(fast_initiation->StopScanningCount(), 1);
-}
-
-TEST_F(NearbySharingServiceImplTest,
-       FastInitiationScanning_DisallowedBySettings) {
-  FakeNearbyFastInitiation* fast_initiation =
-      nearby_fast_initiation_factory_->GetNearbyFastInitiation();
-
-  EXPECT_EQ(fast_initiation->StartScanningCount(), 1);
-  EXPECT_EQ(fast_initiation->StopScanningCount(), 0);
-
-  SetIsEnabled(false);
-  SetConnectionType(ConnectionType::kBluetooth);
-
-  EXPECT_EQ(fast_initiation->StartScanningCount(), 1);
-  EXPECT_EQ(fast_initiation->StopScanningCount(), 1);
-}
-
-TEST_F(NearbySharingServiceImplTest,
-       FastInitiationScanning_OnFastInitiationNotificationStateChanged) {
-  FakeNearbyFastInitiation* fast_initiation =
-      nearby_fast_initiation_factory_->GetNearbyFastInitiation();
-
-  // Fast init notifications are enabled by default so a scanner is created on
-  // initialization of the service.
-  EXPECT_EQ(fast_initiation->StartScanningCount(), 1);
-  EXPECT_EQ(fast_initiation->StopScanningCount(), 0);
-
-  // The existing scanner is destroyed when fast init notifications are turned
-  // off.
-  SetFastInitiationNotificationState(
-      FastInitiationNotificationState::DISABLED_BY_USER_FAST_INIT);
-  EXPECT_EQ(fast_initiation->StartScanningCount(), 1);
-  EXPECT_EQ(fast_initiation->StopScanningCount(), 1);
-
-  SetFastInitiationNotificationState(
-      FastInitiationNotificationState::ENABLED_FAST_INIT);
+  EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout));
   EXPECT_EQ(fast_initiation->StartScanningCount(), 2);
   EXPECT_EQ(fast_initiation->StopScanningCount(), 1);
 }
@@ -1529,6 +1527,7 @@ TEST_F(NearbySharingServiceImplTest, FastInitiationScanning_NotifyObservers) {
   SetConnectionType(ConnectionType::kBluetooth);
 
   TestObserver observer(service_.get());
+
   ASSERT_EQ(fast_initiation->StartScanningCount(), 1);
 
   fast_initiation->FireDevicesDetected();
@@ -1538,29 +1537,7 @@ TEST_F(NearbySharingServiceImplTest, FastInitiationScanning_NotifyObservers) {
 
   // Remove the observer before it goes out of scope.
   service_->RemoveObserver(&observer);
-}
-
-TEST_F(NearbySharingServiceImplTest, FastInitiationScanning_NoHardwareSupport) {
-  FakeNearbyFastInitiation* fast_initiation =
-      nearby_fast_initiation_factory_->GetNearbyFastInitiation();
-  SetConnectionType(ConnectionType::kBluetooth);
-
-  // Hardware support is enabled by default in these tests, so we expect that a
-  // scanner has been created.
-  EXPECT_EQ(fast_initiation->StartScanningCount(), 1);
-  EXPECT_EQ(fast_initiation->StopScanningCount(), 0);
-
-  SetFastInitiationNotificationState(
-      FastInitiationNotificationState::DISABLED_BY_USER_FAST_INIT);
-  EXPECT_EQ(fast_initiation->StartScanningCount(), 1);
-  EXPECT_EQ(fast_initiation->StopScanningCount(), 1);
-  fast_initiation->SetScanOffloadSupported(false);
-  SetFastInitiationNotificationState(
-      FastInitiationNotificationState::ENABLED_FAST_INIT);
-
-  // Make sure we stopped scanning and didn't restart.
-  EXPECT_EQ(fast_initiation->StartScanningCount(), 1);
-  EXPECT_EQ(fast_initiation->StopScanningCount(), 1);
+  FlushTesting();
 }
 
 TEST_F(NearbySharingServiceImplTest,
@@ -1610,15 +1587,15 @@ TEST_F(NearbySharingServiceImplTest,
 
   EXPECT_EQ(RegisterSendSurface(&transfer_callback, &discovery_callback,
                                 SendSurfaceState::kForeground),
-            NearbySharingService::StatusCodes::kError);
+            NearbySharingService::StatusCodes::kInvalidArgument);
   EXPECT_TRUE(fake_nearby_connections_manager_->IsDiscovering());
 }
 
 TEST_F(NearbySharingServiceImplTest,
        RegisterSendSurfaceAlreadyReceivingNotDiscovering) {
   NiceMock<MockTransferUpdateCallback> callback;
-  ShareTarget share_target = SetUpIncomingConnection(callback);
-  EXPECT_FALSE(connection_.IsClosed());
+  SetUpIncomingConnection(callback);
+  EXPECT_FALSE(connection_->IsClosed());
 
   MockTransferUpdateCallback send_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
@@ -1656,7 +1633,7 @@ TEST_F(NearbySharingServiceImplTest,
 
   EXPECT_EQ(RegisterSendSurface(&transfer_callback, &discovery_callback,
                                 SendSurfaceState::kBackground),
-            NearbySharingService::StatusCodes::kError);
+            NearbySharingService::StatusCodes::kInvalidArgument);
   EXPECT_TRUE(fake_nearby_connections_manager_->IsDiscovering());
 }
 
@@ -1683,7 +1660,6 @@ TEST_F(NearbySharingServiceImplTest,
       .WillOnce([&](ShareTarget share_target) {
         EXPECT_FALSE(share_target.is_incoming);
         EXPECT_TRUE(share_target.is_known);
-        EXPECT_FALSE(share_target.has_attachments());
         EXPECT_EQ(share_target.device_name, kDeviceName);
         EXPECT_EQ(share_target.type, kDeviceType);
         EXPECT_TRUE(share_target.device_id);
@@ -1737,7 +1713,6 @@ TEST_F(NearbySharingServiceImplTest, RegisterSendSurfaceEmptyCertificate) {
       .WillOnce([](ShareTarget share_target) {
         EXPECT_FALSE(share_target.is_incoming);
         EXPECT_FALSE(share_target.is_known);
-        EXPECT_FALSE(share_target.has_attachments());
         EXPECT_EQ(share_target.device_name, kDeviceName);
         EXPECT_FALSE(share_target.image_url);
         EXPECT_EQ(share_target.type, kDeviceType);
@@ -1787,35 +1762,6 @@ INSTANTIATE_TEST_SUITE_P(NearbySharingServiceImplTest,
                          NearbySharingServiceImplValidSendTest,
                          testing::ValuesIn(kValidSendSurfaceTestData));
 
-TEST_F(NearbySharingServiceImplTest, DisableFeatureSendSurfaceNotDiscovering) {
-  preference_manager().SetBoolean(prefs::kNearbySharingEnabledName, false);
-  FlushTesting();
-  SetConnectionType(ConnectionType::kWifi);
-  MockTransferUpdateCallback transfer_callback;
-  MockShareTargetDiscoveredCallback discovery_callback;
-  EXPECT_EQ(RegisterSendSurface(&transfer_callback, &discovery_callback,
-                                SendSurfaceState::kForeground),
-            NearbySharingService::StatusCodes::kOk);
-  EXPECT_FALSE(fake_nearby_connections_manager_->IsDiscovering());
-  EXPECT_TRUE(fake_nearby_connections_manager_->is_shutdown());
-}
-
-TEST_F(NearbySharingServiceImplTest,
-       DisableFeatureSendSurfaceStopsDiscovering) {
-  SetConnectionType(ConnectionType::kWifi);
-  MockTransferUpdateCallback transfer_callback;
-  MockShareTargetDiscoveredCallback discovery_callback;
-  EXPECT_EQ(RegisterSendSurface(&transfer_callback, &discovery_callback,
-                                SendSurfaceState::kForeground),
-            NearbySharingService::StatusCodes::kOk);
-  EXPECT_TRUE(fake_nearby_connections_manager_->IsDiscovering());
-
-  preference_manager().SetBoolean(prefs::kNearbySharingEnabledName, false);
-  FlushTesting();
-  EXPECT_FALSE(fake_nearby_connections_manager_->IsDiscovering());
-  EXPECT_TRUE(fake_nearby_connections_manager_->is_shutdown());
-}
-
 TEST_F(NearbySharingServiceImplTest, UnregisterSendSurfaceStopsDiscovering) {
   SetConnectionType(ConnectionType::kWifi);
   MockTransferUpdateCallback transfer_callback;
@@ -1825,7 +1771,7 @@ TEST_F(NearbySharingServiceImplTest, UnregisterSendSurfaceStopsDiscovering) {
             NearbySharingService::StatusCodes::kOk);
   EXPECT_TRUE(fake_nearby_connections_manager_->IsDiscovering());
 
-  EXPECT_EQ(UnregisterSendSurface(&transfer_callback, &discovery_callback),
+  EXPECT_EQ(UnregisterSendSurface(&transfer_callback),
             NearbySharingService::StatusCodes::kOk);
   EXPECT_FALSE(fake_nearby_connections_manager_->IsDiscovering());
   EXPECT_FALSE(fake_nearby_connections_manager_->is_shutdown());
@@ -1843,7 +1789,7 @@ TEST_F(NearbySharingServiceImplTest,
 
   MockTransferUpdateCallback transfer_callback2;
   MockShareTargetDiscoveredCallback discovery_callback2;
-  EXPECT_EQ(UnregisterSendSurface(&transfer_callback2, &discovery_callback2),
+  EXPECT_EQ(UnregisterSendSurface(&transfer_callback2),
             NearbySharingService::StatusCodes::kError);
   EXPECT_TRUE(fake_nearby_connections_manager_->IsDiscovering());
 }
@@ -1853,7 +1799,7 @@ TEST_F(NearbySharingServiceImplTest, UnregisterSendSurfaceNeverRegistered) {
 
   MockTransferUpdateCallback transfer_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
-  EXPECT_EQ(UnregisterSendSurface(&transfer_callback, &discovery_callback),
+  EXPECT_EQ(UnregisterSendSurface(&transfer_callback),
             NearbySharingService::StatusCodes::kError);
   EXPECT_FALSE(fake_nearby_connections_manager_->IsDiscovering());
 }
@@ -1917,8 +1863,7 @@ TEST_F(NearbySharingServiceImplTest,
   ::nearby::AccountManager::Account account;
   account.id = kTestAccountId;
   account_manager().SetAccount(account);
-  preference_manager().SetInteger(prefs::kNearbySharingBackgroundVisibilityName,
-      static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_SELECTED_CONTACTS));
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   MockTransferUpdateCallback callback;
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kBackground);
@@ -1941,6 +1886,7 @@ TEST_F(NearbySharingServiceImplTest,
 TEST_F(NearbySharingServiceImplTest,
        RegisterReceiveSurfaceTwiceSameCallbackKeepAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   MockTransferUpdateCallback callback;
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
@@ -1956,6 +1902,7 @@ TEST_F(NearbySharingServiceImplTest,
 TEST_F(NearbySharingServiceImplTest,
        RegisterReceiveSurfaceTwiceKeepAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   MockTransferUpdateCallback callback;
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
@@ -1972,7 +1919,9 @@ TEST_F(NearbySharingServiceImplTest,
 TEST_F(NearbySharingServiceImplTest,
        DataUsageChangedRegisterReceiveSurfaceRestartsAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
-  preference_manager().SetInteger(prefs::kNearbySharingDataUsageName,
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
+  preference_manager().SetInteger(
+      prefs::kNearbySharingDataUsageName,
       static_cast<int>(DataUsage::OFFLINE_DATA_USAGE));
   FlushTesting();
   MockTransferUpdateCallback callback;
@@ -1983,7 +1932,8 @@ TEST_F(NearbySharingServiceImplTest,
   EXPECT_EQ(DataUsage::OFFLINE_DATA_USAGE,
             fake_nearby_connections_manager_->advertising_data_usage());
 
-  preference_manager().SetInteger(prefs::kNearbySharingDataUsageName,
+  preference_manager().SetInteger(
+      prefs::kNearbySharingDataUsageName,
       static_cast<int>(DataUsage::ONLINE_DATA_USAGE));
   FlushTesting();
   EXPECT_TRUE(fake_nearby_connections_manager_->IsAdvertising());
@@ -1995,7 +1945,8 @@ TEST_F(
     NearbySharingServiceImplTest,
     UnregisterForegroundReceiveSurfaceVisibilityAllContactsRestartAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
-  preference_manager().SetInteger(prefs::kNearbySharingBackgroundVisibilityName,
+  preference_manager().SetInteger(
+      prefs::kNearbySharingBackgroundVisibilityName,
       static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS));
   FlushTesting();
 
@@ -2036,8 +1987,90 @@ TEST_F(
 }
 
 TEST_F(NearbySharingServiceImplTest,
+       RegisterReceiveSurfaceWithVendorId_StartAdvertisingVendorId) {
+  SetConnectionType(ConnectionType::kWifi);
+  preference_manager().SetInteger(
+      prefs::kNearbySharingBackgroundVisibilityName,
+      static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS));
+  FlushTesting();
+
+  // Register background receive surface with vendor ID 1.
+  MockTransferUpdateCallback background_transfer_callback;
+  NearbySharingService::StatusCodes result = RegisterReceiveSurface(
+      &background_transfer_callback,
+      NearbySharingService::ReceiveSurfaceState::kBackground,
+      static_cast<uint8_t>(Advertisement::BlockedVendorId::kSamsung));
+  ASSERT_EQ(result, NearbySharingService::StatusCodes::kOk);
+  ASSERT_TRUE(fake_nearby_connections_manager_->IsAdvertising());
+
+  auto endpoint_info =
+      fake_nearby_connections_manager_->advertising_endpoint_info();
+  auto advertisement = Advertisement::FromEndpointInfo(*endpoint_info);
+  EXPECT_EQ(advertisement->vendor_id(),
+            static_cast<uint8_t>(Advertisement::BlockedVendorId::kSamsung));
+}
+
+TEST_F(NearbySharingServiceImplTest,
+       RegisterReceiveSurfaceWithDifferentVendorIdIsBlocked) {
+  SetConnectionType(ConnectionType::kWifi);
+  preference_manager().SetInteger(
+      prefs::kNearbySharingBackgroundVisibilityName,
+      static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS));
+  FlushTesting();
+
+  // Register background receive surface with vendor ID 1.
+  MockTransferUpdateCallback background_transfer_callback;
+  NearbySharingService::StatusCodes result = RegisterReceiveSurface(
+      &background_transfer_callback,
+      NearbySharingService::ReceiveSurfaceState::kBackground,
+      static_cast<uint8_t>(Advertisement::BlockedVendorId::kSamsung));
+  ASSERT_EQ(result, NearbySharingService::StatusCodes::kOk);
+  ASSERT_TRUE(fake_nearby_connections_manager_->IsAdvertising());
+  // Register foreground receive surface with different vendor ID.
+  MockTransferUpdateCallback foreground_transfer_callback;
+  result = RegisterReceiveSurface(
+      &foreground_transfer_callback,
+      NearbySharingService::ReceiveSurfaceState::kForeground, /*vendor_id=*/2);
+  EXPECT_EQ(result, NearbySharingService::StatusCodes::kInvalidArgument);
+  EXPECT_TRUE(fake_nearby_connections_manager_->IsAdvertising());
+}
+
+TEST_F(NearbySharingServiceImplTest,
+       RegisterReceiveSurfaceWithVendorId_OkWithBgNoVendorId) {
+  SetConnectionType(ConnectionType::kWifi);
+  preference_manager().SetInteger(
+      prefs::kNearbySharingBackgroundVisibilityName,
+      static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS));
+  FlushTesting();
+
+  // Register background receive surface with vendor ID 0.
+  MockTransferUpdateCallback background_transfer_callback;
+  NearbySharingService::StatusCodes result = RegisterReceiveSurface(
+      &background_transfer_callback,
+      NearbySharingService::ReceiveSurfaceState::kBackground,
+      static_cast<uint8_t>(Advertisement::BlockedVendorId::kNone));
+  ASSERT_EQ(result, NearbySharingService::StatusCodes::kOk);
+  ASSERT_TRUE(fake_nearby_connections_manager_->IsAdvertising());
+  // Register foreground receive surface with vendor ID 1.
+  MockTransferUpdateCallback foreground_transfer_callback;
+  result = RegisterReceiveSurface(
+      &foreground_transfer_callback,
+      NearbySharingService::ReceiveSurfaceState::kForeground,
+      static_cast<uint8_t>(Advertisement::BlockedVendorId::kSamsung));
+  EXPECT_EQ(result, NearbySharingService::StatusCodes::kOk);
+  EXPECT_TRUE(fake_nearby_connections_manager_->IsAdvertising());
+  // Verify endpoint info is advertising the foreground surface.
+  auto endpoint_info =
+      fake_nearby_connections_manager_->advertising_endpoint_info();
+  auto advertisement = Advertisement::FromEndpointInfo(*endpoint_info);
+  EXPECT_EQ(advertisement->vendor_id(),
+            static_cast<uint8_t>(Advertisement::BlockedVendorId::kSamsung));
+}
+
+TEST_F(NearbySharingServiceImplTest,
        NoNetworkRegisterReceiveSurfaceIsAdvertising) {
   MockTransferUpdateCallback callback;
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
   EXPECT_EQ(result, NearbySharingService::StatusCodes::kOk);
@@ -2074,6 +2107,7 @@ TEST_F(NearbySharingServiceImplTest,
 
 TEST_F(NearbySharingServiceImplTest, WifiRegisterReceiveSurfaceIsAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   MockTransferUpdateCallback callback;
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
@@ -2084,6 +2118,7 @@ TEST_F(NearbySharingServiceImplTest, WifiRegisterReceiveSurfaceIsAdvertising) {
 TEST_F(NearbySharingServiceImplTest,
        EthernetRegisterReceiveSurfaceIsAdvertising) {
   SetConnectionType(ConnectionType::kEthernet);
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   MockTransferUpdateCallback callback;
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
@@ -2094,6 +2129,7 @@ TEST_F(NearbySharingServiceImplTest,
 TEST_F(NearbySharingServiceImplTest,
        ThreeGRegisterReceiveSurfaceIsAdvertising) {
   SetConnectionType(ConnectionType::k3G);
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   MockTransferUpdateCallback callback;
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
@@ -2106,6 +2142,7 @@ TEST_F(NearbySharingServiceImplTest,
        NoBluetoothWifiReceiveSurfaceIsAdvertising) {
   SetBluetoothIsPresent(false);
   SetConnectionType(ConnectionType::kWifi);
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   MockTransferUpdateCallback callback;
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
@@ -2118,6 +2155,7 @@ TEST_F(NearbySharingServiceImplTest,
        NoBluetoothEthernetReceiveSurfaceIsAdvertising) {
   SetBluetoothIsPresent(false);
   SetConnectionType(ConnectionType::kEthernet);
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   MockTransferUpdateCallback callback;
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
@@ -2140,37 +2178,10 @@ TEST_F(NearbySharingServiceImplTest,
 }
 
 TEST_F(NearbySharingServiceImplTest,
-       DisableFeatureReceiveSurfaceNotAdvertising) {
-  preference_manager().SetBoolean(prefs::kNearbySharingEnabledName, false);
-  FlushTesting();
-  SetConnectionType(ConnectionType::kWifi);
-  MockTransferUpdateCallback callback;
-  NearbySharingService::StatusCodes result = RegisterReceiveSurface(
-      &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
-  EXPECT_EQ(result, NearbySharingService::StatusCodes::kOk);
-  EXPECT_FALSE(fake_nearby_connections_manager_->IsAdvertising());
-  EXPECT_TRUE(fake_nearby_connections_manager_->is_shutdown());
-}
-
-TEST_F(NearbySharingServiceImplTest,
-       DisableFeatureReceiveSurfaceStopsAdvertising) {
-  SetConnectionType(ConnectionType::kWifi);
-  MockTransferUpdateCallback callback;
-  NearbySharingService::StatusCodes result = RegisterReceiveSurface(
-      &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
-  EXPECT_EQ(result, NearbySharingService::StatusCodes::kOk);
-  EXPECT_TRUE(fake_nearby_connections_manager_->IsAdvertising());
-
-  preference_manager().SetBoolean(prefs::kNearbySharingEnabledName, false);
-  FlushTesting();
-  EXPECT_FALSE(fake_nearby_connections_manager_->IsAdvertising());
-  EXPECT_TRUE(fake_nearby_connections_manager_->is_shutdown());
-}
-
-TEST_F(NearbySharingServiceImplTest,
        ForegroundReceiveSurfaceNoOneVisibilityIsAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
-  preference_manager().SetInteger(prefs::kNearbySharingBackgroundVisibilityName,
+  preference_manager().SetInteger(
+      prefs::kNearbySharingBackgroundVisibilityName,
       static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_SELF_SHARE));
   FlushTesting();
   MockTransferUpdateCallback callback;
@@ -2183,7 +2194,9 @@ TEST_F(NearbySharingServiceImplTest,
 TEST_F(NearbySharingServiceImplTest,
        BackgroundReceiveSurfaceNoOneVisibilityNotAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
-  preference_manager().SetInteger(prefs::kNearbySharingBackgroundVisibilityName,
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_SELF_SHARE);
+  preference_manager().SetInteger(
+      prefs::kNearbySharingBackgroundVisibilityName,
       static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_UNSPECIFIED));
   FlushTesting();
   MockTransferUpdateCallback callback;
@@ -2197,8 +2210,7 @@ TEST_F(NearbySharingServiceImplTest,
 TEST_F(NearbySharingServiceImplTest,
        BackgroundReceiveSurfaceVisibilityToNoOneStopsAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
-  preference_manager().SetInteger(prefs::kNearbySharingBackgroundVisibilityName,
-      static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_SELECTED_CONTACTS));
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_SELECTED_CONTACTS);
   FlushTesting();
   MockTransferUpdateCallback callback;
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
@@ -2206,18 +2218,18 @@ TEST_F(NearbySharingServiceImplTest,
   EXPECT_EQ(result, NearbySharingService::StatusCodes::kOk);
   EXPECT_TRUE(fake_nearby_connections_manager_->IsAdvertising());
 
-  preference_manager().SetInteger(prefs::kNearbySharingBackgroundVisibilityName,
-      static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_UNSPECIFIED));
+  preference_manager().SetInteger(
+      prefs::kNearbySharingBackgroundVisibilityName,
+      static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_HIDDEN));
   FlushTesting();
   EXPECT_FALSE(fake_nearby_connections_manager_->IsAdvertising());
   EXPECT_FALSE(fake_nearby_connections_manager_->is_shutdown());
 }
 
 TEST_F(NearbySharingServiceImplTest,
-       BackgroundReceiveSurfaceVisibilityToSelectedStartsAdvertising) {
+       BackgroundReceiveSurfaceVisibilityToAllContactsStartsAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
-  preference_manager().SetInteger(prefs::kNearbySharingBackgroundVisibilityName,
-      static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_UNSPECIFIED));
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_UNSPECIFIED);
   FlushTesting();
   MockTransferUpdateCallback callback;
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
@@ -2226,8 +2238,7 @@ TEST_F(NearbySharingServiceImplTest,
   EXPECT_FALSE(fake_nearby_connections_manager_->IsAdvertising());
   EXPECT_FALSE(fake_nearby_connections_manager_->is_shutdown());
 
-  preference_manager().SetInteger(prefs::kNearbySharingBackgroundVisibilityName,
-      static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_SELECTED_CONTACTS));
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   FlushTesting();
   EXPECT_TRUE(fake_nearby_connections_manager_->IsAdvertising());
 }
@@ -2235,7 +2246,8 @@ TEST_F(NearbySharingServiceImplTest,
 TEST_F(NearbySharingServiceImplTest,
        ForegroundReceiveSurfaceSelectedContactsVisibilityIsAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
-  preference_manager().SetInteger(prefs::kNearbySharingBackgroundVisibilityName,
+  preference_manager().SetInteger(
+      prefs::kNearbySharingBackgroundVisibilityName,
       static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_SELECTED_CONTACTS));
   FlushTesting();
   MockTransferUpdateCallback callback;
@@ -2248,7 +2260,8 @@ TEST_F(NearbySharingServiceImplTest,
 TEST_F(NearbySharingServiceImplTest,
        BackgroundReceiveSurfaceSelectedContactsVisibilityIsAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
-  preference_manager().SetInteger(prefs::kNearbySharingBackgroundVisibilityName,
+  preference_manager().SetInteger(
+      prefs::kNearbySharingBackgroundVisibilityName,
       static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_SELECTED_CONTACTS));
   FlushTesting();
   MockTransferUpdateCallback callback;
@@ -2261,7 +2274,8 @@ TEST_F(NearbySharingServiceImplTest,
 TEST_F(NearbySharingServiceImplTest,
        ForegroundReceiveSurfaceAllContactsVisibilityIsAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
-  preference_manager().SetInteger(prefs::kNearbySharingBackgroundVisibilityName,
+  preference_manager().SetInteger(
+      prefs::kNearbySharingBackgroundVisibilityName,
       static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS));
   FlushTesting();
   MockTransferUpdateCallback callback;
@@ -2274,7 +2288,8 @@ TEST_F(NearbySharingServiceImplTest,
 TEST_F(NearbySharingServiceImplTest,
        BackgroundReceiveSurfaceAllContactsVisibilityNotAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
-  preference_manager().SetInteger(prefs::kNearbySharingBackgroundVisibilityName,
+  preference_manager().SetInteger(
+      prefs::kNearbySharingBackgroundVisibilityName,
       static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS));
   FlushTesting();
   MockTransferUpdateCallback callback;
@@ -2286,6 +2301,7 @@ TEST_F(NearbySharingServiceImplTest,
 
 TEST_F(NearbySharingServiceImplTest, UnregisterReceiveSurfaceStopsAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   MockTransferUpdateCallback callback;
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
@@ -2302,6 +2318,7 @@ TEST_F(NearbySharingServiceImplTest, UnregisterReceiveSurfaceStopsAdvertising) {
 TEST_F(NearbySharingServiceImplTest,
        UnregisterReceiveSurfaceDifferentCallbackKeepAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   MockTransferUpdateCallback callback;
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
@@ -2326,6 +2343,63 @@ TEST_F(NearbySharingServiceImplTest, UnregisterReceiveSurfaceNeverRegistered) {
   EXPECT_FALSE(fake_nearby_connections_manager_->IsAdvertising());
 }
 
+TEST_F(NearbySharingServiceImplTest, IncomingConnectionClosedAfterShutdown) {
+  fake_nearby_connections_manager_->SetRawAuthenticationToken(kEndpointId,
+                                                              GetToken());
+  SetUpAdvertisementDecoder(GetValidV1EndpointInfo(),
+                            /*return_empty_advertisement=*/false,
+                            /*return_empty_device_name=*/false,
+                            /*expected_number_of_calls=*/1u);
+
+  SetConnectionType(ConnectionType::kWifi);
+  NiceMock<MockTransferUpdateCallback> callback;
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .Times(0);
+
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
+  SetUpForegroundReceiveSurface(callback);
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
+  Shutdown();
+
+  service_->OnIncomingConnection(kEndpointId, GetValidV1EndpointInfo(),
+                                 connection_.get());
+
+  sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout);
+  service_.reset();
+}
+
+TEST_F(NearbySharingServiceImplTest,
+       IncomingConnectionClosedBeforeCertDecryption) {
+  fake_nearby_connections_manager_->SetRawAuthenticationToken(kEndpointId,
+                                                              GetToken());
+  SetUpAdvertisementDecoder(GetValidV1EndpointInfo(),
+                            /*return_empty_advertisement=*/false,
+                            /*return_empty_device_name=*/false,
+                            /*expected_number_of_calls=*/1u);
+
+  SetConnectionType(ConnectionType::kWifi);
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
+  NiceMock<MockTransferUpdateCallback> callback;
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([](const ShareTarget& share_target,
+                                   const AttachmentContainer& container,
+                                   TransferMetadata metadata) {
+        EXPECT_TRUE(metadata.is_final_status());
+        EXPECT_EQ(TransferMetadata::Status::kAwaitingRemoteAcceptanceFailed,
+                  metadata.status());
+      }));
+
+  SetUpForegroundReceiveSurface(callback);
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
+  service_->OnIncomingConnection(kEndpointId, GetValidV1EndpointInfo(),
+                                 connection_.get());
+  sharing_service_task_runner_->PostTask([this]() { connection_->Close(); });
+  sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout);
+
+  // To avoid UAF in OnIncomingTransferUpdate().
+  UnregisterReceiveSurface(&callback);
+}
+
 TEST_F(NearbySharingServiceImplTest,
        IncomingConnectionClosedReadingIntroduction) {
   fake_nearby_connections_manager_->SetRawAuthenticationToken(kEndpointId,
@@ -2337,13 +2411,15 @@ TEST_F(NearbySharingServiceImplTest,
 
   SetConnectionType(ConnectionType::kWifi);
   NiceMock<MockTransferUpdateCallback> callback;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_)).Times(0);
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .Times(0);
 
   SetUpKeyVerification(/*is_incoming=*/true,
                        service::proto::PairedKeyResultFrame::SUCCESS);
   SetUpForegroundReceiveSurface(callback);
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
   service_->OnIncomingConnection(kEndpointId, GetValidV1EndpointInfo(),
-                                 &connection_);
+                                 connection_.get());
   ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
                                            /*success=*/true);
 
@@ -2362,27 +2438,29 @@ TEST_F(NearbySharingServiceImplTest, IncomingConnectionEmptyIntroductionFrame) {
 
   SetConnectionType(ConnectionType::kWifi);
   NiceMock<MockTransferUpdateCallback> callback;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_TRUE(metadata.is_final_status());
-            EXPECT_EQ(metadata.status(),
-                      TransferMetadata::Status::kUnsupportedAttachmentType);
-            EXPECT_TRUE(share_target.is_incoming);
-            EXPECT_TRUE(share_target.is_known);
-            EXPECT_FALSE(share_target.has_attachments());
-            EXPECT_EQ(share_target.device_name, kDeviceName);
-            EXPECT_EQ(share_target.type, kDeviceType);
-            EXPECT_TRUE(share_target.device_id);
-            EXPECT_NE(share_target.device_id, kEndpointId);
-            EXPECT_EQ(share_target.full_name, kTestMetadataFullName);
-          }));
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([](const ShareTarget& share_target,
+                                   const AttachmentContainer& container,
+                                   TransferMetadata metadata) {
+        EXPECT_TRUE(metadata.is_final_status());
+        EXPECT_EQ(metadata.status(),
+                  TransferMetadata::Status::kUnsupportedAttachmentType);
+        EXPECT_TRUE(share_target.is_incoming);
+        EXPECT_TRUE(share_target.is_known);
+        EXPECT_FALSE(container.HasAttachments());
+        EXPECT_EQ(share_target.device_name, kDeviceName);
+        EXPECT_EQ(share_target.type, kDeviceType);
+        EXPECT_TRUE(share_target.device_id);
+        EXPECT_NE(share_target.device_id, kEndpointId);
+        EXPECT_EQ(share_target.full_name, kTestMetadataFullName);
+      }));
 
   SetUpKeyVerification(/*is_incoming=*/true,
                        service::proto::PairedKeyResultFrame::SUCCESS);
   SetUpForegroundReceiveSurface(callback);
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
   service_->OnIncomingConnection(kEndpointId, GetValidV1EndpointInfo(),
-                                 &connection_);
+                                 connection_.get());
   ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
                                            /*success=*/true);
   // Check data written to connection_.
@@ -2408,32 +2486,34 @@ TEST_F(NearbySharingServiceImplTest,
   SetConnectionType(ConnectionType::kWifi);
   NiceMock<MockTransferUpdateCallback> callback;
 
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_FALSE(metadata.is_final_status());
-            EXPECT_EQ(TransferMetadata::Status::kAwaitingLocalConfirmation,
-                      metadata.status());
-            EXPECT_TRUE(share_target.is_incoming);
-            EXPECT_FALSE(share_target.is_known);
-            EXPECT_TRUE(share_target.has_attachments());
-            EXPECT_EQ(share_target.text_attachments.size(), 3u);
-            EXPECT_EQ(share_target.file_attachments.size(), 1u);
-            EXPECT_EQ(share_target.device_name, kDeviceName);
-            EXPECT_FALSE(share_target.image_url);
-            EXPECT_EQ(share_target.type, kDeviceType);
-            EXPECT_EQ(share_target.device_id, kEndpointId);
-            EXPECT_FALSE(share_target.full_name);
-          }));
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([](const ShareTarget& share_target,
+                                   const AttachmentContainer& container,
+                                   TransferMetadata metadata) {
+        EXPECT_FALSE(metadata.is_final_status());
+        EXPECT_EQ(TransferMetadata::Status::kAwaitingLocalConfirmation,
+                  metadata.status());
+        EXPECT_TRUE(share_target.is_incoming);
+        EXPECT_FALSE(share_target.is_known);
+        EXPECT_TRUE(container.HasAttachments());
+        EXPECT_EQ(container.GetTextAttachments().size(), 3u);
+        EXPECT_EQ(container.GetFileAttachments().size(), 1u);
+        EXPECT_EQ(share_target.device_name, kDeviceName);
+        EXPECT_FALSE(share_target.image_url);
+        EXPECT_EQ(share_target.type, kDeviceType);
+        EXPECT_EQ(share_target.device_id, kEndpointId);
+        EXPECT_FALSE(share_target.full_name);
+      }));
 
   SetUpKeyVerification(/*is_incoming=*/true,
                        service::proto::PairedKeyResultFrame::SUCCESS);
   SetUpForegroundReceiveSurface(callback);
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
   service_->OnIncomingConnection(kEndpointId, GetValidV1EndpointInfo(),
-                                 &connection_);
+                                 connection_.get());
   ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
                                            /*success=*/false);
-  EXPECT_FALSE(connection_.IsClosed());
+  EXPECT_FALSE(connection_->IsClosed());
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
@@ -2441,37 +2521,40 @@ TEST_F(NearbySharingServiceImplTest,
 
 TEST_F(NearbySharingServiceImplTest, IncomingConnectionTimedOut) {
   NiceMock<MockTransferUpdateCallback> callback;
-  ShareTarget share_target = SetUpIncomingConnection(callback);
-  EXPECT_FALSE(connection_.IsClosed());
+  SetUpIncomingConnection(callback);
+  EXPECT_FALSE(connection_->IsClosed());
 
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_TRUE(metadata.is_final_status());
-            EXPECT_EQ(metadata.status(), TransferMetadata::Status::kTimedOut);
-          }));
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([](const ShareTarget& share_target,
+                                   const AttachmentContainer& container,
+                                   TransferMetadata metadata) {
+        EXPECT_TRUE(metadata.is_final_status());
+        EXPECT_EQ(metadata.status(), TransferMetadata::Status::kTimedOut);
+      }));
 
   FastForward(kReadResponseFrameTimeout);
 
   // Waits for delay to close connection.
   FastForward(kIncomingRejectionDelay);
-  EXPECT_TRUE(connection_.IsClosed());
+  EXPECT_TRUE(connection_->IsClosed());
 }
 
 TEST_F(NearbySharingServiceImplTest,
        IncomingConnectionClosedWaitingLocalConfirmation) {
   NiceMock<MockTransferUpdateCallback> callback;
-  ShareTarget share_target = SetUpIncomingConnection(callback);
+  SetUpIncomingConnection(callback);
 
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_TRUE(metadata.is_final_status());
-            EXPECT_EQ(metadata.status(),
-                      TransferMetadata::Status::kUnexpectedDisconnection);
-          }));
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([](const ShareTarget& share_target,
+                                   const AttachmentContainer& container,
+                                   TransferMetadata metadata) {
+        EXPECT_TRUE(metadata.is_final_status());
+        EXPECT_EQ(metadata.status(),
+                  TransferMetadata::Status::kUnexpectedDisconnection);
+      }));
 
-  connection_.Close();
+  sharing_service_task_runner_->PostTask([this]() { connection_->Close(); });
+  sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout);
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
@@ -2518,19 +2601,20 @@ TEST_F(NearbySharingServiceImplTest, IncomingConnectionOutOfStorage) {
         frame->set_allocated_v1(v1_frame);
         return std::unique_ptr<Frame>(frame);
       }));
-  connection_.AppendReadableData(std::move(bytes));
+  connection_->AppendReadableData(std::move(bytes));
   FlushTesting();
 
   SetConnectionType(ConnectionType::kWifi);
   NiceMock<MockTransferUpdateCallback> callback;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
       .WillOnce(testing::Invoke([](const ShareTarget& share_target,
+                                   const AttachmentContainer& container,
                                    TransferMetadata metadata) {
         EXPECT_TRUE(share_target.is_incoming);
         EXPECT_TRUE(share_target.is_known);
-        EXPECT_TRUE(share_target.has_attachments());
-        EXPECT_EQ(share_target.text_attachments.size(), 0u);
-        EXPECT_EQ(share_target.file_attachments.size(), 1u);
+        EXPECT_TRUE(container.HasAttachments());
+        EXPECT_EQ(container.GetTextAttachments().size(), 0u);
+        EXPECT_EQ(container.GetFileAttachments().size(), 1u);
         EXPECT_EQ(share_target.device_name, kDeviceName);
         EXPECT_EQ(share_target.type, kDeviceType);
         EXPECT_TRUE(share_target.device_id);
@@ -2542,8 +2626,9 @@ TEST_F(NearbySharingServiceImplTest, IncomingConnectionOutOfStorage) {
   SetUpKeyVerification(
       /*is_incoming=*/true, PairedKeyResultFrame::SUCCESS);
   SetUpForegroundReceiveSurface(callback);
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
   service_->OnIncomingConnection(kEndpointId, GetValidV1EndpointInfo(),
-                                 &connection_);
+                                 connection_.get());
   ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
                                            /*success=*/true);
   // To avoid UAF in OnIncomingTransferUpdate().
@@ -2599,14 +2684,15 @@ TEST_F(NearbySharingServiceImplTest, IncomingConnectionFileSizeOverflow) {
         frame->set_allocated_v1(v1_frame);
         return std::unique_ptr<Frame>(frame);
       }));
-  connection_.AppendReadableData(std::move(bytes));
+  connection_->AppendReadableData(std::move(bytes));
   FlushTesting();
 
   SetConnectionType(ConnectionType::kWifi);
   NiceMock<MockTransferUpdateCallback> callback;
 
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
       .WillOnce(testing::Invoke([](const ShareTarget& share_target,
+                                   const AttachmentContainer& container,
                                    TransferMetadata metadata) {
         EXPECT_TRUE(share_target.is_incoming);
         EXPECT_TRUE(share_target.is_known);
@@ -2621,8 +2707,9 @@ TEST_F(NearbySharingServiceImplTest, IncomingConnectionFileSizeOverflow) {
   SetUpKeyVerification(
       /*is_incoming=*/true, PairedKeyResultFrame::SUCCESS);
   SetUpForegroundReceiveSurface(callback);
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
   service_->OnIncomingConnection(kEndpointId, GetValidV1EndpointInfo(),
-                                 &connection_);
+                                 connection_.get());
   ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
                                            /*success=*/true);
   // To avoid UAF in OnIncomingTransferUpdate().
@@ -2642,111 +2729,73 @@ TEST_F(NearbySharingServiceImplTest,
   SetConnectionType(ConnectionType::kWifi);
   NiceMock<MockTransferUpdateCallback> callback;
   absl::Notification notification;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke([&notification](const ShareTarget& share_target,
-                                                TransferMetadata metadata) {
-        EXPECT_FALSE(metadata.is_final_status());
-        EXPECT_EQ(TransferMetadata::Status::kAwaitingLocalConfirmation,
-                  metadata.status());
-        EXPECT_TRUE(share_target.is_incoming);
-        EXPECT_TRUE(share_target.is_known);
-        EXPECT_TRUE(share_target.has_attachments());
-        EXPECT_EQ(share_target.text_attachments.size(), 3u);
-        EXPECT_EQ(share_target.file_attachments.size(), 1u);
-        EXPECT_EQ(share_target.device_name, kDeviceName);
-        EXPECT_EQ(share_target.type, kDeviceType);
-        EXPECT_TRUE(share_target.device_id);
-        EXPECT_NE(share_target.device_id, kEndpointId);
-        EXPECT_EQ(share_target.full_name, kTestMetadataFullName);
-
-        EXPECT_FALSE(metadata.token().has_value());
-        notification.Notify();
-      }));
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(
+          testing::Invoke([&notification](const ShareTarget& share_target,
+                                          const AttachmentContainer& container,
+                                          TransferMetadata metadata) {
+            EXPECT_FALSE(metadata.is_final_status());
+            EXPECT_EQ(TransferMetadata::Status::kAwaitingLocalConfirmation,
+                      metadata.status());
+            EXPECT_TRUE(share_target.is_incoming);
+            EXPECT_TRUE(share_target.is_known);
+            EXPECT_TRUE(container.HasAttachments());
+            EXPECT_EQ(container.GetTextAttachments().size(), 3u);
+            EXPECT_EQ(container.GetFileAttachments().size(), 1u);
+            EXPECT_EQ(share_target.device_name, kDeviceName);
+            EXPECT_EQ(share_target.type, kDeviceType);
+            EXPECT_TRUE(share_target.device_id);
+            EXPECT_NE(share_target.device_id, kEndpointId);
+            EXPECT_EQ(share_target.full_name, kTestMetadataFullName);
+            EXPECT_FALSE(share_target.for_self_share);
+            EXPECT_FALSE(metadata.is_self_share());
+            EXPECT_TRUE(metadata.token().has_value());
+            notification.Notify();
+          }));
 
   SetUpKeyVerification(/*is_incoming=*/true, PairedKeyResultFrame::SUCCESS);
   SetUpForegroundReceiveSurface(callback);
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
   service_->OnIncomingConnection(kEndpointId, GetValidV1EndpointInfo(),
-                                 &connection_);
+                                 connection_.get());
   ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
                                            /*success=*/true);
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
-  EXPECT_FALSE(connection_.IsClosed());
+  EXPECT_FALSE(connection_->IsClosed());
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, AcceptInvalidShareTarget) {
-  ShareTarget share_target;
   absl::Notification notification;
   service_->Accept(
-      share_target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
+      98765L, [&](NearbySharingServiceImpl::StatusCodes status_code) {
         EXPECT_EQ(status_code,
-                  NearbySharingServiceImpl::StatusCodes::kOutOfOrderApiCall);
+                  NearbySharingServiceImpl::StatusCodes::kInvalidArgument);
         notification.Notify();
       });
 
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
-}
-
-TEST_F(NearbySharingServiceImplTest,
-       AcceptValidShareTargetRegisterPayloadError) {
-  fake_nearby_connections_manager_->SetPayloadPathStatus(kFilePayloadId,
-                                                         Status::kError);
-  NiceMock<MockTransferUpdateCallback> callback;
-  ShareTarget share_target = SetUpIncomingConnection(callback);
-
-  absl::Notification notification;
-  service_->Accept(
-      share_target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
-        EXPECT_EQ(NearbySharingServiceImpl::StatusCodes::kError, status_code);
-        notification.Notify();
-      });
-
-  EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
-
-  EXPECT_TRUE(
-      fake_nearby_connections_manager_->DidUpgradeBandwidth(kEndpointId));
-
-  // Check data written to connection_.
-  EXPECT_TRUE(ExpectPairedKeyEncryptionFrame());
-  EXPECT_TRUE(ExpectPairedKeyResultFrame());
-
-  EXPECT_FALSE(connection_.IsClosed());
-
-  {
-    std::optional<std::filesystem::path> path =
-        fake_nearby_connections_manager_->GetRegisteredPayloadPath(
-            kFilePayloadId);
-    EXPECT_TRUE(path.has_value());
-    std::filesystem::remove(*path);
-  }
-
-  // To avoid UAF in OnIncomingTransferUpdate().
-  UnregisterReceiveSurface(&callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, AcceptValidShareTarget) {
-  for (int64_t payload_id : GetValidIntroductionFramePayloadIds()) {
-    fake_nearby_connections_manager_->SetPayloadPathStatus(payload_id,
-                                                           Status::kSuccess);
-  }
-
   NiceMock<MockTransferUpdateCallback> callback;
-  ShareTarget share_target = SetUpIncomingConnection(callback);
+  int64_t share_target_id = SetUpIncomingConnection(callback);
 
   absl::Notification notification;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_FALSE(metadata.is_final_status());
-            EXPECT_EQ(metadata.status(),
-                      TransferMetadata::Status::kAwaitingRemoteAcceptance);
-          }));
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([](const ShareTarget& share_target,
+                                   const AttachmentContainer& container,
+                                   TransferMetadata metadata) {
+        EXPECT_FALSE(metadata.is_final_status());
+        EXPECT_EQ(metadata.status(),
+                  TransferMetadata::Status::kAwaitingRemoteAcceptance);
+      }));
 
   service_->Accept(
-      share_target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
+      share_target_id, [&](NearbySharingServiceImpl::StatusCodes status_code) {
         EXPECT_EQ(status_code, NearbySharingServiceImpl::StatusCodes::kOk);
         notification.Notify();
       });
@@ -2762,7 +2811,7 @@ TEST_F(NearbySharingServiceImplTest, AcceptValidShareTarget) {
   EXPECT_TRUE(ExpectConnectionResponseFrame(
       service::proto::ConnectionResponseFrame::ACCEPT));
 
-  EXPECT_FALSE(connection_.IsClosed());
+  EXPECT_FALSE(connection_->IsClosed());
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
@@ -2774,25 +2823,21 @@ TEST_F(NearbySharingServiceImplTest, AcceptValidShareTargetPayloadSuccessful) {
 
 TEST_F(NearbySharingServiceImplTest,
        AcceptValidShareTargetPayloadSuccessfulIncomingPayloadNotFound) {
-  for (int64_t payload_id : GetValidIntroductionFramePayloadIds()) {
-    fake_nearby_connections_manager_->SetPayloadPathStatus(payload_id,
-                                                           Status::kSuccess);
-  }
-
   NiceMock<MockTransferUpdateCallback> callback;
-  ShareTarget share_target = SetUpIncomingConnection(callback);
+  int64_t share_target_id = SetUpIncomingConnection(callback);
 
   absl::Notification notification;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_FALSE(metadata.is_final_status());
-            EXPECT_EQ(metadata.status(),
-                      TransferMetadata::Status::kAwaitingRemoteAcceptance);
-          }));
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([](const ShareTarget& share_target,
+                                   const AttachmentContainer& container,
+                                   TransferMetadata metadata) {
+        EXPECT_FALSE(metadata.is_final_status());
+        EXPECT_EQ(metadata.status(),
+                  TransferMetadata::Status::kAwaitingRemoteAcceptance);
+      }));
 
   service_->Accept(
-      share_target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
+      share_target_id, [&](NearbySharingServiceImpl::StatusCodes status_code) {
         EXPECT_EQ(status_code, NearbySharingServiceImpl::StatusCodes::kOk);
         notification.Notify();
       });
@@ -2809,59 +2854,65 @@ TEST_F(NearbySharingServiceImplTest,
     // Deliberately not calling SetIncomingPayload() for text payloads to check
     // for failure condition.
 
-    std::weak_ptr<NearbyConnectionsManager::PayloadStatusListener> listener =
-        fake_nearby_connections_manager_->GetRegisteredPayloadStatusListener(
-            id);
-    ASSERT_FALSE(listener.expired());
-
     absl::Notification progress_notification;
-    EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
+    EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
         .WillOnce(testing::Invoke([&](const ShareTarget& share_target,
+                                      const AttachmentContainer& container,
                                       TransferMetadata metadata) {
           EXPECT_FALSE(metadata.is_final_status());
           EXPECT_EQ(metadata.status(), TransferMetadata::Status::kInProgress);
           progress_notification.Notify();
         }));
 
+    sharing_service_task_runner_->PostTask([this, id]() {
+      std::weak_ptr<NearbyConnectionsManager::PayloadStatusListener> listener =
+          fake_nearby_connections_manager_->GetRegisteredPayloadStatusListener(
+              id);
+      ASSERT_FALSE(listener.expired());
+
+      auto payload = std::make_unique<PayloadTransferUpdate>(
+          id, PayloadStatus::kSuccess,
+          /*total_bytes=*/kPayloadSize,
+          /*bytes_transferred=*/kPayloadSize);
+      if (auto locked_listener = listener.lock()) {
+        locked_listener->OnStatusUpdate(std::move(payload),
+                                        /*upgraded_medium=*/std::nullopt);
+      }
+    });
+    EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
+    FastForward(kMinProgressUpdateFrequency);
+  }
+
+  absl::Notification success_notification;
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([&](const ShareTarget& share_target,
+                                    const AttachmentContainer& container,
+                                    TransferMetadata metadata) {
+        EXPECT_TRUE(metadata.is_final_status());
+        EXPECT_EQ(metadata.status(),
+                  TransferMetadata::Status::kIncompletePayloads);
+        ASSERT_TRUE(container.HasAttachments());
+        EXPECT_EQ(container.GetFileAttachments().size(), 1u);
+        const FileAttachment& file = container.GetFileAttachments()[0];
+        EXPECT_FALSE(file.file_path());
+        success_notification.Notify();
+      }));
+
+  sharing_service_task_runner_->PostTask([this]() {
+    std::weak_ptr<NearbyConnectionsManager::PayloadStatusListener> listener =
+        fake_nearby_connections_manager_->GetRegisteredPayloadStatusListener(
+            kFilePayloadId);
+    ASSERT_FALSE(listener.expired());
+
     auto payload = std::make_unique<PayloadTransferUpdate>(
-        id, PayloadStatus::kSuccess,
+        kFilePayloadId, PayloadStatus::kSuccess,
         /*total_bytes=*/kPayloadSize,
         /*bytes_transferred=*/kPayloadSize);
     if (auto locked_listener = listener.lock()) {
       locked_listener->OnStatusUpdate(std::move(payload),
                                       /*upgraded_medium=*/std::nullopt);
     }
-    EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
-    FastForward(kMinProgressUpdateFrequency);
-  }
-
-  absl::Notification success_notification;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [&](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_TRUE(metadata.is_final_status());
-            EXPECT_EQ(metadata.status(),
-                      TransferMetadata::Status::kIncompletePayloads);
-            ASSERT_TRUE(share_target.has_attachments());
-            EXPECT_EQ(share_target.file_attachments.size(), 1u);
-            const FileAttachment& file = share_target.file_attachments[0];
-            EXPECT_FALSE(file.file_path());
-            success_notification.Notify();
-          }));
-
-  std::weak_ptr<NearbyConnectionsManager::PayloadStatusListener> listener =
-      fake_nearby_connections_manager_->GetRegisteredPayloadStatusListener(
-          kFilePayloadId);
-  ASSERT_FALSE(listener.expired());
-
-  auto payload = std::make_unique<PayloadTransferUpdate>(
-      kFilePayloadId, PayloadStatus::kSuccess,
-      /*total_bytes=*/kPayloadSize,
-      /*bytes_transferred=*/kPayloadSize);
-  if (auto locked_listener = listener.lock()) {
-    locked_listener->OnStatusUpdate(std::move(payload),
-                                    /*upgraded_medium=*/std::nullopt);
-  }
+  });
   EXPECT_TRUE(
       success_notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
@@ -2871,64 +2922,63 @@ TEST_F(NearbySharingServiceImplTest,
 
   // File deletion runs in a ThreadPool.
   EXPECT_TRUE(
-      FakeTaskRunner::WaitForRunningTasksWithTimeout(absl::Milliseconds(200)));
+      sharing_service_task_runner_->SyncWithTimeout(absl::Milliseconds(200)));
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, AcceptValidShareTargetPayloadFailed) {
-  for (int64_t payload_id : GetValidIntroductionFramePayloadIds()) {
-    fake_nearby_connections_manager_->SetPayloadPathStatus(payload_id,
-                                                           Status::kSuccess);
-  }
-
   NiceMock<MockTransferUpdateCallback> callback;
-  ShareTarget share_target = SetUpIncomingConnection(callback);
+  int64_t share_target_id = SetUpIncomingConnection(callback);
 
   absl::Notification notification;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_FALSE(metadata.is_final_status());
-            EXPECT_EQ(metadata.status(),
-                      TransferMetadata::Status::kAwaitingRemoteAcceptance);
-          }));
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([](const ShareTarget& share_target,
+                                   const AttachmentContainer& container,
+                                   TransferMetadata metadata) {
+        EXPECT_FALSE(metadata.is_final_status());
+        EXPECT_EQ(metadata.status(),
+                  TransferMetadata::Status::kAwaitingRemoteAcceptance);
+      }));
 
   service_->Accept(
-      share_target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
+      share_target_id, [&](NearbySharingServiceImpl::StatusCodes status_code) {
         EXPECT_EQ(status_code, NearbySharingServiceImpl::StatusCodes::kOk);
         notification.Notify();
       });
 
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
-  std::weak_ptr<NearbyConnectionsManager::PayloadStatusListener> listener =
-      fake_nearby_connections_manager_->GetRegisteredPayloadStatusListener(
-          kFilePayloadId);
-  ASSERT_FALSE(listener.expired());
-
   absl::Notification failure_notification;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [&](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_TRUE(metadata.is_final_status());
-            EXPECT_EQ(metadata.status(), TransferMetadata::Status::kFailed);
-            ASSERT_TRUE(share_target.has_attachments());
-            EXPECT_EQ(share_target.file_attachments.size(), 1u);
-            const FileAttachment& file = share_target.file_attachments[0];
-            EXPECT_FALSE(file.file_path());
-            failure_notification.Notify();
-          }));
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([&](const ShareTarget& share_target,
+                                    const AttachmentContainer& container,
+                                    TransferMetadata metadata) {
+        EXPECT_TRUE(metadata.is_final_status());
+        EXPECT_EQ(metadata.status(), TransferMetadata::Status::kFailed);
+        ASSERT_TRUE(container.HasAttachments());
+        EXPECT_EQ(container.GetFileAttachments().size(), 1u);
+        const FileAttachment& file = container.GetFileAttachments()[0];
+        EXPECT_FALSE(file.file_path());
+        failure_notification.Notify();
+      }));
 
-  auto payload = std::make_unique<PayloadTransferUpdate>(
-      kFilePayloadId, PayloadStatus::kFailure,
-      /*total_bytes=*/kPayloadSize,
-      /*bytes_transferred=*/kPayloadSize);
-  if (auto locked_listener = listener.lock()) {
-    locked_listener->OnStatusUpdate(std::move(payload),
-                                    /*upgraded_medium=*/std::nullopt);
-  }
+  sharing_service_task_runner_->PostTask([this]() {
+    std::weak_ptr<NearbyConnectionsManager::PayloadStatusListener> listener =
+        fake_nearby_connections_manager_->GetRegisteredPayloadStatusListener(
+            kFilePayloadId);
+    ASSERT_FALSE(listener.expired());
+
+    auto payload = std::make_unique<PayloadTransferUpdate>(
+        kFilePayloadId, PayloadStatus::kFailure,
+        /*total_bytes=*/kPayloadSize,
+        /*bytes_transferred=*/kPayloadSize);
+    if (auto locked_listener = listener.lock()) {
+      locked_listener->OnStatusUpdate(std::move(payload),
+                                      /*upgraded_medium=*/std::nullopt);
+    }
+  });
 
   EXPECT_TRUE(
       failure_notification.WaitForNotificationWithTimeout(kWaitTimeout));
@@ -2939,64 +2989,63 @@ TEST_F(NearbySharingServiceImplTest, AcceptValidShareTargetPayloadFailed) {
 
   // File deletion runs in a ThreadPool.
   EXPECT_TRUE(
-      FakeTaskRunner::WaitForRunningTasksWithTimeout(absl::Milliseconds(200)));
+      sharing_service_task_runner_->SyncWithTimeout(absl::Milliseconds(200)));
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, AcceptValidShareTargetPayloadCancelled) {
-  for (int64_t payload_id : GetValidIntroductionFramePayloadIds()) {
-    fake_nearby_connections_manager_->SetPayloadPathStatus(payload_id,
-                                                           Status::kSuccess);
-  }
-
   NiceMock<MockTransferUpdateCallback> callback;
-  ShareTarget share_target = SetUpIncomingConnection(callback);
+  int64_t share_target_id = SetUpIncomingConnection(callback);
 
   absl::Notification notification;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_FALSE(metadata.is_final_status());
-            EXPECT_EQ(metadata.status(),
-                      TransferMetadata::Status::kAwaitingRemoteAcceptance);
-          }));
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([](const ShareTarget& share_target,
+                                   const AttachmentContainer& container,
+                                   TransferMetadata metadata) {
+        EXPECT_FALSE(metadata.is_final_status());
+        EXPECT_EQ(metadata.status(),
+                  TransferMetadata::Status::kAwaitingRemoteAcceptance);
+      }));
 
   service_->Accept(
-      share_target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
+      share_target_id, [&](NearbySharingServiceImpl::StatusCodes status_code) {
         EXPECT_EQ(status_code, NearbySharingServiceImpl::StatusCodes::kOk);
         notification.Notify();
       });
 
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
-  std::weak_ptr<NearbyConnectionsManager::PayloadStatusListener> listener =
-      fake_nearby_connections_manager_->GetRegisteredPayloadStatusListener(
-          kFilePayloadId);
-  ASSERT_FALSE(listener.expired());
-
   absl::Notification failure_notification;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [&](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_TRUE(metadata.is_final_status());
-            EXPECT_EQ(metadata.status(), TransferMetadata::Status::kCancelled);
-            ASSERT_TRUE(share_target.has_attachments());
-            EXPECT_EQ(share_target.file_attachments.size(), 1u);
-            const FileAttachment& file = share_target.file_attachments[0];
-            EXPECT_FALSE(file.file_path());
-            failure_notification.Notify();
-          }));
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([&](const ShareTarget& share_target,
+                                    const AttachmentContainer& container,
+                                    TransferMetadata metadata) {
+        EXPECT_TRUE(metadata.is_final_status());
+        EXPECT_EQ(metadata.status(), TransferMetadata::Status::kCancelled);
+        ASSERT_TRUE(container.HasAttachments());
+        EXPECT_EQ(container.GetFileAttachments().size(), 1u);
+        const FileAttachment& file = container.GetFileAttachments()[0];
+        EXPECT_FALSE(file.file_path());
+        failure_notification.Notify();
+      }));
 
-  auto payload = std::make_unique<PayloadTransferUpdate>(
-      kFilePayloadId, PayloadStatus::kCanceled,
-      /*total_bytes=*/kPayloadSize,
-      /*bytes_transferred=*/kPayloadSize);
-  if (auto locked_listener = listener.lock()) {
-    locked_listener->OnStatusUpdate(std::move(payload),
-                                    /*upgraded_medium=*/std::nullopt);
-  }
+  sharing_service_task_runner_->PostTask([this]() {
+    std::weak_ptr<NearbyConnectionsManager::PayloadStatusListener> listener =
+        fake_nearby_connections_manager_->GetRegisteredPayloadStatusListener(
+            kFilePayloadId);
+    ASSERT_FALSE(listener.expired());
+
+    auto payload = std::make_unique<PayloadTransferUpdate>(
+        kFilePayloadId, PayloadStatus::kCanceled,
+        /*total_bytes=*/kPayloadSize,
+        /*bytes_transferred=*/kPayloadSize);
+    if (auto locked_listener = listener.lock()) {
+      locked_listener->OnStatusUpdate(std::move(payload),
+                                      /*upgraded_medium=*/std::nullopt);
+    }
+  });
   EXPECT_TRUE(
       failure_notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
@@ -3006,19 +3055,18 @@ TEST_F(NearbySharingServiceImplTest, AcceptValidShareTargetPayloadCancelled) {
 
   // File deletion runs in a ThreadPool.
   EXPECT_TRUE(
-      FakeTaskRunner::WaitForRunningTasksWithTimeout(absl::Milliseconds(200)));
+      sharing_service_task_runner_->SyncWithTimeout(absl::Milliseconds(200)));
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, RejectInvalidShareTarget) {
-  ShareTarget share_target;
   absl::Notification notification;
   service_->Reject(
-      share_target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
+      98456L, [&](NearbySharingServiceImpl::StatusCodes status_code) {
         EXPECT_EQ(status_code,
-                  NearbySharingServiceImpl::StatusCodes::kOutOfOrderApiCall);
+                  NearbySharingServiceImpl::StatusCodes::kInvalidArgument);
         notification.Notify();
       });
 
@@ -3027,18 +3075,19 @@ TEST_F(NearbySharingServiceImplTest, RejectInvalidShareTarget) {
 
 TEST_F(NearbySharingServiceImplTest, RejectValidShareTarget) {
   NiceMock<MockTransferUpdateCallback> callback;
-  ShareTarget share_target = SetUpIncomingConnection(callback);
+  int64_t share_target_id = SetUpIncomingConnection(callback);
 
   absl::Notification notification;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_TRUE(metadata.is_final_status());
-            EXPECT_EQ(metadata.status(), TransferMetadata::Status::kRejected);
-          }));
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([](const ShareTarget& share_target,
+                                   const AttachmentContainer& container,
+                                   TransferMetadata metadata) {
+        EXPECT_TRUE(metadata.is_final_status());
+        EXPECT_EQ(metadata.status(), TransferMetadata::Status::kRejected);
+      }));
 
   service_->Reject(
-      share_target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
+      share_target_id, [&](NearbySharingServiceImpl::StatusCodes status_code) {
         EXPECT_EQ(status_code, NearbySharingServiceImpl::StatusCodes::kOk);
         notification.Notify();
       });
@@ -3051,7 +3100,7 @@ TEST_F(NearbySharingServiceImplTest, RejectValidShareTarget) {
   EXPECT_TRUE(ExpectConnectionResponseFrame(ConnectionResponseFrame::REJECT));
 
   FastForward(kIncomingRejectionDelay + kDelta);
-  EXPECT_TRUE(connection_.IsClosed());
+  EXPECT_TRUE(connection_->IsClosed());
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
@@ -3070,31 +3119,33 @@ TEST_F(NearbySharingServiceImplTest,
   SetConnectionType(ConnectionType::kWifi);
   NiceMock<MockTransferUpdateCallback> callback;
   absl::Notification notification;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [&](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_FALSE(metadata.is_final_status());
-            EXPECT_EQ(metadata.status(),
-                      TransferMetadata::Status::kAwaitingLocalConfirmation);
-            EXPECT_TRUE(share_target.is_incoming);
-            EXPECT_TRUE(share_target.is_known);
-            EXPECT_TRUE(share_target.has_attachments());
-            EXPECT_EQ(share_target.text_attachments.size(), 3u);
-            EXPECT_EQ(share_target.file_attachments.size(), 1u);
-            EXPECT_EQ(share_target.device_name, kDeviceName);
-            EXPECT_EQ(share_target.type, kDeviceType);
-            EXPECT_TRUE(share_target.device_id);
-            EXPECT_NE(share_target.device_id, kEndpointId);
-            EXPECT_EQ(share_target.full_name, kTestMetadataFullName);
-            EXPECT_EQ(metadata.token(), kFourDigitToken);
-            notification.Notify();
-          }));
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([&](const ShareTarget& share_target,
+                                    const AttachmentContainer& container,
+                                    TransferMetadata metadata) {
+        EXPECT_FALSE(metadata.is_final_status());
+        EXPECT_EQ(metadata.status(),
+                  TransferMetadata::Status::kAwaitingLocalConfirmation);
+        EXPECT_TRUE(share_target.is_incoming);
+        EXPECT_TRUE(share_target.is_known);
+        EXPECT_TRUE(container.HasAttachments());
+        EXPECT_EQ(container.GetTextAttachments().size(), 3u);
+        EXPECT_EQ(container.GetFileAttachments().size(), 1u);
+        EXPECT_EQ(share_target.device_name, kDeviceName);
+        EXPECT_EQ(share_target.type, kDeviceType);
+        EXPECT_TRUE(share_target.device_id);
+        EXPECT_NE(share_target.device_id, kEndpointId);
+        EXPECT_EQ(share_target.full_name, kTestMetadataFullName);
+        EXPECT_EQ(metadata.token(), kFourDigitToken);
+        notification.Notify();
+      }));
 
   SetUpKeyVerification(/*is_incoming=*/true, PairedKeyResultFrame::UNABLE);
   SetUpForegroundReceiveSurface(callback);
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
 
   service_->OnIncomingConnection(kEndpointId, GetValidV1EndpointInfo(),
-                                 &connection_);
+                                 connection_.get());
   ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
                                            /*success=*/true);
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
@@ -3102,7 +3153,7 @@ TEST_F(NearbySharingServiceImplTest,
   EXPECT_TRUE(
       fake_nearby_connections_manager_->DidUpgradeBandwidth(kEndpointId));
 
-  EXPECT_FALSE(connection_.IsClosed());
+  EXPECT_FALSE(connection_->IsClosed());
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
@@ -3121,26 +3172,27 @@ TEST_F(NearbySharingServiceImplTest,
   SetConnectionType(ConnectionType::kWifi);
   NiceMock<MockTransferUpdateCallback> callback;
   absl::Notification notification;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [&](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_FALSE(metadata.is_final_status());
-            EXPECT_EQ(TransferMetadata::Status::kAwaitingLocalConfirmation,
-                      metadata.status());
-            EXPECT_TRUE(share_target.is_incoming);
-            EXPECT_TRUE(share_target.is_known);
-            EXPECT_TRUE(share_target.has_attachments());
-            EXPECT_EQ(share_target.text_attachments.size(), 3u);
-            EXPECT_EQ(share_target.file_attachments.size(), 1u);
-            EXPECT_EQ(share_target.device_name, kDeviceName);
-            EXPECT_EQ(share_target.type, kDeviceType);
-            EXPECT_TRUE(share_target.device_id);
-            EXPECT_NE(share_target.device_id, kEndpointId);
-            EXPECT_EQ(share_target.full_name, kTestMetadataFullName);
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([&](const ShareTarget& share_target,
+                                    const AttachmentContainer& container,
+                                    TransferMetadata metadata) {
+        EXPECT_FALSE(metadata.is_final_status());
+        EXPECT_EQ(TransferMetadata::Status::kAwaitingLocalConfirmation,
+                  metadata.status());
+        EXPECT_TRUE(share_target.is_incoming);
+        EXPECT_TRUE(share_target.is_known);
+        EXPECT_TRUE(container.HasAttachments());
+        EXPECT_EQ(container.GetTextAttachments().size(), 3u);
+        EXPECT_EQ(container.GetFileAttachments().size(), 1u);
+        EXPECT_EQ(share_target.device_name, kDeviceName);
+        EXPECT_EQ(share_target.type, kDeviceType);
+        EXPECT_TRUE(share_target.device_id);
+        EXPECT_NE(share_target.device_id, kEndpointId);
+        EXPECT_EQ(share_target.full_name, kTestMetadataFullName);
 
-            EXPECT_EQ(kFourDigitToken, metadata.token());
-            notification.Notify();
-          }));
+        EXPECT_EQ(kFourDigitToken, metadata.token());
+        notification.Notify();
+      }));
 
   SetUpKeyVerification(/*is_incoming=*/true, PairedKeyResultFrame::UNABLE);
 
@@ -3148,9 +3200,10 @@ TEST_F(NearbySharingServiceImplTest,
       &callback, NearbySharingService::ReceiveSurfaceState::kBackground);
   EXPECT_EQ(result, NearbySharingService::StatusCodes::kOk);
   EXPECT_TRUE(fake_nearby_connections_manager_->IsAdvertising());
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
 
   service_->OnIncomingConnection(kEndpointId, GetValidV1EndpointInfo(),
-                                 &connection_);
+                                 connection_.get());
   ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
                                            /*success=*/true);
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
@@ -3158,7 +3211,7 @@ TEST_F(NearbySharingServiceImplTest,
   EXPECT_TRUE(
       fake_nearby_connections_manager_->DidUpgradeBandwidth(kEndpointId));
 
-  EXPECT_FALSE(connection_.IsClosed());
+  EXPECT_FALSE(connection_->IsClosed());
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
@@ -3183,19 +3236,20 @@ TEST_F(NearbySharingServiceImplTest,
   std::string intro = "introduction_frame";
   std::vector<uint8_t> bytes(intro.begin(), intro.end());
   EXPECT_CALL(fake_decoder_, DecodeFrame(testing::Eq(bytes))).Times(0);
-  connection_.AppendReadableData(bytes);
+  connection_->AppendReadableData(bytes);
   FlushTesting();
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
 
   service_->OnIncomingConnection(kEndpointId, GetValidV1EndpointInfo(),
-                                 &connection_);
+                                 connection_.get());
   ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
                                            /*success=*/true);
 
   // Ensure that the messages sent by ProcessLatestPublicCertificateDecryption
   // are processed prior to checking if connection is closed.
   EXPECT_TRUE(
-      FakeTaskRunner::WaitForRunningTasksWithTimeout(absl::Milliseconds(200)));
-  EXPECT_TRUE(connection_.IsClosed());
+      sharing_service_task_runner_->SyncWithTimeout(absl::Milliseconds(200)));
+  EXPECT_TRUE(connection_->IsClosed());
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
@@ -3209,6 +3263,7 @@ TEST_F(NearbySharingServiceImplTest,
                             /*expected_number_of_calls=*/1u);
 
   SetConnectionType(ConnectionType::kWifi);
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_EVERYONE);
   NiceMock<MockTransferUpdateCallback> callback;
 
   SetUpForegroundReceiveSurface(callback);
@@ -3217,15 +3272,16 @@ TEST_F(NearbySharingServiceImplTest,
   std::string intro = "introduction_frame";
   std::vector<uint8_t> bytes(intro.begin(), intro.end());
   EXPECT_CALL(fake_decoder_, DecodeFrame(testing::Eq(bytes))).Times(0);
-  connection_.AppendReadableData(bytes);
+  connection_->AppendReadableData(bytes);
   FlushTesting();
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
 
   service_->OnIncomingConnection(kEndpointId, GetValidV1EndpointInfo(),
-                                 &connection_);
+                                 connection_.get());
   ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
                                            /*success=*/true);
 
-  EXPECT_TRUE(connection_.IsClosed());
+  EXPECT_TRUE(connection_->IsClosed());
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
@@ -3233,8 +3289,8 @@ TEST_F(NearbySharingServiceImplTest,
 
 TEST_F(NearbySharingServiceImplTest, RegisterReceiveSurfaceAlreadyReceiving) {
   NiceMock<MockTransferUpdateCallback> callback;
-  ShareTarget share_target = SetUpIncomingConnection(callback);
-  EXPECT_FALSE(connection_.IsClosed());
+  SetUpIncomingConnection(callback);
+  EXPECT_FALSE(connection_->IsClosed());
 
   EXPECT_EQ(
       RegisterReceiveSurface(
@@ -3264,28 +3320,28 @@ TEST_F(NearbySharingServiceImplTest, RegisterReceiveSurfaceWhileDiscovering) {
 TEST_F(NearbySharingServiceImplTest, SendAttachmentsWithoutAttachments) {
   MockTransferUpdateCallback transfer_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
-  ShareTarget target =
+  int64_t target_id =
       DiscoverShareTarget(transfer_callback, discovery_callback);
 
-  EXPECT_EQ(SendAttachments(target, /*attachments=*/{}),
-            NearbySharingServiceImpl::StatusCodes::kError);
+  EXPECT_EQ(SendAttachments(target_id, /*attachment_container=*/nullptr),
+            NearbySharingServiceImpl::StatusCodes::kInvalidArgument);
 
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, RegisterReceiveSurfaceWhileSending) {
   MockTransferUpdateCallback transfer_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
-  ShareTarget target =
+  int64_t target_id =
       SetUpOutgoingShareTarget(transfer_callback, discovery_callback);
 
   absl::Notification notification;
-  ExpectTransferUpdates(transfer_callback, target,
+  ExpectTransferUpdates(transfer_callback, target_id,
                         {TransferMetadata::Status::kConnecting,
-                         TransferMetadata::Status::kAwaitingLocalConfirmation,
                          TransferMetadata::Status::kAwaitingRemoteAcceptance},
                         [&]() { notification.Notify(); });
-  EXPECT_EQ(SendAttachments(target, CreateTextAttachments({kTextPayload})),
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
+  EXPECT_EQ(SendAttachments(target_id, CreateTextAttachments({kTextPayload})),
             NearbySharingServiceImpl::StatusCodes::kOk);
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
@@ -3294,35 +3350,34 @@ TEST_F(NearbySharingServiceImplTest, RegisterReceiveSurfaceWhileSending) {
       NearbySharingService::ReceiveSurfaceState::kForeground);
   EXPECT_EQ(result, NearbySharingService::StatusCodes::kOk);
 
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, SendTextAlreadySending) {
   MockTransferUpdateCallback transfer_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
-  ShareTarget target =
+  int64_t target_id =
       SetUpOutgoingShareTarget(transfer_callback, discovery_callback);
 
   absl::Notification notification;
-  ExpectTransferUpdates(transfer_callback, target,
+  ExpectTransferUpdates(transfer_callback, target_id,
                         {TransferMetadata::Status::kConnecting,
-                         TransferMetadata::Status::kAwaitingLocalConfirmation,
                          TransferMetadata::Status::kAwaitingRemoteAcceptance},
                         [&]() { notification.Notify(); });
-  EXPECT_EQ(SendAttachments(target, CreateTextAttachments({kTextPayload})),
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
+  EXPECT_EQ(SendAttachments(target_id, CreateTextAttachments({kTextPayload})),
             NearbySharingServiceImpl::StatusCodes::kOk);
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
   // We're now in the sending state, try to send again should fail
-  EXPECT_EQ(SendAttachments(target, CreateTextAttachments({kTextPayload})),
+  EXPECT_EQ(SendAttachments(target_id, CreateTextAttachments({kTextPayload})),
             NearbySharingServiceImpl::StatusCodes::kError);
 
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, SendTextWithoutScanning) {
-  ShareTarget target;
-  EXPECT_EQ(SendAttachments(target, CreateTextAttachments({kTextPayload})),
+  EXPECT_EQ(SendAttachments(325626L, CreateTextAttachments({kTextPayload})),
             NearbySharingServiceImpl::StatusCodes::kError);
 }
 
@@ -3331,10 +3386,9 @@ TEST_F(NearbySharingServiceImplTest, SendTextUnknownTarget) {
   MockShareTargetDiscoveredCallback discovery_callback;
   DiscoverShareTarget(transfer_callback, discovery_callback);
 
-  ShareTarget target;
-  EXPECT_EQ(SendAttachments(target, CreateTextAttachments({kTextPayload})),
-            NearbySharingServiceImpl::StatusCodes::kError);
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  EXPECT_EQ(SendAttachments(12345L, CreateTextAttachments({kTextPayload})),
+            NearbySharingServiceImpl::StatusCodes::kInvalidArgument);
+  UnregisterSendSurface(&transfer_callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, SendTextFailedCreateEndpointInfo) {
@@ -3343,13 +3397,13 @@ TEST_F(NearbySharingServiceImplTest, SendTextFailedCreateEndpointInfo) {
 
   MockTransferUpdateCallback transfer_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
-  ShareTarget target =
+  int64_t target_id =
       DiscoverShareTarget(transfer_callback, discovery_callback);
 
-  EXPECT_EQ(SendAttachments(target, CreateTextAttachments({kTextPayload})),
+  EXPECT_EQ(SendAttachments(target_id, CreateTextAttachments({kTextPayload})),
             NearbySharingServiceImpl::StatusCodes::kError);
 
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, SendTextFailedToConnect) {
@@ -3357,32 +3411,33 @@ TEST_F(NearbySharingServiceImplTest, SendTextFailedToConnect) {
   MockShareTargetDiscoveredCallback discovery_callback;
   // Call DiscoverShareTarget() instead of SetUpOutgoingShareTarget() as we want
   // to fail before key verification is done.
-  ShareTarget target =
+  int64_t target_id =
       DiscoverShareTarget(transfer_callback, discovery_callback);
 
   absl::Notification notification;
   ExpectTransferUpdates(
-      transfer_callback, target,
+      transfer_callback, target_id,
       {TransferMetadata::Status::kConnecting,
        TransferMetadata::Status::kFailedToInitiateOutgoingConnection},
       [&]() { notification.Notify(); });
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
 
-  EXPECT_EQ(SendAttachments(target, CreateTextAttachments({kTextPayload})),
+  EXPECT_EQ(SendAttachments(target_id, CreateTextAttachments({kTextPayload})),
             NearbySharingServiceImpl::StatusCodes::kOk);
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, SendTextFailedKeyVerification) {
   MockTransferUpdateCallback transfer_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
-  ShareTarget target =
+  int64_t target_id =
       DiscoverShareTarget(transfer_callback, discovery_callback);
 
   absl::Notification notification;
   ExpectTransferUpdates(
-      transfer_callback, target,
+      transfer_callback, target_id,
       {TransferMetadata::Status::kConnecting,
        TransferMetadata::Status::kPairedKeyVerificationFailed},
       [&]() { notification.Notify(); });
@@ -3390,37 +3445,39 @@ TEST_F(NearbySharingServiceImplTest, SendTextFailedKeyVerification) {
   SetUpKeyVerification(/*is_incoming=*/false, PairedKeyResultFrame::FAIL);
   fake_nearby_connections_manager_->SetRawAuthenticationToken(kEndpointId,
                                                               GetToken());
-  fake_nearby_connections_manager_->set_nearby_connection(&connection_);
+  fake_nearby_connections_manager_->set_nearby_connection(connection_.get());
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
 
-  EXPECT_EQ(SendAttachments(target, CreateTextAttachments({kTextPayload})),
+  EXPECT_EQ(SendAttachments(target_id, CreateTextAttachments({kTextPayload})),
             NearbySharingServiceImpl::StatusCodes::kOk);
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, SendTextUnableToVerifyKey) {
   MockTransferUpdateCallback transfer_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
-  ShareTarget target =
+  int64_t target_id =
       DiscoverShareTarget(transfer_callback, discovery_callback);
 
   absl::Notification notification;
-  ExpectTransferUpdates(transfer_callback, target,
+  ExpectTransferUpdates(transfer_callback, target_id,
                         {TransferMetadata::Status::kConnecting,
-                         TransferMetadata::Status::kAwaitingLocalConfirmation,
                          TransferMetadata::Status::kAwaitingRemoteAcceptance},
                         [&]() { notification.Notify(); });
 
   SetUpKeyVerification(/*is_incoming=*/false, PairedKeyResultFrame::UNABLE);
   fake_nearby_connections_manager_->SetRawAuthenticationToken(kEndpointId,
                                                               GetToken());
-  fake_nearby_connections_manager_->set_nearby_connection(&connection_);
-  EXPECT_EQ(SendAttachments(target, CreateTextAttachments({kTextPayload})),
+  fake_nearby_connections_manager_->set_nearby_connection(connection_.get());
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
+
+  EXPECT_EQ(SendAttachments(target_id, CreateTextAttachments({kTextPayload})),
             NearbySharingServiceImpl::StatusCodes::kOk);
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
 }
 
 INSTANTIATE_TEST_SUITE_P(NearbySharingServiceImplSendFailureTest,
@@ -3430,17 +3487,17 @@ INSTANTIATE_TEST_SUITE_P(NearbySharingServiceImplSendFailureTest,
 TEST_P(NearbySharingServiceImplSendFailureTest, SendTextRemoteFailure) {
   MockTransferUpdateCallback transfer_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
-  ShareTarget target =
+  int64_t target_id =
       SetUpOutgoingShareTarget(transfer_callback, discovery_callback);
 
   absl::Notification notification;
-  ExpectTransferUpdates(transfer_callback, target,
+  ExpectTransferUpdates(transfer_callback, target_id,
                         {TransferMetadata::Status::kConnecting,
-                         TransferMetadata::Status::kAwaitingLocalConfirmation,
                          TransferMetadata::Status::kAwaitingRemoteAcceptance},
                         [&]() { notification.Notify(); });
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
 
-  EXPECT_EQ(SendAttachments(target, CreateTextAttachments({kTextPayload})),
+  EXPECT_EQ(SendAttachments(target_id, CreateTextAttachments({kTextPayload})),
             NearbySharingServiceImpl::StatusCodes::kOk);
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
@@ -3451,35 +3508,48 @@ TEST_P(NearbySharingServiceImplSendFailureTest, SendTextRemoteFailure) {
 
   // We're now waiting for the remote device to respond with the accept
   absl::Notification reject_notification;
-  ExpectTransferUpdates(transfer_callback, target, {GetParam().expected_status},
+  ExpectTransferUpdates(transfer_callback, target_id,
+                        {GetParam().expected_status},
                         [&]() { reject_notification.Notify(); });
 
   // Cancel the transfer by rejecting it.
   SendConnectionResponse(GetParam().response_status);
   EXPECT_TRUE(reject_notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
-  EXPECT_TRUE(connection_.IsClosed());
+  EXPECT_TRUE(connection_->IsClosed());
 
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
+}
+
+TEST_F(NearbySharingServiceImplTest, SendFileWithEmptyPath) {
+  MockTransferUpdateCallback transfer_callback;
+  MockShareTargetDiscoveredCallback discovery_callback;
+  int64_t target_id =
+      DiscoverShareTarget(transfer_callback, discovery_callback);
+
+  EXPECT_EQ(SendAttachments(target_id, CreateFileAttachments({""})),
+            NearbySharingServiceImpl::StatusCodes::kInvalidArgument);
+
+  UnregisterSendSurface(&transfer_callback);
 }
 
 TEST_P(NearbySharingServiceImplSendFailureTest, SendFilesRemoteFailure) {
   MockTransferUpdateCallback transfer_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
-  ShareTarget target =
+  int64_t target_id =
       SetUpOutgoingShareTarget(transfer_callback, discovery_callback);
 
   std::vector<uint8_t> test_data = {'T', 'e', 's', 't'};
   std::filesystem::path path = CreateTestFile("text.txt", test_data);
 
   absl::Notification notification;
-  ExpectTransferUpdates(transfer_callback, target,
+  ExpectTransferUpdates(transfer_callback, target_id,
                         {TransferMetadata::Status::kConnecting,
-                         TransferMetadata::Status::kAwaitingLocalConfirmation,
                          TransferMetadata::Status::kAwaitingRemoteAcceptance},
                         [&]() { notification.Notify(); });
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
 
-  EXPECT_EQ(SendAttachments(target, CreateFileAttachments({path})),
+  EXPECT_EQ(SendAttachments(target_id, CreateFileAttachments({path})),
             NearbySharingServiceImpl::StatusCodes::kOk);
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
@@ -3490,16 +3560,17 @@ TEST_P(NearbySharingServiceImplSendFailureTest, SendFilesRemoteFailure) {
 
   // We're now waiting for the remote device to respond with the accept
   absl::Notification reject_notification;
-  ExpectTransferUpdates(transfer_callback, target, {GetParam().expected_status},
+  ExpectTransferUpdates(transfer_callback, target_id,
+                        {GetParam().expected_status},
                         [&]() { reject_notification.Notify(); });
 
   // Cancel the transfer by rejecting it.
   SendConnectionResponse(GetParam().response_status);
   EXPECT_TRUE(reject_notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
-  EXPECT_TRUE(connection_.IsClosed());
+  EXPECT_TRUE(connection_->IsClosed());
 
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, SendTextSuccess) {
@@ -3508,17 +3579,17 @@ TEST_F(NearbySharingServiceImplTest, SendTextSuccess) {
   AccountManager::Account account;
   account.id = kTestAccountId;
   account_manager().SetAccount(account);
-  ShareTarget target =
+  int64_t target_id =
       SetUpOutgoingShareTarget(transfer_callback, discovery_callback);
 
   absl::Notification notification;
-  ExpectTransferUpdates(transfer_callback, target,
+  ExpectTransferUpdates(transfer_callback, target_id,
                         {TransferMetadata::Status::kConnecting,
-                         TransferMetadata::Status::kAwaitingLocalConfirmation,
                          TransferMetadata::Status::kAwaitingRemoteAcceptance},
                         [&]() { notification.Notify(); });
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
 
-  EXPECT_EQ(SendAttachments(target, CreateTextAttachments({kTextPayload})),
+  EXPECT_EQ(SendAttachments(target_id, CreateTextAttachments({kTextPayload})),
             NearbySharingServiceImpl::StatusCodes::kOk);
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
@@ -3549,8 +3620,8 @@ TEST_F(NearbySharingServiceImplTest, SendTextSuccess) {
   EXPECT_EQ(advertisement->encrypted_metadata_key(),
             test_metadata_key.encrypted_key());
 
-  PayloadInfo info = AcceptAndSendPayload(transfer_callback, target);
-  FinishOutgoingTransfer(transfer_callback, target, info);
+  PayloadInfo info = AcceptAndSendPayload(transfer_callback, target_id);
+  FinishOutgoingTransfer(transfer_callback, target_id, info);
 
   // We should not have called disconnect yet as we want to wait for 1 minute to
   // make sure all outgoing packets have been sent properly.
@@ -3564,18 +3635,18 @@ TEST_F(NearbySharingServiceImplTest, SendTextSuccess) {
   EXPECT_FALSE(
       fake_nearby_connections_manager_->connection_endpoint_info(kEndpointId));
 
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
   account_manager().SetAccount(std::nullopt);
 }
 
 TEST_F(NearbySharingServiceImplTest, SendTextSuccessClosedConnection) {
   MockTransferUpdateCallback transfer_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
-  ShareTarget target =
+  int64_t target_id =
       SetUpOutgoingShareTarget(transfer_callback, discovery_callback);
-  SetUpOutgoingConnectionUntilAccept(transfer_callback, target);
-  PayloadInfo info = AcceptAndSendPayload(transfer_callback, target);
-  FinishOutgoingTransfer(transfer_callback, target, info);
+  SetUpOutgoingConnectionUntilAccept(transfer_callback, target_id);
+  PayloadInfo info = AcceptAndSendPayload(transfer_callback, target_id);
+  FinishOutgoingTransfer(transfer_callback, target_id, info);
 
   // We should not have called disconnect yet as we want to wait for 1 minute
   // to make sure all outgoing packets have been sent properly.
@@ -3583,7 +3654,7 @@ TEST_F(NearbySharingServiceImplTest, SendTextSuccessClosedConnection) {
       fake_nearby_connections_manager_->connection_endpoint_info(kEndpointId));
 
   // Call disconnect on the connection early before the timeout has passed.
-  connection_.Close();
+  sharing_service_task_runner_->PostTask([this]() { connection_->Close(); });
 
   // Expect that we haven't called disconnect again as the endpoint is already
   // disconnected.
@@ -3593,13 +3664,13 @@ TEST_F(NearbySharingServiceImplTest, SendTextSuccessClosedConnection) {
   // Make sure the scheduled disconnect callback does nothing.
   FastForward(kOutgoingDisconnectionDelay);
 
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, SendFilesSuccess) {
   MockTransferUpdateCallback transfer_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
-  ShareTarget target =
+  int64_t target_id =
       SetUpOutgoingShareTarget(transfer_callback, discovery_callback);
 
   std::vector<uint8_t> test_data = {'T', 'e', 's', 't'};
@@ -3607,13 +3678,13 @@ TEST_F(NearbySharingServiceImplTest, SendFilesSuccess) {
   std::filesystem::path path = CreateTestFile(file_name, test_data);
 
   absl::Notification introduction_notification;
-  ExpectTransferUpdates(transfer_callback, target,
+  ExpectTransferUpdates(transfer_callback, target_id,
                         {TransferMetadata::Status::kConnecting,
-                         TransferMetadata::Status::kAwaitingLocalConfirmation,
                          TransferMetadata::Status::kAwaitingRemoteAcceptance},
                         [&]() { introduction_notification.Notify(); });
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
 
-  EXPECT_EQ(SendAttachments(target, CreateFileAttachments({path})),
+  EXPECT_EQ(SendAttachments(target_id, CreateFileAttachments({path})),
             NearbySharingServiceImpl::StatusCodes::kOk);
   EXPECT_TRUE(
       introduction_notification.WaitForNotificationWithTimeout(kWaitTimeout));
@@ -3647,7 +3718,7 @@ TEST_F(NearbySharingServiceImplTest, SendFilesSuccess) {
   // We're now waiting for the remote device to respond with the accept
   // result.
   absl::Notification accept_notification;
-  ExpectTransferUpdates(transfer_callback, target,
+  ExpectTransferUpdates(transfer_callback, target_id,
                         {TransferMetadata::Status::kInProgress},
                         [&]() { accept_notification.Notify(); });
 
@@ -3658,19 +3729,86 @@ TEST_F(NearbySharingServiceImplTest, SendFilesSuccess) {
   EXPECT_TRUE(
       payload_notification.WaitForNotificationWithTimeout(kWaitTimeout));
 
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
+}
+
+TEST_F(NearbySharingServiceImplTest, SendWifiCredentialsSuccess) {
+  NearbyFlags::GetInstance().OverrideBoolFlagValue(
+      config_package_nearby::nearby_sharing_feature::
+          kEnableTransferCancellationOptimization,
+      true);
+  MockTransferUpdateCallback transfer_callback;
+  MockShareTargetDiscoveredCallback discovery_callback;
+  int64_t target_id =
+      SetUpOutgoingShareTarget(transfer_callback, discovery_callback);
+
+  absl::Notification introduction_notification;
+  ExpectTransferUpdates(transfer_callback, target_id,
+                        {TransferMetadata::Status::kConnecting,
+                         TransferMetadata::Status::kAwaitingRemoteAcceptance},
+                        [&]() { introduction_notification.Notify(); });
+  EXPECT_CALL(*mock_app_info_, SetActiveFlag());
+
+  EXPECT_EQ(SendAttachments(target_id, CreateWifiCredentialAttachments(
+                                           "GoogleGuest", "password")),
+            NearbySharingServiceImpl::StatusCodes::kOk);
+  EXPECT_TRUE(
+      introduction_notification.WaitForNotificationWithTimeout(kWaitTimeout));
+
+  // Verify data sent to the remote device so far.
+  EXPECT_TRUE(ExpectPairedKeyEncryptionFrame());
+  EXPECT_TRUE(ExpectPairedKeyResultFrame());
+  std::optional<IntroductionFrame> intro = ExpectIntroductionFrame();
+
+  ASSERT_TRUE(intro.has_value());
+  ASSERT_EQ(intro->wifi_credentials_metadata_size(), 1);
+  auto meta = intro->wifi_credentials_metadata(0);
+
+  EXPECT_EQ(meta.ssid(), "GoogleGuest");
+  EXPECT_EQ(meta.security_type(),
+            service::proto::WifiCredentialsMetadata::WPA_PSK);
+
+  // Expect the wifi credential payload to be sent in the end.
+  absl::Notification payload_notification;
+  fake_nearby_connections_manager_->set_send_payload_callback(
+      [&](std::unique_ptr<nearby::sharing::Payload> payload,
+          std::weak_ptr<NearbyConnectionsManager::PayloadStatusListener>
+              listener) {
+        ASSERT_TRUE(payload->content.is_bytes());
+        std::vector<uint8_t> bytes = payload->content.bytes_payload.bytes;
+        nearby::sharing::service::proto::WifiCredentials wifi_credentials;
+        ASSERT_TRUE(
+            wifi_credentials.ParseFromArray(bytes.data(), bytes.size()));
+        EXPECT_EQ(wifi_credentials.password(), "password");
+        EXPECT_FALSE(wifi_credentials.hidden_ssid());
+
+        payload_notification.Notify();
+      });
+
+  // We're now waiting for the remote device to respond with the accept
+  // result.
+  absl::Notification accept_notification;
+  ExpectTransferUpdates(transfer_callback, target_id,
+                        {TransferMetadata::Status::kInProgress},
+                        [&]() { accept_notification.Notify(); });
+
+  // Kick off send process by accepting the transfer from the remote device.
+  SendConnectionResponse(ConnectionResponseFrame::ACCEPT);
+
+  EXPECT_TRUE(accept_notification.WaitForNotificationWithTimeout(kWaitTimeout));
+  EXPECT_TRUE(
+      payload_notification.WaitForNotificationWithTimeout(kWaitTimeout));
+
+  UnregisterSendSurface(&transfer_callback);
 }
 
 TEST_F(NearbySharingServiceImplTest, CancelSenderInitiator) {
   MockTransferUpdateCallback transfer_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
-  ShareTarget target =
+  int64_t target_id =
       SetUpOutgoingShareTarget(transfer_callback, discovery_callback);
-  std::optional<ShareTarget> outgoing_share_target =
-      SetUpOutgoingConnectionUntilAccept(transfer_callback, target);
-  ASSERT_TRUE(outgoing_share_target.has_value());
-  target = *outgoing_share_target;
-  PayloadInfo info = AcceptAndSendPayload(transfer_callback, target);
+  SetUpOutgoingConnectionUntilAccept(transfer_callback, target_id);
+  PayloadInfo info = AcceptAndSendPayload(transfer_callback, target_id);
 
   // After we stop scanning, we check back in after kInvalidateDelay
   // milliseconds to make sure that we stopped in order to send a file and
@@ -3680,17 +3818,19 @@ TEST_F(NearbySharingServiceImplTest, CancelSenderInitiator) {
   FastForward(kInvalidateDelay);
 
   absl::Notification notification;
-  EXPECT_CALL(transfer_callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [&](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_EQ(share_target.id, target.id);
-            EXPECT_EQ(metadata.status(), TransferMetadata::Status::kCancelled);
-          }));
+  EXPECT_CALL(transfer_callback,
+              OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([&](const ShareTarget& share_target,
+                                    const AttachmentContainer& container,
+                                    TransferMetadata metadata) {
+        EXPECT_EQ(share_target.id, target_id);
+        EXPECT_EQ(metadata.status(), TransferMetadata::Status::kCancelled);
+      }));
   EXPECT_FALSE(
       fake_nearby_connections_manager_->WasPayloadCanceled(info.payload_id));
   // The initiator of the cancellation explicitly calls Cancel().
   service_->Cancel(
-      target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
+      target_id, [&](NearbySharingServiceImpl::StatusCodes status_code) {
         EXPECT_EQ(status_code, NearbySharingServiceImpl::StatusCodes::kOk);
         notification.Notify();
       });
@@ -3700,37 +3840,36 @@ TEST_F(NearbySharingServiceImplTest, CancelSenderInitiator) {
 
   // After the TransferMetadata::Status::kCancelled update, we expect other
   // classes to unregister the send surface.
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
 
   // The initiator of the cancel should send a cancel frame to the other device,
   // then wait a few seconds before disconnecting to allow for processing on the
   // other device.
   EXPECT_TRUE(ExpectProgressUpdateFrame());
   EXPECT_TRUE(ExpectCancelFrame());
-  EXPECT_FALSE(connection_.IsClosed());
+  EXPECT_FALSE(connection_->IsClosed());
   FastForward(kInitiatorCancelDelay);
-  EXPECT_TRUE(connection_.IsClosed());
+  EXPECT_TRUE(connection_->IsClosed());
 }
 
 TEST_F(NearbySharingServiceImplTest, CancelSenderNoninitiator) {
   MockTransferUpdateCallback transfer_callback;
   MockShareTargetDiscoveredCallback discovery_callback;
-  ShareTarget target =
+  int64_t target_id =
       SetUpOutgoingShareTarget(transfer_callback, discovery_callback);
-  std::optional<ShareTarget> outgoing_share_target =
-      SetUpOutgoingConnectionUntilAccept(transfer_callback, target);
-  ASSERT_TRUE(outgoing_share_target.has_value());
-  target = *outgoing_share_target;
-  PayloadInfo info = AcceptAndSendPayload(transfer_callback, target);
+  SetUpOutgoingConnectionUntilAccept(transfer_callback, target_id);
+  PayloadInfo info = AcceptAndSendPayload(transfer_callback, target_id);
 
   absl::Notification notification;
-  EXPECT_CALL(transfer_callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [&](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_EQ(share_target.id, target.id);
-            EXPECT_EQ(metadata.status(), TransferMetadata::Status::kCancelled);
-            notification.Notify();
-          }));
+  EXPECT_CALL(transfer_callback,
+              OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([&](const ShareTarget& share_target,
+                                    const AttachmentContainer& container,
+                                    TransferMetadata metadata) {
+        EXPECT_EQ(share_target.id, target_id);
+        EXPECT_EQ(metadata.status(), TransferMetadata::Status::kCancelled);
+        notification.Notify();
+      }));
   EXPECT_FALSE(
       fake_nearby_connections_manager_->WasPayloadCanceled(info.payload_id));
   // The non-initiator of the cancellation processes a cancellation frame from
@@ -3741,27 +3880,29 @@ TEST_F(NearbySharingServiceImplTest, CancelSenderNoninitiator) {
       fake_nearby_connections_manager_->WasPayloadCanceled(info.payload_id));
 
   // The non-initiator should close the connection immediately
-  EXPECT_TRUE(connection_.IsClosed());
+  EXPECT_TRUE(connection_->IsClosed());
 }
 
 TEST_F(NearbySharingServiceImplTest, CancelReceiverInitiator) {
   NiceMock<MockTransferUpdateCallback> transfer_callback;
-  ShareTarget target = SetUpIncomingConnection(transfer_callback);
+  int64_t target_id = SetUpIncomingConnection(transfer_callback);
   ASSERT_TRUE(ExpectPairedKeyEncryptionFrame());
   ASSERT_TRUE(ExpectPairedKeyResultFrame());
 
   absl::Notification notification;
-  EXPECT_CALL(transfer_callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [&](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_EQ(share_target.id, target.id);
-            EXPECT_EQ(metadata.status(), TransferMetadata::Status::kCancelled);
-          }));
+  EXPECT_CALL(transfer_callback,
+              OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([&](const ShareTarget& share_target,
+                                    const AttachmentContainer& container,
+                                    TransferMetadata metadata) {
+        EXPECT_EQ(share_target.id, target_id);
+        EXPECT_EQ(metadata.status(), TransferMetadata::Status::kCancelled);
+      }));
   EXPECT_FALSE(
       fake_nearby_connections_manager_->WasPayloadCanceled(kFilePayloadId));
   // The initiator of the cancellation explicitly calls Cancel().
   service_->Cancel(
-      target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
+      target_id, [&](NearbySharingServiceImpl::StatusCodes status_code) {
         EXPECT_EQ(NearbySharingServiceImpl::StatusCodes::kOk, status_code);
         notification.Notify();
       });
@@ -3777,25 +3918,27 @@ TEST_F(NearbySharingServiceImplTest, CancelReceiverInitiator) {
   // then wait a few seconds before disconnecting to allow for processing on the
   // other device.
   ASSERT_TRUE(ExpectCancelFrame());
-  EXPECT_FALSE(connection_.IsClosed());
+  EXPECT_FALSE(connection_->IsClosed());
   FastForward(kInitiatorCancelDelay);
-  EXPECT_TRUE(connection_.IsClosed());
+  EXPECT_TRUE(connection_->IsClosed());
 }
 
 TEST_F(NearbySharingServiceImplTest, CancelReceiverNoninitiator) {
   NiceMock<MockTransferUpdateCallback> transfer_callback;
-  ShareTarget target = SetUpIncomingConnection(transfer_callback);
+  int64_t target_id = SetUpIncomingConnection(transfer_callback);
   ExpectPairedKeyEncryptionFrame();
   ExpectPairedKeyResultFrame();
 
   absl::Notification notification;
-  EXPECT_CALL(transfer_callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [&](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_EQ(target.id, share_target.id);
-            EXPECT_EQ(TransferMetadata::Status::kCancelled, metadata.status());
-            notification.Notify();
-          }));
+  EXPECT_CALL(transfer_callback,
+              OnTransferUpdate(testing::_, testing::_, testing::_))
+      .WillOnce(testing::Invoke([&](const ShareTarget& share_target,
+                                    const AttachmentContainer& container,
+                                    TransferMetadata metadata) {
+        EXPECT_EQ(target_id, share_target.id);
+        EXPECT_EQ(TransferMetadata::Status::kCancelled, metadata.status());
+        notification.Notify();
+      }));
   EXPECT_FALSE(
       fake_nearby_connections_manager_->WasPayloadCanceled(kFilePayloadId));
   // The non-initiator of the cancellation processes a cancellation frame from
@@ -3806,7 +3949,7 @@ TEST_F(NearbySharingServiceImplTest, CancelReceiverNoninitiator) {
       fake_nearby_connections_manager_->WasPayloadCanceled(kFilePayloadId));
 
   // The non-initiator should close the connection immediately
-  EXPECT_TRUE(connection_.IsClosed());
+  EXPECT_TRUE(connection_->IsClosed());
 }
 
 TEST_F(NearbySharingServiceImplTest,
@@ -3838,6 +3981,77 @@ TEST_F(NearbySharingServiceImplTest,
             NearbySharingService::StatusCodes::kOk);
   EXPECT_FALSE(service_->IsInHighVisibility());
   EXPECT_FALSE(observer.in_high_visibility_);
+
+  // Remove the observer before it goes out of scope.
+  service_->RemoveObserver(&observer);
+  FlushTesting();
+}
+
+TEST_F(NearbySharingServiceImplTest, AddObserverSendsInitialAdapterState) {
+  SetBluetoothIsPresent(true);
+  SetBluetoothIsPowered(false);
+  SetWifiIsPresent(false);
+  SetWifiIsPowered(false);
+  SetLanIsConnected(true);
+
+  TestObserver observer(service_.get());
+  FlushTesting();
+
+  EXPECT_EQ(observer.bluetooth_state_,
+            NearbySharingService::Observer::AdapterState::DISABLED);
+  EXPECT_EQ(observer.lan_state_,
+            NearbySharingService::Observer::AdapterState::ENABLED);
+
+  // Remove the observer before it goes out of scope.
+  service_->RemoveObserver(&observer);
+}
+
+TEST_F(NearbySharingServiceImplTest, AddObserverBluetoothAdapterUpdate) {
+  SetBluetoothIsPresent(false);
+  SetBluetoothIsPowered(false);
+  SetWifiIsPresent(false);
+  SetWifiIsPowered(false);
+  SetLanIsConnected(false);
+
+  TestObserver observer(service_.get());
+  FlushTesting();
+  EXPECT_EQ(observer.bluetooth_state_,
+            NearbySharingService::Observer::AdapterState::NOT_PRESENT);
+
+  SetBluetoothIsPresent(true);
+  SetBluetoothIsPowered(false);
+  EXPECT_EQ(observer.bluetooth_state_,
+            NearbySharingService::Observer::AdapterState::DISABLED);
+
+  SetBluetoothIsPresent(true);
+  SetBluetoothIsPowered(true);
+  EXPECT_EQ(observer.bluetooth_state_,
+            NearbySharingService::Observer::AdapterState::ENABLED);
+
+  SetBluetoothIsPresent(false);
+  SetBluetoothIsPowered(true);
+  EXPECT_EQ(observer.bluetooth_state_,
+            NearbySharingService::Observer::AdapterState::NOT_PRESENT);
+
+  // Remove the observer before it goes out of scope.
+  service_->RemoveObserver(&observer);
+}
+
+TEST_F(NearbySharingServiceImplTest, AddObserverLanAdapterUpdate) {
+  SetBluetoothIsPresent(false);
+  SetBluetoothIsPowered(false);
+  SetWifiIsPresent(false);
+  SetWifiIsPowered(false);
+  SetLanIsConnected(false);
+
+  TestObserver observer(service_.get());
+  FlushTesting();
+  EXPECT_EQ(observer.lan_state_,
+            NearbySharingService::Observer::AdapterState::DISABLED);
+
+  SetLanIsConnected(true);
+  EXPECT_EQ(observer.lan_state_,
+            NearbySharingService::Observer::AdapterState::ENABLED);
 
   // Remove the observer before it goes out of scope.
   service_->RemoveObserver(&observer);
@@ -3885,13 +4099,13 @@ TEST_F(NearbySharingServiceImplTest,
 
   certificate_manager()->set_next_salt({0x00, 0x02});
   certificate_manager()->NotifyPrivateCertificatesChanged();
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
+  EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout));
   EXPECT_TRUE(fake_nearby_connections_manager_->IsAdvertising());
   auto endpoint_info_rotated =
       fake_nearby_connections_manager_->advertising_endpoint_info();
   EXPECT_NE(endpoint_info_initial, endpoint_info_rotated);
   UnregisterReceiveSurface(&callback);
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
+  EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout));
 }
 
 TEST_F(NearbySharingServiceImplTest, OrderedEndpointDiscoveryEvents) {
@@ -4108,7 +4322,7 @@ TEST_F(NearbySharingServiceImplTest,
   EXPECT_CALL(discovery_callback, OnShareTargetLost).Times(0);
   ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
                                            /*success=*/false);
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
   FastForward(kCertificateDownloadDuringDiscoveryPeriod);
   EXPECT_EQ(certificate_manager()->num_download_public_certificates_calls(),
             1u);
@@ -4209,7 +4423,7 @@ TEST_F(NearbySharingServiceImplTest, RetryDiscoveredEndpointsDownloadLimit) {
   FastForward(kCertificateDownloadDuringDiscoveryPeriod);
   EXPECT_EQ(certificate_manager()->num_download_public_certificates_calls(),
             1u + kMaxCertificateDownloadsDuringDiscovery);
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
+  UnregisterSendSurface(&transfer_callback);
   RegisterSendSurface(&transfer_callback, &discovery_callback,
                       SendSurfaceState::kForeground);
   // Note: Certificate downloads are also requested in RegisterSendSurface; this
@@ -4230,11 +4444,12 @@ TEST_F(NearbySharingServiceImplTest, RetryDiscoveredEndpointsDownloadLimit) {
 
 TEST_F(NearbySharingServiceImplTest, OpenSharedTarget) {
   ShareTarget share_target;
-  share_target.text_attachments = {
-      TextAttachment(TextMetadata::TEXT, "body", "title", "mime")};
+  auto container = std::make_unique<AttachmentContainer>();
+  container->AddTextAttachment(
+      TextAttachment(TextMetadata::TEXT, "body", "title", "mime"));
   NearbySharingService::StatusCodes result;
   absl::Notification notification;
-  service_->Open(share_target,
+  service_->Open(share_target, std::move(container),
                  [&](NearbySharingService::StatusCodes status_code) {
                    result = status_code;
                    notification.Notify();
@@ -4242,6 +4457,20 @@ TEST_F(NearbySharingServiceImplTest, OpenSharedTarget) {
 
   ASSERT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
   EXPECT_EQ(result, NearbySharingService::StatusCodes::kOk);
+}
+
+TEST_F(NearbySharingServiceImplTest, OpenSharedTargetWithEmptyAttachments) {
+  ShareTarget share_target;
+  NearbySharingService::StatusCodes result;
+  absl::Notification notification;
+  service_->Open(share_target, std::make_unique<AttachmentContainer>(),
+                 [&](NearbySharingService::StatusCodes status_code) {
+                   result = status_code;
+                   notification.Notify();
+                 });
+
+  ASSERT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
+  EXPECT_EQ(result, NearbySharingService::StatusCodes::kInvalidArgument);
 }
 
 TEST_F(NearbySharingServiceImplTest,
@@ -4256,8 +4485,64 @@ TEST_F(NearbySharingServiceImplTest,
   EXPECT_FALSE(fake_nearby_connections_manager_->is_shutdown());
 }
 
+TEST_F(NearbySharingServiceImplTest, BlockTargetWithSameVendorId) {
+  InSequence s;
+  // Set up advertisement decoder.
+  EXPECT_CALL(fake_decoder_, DecodeAdvertisement(testing::_))
+      .WillRepeatedly(testing::Invoke([=](absl::Span<const uint8_t> data) {
+        return Advertisement::NewInstance(
+            GetNearbyShareTestEncryptedMetadataKey().salt(),
+            GetNearbyShareTestEncryptedMetadataKey().encrypted_key(),
+            kDeviceType, kDeviceName,
+            static_cast<uint8_t>(Advertisement::BlockedVendorId::kSamsung));
+      }));
+  // Register send surface with vendor ID 1 that requests blocking.
+  MockTransferUpdateCallback callback;
+  MockShareTargetDiscoveredCallback discovery_callback;
+  ASSERT_EQ(RegisterSendSurface(&callback, &discovery_callback,
+                                SendSurfaceState::kForeground,
+                                Advertisement::BlockedVendorId::kSamsung),
+            NearbySharingService::StatusCodes::kOk);
+  // Verify service will not report discovered.
+  EXPECT_CALL(discovery_callback, OnShareTargetDiscovered(testing::_)).Times(0);
+  // Find endpoint with vendor ID 1.
+  FindEndpointWithVendorId(
+      /*endpoint_id=*/"1",
+      static_cast<uint8_t>(Advertisement::BlockedVendorId::kSamsung));
+  ProcessLatestPublicCertificateDecryption(/*expected_num_calls=*/1,
+                                           /*success=*/false);
+}
+
+TEST_F(NearbySharingServiceImplTest,
+       RegisterSendSurfaceWithDifferentVendorIdIsBlocked) {
+  SetConnectionType(ConnectionType::kWifi);
+  preference_manager().SetInteger(
+      prefs::kNearbySharingBackgroundVisibilityName,
+      static_cast<int>(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS));
+  FlushTesting();
+
+  // Register background send surface with vendor ID 1.
+  MockShareTargetDiscoveredCallback background_discovered_callback;
+  MockTransferUpdateCallback background_transfer_callback;
+  NearbySharingService::StatusCodes result = RegisterSendSurface(
+      &background_transfer_callback, &background_discovered_callback,
+      NearbySharingService::SendSurfaceState::kBackground,
+      Advertisement::BlockedVendorId::kSamsung);
+  ASSERT_EQ(result, NearbySharingService::StatusCodes::kOk);
+  // Register foreground send surface with different vendor ID.
+  MockShareTargetDiscoveredCallback foreground_discovered_callback;
+  MockTransferUpdateCallback foreground_transfer_callback;
+  result = RegisterSendSurface(
+      &foreground_transfer_callback, &foreground_discovered_callback,
+      NearbySharingService::SendSurfaceState::kForeground,
+      static_cast<Advertisement::BlockedVendorId>(2));
+  EXPECT_EQ(result, NearbySharingService::StatusCodes::kInvalidArgument);
+  EXPECT_FALSE(fake_nearby_connections_manager_->IsDiscovering());
+}
+
 TEST_F(NearbySharingServiceImplTest, ScreenLocksDuringAdvertising) {
   SetConnectionType(ConnectionType::kWifi);
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   MockTransferUpdateCallback callback;
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
@@ -4290,20 +4575,10 @@ TEST_F(NearbySharingServiceImplTest, ScreenLocksDuringDiscovery) {
 }
 
 TEST_F(NearbySharingServiceImplTest, CreateShareTarget) {
-  auto CreateShareTarget =
-      [](NearbySharingServiceImpl* service_,
-         std::unique_ptr<Advertisement> advertisement,
-         std::optional<NearbyShareDecryptedPublicCertificate> certificate)
-      -> std::optional<ShareTarget> {
-    return service_->CreateShareTarget(kEndpointId, std::move(advertisement),
-                                       certificate,
-                                       /*is_incoming=*/true);
-  };
-
   std::unique_ptr<Advertisement> advertisement = Advertisement::NewInstance(
       GetNearbyShareTestEncryptedMetadataKey().salt(),
       GetNearbyShareTestEncryptedMetadataKey().encrypted_key(), kDeviceType,
-      kDeviceName);
+      kDeviceName, kVendorId);
 
   // Flip |for_self_share| to true to ensure the resulting ShareTarget picks
   // this up.
@@ -4318,8 +4593,8 @@ TEST_F(NearbySharingServiceImplTest, CreateShareTarget) {
   ASSERT_TRUE(certificate.has_value());
   ASSERT_EQ(certificate_proto.for_self_share(), certificate->for_self_share());
 
-  std::optional<ShareTarget> share_target =
-      CreateShareTarget(service_.get(), std::move(advertisement), certificate);
+  std::optional<ShareTarget> share_target = service_->CreateShareTarget(
+      kEndpointId, *advertisement, certificate, /*is_incoming=*/true);
 
   ASSERT_TRUE(share_target.has_value());
   EXPECT_EQ(kDeviceName, share_target->device_name);
@@ -4327,24 +4602,17 @@ TEST_F(NearbySharingServiceImplTest, CreateShareTarget) {
   EXPECT_EQ(certificate_proto.for_self_share(), share_target->for_self_share);
 
   // Test when |certificate| is null.
-  advertisement = Advertisement::NewInstance(
-      GetNearbyShareTestEncryptedMetadataKey().salt(),
-      GetNearbyShareTestEncryptedMetadataKey().encrypted_key(), kDeviceType,
-      kDeviceName);
-  share_target = CreateShareTarget(service_.get(), std::move(advertisement),
-                                   /*certificate=*/std::nullopt);
+  share_target = service_->CreateShareTarget(kEndpointId, *advertisement,
+                                             /*certificate=*/std::nullopt,
+                                             /*is_incoming=*/true);
   ASSERT_TRUE(share_target.has_value());
   EXPECT_EQ(kDeviceName, share_target->device_name);
   EXPECT_EQ(kDeviceType, share_target->type);
+  EXPECT_EQ(kVendorId, share_target->vendor_id);
   EXPECT_FALSE(share_target->for_self_share);
 }
 
 TEST_F(NearbySharingServiceImplTest, SelfShareAutoAccept) {
-  for (int64_t payload_id : GetValidIntroductionFramePayloadIds()) {
-    fake_nearby_connections_manager_->SetPayloadPathStatus(payload_id,
-                                                           Status::kSuccess);
-  }
-
   // We create an incoming connection corresponding to a certificate where the
   // |for_self_share| field is set to 'true'. This value will be propagated to
   // the ShareTarget, which will be used as a signal for the service to
@@ -4352,12 +4620,12 @@ TEST_F(NearbySharingServiceImplTest, SelfShareAutoAccept) {
   // similar to other tests (see "AcceptValidShareTarget") but without the
   // explicit call to service_->Accept().
   NiceMock<MockTransferUpdateCallback> callback;
-  ShareTarget share_target = SetUpIncomingConnection(
+  int64_t share_target_id = SetUpIncomingConnection(
       callback, /*is_foreground=*/false, /*for_self_share=*/true);
 
   // Should fail to call accept.
   service_->Accept(
-      share_target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
+      share_target_id, [&](NearbySharingServiceImpl::StatusCodes status_code) {
         EXPECT_EQ(status_code,
                   NearbySharingServiceImpl::StatusCodes::kOutOfOrderApiCall);
       });
@@ -4367,7 +4635,7 @@ TEST_F(NearbySharingServiceImplTest, SelfShareAutoAccept) {
   ExpectPairedKeyResultFrame();
   ExpectConnectionResponseFrame(ConnectionResponseFrame::ACCEPT);
 
-  EXPECT_FALSE(connection_.IsClosed());
+  EXPECT_FALSE(connection_->IsClosed());
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
@@ -4376,53 +4644,16 @@ TEST_F(NearbySharingServiceImplTest, SelfShareAutoAccept) {
   service_.reset();
 }
 
-TEST_F(NearbySharingServiceImplTest, SelfShareNormalFlowWhenSelfshareDisabled) {
-  for (int64_t payload_id : GetValidIntroductionFramePayloadIds()) {
-    fake_nearby_connections_manager_->SetPayloadPathStatus(payload_id,
-                                                           Status::kSuccess);
-  }
-
-  DisableSelfshareFeature();
-
-  NiceMock<MockTransferUpdateCallback> callback;
-  ShareTarget share_target = SetUpIncomingConnection(
-      callback, /*is_foreground=*/false, /*for_self_share=*/true);
-
-  absl::Notification notification;
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_))
-      .WillOnce(testing::Invoke(
-          [&](const ShareTarget& share_target, TransferMetadata metadata) {
-            EXPECT_FALSE(metadata.is_final_status());
-            EXPECT_EQ(metadata.status(),
-                      TransferMetadata::Status::kAwaitingRemoteAcceptance);
-            notification.Notify();
-          }));
-
-  service_->Accept(
-      share_target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
-        EXPECT_EQ(status_code, NearbySharingServiceImpl::StatusCodes::kOk);
-      });
-
-  EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
-
-  // To avoid UAF in OnIncomingTransferUpdate().
-  UnregisterReceiveSurface(&callback);
-}
-
 TEST_F(NearbySharingServiceImplTest, SelfShareNoAutoAcceptInForeground) {
-  for (int64_t payload_id : GetValidIntroductionFramePayloadIds()) {
-    fake_nearby_connections_manager_->SetPayloadPathStatus(payload_id,
-                                                           Status::kSuccess);
-  }
-
   NiceMock<MockTransferUpdateCallback> callback;
-  ShareTarget share_target = SetUpIncomingConnection(
+  int64_t share_target_id = SetUpIncomingConnection(
       callback, /*is_foreground=*/true, /*for_self_share=*/true);
 
-  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_)).Times(0);
+  EXPECT_CALL(callback, OnTransferUpdate(testing::_, testing::_, testing::_))
+      .Times(0);
 
   service_->Accept(
-      share_target, [&](NearbySharingServiceImpl::StatusCodes status_code) {
+      share_target_id, [&](NearbySharingServiceImpl::StatusCodes status_code) {
         EXPECT_EQ(status_code,
                   NearbySharingServiceImpl::StatusCodes::kOutOfOrderApiCall);
       });
@@ -4432,7 +4663,7 @@ TEST_F(NearbySharingServiceImplTest, SelfShareNoAutoAcceptInForeground) {
   ExpectPairedKeyResultFrame();
   ExpectConnectionResponseFrame(ConnectionResponseFrame::ACCEPT);
 
-  EXPECT_FALSE(connection_.IsClosed());
+  EXPECT_FALSE(connection_->IsClosed());
 
   // To avoid UAF in OnIncomingTransferUpdate().
   UnregisterReceiveSurface(&callback);
@@ -4452,7 +4683,7 @@ TEST_F(NearbySharingServiceImplTest, ObserveAccountLoginAndLogout) {
         EXPECT_EQ(account.id, kTestAccountId);
         notification.Notify();
       },
-      []() {});
+      [](absl::Status status) {});
   EXPECT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
   EXPECT_CALL(account_observer, OnLogoutSucceeded(kTestAccountId)).Times(1);
   absl::Notification logout_notification;
@@ -4462,7 +4693,7 @@ TEST_F(NearbySharingServiceImplTest, ObserveAccountLoginAndLogout) {
   });
   EXPECT_TRUE(logout_notification.WaitForNotificationWithTimeout(kWaitTimeout));
   service_->GetAccountManager()->RemoveObserver(&account_observer);
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
+  EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout));
 }
 
 TEST_F(NearbySharingServiceImplTest, LoginAndLogoutShouldResetSettings) {
@@ -4483,9 +4714,9 @@ TEST_F(NearbySharingServiceImplTest, LoginAndLogoutShouldResetSettings) {
         EXPECT_EQ(account.id, kTestAccountId);
         login_notification.Notify();
       },
-      []() {});
+      [](absl::Status status) {});
   ASSERT_TRUE(login_notification.WaitForNotificationWithTimeout(kWaitTimeout));
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
+  EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout));
   EXPECT_TRUE(service_->GetSettings()->GetIsAnalyticsEnabled());
   ASSERT_TRUE(service_->GetAccountManager()->GetCurrentAccount().has_value());
   EXPECT_EQ(service_->GetAccountManager()->GetCurrentAccount()->id,
@@ -4499,103 +4730,10 @@ TEST_F(NearbySharingServiceImplTest, LoginAndLogoutShouldResetSettings) {
   });
   EXPECT_TRUE(logout_notification.WaitForNotificationWithTimeout(kWaitTimeout));
   absl::SleepFor(absl::Milliseconds(100));
-  EXPECT_FALSE(service_->GetSettings()->GetIsAnalyticsEnabled());
+  // data collection flag is not reset on logout.
+  EXPECT_TRUE(service_->GetSettings()->GetIsAnalyticsEnabled());
   EXPECT_FALSE(service_->GetAccountManager()->GetCurrentAccount().has_value());
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
-}
-
-TEST_F(NearbySharingServiceImplTest,
-       VisibilityShouldSetAsAllContactsAfterLoginSuccessDuringOnBoarding) {
-  SetConnectionType(ConnectionType::kWifi);
-
-  service_->GetSettings()->SetIsOnboardingComplete(false, []() {});
-  service_->GetSettings()->SetVisibility(
-      DeviceVisibility::DEVICE_VISIBILITY_HIDDEN);
-
-  EXPECT_EQ(service_->GetSettings()->GetVisibility(),
-            DeviceVisibility::DEVICE_VISIBILITY_HIDDEN);
-
-  // Create account.
-  ::nearby::AccountManager::Account account;
-  account.id = kTestAccountId;
-
-  // Login user.
-  absl::Notification login_notification;
-  account_manager().SetAccount(account);
-  service_->GetAccountManager()->Login(
-      [&](AccountManager::Account account) {
-        EXPECT_EQ(account.id, kTestAccountId);
-        login_notification.Notify();
-      },
-      []() {});
-  ASSERT_TRUE(login_notification.WaitForNotificationWithTimeout(kWaitTimeout));
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
-
-  EXPECT_EQ(service_->GetSettings()->GetVisibility(),
-            DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
-}
-
-TEST_F(NearbySharingServiceImplTest, LogoutShouldNotResetOnboarding) {
-  SetConnectionType(ConnectionType::kWifi);
-
-  // Used to check whether the setting is cleared after login.
-  service_->GetSettings()->SetIsOnboardingComplete(false, []() {});
-
-  // Create account.
-  ::nearby::AccountManager::Account account;
-  account.id = kTestAccountId;
-
-  // Login user.
-  absl::Notification login_notification;
-  account_manager().SetAccount(account);
-  service_->GetAccountManager()->Login(
-      [&](AccountManager::Account account) {
-        EXPECT_EQ(account.id, kTestAccountId);
-        login_notification.Notify();
-      },
-      []() {});
-  ASSERT_TRUE(login_notification.WaitForNotificationWithTimeout(kWaitTimeout));
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
-  EXPECT_FALSE(service_->GetSettings()->IsOnboardingComplete());
-
-  // Logout user.
-  absl::Notification logout_notification;
-  service_->GetAccountManager()->Logout([&](absl::Status status) {
-    EXPECT_TRUE(status.ok());
-    logout_notification.Notify();
-  });
-  EXPECT_TRUE(logout_notification.WaitForNotificationWithTimeout(kWaitTimeout));
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
-  EXPECT_FALSE(service_->GetSettings()->IsOnboardingComplete());
-
-  // Complete onboarding.
-  service_->GetSettings()->SetIsOnboardingComplete(true, []() {});
-
-  // Login user.
-  absl::Notification login2_notification;
-  account_manager().SetAccount(account);
-  service_->GetAccountManager()->Login(
-      [&](AccountManager::Account account) {
-        EXPECT_EQ(account.id, kTestAccountId);
-        login2_notification.Notify();
-      },
-      []() {});
-  ASSERT_TRUE(login2_notification.WaitForNotificationWithTimeout(kWaitTimeout));
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
-  EXPECT_TRUE(service_->GetSettings()->IsOnboardingComplete());
-
-  // Logout user.
-  absl::Notification logout2_notification;
-  service_->GetAccountManager()->Logout([&](absl::Status status) {
-    EXPECT_TRUE(status.ok());
-    logout2_notification.Notify();
-  });
-  EXPECT_TRUE(
-      logout2_notification.WaitForNotificationWithTimeout(kWaitTimeout));
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
-  EXPECT_TRUE(service_->GetSettings()->IsOnboardingComplete());
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
+  EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout));
 }
 
 TEST_F(NearbySharingServiceImplTest, LogoutShouldSetValidVisibility) {
@@ -4613,12 +4751,11 @@ TEST_F(NearbySharingServiceImplTest, LogoutShouldSetValidVisibility) {
         EXPECT_EQ(account.id, kTestAccountId);
         login_notification.Notify();
       },
-      []() {});
+      [](absl::Status status) {});
   ASSERT_TRUE(login_notification.WaitForNotificationWithTimeout(kWaitTimeout));
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
+  EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout));
 
   // Set visibility.
-  service_->GetSettings()->SetIsReceiving(true);
   service_->GetSettings()->SetVisibility(
       DeviceVisibility::DEVICE_VISIBILITY_SELF_SHARE);
 
@@ -4629,8 +4766,9 @@ TEST_F(NearbySharingServiceImplTest, LogoutShouldSetValidVisibility) {
     logout_notification.Notify();
   });
   EXPECT_TRUE(logout_notification.WaitForNotificationWithTimeout(kWaitTimeout));
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
-  EXPECT_FALSE(service_->GetSettings()->GetIsReceiving());
+  EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout));
+  EXPECT_EQ(service_->GetSettings()->GetVisibility(),
+            DeviceVisibility::DEVICE_VISIBILITY_HIDDEN);
 
   // Login user.
   absl::Notification login2_notification;
@@ -4640,12 +4778,11 @@ TEST_F(NearbySharingServiceImplTest, LogoutShouldSetValidVisibility) {
         EXPECT_EQ(account.id, kTestAccountId);
         login2_notification.Notify();
       },
-      []() {});
+      [](absl::Status status) {});
   ASSERT_TRUE(login2_notification.WaitForNotificationWithTimeout(kWaitTimeout));
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
+  EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout));
 
   // Set visibility.
-  service_->GetSettings()->SetIsReceiving(true);
   service_->GetSettings()->SetVisibility(
       DeviceVisibility::DEVICE_VISIBILITY_EVERYONE);
 
@@ -4657,11 +4794,10 @@ TEST_F(NearbySharingServiceImplTest, LogoutShouldSetValidVisibility) {
   });
   EXPECT_TRUE(
       logout2_notification.WaitForNotificationWithTimeout(kWaitTimeout));
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
-  EXPECT_TRUE(service_->GetSettings()->GetIsReceiving());
+  EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout));
   EXPECT_EQ(service_->GetSettings()->GetVisibility(),
             DeviceVisibility::DEVICE_VISIBILITY_EVERYONE);
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
+  EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout));
 }
 
 TEST_F(NearbySharingServiceImplTest, LoginAndLogoutNoStopRunningSurfaces) {
@@ -4684,7 +4820,7 @@ TEST_F(NearbySharingServiceImplTest, LoginAndLogoutNoStopRunningSurfaces) {
         EXPECT_EQ(account.id, kTestAccountId);
         notification.Notify();
       },
-      []() {});
+      [](absl::Status status) {});
   ASSERT_TRUE(notification.WaitForNotificationWithTimeout(kWaitTimeout));
   EXPECT_TRUE(fake_nearby_connections_manager_->IsDiscovering());
 
@@ -4695,14 +4831,14 @@ TEST_F(NearbySharingServiceImplTest, LoginAndLogoutNoStopRunningSurfaces) {
     logout_notification.Notify();
   });
   EXPECT_TRUE(logout_notification.WaitForNotificationWithTimeout(kWaitTimeout));
-  UnregisterSendSurface(&transfer_callback, &discovery_callback);
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
+  UnregisterSendSurface(&transfer_callback);
+  EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout));
 }
 
 TEST_F(NearbySharingServiceImplTest,
        IsReceivingEnabledWithRegisterReceiveSurfaceForeground) {
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_ALL_CONTACTS);
   MockTransferUpdateCallback callback;
-  service_->GetSettings()->SetIsReceiving(true);
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
   EXPECT_EQ(result, NearbySharingService::StatusCodes::kOk);
@@ -4713,7 +4849,6 @@ TEST_F(NearbySharingServiceImplTest,
 TEST_F(NearbySharingServiceImplTest,
        IsReceivingDisabledWithRegisterReceiveSurfaceForeground) {
   MockTransferUpdateCallback callback;
-  service_->GetSettings()->SetIsReceiving(false);
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
   EXPECT_EQ(result, NearbySharingService::StatusCodes::kOk);
@@ -4726,10 +4861,9 @@ TEST_F(NearbySharingServiceImplTest,
   MockTransferUpdateCallback callback;
   service_->GetSettings()->SetVisibility(
       DeviceVisibility::DEVICE_VISIBILITY_SELF_SHARE);
-  service_->GetSettings()->SetIsReceiving(true);
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kBackground);
-  FakeTaskRunner::WaitForRunningTasksWithTimeout(kTaskWaitTimeout);
+  EXPECT_TRUE(sharing_service_task_runner_->SyncWithTimeout(kTaskWaitTimeout));
   EXPECT_EQ(result, NearbySharingService::StatusCodes::kOk);
   EXPECT_TRUE(fake_nearby_connections_manager_->IsAdvertising());
   UnregisterReceiveSurface(&callback);
@@ -4738,12 +4872,60 @@ TEST_F(NearbySharingServiceImplTest,
 TEST_F(NearbySharingServiceImplTest,
        IsReceivingDisabledWithRegisterReceiveSurfaceBackground) {
   MockTransferUpdateCallback callback;
-  service_->GetSettings()->SetIsReceiving(false);
   NearbySharingService::StatusCodes result = RegisterReceiveSurface(
       &callback, NearbySharingService::ReceiveSurfaceState::kBackground);
   EXPECT_EQ(result, NearbySharingService::StatusCodes::kOk);
   EXPECT_FALSE(fake_nearby_connections_manager_->IsAdvertising());
   UnregisterReceiveSurface(&callback);
+}
+
+TEST_F(NearbySharingServiceImplTest, NoAdvertisingWhenHidden) {
+  MockTransferUpdateCallback callback;
+  SetVisibility(DeviceVisibility::DEVICE_VISIBILITY_HIDDEN);
+  NearbySharingService::StatusCodes result = RegisterReceiveSurface(
+      &callback, NearbySharingService::ReceiveSurfaceState::kForeground);
+  EXPECT_EQ(result, NearbySharingService::StatusCodes::kOk);
+  EXPECT_FALSE(fake_nearby_connections_manager_->IsAdvertising());
+  UnregisterReceiveSurface(&callback);
+}
+
+TEST_F(NearbySharingServiceImplTest, RemoveIncomingPayloads) {
+  NearbyFlags::GetInstance().OverrideBoolFlagValue(
+      config_package_nearby::nearby_sharing_feature::
+          kDeleteUnexpectedReceivedFile,
+      true);
+  fake_nearby_connections_manager_->AddUnknownFilePathsToDeleteForTesting(
+      "test1.txt");
+  fake_nearby_connections_manager_->AddUnknownFilePathsToDeleteForTesting(
+      "test2.txt");
+  auto unknown_file_paths_to_delete =
+      fake_nearby_connections_manager_->GetUnknownFilePathsToDeleteForTesting();
+  EXPECT_EQ(unknown_file_paths_to_delete.size(), 2);
+  EXPECT_THAT(unknown_file_paths_to_delete,
+              UnorderedElementsAre("test1.txt", "test2.txt"));
+  ShareTarget share_target;
+  share_target.is_incoming = true;
+  IncomingShareSession session(
+      *sharing_service_task_runner_, "endpoint_id", share_target,
+      [](const IncomingShareSession&, const TransferMetadata&) {});
+  service_->RemoveIncomingPayloads(session);
+  EXPECT_EQ(
+      fake_nearby_connections_manager_->GetUnknownFilePathsToDeleteForTesting()
+          .size(),
+      0);
+
+  // Test GetAndClearUnknownFilePathsToDelete
+  fake_nearby_connections_manager_->AddUnknownFilePathsToDeleteForTesting(
+      "test1.txt");
+  fake_nearby_connections_manager_->AddUnknownFilePathsToDeleteForTesting(
+      "test2.txt");
+  unknown_file_paths_to_delete =
+      fake_nearby_connections_manager_->GetAndClearUnknownFilePathsToDelete();
+  EXPECT_EQ(unknown_file_paths_to_delete.size(), 2);
+  EXPECT_EQ(
+      fake_nearby_connections_manager_->GetUnknownFilePathsToDeleteForTesting()
+          .size(),
+      0);
 }
 
 }  // namespace NearbySharingServiceUnitTests

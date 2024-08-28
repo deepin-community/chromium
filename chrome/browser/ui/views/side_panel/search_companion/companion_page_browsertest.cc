@@ -30,17 +30,16 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/side_panel/companion/companion_tab_helper.h"
-#include "chrome/browser/ui/side_panel/companion/companion_utils.h"
-#include "chrome/browser/ui/side_panel/side_panel_enums.h"
+#include "chrome/browser/ui/views/side_panel/companion/companion_tab_helper.h"
+#include "chrome/browser/ui/views/side_panel/companion/companion_utils.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/frame/browser_actions.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/side_panel/search_companion/search_companion_side_panel_coordinator.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_toolbar_container.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/common/companion/visual_query/features.h"
 #include "chrome/common/pref_names.h"
@@ -712,12 +711,6 @@ class CompanionPageBrowserTest : public InProcessBrowserTest {
     return requests_received_on_server_;
   }
 
-  SidePanelToolbarContainer* side_panel_toolbar_container() {
-    BrowserView* browser_view =
-        BrowserView::GetBrowserViewForBrowser(browser());
-    return browser_view->toolbar()->side_panel_container();
-  }
-
  protected:
   feature_engagement::test::ScopedIphFeatureList iph_feature_list_;
   base::test::ScopedFeatureList feature_list_;
@@ -1126,7 +1119,7 @@ IN_PROC_BROWSER_TEST_F(CompanionPageBrowserTest, LinkClickOnCompanionPage) {
                    static_cast<int>(SidePanelOpenTrigger::kComboboxSelected));
 }
 
-// TODO(crbug.com/1495434): Test is flaking on Linux MSAN bot
+// TODO(crbug.com/40937688): Test is flaking on Linux MSAN bot
 #if BUILDFLAG(IS_LINUX) && defined(MEMORY_SANITIZER)
 #define MAYBE_LinkClickOnCompanionPageNotifiesNewTabSidePanelViaPostMessage \
   DISABLED_LinkClickOnCompanionPageNotifiesNewTabSidePanelViaPostMessage
@@ -1322,7 +1315,7 @@ IN_PROC_BROWSER_TEST_F(CompanionPageBrowserTest,
   EXPECT_FALSE(proto.has_value());
 }
 
-// TODO(crbug.com/1479808): Flaky on linux-chromeos-chrome.
+// TODO(crbug.com/40930057): Flaky on linux-chromeos-chrome.
 #if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_ReloadWillRefreshCompanion DISABLED_ReloadWillRefreshCompanion
 #else
@@ -2113,8 +2106,8 @@ IN_PROC_BROWSER_TEST_F(CompanionPageDisabledBrowserTest,
   side_panel_coordinator()->Show(SidePanelEntry::Id::kSearchCompanion);
   EXPECT_FALSE(side_panel_coordinator()->GetCurrentEntryId().has_value());
   EXPECT_EQ(0u, requests_received_on_server());
-  EXPECT_FALSE(side_panel_toolbar_container()->IsPinned(
-      SidePanelEntry::Id::kSearchCompanion));
+  EXPECT_FALSE(PinnedToolbarActionsModel::Get(browser()->profile())
+                   ->Contains(kActionSidePanelShowSearchCompanion));
 
   base::HistogramTester histogram_tester;
 
@@ -2144,15 +2137,17 @@ IN_PROC_BROWSER_TEST_F(CompanionPageDisabledBrowserTest,
             SidePanelEntry::Id::kSearchCompanion);
   EXPECT_EQ(1u, requests_received_on_server());
   // Companion is immediately pinned.
-  EXPECT_TRUE(side_panel_toolbar_container()->IsPinned(
-      SidePanelEntry::Id::kSearchCompanion));
+  EXPECT_TRUE(PinnedToolbarActionsModel::Get(browser()->profile())
+                  ->Contains(kActionSidePanelShowSearchCompanion));
 }
 
 // Verifies the behavior when companion feature is disabled but a navigation to
 // exps registration URL is observed. Restart the browser and verify that
 // companion is active and pinned.
+//
+// TODO(crbug.com/334977785): Flaky.
 IN_PROC_BROWSER_TEST_F(CompanionPageDisabledBrowserTest,
-                       ObservesExpsRegistrationSuccessURL) {
+                       DISABLED_ObservesExpsRegistrationSuccessURL) {
   EXPECT_TRUE(companion::IsCompanionFeatureEnabled());
   EXPECT_TRUE(base::FeatureList::IsEnabled(
       companion::features::internal::
@@ -2175,8 +2170,8 @@ IN_PROC_BROWSER_TEST_F(CompanionPageDisabledBrowserTest,
   EXPECT_EQ(1u, requests_received_on_server());
 
   // Companion should be pinned now.
-  EXPECT_TRUE(side_panel_toolbar_container()->IsPinned(
-      SidePanelEntry::Id::kSearchCompanion));
+  EXPECT_TRUE(PinnedToolbarActionsModel::Get(browser()->profile())
+                  ->Contains(kActionSidePanelShowSearchCompanion));
 }
 
 class CompanionPagePolicyBrowserTest : public CompanionPageBrowserTest {
@@ -2339,7 +2334,7 @@ IN_PROC_BROWSER_TEST_F(SidePanelCompanion2BrowserDisabledTest,
   EXPECT_EQ(0u, requests_received_on_server());
 }
 
-// TODO(crbug.com/1491942): This fails with the field trial testing config.
+// TODO(crbug.com/40285326): This fails with the field trial testing config.
 class SidePanelCompanion2BrowserEnabledTestNoTestingConfig
     : public SidePanelCompanion2BrowserEnabledTest {
  public:
@@ -2388,8 +2383,6 @@ class CompanionSidePanelPinningBrowserTest : public CompanionPageBrowserTest {
 
   void SetUpFeatureList() override {
     CompanionPageBrowserTest::SetUpFeatureList();
-    pinning_feature_list_.InitWithFeatures(
-        {features::kSidePanelPinning, features::kChromeRefresh2023}, {});
   }
 
   ~CompanionSidePanelPinningBrowserTest() override = default;
@@ -2399,8 +2392,6 @@ class CompanionSidePanelPinningBrowserTest : public CompanionPageBrowserTest {
         prefs::kGoogleSearchSidePanelEnabled, enable_companion_by_policy);
   }
 
- private:
-  base::test::ScopedFeatureList pinning_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(CompanionSidePanelPinningBrowserTest,
@@ -2410,7 +2401,7 @@ IN_PROC_BROWSER_TEST_F(CompanionSidePanelPinningBrowserTest,
   actions::ActionItem* companion_action_item =
       actions::ActionManager::Get().FindAction(
           kActionSidePanelShowSearchCompanion,
-          BrowserActions::FromBrowser(browser())->root_action_item());
+          browser()->browser_actions()->root_action_item());
   EXPECT_TRUE(companion_action_item->GetEnabled());
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -2425,7 +2416,7 @@ IN_PROC_BROWSER_TEST_F(CompanionSidePanelPinningBrowserTest,
   actions::ActionItem* companion_action_item =
       actions::ActionManager::Get().FindAction(
           kActionSidePanelShowSearchCompanion,
-          BrowserActions::FromBrowser(browser())->root_action_item());
+          browser()->browser_actions()->root_action_item());
   EXPECT_TRUE(companion_action_item->GetEnabled());
 
   EnableCompanionByPolicy(false);

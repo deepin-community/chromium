@@ -314,6 +314,9 @@
   <message name="IDS_POLICY_PROXY_NEITHER_SPECIFIED_ERROR" desc="The text displayed in the status column when neither a fixed proxy servers or a .pac url are specified.">
     Neither fixed proxy servers nor a .pac script URL are specified.
   </message>
+  <message name="IDS_POLICY_DEVELOPER_TOOLS_EXTENSIONS_CONFLICT_MESSAGE" desc="The text displayed in the status column when the value of DeveloperToolsAvailability conflicts with ExtensionDeveloperModeSettings.">
+    <ph name="EXTENSION_DEVELOPER_MODE_SETTINGS_POLICY_NAME">$1<ex>ExtensionDeveloperModeSettings</ex></ph> policy is set. <ph name="DEVELOPER_TOOLS_AVAILABILITY_POLICY_NAME">$2<ex>DeveloperToolsAvailability</ex></ph> will not control the availability of developer mode on extensions page.
+  </message>
   <message name="IDS_POLICY_OVERRIDDEN" desc="The text displayed in the status column when the corresponding policy is being ignored because another policy is overriding it.">
     Ignored because it was overridden by <ph name="POLICY_NAME">$1<ex>ProxyMode</ex></ph>.
   </message>
@@ -411,6 +414,15 @@ Additional details:
   </message>
   <message name="IDS_POLICY_DATA_CONTROLS_MUTUALLY_EXCLUSIVE_KEY_SETS" desc="The text displayed in the status column of the DataControlsRules policy when one of its rules contains incoherent values">
     Keys "<ph name="DATA_CONTROLS_FIRST_KEY_SET">$1<ex>"destinations", "sources"</ex></ph>" cannot be set in the same dictionary as the "<ph name="DATA_CONTROLS_SECOND_KEY_SET">$2<ex>"and", "or"</ex></ph>" keys
+  </message>
+  <message name="IDS_POLICY_DATA_CONTROLS_UNSUPPORTED_CONDITION" desc="The text displayed in the status column of the DataControlsRules policy when one of its rules contains an unsupported condition">
+    "<ph name="DATA_CONTROLS_ATTRIBUTE">$1<ex>destination</ex></ph>" is not a supported condition for "<ph name="DATA_CONTROLS_RESTRICTION">$2<ex>SCREENSHOT</ex></ph>"
+  </message>
+  <message name="IDS_POLICY_DATA_CONTROLS_UNSUPPORTED_RESTRICTION" desc="The text displayed in the status column of the DataControlsRules policy when one of its rules contains an unsupported restriction">
+    "<ph name="DATA_CONTROLS_RESTRICTION">$1<ex>SCREENSHARE</ex></ph>" is not a supported restriction on this platform
+  </message>
+  <message name="IDS_POLICY_DATA_CONTROLS_UNSUPPORTED_LEVEL" desc="The text displayed in the status column of the DataControlsRules policy when one of its rules contains an unsupported restriction level">
+    "<ph name="DATA_CONTROLS_RESTRICTION">$1<ex>SCREENSHOT</ex></ph>" cannot be set to "<ph name="DATA_CONTROLS_LEVEL">$2<ex>WARN</ex></ph>"
   </message>
 
   <!-- chrome://policy -->
@@ -749,6 +761,9 @@ Additional details:
     List entry "<ph name="LANGUAGE_ID">$1<ex>en-GB</ex></ph>": Entry ignored because it is also included in the SpellcheckLanguage policy.
     </message>
   </if>
+  <message name="IDS_POLICY_DEFAULT_GEO_POLICY_ARC_CONFLICT" desc="Warning message for the DefaultGeolocationSetting policy, when the GoogleLocationServicesEnabled policy is set. The former will no longer affect the ARC, when the latter is set.">
+    Warning: This policy is conflicting with the <ph name="POLICY_NAME">$1<ex>GoogleLocationServicesEnabled</ex></ph> and will have no effect on Android apps. Otherwise, this policy is working as intended.
+  </message>
   <message name="IDS_POLICY_LABEL_IS_AFFILIATED" desc="Label to indicate if the user is affiliated or not.">
     Is affiliated:
   </message>
@@ -784,6 +799,15 @@ Additional details:
   </message>
   <message name="IDS_POLICY_MORE_ACTIONS" desc="Label for the dropdown menu on the chrome://policy page that offers additional actions such as downloading policy data as a JSON file, uploading report or showing policy logs.">
     More actions
+  </message>
+  <message name="IDS_POLICY_TABLE_COLUMN_SORT" desc="Part of the label for policy table sorting arrows.">
+    Sort
+  </message>
+  <message name="IDS_POLICY_TABLE_COLUMN_SORT_ASCENDING" desc="Part of the label for policy table sorting arrows denoting ascending sort order.">
+    in ascending order
+  </message>
+  <message name="IDS_POLICY_TABLE_COLUMN_SORT_DESCENDING" desc="Part of the label for policy table sorting arrows denoting descending sort order.">
+    in descending order
   </message>
 
   <!-- Strings for chrome://policy/logs -->
@@ -1248,5 +1272,24 @@ Additional details:
   </message>
   <message name="IDS_POLICY_NOT_SUPPORTED_AS_USER_POLICY_ON_IOS" desc="The text displayed in the status column when a policy is not supported as a user policy on ios.">
     This policy is not yet supported as a user policy on iOS.
+  </message>
+  <message name="IDS_POLICY_SKYVAULT_DOWNLOAD_SIGN_IN_TITLE" desc="The title for the notification asking the user to sign-in to Microsoft OneDrive to complete the download flow.">
+    Sign in to OneDrive to continue downloading
+  </message>
+  <message name="IDS_POLICY_SKYVAULT_DOWNLOAD_SIGN_IN_BUTTON" desc="Label for the button that starts the sign-in flow to Microsoft OneDrive.">
+    Sign in
+  </message>
+  <message name="IDS_POLICY_SKYVAULT_DOWNLOAD_SIGN_IN_CANCEL_BUTTON" desc="Cancel button for the notification asking the user to sign-in to Microsoft OneDrive.">
+    Cancel
+  </message>
+  <message name="IDS_POLICY_SKYVAULT_DOWNLOAD_SIGN_IN_DISPLAY_SOURCE"
+                 desc="The name of the notification source, which is download manager. Shown in the notification header.">
+          Download manager
+  </message>
+  <message name="IDS_POLICY_SKYVAULT_MIGRATION_BANNER" desc="The Files App banner displayed in local folders while SkyVault migration is ongoing.">
+    Your administrator is moving your files to <ph name="CLOUD_PROVIDER">$1<ex>Google Drive</ex></ph>. You can modify these files once the upload is complete.
+  </message>
+  <message name="IDS_POLICY_SKYVAULT_MISCONFIGURED_POLICY_MESSAGE" desc="The message informing the user that SkyVault policies aren't configured propely. It can be shown as an error inside the Files App or as a system notification.">
+    The file system has been disabled by your administrator
   </message>
 </grit-part>

@@ -10,11 +10,10 @@
 #include <string>
 
 #include "base/containers/contains.h"
-#include "base/debug/crash_logging.h"
-#include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
+#include "base/not_fatal_until.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "content/browser/fenced_frame/fenced_frame_reporter.h"
@@ -60,7 +59,7 @@ gfx::Size AdSizeToGfxSize(const blink::AdSize& ad_size) {
   return gfx::Size(width_in_pixels, height_in_pixels);
 }
 
-// TODO(crbug.com/1420638): Once the representation of size in fenced frame
+// TODO(crbug.com/40258855): Once the representation of size in fenced frame
 // config is finalized, change the type of substituted width and height to the
 // same.
 // Substitute the size macros in ad url with the size from the winning bid.
@@ -119,7 +118,7 @@ void FencedFrameURLMapping::ImportPendingAdComponents(
     // navigated. In urn iframes, the Page is rooted at the top-level frame, so
     // the same FencedFrameURLMapping exists after "urn iframe root"
     // navigations.
-    // TODO(crbug.com/1415475): Change this to a CHECK when we remove urn
+    // TODO(crbug.com/40256574): Change this to a CHECK when we remove urn
     // iframes.
     if (IsMapped(component_ad.first)) {
       return;
@@ -151,6 +150,8 @@ std::optional<GURL> FencedFrameURLMapping::AddFencedFrameURLForTesting(
 
   config.fenced_frame_reporter_ = std::move(fenced_frame_reporter);
   config.mode_ = blink::FencedFrame::DeprecatedFencedFrameMode::kOpaqueAds;
+  // Give this frame the more restrictive option.
+  config.allows_information_inflow_ = false;
   config.deprecated_should_freeze_initial_size_.emplace(
       true, VisibilityToEmbedder::kTransparent, VisibilityToContent::kOpaque);
   // We don't know at this point if the test being run needs the FLEDGE or
@@ -164,6 +165,11 @@ std::optional<GURL> FencedFrameURLMapping::AddFencedFrameURLForTesting(
       std::begin(blink::kFencedFrameSharedStorageDefaultRequiredFeatures),
       std::end(blink::kFencedFrameSharedStorageDefaultRequiredFeatures));
   return urn;
+}
+
+void FencedFrameURLMapping::ClearMapForTesting() {
+  urn_uuid_to_url_map_.clear();
+  pending_urn_uuid_to_url_map_.clear();
 }
 
 std::optional<FencedFrameURLMapping::UrnUuidToUrlMap::iterator>
@@ -192,7 +198,7 @@ FencedFrameURLMapping::AssignFencedFrameURLAndInterestGroupInfo(
     std::vector<blink::AdDescriptor> ad_component_descriptors,
     scoped_refptr<FencedFrameReporter> fenced_frame_reporter) {
   // Move pending mapped urn::uuid to `urn_uuid_to_url_map_`.
-  // TODO(crbug.com/1422301): Remove the check for whether `urn_uuid` has been
+  // TODO(crbug.com/40896818): Remove the check for whether `urn_uuid` has been
   // mapped already once the crash is resolved.
   CHECK(!IsMapped(urn_uuid));
   auto pending_it = pending_urn_uuid_to_url_map_.find(urn_uuid);
@@ -206,7 +212,7 @@ FencedFrameURLMapping::AssignFencedFrameURLAndInterestGroupInfo(
   auto& config = urn_uuid_to_url_map_[urn_uuid];
 
   // Assign mapped URL and interest group info.
-  // TODO(crbug.com/1420638): Once the representation of size in fenced frame
+  // TODO(crbug.com/40258855): Once the representation of size in fenced frame
   // config is finalized, pass the ad size from the winning bid to its fenced
   // frame config.
   config.urn_uuid_.emplace(urn_uuid);
@@ -251,7 +257,7 @@ FencedFrameURLMapping::AssignFencedFrameURLAndInterestGroupInfo(
     // frame is reused. The pointer to its parent's fenced frame reporter is
     // copied to each ad component. This has the advantage that we do not need
     // to traverse to its parent every time we need its parent's reporter.
-    // TODO(crbug.com/1420638): Once the representation of size in fenced frame
+    // TODO(crbug.com/40258855): Once the representation of size in fenced frame
     // config is finalized, pass the ad component size from the winning bid to
     // its fenced frame config.
     if (ad_component_descriptor.size) {
@@ -283,6 +289,7 @@ FencedFrameURLMapping::AssignFencedFrameURLAndInterestGroupInfo(
 
   config.fenced_frame_reporter_ = std::move(fenced_frame_reporter);
   config.mode_ = blink::FencedFrame::DeprecatedFencedFrameMode::kOpaqueAds;
+  config.allows_information_inflow_ = false;
 
   return config.RedactFor(FencedFrameEntity::kEmbedder);
 }
@@ -325,21 +332,17 @@ void FencedFrameURLMapping::ConvertFencedFrameURNToURL(
 void FencedFrameURLMapping::RemoveObserverForURN(
     const GURL& urn_uuid,
     MappingResultObserver* observer) {
-  // TODO(crbug.com/1488795): Change these `DumpWithoutCrashing` to CHECK when
-  // we identify and fix the root cause. (Or just remove them if it is a
-  // harmless race condition.)
   auto it = pending_urn_uuid_to_url_map_.find(urn_uuid);
   if (it == pending_urn_uuid_to_url_map_.end()) {
-    SCOPED_CRASH_KEY_STRING32("RemoveObserverForURN", "dump_location", "urn");
-    base::debug::DumpWithoutCrashing();
+    // A harmless race condition may occur that the pending urn to url map has
+    // changed out from under the place that is calling this function (so the
+    // destructors were already called), so it's empty.
     return;
   }
 
   auto observer_it = it->second.find(observer);
   if (observer_it == it->second.end()) {
-    SCOPED_CRASH_KEY_STRING32("RemoveObserverForURN", "dump_location",
-                              "observer");
-    base::debug::DumpWithoutCrashing();
+    // Similarly, the observer may not be associated with the urn.
     return;
   }
 
@@ -351,7 +354,8 @@ FencedFrameURLMapping::OnSharedStorageURNMappingResultDetermined(
     const GURL& urn_uuid,
     const SharedStorageURNMappingResult& mapping_result) {
   auto pending_it = pending_urn_uuid_to_url_map_.find(urn_uuid);
-  DCHECK(pending_it != pending_urn_uuid_to_url_map_.end());
+  CHECK(pending_it != pending_urn_uuid_to_url_map_.end(),
+        base::NotFatalUntil::M130);
 
   DCHECK(!IsMapped(urn_uuid));
 
@@ -360,7 +364,7 @@ FencedFrameURLMapping::OnSharedStorageURNMappingResultDetermined(
   // Only if the resolved URL is fenced-frame-compatible do we:
   //   1.) Add it to `urn_uuid_to_url_map_`
   //   2.) Report it back to any already-queued observers
-  // TODO(crbug.com/1318970): Simplify this by making Shared Storage only
+  // TODO(crbug.com/40223071): Simplify this by making Shared Storage only
   // capable of producing URLs that fenced frames can navigate to.
   if (blink::IsValidFencedFrameURL(mapping_result.mapped_url)) {
     config = FencedFrameConfig(urn_uuid, mapping_result.mapped_url,
@@ -370,6 +374,7 @@ FencedFrameURLMapping::OnSharedStorageURNMappingResultDetermined(
     config->effective_enabled_permissions_ = {
         std::begin(blink::kFencedFrameSharedStorageDefaultRequiredFeatures),
         std::end(blink::kFencedFrameSharedStorageDefaultRequiredFeatures)};
+    config->allows_information_inflow_ = true;
 
     urn_uuid_to_url_map_.emplace(urn_uuid, *config);
   }
@@ -395,7 +400,7 @@ SharedStorageBudgetMetadata*
 FencedFrameURLMapping::GetSharedStorageBudgetMetadataForTesting(
     const GURL& urn_uuid) {
   auto it = urn_uuid_to_url_map_.find(urn_uuid);
-  DCHECK(it != urn_uuid_to_url_map_.end());
+  CHECK(it != urn_uuid_to_url_map_.end(), base::NotFatalUntil::M130);
 
   if (!it->second.shared_storage_budget_metadata_)
     return nullptr;

@@ -35,7 +35,6 @@
 #include "base/threading/thread_restrictions.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/spaced/spaced_client.h"
-#include "chromeos/ash/components/memory/memory.h"
 #include "chromeos/ash/components/system/scheduler_configuration_manager_base.h"
 #include "components/user_manager/user_manager.h"
 #include "components/version_info/channel.h"
@@ -156,16 +155,6 @@ void ApplyDisableDownloadProvider(StartParams* params) {
           ash::switches::kArcDisableDownloadProvider);
 }
 
-void ApplyDisableUreadahed(StartParams* params) {
-  // Host ureadahead generation implies disabling ureadahead.
-  params->disable_ureadahead =
-      IsUreadaheadDisabled() || IsHostUreadaheadGeneration();
-}
-
-void ApplyHostUreadahedGeneration(StartParams* params) {
-  params->host_ureadahead_generation = IsHostUreadaheadGeneration();
-}
-
 void ApplyUseDevCaches(StartParams* params) {
   params->use_dev_caches = IsArcUseDevCaches();
 }
@@ -205,6 +194,7 @@ class ArcSessionDelegateImpl : public ArcSessionImpl::Delegate {
   // Called when Mojo connection is established or canceled.
   // In case of cancel or error, |server_pipe| is invalid.
   void OnMojoConnected(ConnectMojoCallback callback,
+                       std::unique_ptr<ArcBridgeHostImpl> host,
                        mojo::ScopedMessagePipeHandle server_pipe);
 
   // Owned by ArcServiceManager.
@@ -248,7 +238,8 @@ base::ScopedFD ArcSessionDelegateImpl::ConnectMojo(
       base::BindOnce(&ArcSessionDelegateImpl::ConnectMojoInternal,
                      std::move(socket_fd), std::move(cancel_fd)),
       base::BindOnce(&ArcSessionDelegateImpl::OnMojoConnected,
-                     weak_factory_.GetWeakPtr(), std::move(callback)));
+                     weak_factory_.GetWeakPtr(), std::move(callback),
+                     std::make_unique<ArcBridgeHostImpl>(arc_bridge_service_)));
   return return_fd;
 }
 
@@ -387,6 +378,7 @@ mojo::ScopedMessagePipeHandle ArcSessionDelegateImpl::ConnectMojoInternal(
 
 void ArcSessionDelegateImpl::OnMojoConnected(
     ConnectMojoCallback callback,
+    std::unique_ptr<ArcBridgeHostImpl> host,
     mojo::ScopedMessagePipeHandle server_pipe) {
   if (!server_pipe.is_valid()) {
     LOG(ERROR) << "Invalid pipe";
@@ -394,9 +386,9 @@ void ArcSessionDelegateImpl::OnMojoConnected(
     return;
   }
 
-  std::move(callback).Run(std::make_unique<ArcBridgeHostImpl>(
-      arc_bridge_service_,
-      mojo::PendingReceiver<mojom::ArcBridgeHost>(std::move(server_pipe))));
+  host->AddReceiver(
+      mojo::PendingReceiver<mojom::ArcBridgeHost>(std::move(server_pipe)));
+  std::move(callback).Run(std::move(host));
 }
 
 }  // namespace
@@ -463,21 +455,15 @@ void ArcSessionImpl::DoStartMiniInstance(size_t num_cores_disabled) {
           arc::kKeyboardShortcutHelperIntegrationFeature);
   params.lcd_density = lcd_density_;
   params.num_cores_disabled = num_cores_disabled;
-  // TODO(b/278121256): Remove pre-NotificationsRefresh code from ARC.
-  params.enable_notifications_refresh = true;
   params.enable_tts_caching = true;
   params.enable_consumer_auto_update_toggle = base::FeatureList::IsEnabled(
       ash::features::kConsumerAutoUpdateToggleAllowed);
   params.enable_privacy_hub_for_chrome =
       base::FeatureList::IsEnabled(ash::features::kCrosPrivacyHub);
   params.arc_switch_to_keymint = ShouldUseArcKeyMint();
+  params.enable_arc_attestation = ShouldUseArcAttestation();
   params.use_virtio_blk_data = use_virtio_blk_data_;
   params.arc_signed_in = arc_signed_in_;
-
-  // TODO (b/196460968): Remove after CTS run is complete.
-  if (params.enable_notifications_refresh) {
-    VLOG(1) << "Notifications Refresh is enabled";
-  }
 
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           ash::switches::kArcPlayStoreAutoUpdate)) {
@@ -515,8 +501,6 @@ void ArcSessionImpl::DoStartMiniInstance(size_t num_cores_disabled) {
 
   ApplyDalvikMemoryProfile(system_memory_info_callback_, &params);
   ApplyDisableDownloadProvider(&params);
-  ApplyDisableUreadahed(&params);
-  ApplyHostUreadahedGeneration(&params);
   ApplyUseDevCaches(&params);
   ApplyHostUreadaheadMode(&params);
 
@@ -541,7 +525,7 @@ void ArcSessionImpl::RequestUpgrade(UpgradeParams params) {
 
   switch (state_) {
     case State::NOT_STARTED:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
     case State::WAITING_FOR_NUM_CORES:
     case State::STARTING_MINI_INSTANCE:
@@ -556,7 +540,7 @@ void ArcSessionImpl::RequestUpgrade(UpgradeParams params) {
     case State::STOPPED:
       // These mean RequestUpgrade() is called twice or called after
       // stopped, which are invalid operations.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 }
@@ -916,7 +900,7 @@ std::ostream& operator<<(std::ostream& os, ArcSessionImpl::State state) {
 
   // Some compilers report an error even if all values of an enum-class are
   // covered exhaustively in a switch statement.
-  NOTREACHED() << "Invalid value " << static_cast<int>(state);
+  NOTREACHED_IN_MIGRATION() << "Invalid value " << static_cast<int>(state);
   return os;
 }
 

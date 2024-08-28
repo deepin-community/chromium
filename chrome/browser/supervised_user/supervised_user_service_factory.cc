@@ -5,6 +5,7 @@
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 
 #include "base/functional/bind.h"
+#include "base/version_info/channel.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
@@ -12,6 +13,7 @@
 #include "chrome/browser/supervised_user/supervised_user_browser_utils.h"
 #include "chrome/browser/supervised_user/supervised_user_settings_service_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
+#include "chrome/common/channel_info.h"
 #include "components/supervised_user/core/browser/supervised_user_service.h"
 #include "components/supervised_user/core/browser/supervised_user_url_filter.h"
 #include "components/sync/service/sync_service.h"
@@ -28,13 +30,13 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/supervised_user/android/supervised_user_service_platform_delegate.h"
 #else
-#include "chrome/browser/supervised_user/supervised_user_service_platform_delegate.h"
+#include "chrome/browser/supervised_user/desktop/supervised_user_service_platform_delegate.h"
 #endif
 
 class FilterDelegateImpl
     : public supervised_user::SupervisedUserURLFilter::Delegate {
  public:
-  std::string GetCountryCode() override {
+  std::string GetCountryCode() const override {
     std::string country;
     variations::VariationsService* variations_service =
         g_browser_process->variations_service();
@@ -45,6 +47,10 @@ class FilterDelegateImpl
       }
     }
     return country;
+  }
+
+  version_info::Channel GetChannel() const override {
+    return chrome::GetChannel();
   }
 };
 
@@ -86,13 +92,7 @@ KeyedService* SupervisedUserServiceFactory::BuildInstanceFor(Profile* profile) {
       SyncServiceFactory::GetInstance()->GetForProfile(profile),
       base::BindRepeating(supervised_user::IsSupportedChromeExtensionURL),
       std::make_unique<FilterDelegateImpl>(),
-#if BUILDFLAG(IS_ANDROID)
-      std::make_unique<SupervisedUserServicePlatformDelegate>(
-          SupervisedUserServicePlatformDelegate()),
-#else
-      std::make_unique<SupervisedUserServicePlatformDelegate>(
-          SupervisedUserServicePlatformDelegate(*profile)),
-#endif
+      std::make_unique<SupervisedUserServicePlatformDelegate>(*profile),
       /*can_show_first_time_interstitial_banner=*/!profile->IsNewProfile());
 }
 

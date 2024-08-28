@@ -108,16 +108,9 @@ bool CachedMatchedProperties::DependenciesEqual(
     return false;
   }
   if (computed_style->HasVariableReferenceFromNonInheritedProperty()) {
-    if (RuntimeEnabledFeatures::CSSMPCImprovementsEnabled()) {
-      if (!base::ValuesEquivalent(parent_computed_style->InheritedVariables(),
-                                  state.ParentStyle()->InheritedVariables())) {
-        return false;
-      }
-    } else {
-      if (parent_computed_style->InheritedVariables() !=
-          state.ParentStyle()->InheritedVariables()) {
-        return false;
-      }
+    if (!base::ValuesEquivalent(parent_computed_style->InheritedVariables(),
+                                state.ParentStyle()->InheritedVariables())) {
+      return false;
     }
   }
 
@@ -200,8 +193,8 @@ bool CachedMatchedProperties::operator==(
         matched_properties_types[i].is_inline_style) {
       return false;
     }
-    if (properties[i].types_.is_fallback_style !=
-        matched_properties_types[i].is_fallback_style) {
+    if (properties[i].types_.is_try_style !=
+        matched_properties_types[i].is_try_style) {
       return false;
     }
     if (properties[i].types_.signal != matched_properties_types[i].signal) {
@@ -264,7 +257,7 @@ bool MatchedPropertiesCache::IsStyleCacheable(
   // Content property with attr() values depend on the attribute value of the
   // originating element, thus we cannot cache based on the matched properties
   // because the value of content is retrieved from the attribute at apply time.
-  if (builder.HasAttrContent()) {
+  if (builder.HasAttrFunction()) {
     return false;
   }
   if (builder.Zoom() != ComputedStyleInitialValues::InitialZoom()) {
@@ -274,6 +267,11 @@ bool MatchedPropertiesCache::IsStyleCacheable(
     return false;
   }
   if (builder.HasContainerRelativeUnits()) {
+    return false;
+  }
+  if (builder.HasAnchorFunctions()) {
+    // The result of anchor() and anchor-size() functions can depend on
+    // the 'anchor' attribute on the element.
     return false;
   }
   // Avoiding cache for ::highlight styles, and the originating styles they are
@@ -323,6 +321,16 @@ bool MatchedPropertiesCache::IsCacheable(const StyleResolverState& state) {
   // would end up with an incorrect match.
   if (IsAtShadowBoundary(&state.GetElement()) &&
       state.StyleBuilder().UserModify() != parent_style.UserModify()) {
+    return false;
+  }
+
+  if (!state.GetElement().GetCascadeFilter().IsEmpty()) {
+    // The result of applying properties with the same matching declarations can
+    // be different if the cascade filter is different.
+    return false;
+  }
+
+  if (state.HasAttrFunction()) {
     return false;
   }
 

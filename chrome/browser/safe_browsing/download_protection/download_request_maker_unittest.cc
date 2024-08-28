@@ -244,9 +244,11 @@ TEST_F(DownloadRequestMakerTest, PopulatesReferrerChain) {
   ReferrerChainEntry* entry2 = referrer_chain->Add();
   entry2->set_url("entry2_url");
   entry2->set_type(ReferrerChainEntry::RECENT_NAVIGATION);
-  ReferrerChainData referrer_chain_data(std::move(referrer_chain),
-                                        /*referrer_chain_length=*/2,
-                                        /*recent_navigation_to_collect=*/1);
+  ReferrerChainData referrer_chain_data(
+      ReferrerChainProvider::AttributionResult::SUCCESS,
+      std::move(referrer_chain),
+      /*referrer_chain_length=*/2,
+      /*recent_navigation_to_collect=*/1);
 
   DownloadRequestMaker request_maker(
       mock_feature_extractor_, &profile_, DownloadRequestMaker::TabUrls(),
@@ -368,6 +370,10 @@ TEST_F(DownloadRequestMakerTest, PopulatesEnhancedProtection) {
 }
 
 TEST_F(DownloadRequestMakerTest, PopulateTailoredInfo) {
+  base::test::ScopedFeatureList features;
+  features.InitAndDisableFeature(
+      safe_browsing::kDownloadReportWithoutUserDecision);
+
   base::RunLoop run_loop;
   base::FilePath tmp_path(FILE_PATH_LITERAL("temp_path"));
 
@@ -401,6 +407,46 @@ TEST_F(DownloadRequestMakerTest, PopulateTailoredInfo) {
 
   ASSERT_NE(request, nullptr);
   EXPECT_EQ(request->tailored_info().version(), 3);
+}
+
+TEST_F(DownloadRequestMakerTest,
+       PopulateTailoredInfo_DownloadReportWithoutUserDecision) {
+  base::test::ScopedFeatureList features;
+  features.InitAndEnableFeature(
+      safe_browsing::kDownloadReportWithoutUserDecision);
+
+  base::RunLoop run_loop;
+  base::FilePath tmp_path(FILE_PATH_LITERAL("temp_path"));
+
+  DownloadRequestMaker request_maker(
+      mock_feature_extractor_, &profile_, DownloadRequestMaker::TabUrls(),
+      /*target_file_path=*/base::FilePath(), tmp_path,
+      /*source_url=*/GURL(),
+      /*sha256_hash=*/"",
+      /*length=*/0,
+      /*resources=*/std::vector<ClientDownloadRequest::Resource>(),
+      /*is_user_initiated=*/true,
+      /*referrer_chain_data=*/nullptr, /*password=*/std::nullopt,
+      /*previous_token=*/"", base::DoNothing());
+
+  EXPECT_CALL(*mock_feature_extractor_, CheckSignature(tmp_path, _)).Times(1);
+  EXPECT_CALL(*mock_feature_extractor_, ExtractImageFeatures(tmp_path, _, _, _))
+      .WillRepeatedly(Return(true));
+
+  std::unique_ptr<ClientDownloadRequest> request;
+  request_maker.Start(base::BindOnce(
+      [](base::RunLoop* run_loop,
+         std::unique_ptr<ClientDownloadRequest>* request_target,
+         std::unique_ptr<ClientDownloadRequest> request) {
+        run_loop->Quit();
+        *request_target = std::move(request);
+      },
+      &run_loop, &request));
+
+  run_loop.Run();
+
+  ASSERT_NE(request, nullptr);
+  EXPECT_EQ(request->tailored_info().version(), 5);
 }
 
 TEST_F(DownloadRequestMakerTest, PopulatesFileBasename) {

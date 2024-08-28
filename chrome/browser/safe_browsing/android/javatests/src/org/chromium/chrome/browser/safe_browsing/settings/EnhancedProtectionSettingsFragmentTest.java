@@ -11,17 +11,18 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridge;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingState;
 import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
 import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.browser_ui.settings.TextMessagePreference;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 
 /** Tests for {@link EnhancedProtectionSettingsFragment}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -75,20 +76,21 @@ public class EnhancedProtectionSettingsFragmentTest {
                 fragment.findPreference(EnhancedProtectionSettingsFragment.PREF_LEARN_MORE);
     }
 
-    // TODO(crbug.com/1478337): Add a test to check the openUrlInCCT functionality.
+    // TODO(crbug.com/40929404): Add a test to check the openUrlInCCT functionality.
 
     @Test
     @SmallTest
     @Feature({"SafeBrowsing"})
     @EnableFeatures(ChromeFeatureList.FRIENDLIER_SAFE_BROWSING_SETTINGS_ENHANCED_PROTECTION)
     public void testFriendlierSafeBrowsingSettingsEnhancedProtection() {
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    SafeBrowsingBridge.setSafeBrowsingState(SafeBrowsingState.ENHANCED_PROTECTION);
+                    new SafeBrowsingBridge(ProfileManager.getLastUsedRegularProfile())
+                            .setSafeBrowsingState(SafeBrowsingState.ENHANCED_PROTECTION);
                 });
         launchSettingsActivity();
 
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     // Check that the learn more label is shown
                     Assert.assertNotNull(mEnhancedProtectionLearnMore);
@@ -174,13 +176,14 @@ public class EnhancedProtectionSettingsFragmentTest {
     @Feature({"SafeBrowsing"})
     @DisableFeatures(ChromeFeatureList.FRIENDLIER_SAFE_BROWSING_SETTINGS_ENHANCED_PROTECTION)
     public void testDisabledFriendlierSafeBrowsingSettingsEnhancedProtection() {
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    SafeBrowsingBridge.setSafeBrowsingState(SafeBrowsingState.ENHANCED_PROTECTION);
+                    new SafeBrowsingBridge(ProfileManager.getLastUsedRegularProfile())
+                            .setSafeBrowsingState(SafeBrowsingState.ENHANCED_PROTECTION);
                 });
         launchSettingsActivity();
 
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     // Check that the extra bullet points and friendlier When On/Things to Consider
                     // headings and the learn more label are gone.

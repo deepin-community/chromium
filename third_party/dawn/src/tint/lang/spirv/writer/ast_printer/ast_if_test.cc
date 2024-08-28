@@ -26,7 +26,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "gmock/gmock.h"
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/spirv/writer/ast_printer/helper_test.h"
 #include "src/tint/lang/spirv/writer/common/spv_dump_test.h"
 
@@ -36,6 +35,7 @@ namespace tint::spirv::writer {
 namespace {
 
 using SpirvASTPrinterTest = TestHelper;
+using SpirvASTPrinterDeathTest = SpirvASTPrinterTest;
 
 TEST_F(SpirvASTPrinterTest, If_Empty) {
     // if (true) {
@@ -60,12 +60,12 @@ OpBranch %3
 )");
 }
 
-TEST_F(SpirvASTPrinterTest, If_Empty_OutsideFunction_IsError) {
+TEST_F(SpirvASTPrinterDeathTest, If_Empty_OutsideFunction_IsError) {
     // Outside a function.
     // if (true) {
     // }
 
-    EXPECT_FATAL_FAILURE(
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             ProgramBuilder pb;
 

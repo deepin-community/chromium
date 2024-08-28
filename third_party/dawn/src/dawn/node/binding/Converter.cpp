@@ -191,7 +191,7 @@ bool Converter::Convert(wgpu::TextureDataLayout& out, const interop::GPUImageDat
 
 bool Converter::Convert(wgpu::TextureFormat& out, const interop::GPUTextureFormat& in) {
     out = wgpu::TextureFormat::Undefined;
-    wgpu::FeatureName requiredFeature = wgpu::FeatureName::Undefined;
+    wgpu::FeatureName requiredFeature = wgpu::FeatureName(0u);
     switch (in) {
         case interop::GPUTextureFormat::kR8Unorm:
             out = wgpu::TextureFormat::R8Unorm;
@@ -539,7 +539,7 @@ bool Converter::Convert(wgpu::TextureFormat& out, const interop::GPUTextureForma
             return Throw(err.str());
     }
 
-    assert(requiredFeature != wgpu::FeatureName::Undefined);
+    assert(requiredFeature != wgpu::FeatureName(0u));
     if (!HasFeature(requiredFeature)) {
         std::stringstream err;
         err << "" << out << " requires feature '" << requiredFeature << "'";
@@ -653,15 +653,20 @@ bool Converter::Convert(interop::GPUTextureFormat& out, wgpu::TextureFormat in) 
         CASE(Stencil8, kStencil8);
 #undef CASE
 
-        case wgpu::TextureFormat::R10X6BG10X6Biplanar420Unorm:
         case wgpu::TextureFormat::R16Snorm:
         case wgpu::TextureFormat::R16Unorm:
         case wgpu::TextureFormat::R8BG8Biplanar420Unorm:
+        case wgpu::TextureFormat::R8BG8Biplanar422Unorm:
+        case wgpu::TextureFormat::R8BG8Biplanar444Unorm:
         case wgpu::TextureFormat::R8BG8A8Triplanar420Unorm:
+        case wgpu::TextureFormat::R10X6BG10X6Biplanar420Unorm:
+        case wgpu::TextureFormat::R10X6BG10X6Biplanar422Unorm:
+        case wgpu::TextureFormat::R10X6BG10X6Biplanar444Unorm:
         case wgpu::TextureFormat::RG16Snorm:
         case wgpu::TextureFormat::RG16Unorm:
         case wgpu::TextureFormat::RGBA16Snorm:
         case wgpu::TextureFormat::RGBA16Unorm:
+        case wgpu::TextureFormat::External:
 
         case wgpu::TextureFormat::Undefined:
             return false;
@@ -1111,7 +1116,6 @@ bool Converter::Convert(wgpu::VertexAttribute& out, const interop::GPUVertexAttr
 }
 
 bool Converter::Convert(wgpu::VertexFormat& out, const interop::GPUVertexFormat& in) {
-    out = wgpu::VertexFormat::Undefined;
     switch (in) {
         case interop::GPUVertexFormat::kUint8X2:
             out = wgpu::VertexFormat::Uint8x2;
@@ -1458,6 +1462,12 @@ bool Converter::Convert(wgpu::FeatureName& out, interop::GPUFeatureName in) {
         case interop::GPUFeatureName::kFloat32Filterable:
             out = wgpu::FeatureName::Float32Filterable;
             return true;
+        case interop::GPUFeatureName::kSubgroups:
+            out = wgpu::FeatureName::Subgroups;
+            return true;
+        case interop::GPUFeatureName::kSubgroupsF16:
+            out = wgpu::FeatureName::SubgroupsF16;
+            return true;
         case interop::GPUFeatureName::kChromiumExperimentalSubgroups:
             out = wgpu::FeatureName::ChromiumExperimentalSubgroups;
             return true;
@@ -1489,24 +1499,44 @@ bool Converter::Convert(interop::GPUFeatureName& out, wgpu::FeatureName in) {
         CASE(TextureCompressionBC, kTextureCompressionBc);
         CASE(TextureCompressionETC2, kTextureCompressionEtc2);
         CASE(TimestampQuery, kTimestampQuery);
+        CASE(Subgroups, kSubgroups);
+        CASE(SubgroupsF16, kSubgroupsF16);
 
 #undef CASE
 
         case wgpu::FeatureName::AdapterPropertiesD3D:
+        case wgpu::FeatureName::AdapterPropertiesMemoryHeaps:
+        case wgpu::FeatureName::AdapterPropertiesVk:
         case wgpu::FeatureName::ANGLETextureSharing:
+        case wgpu::FeatureName::BufferMapExtendedUsages:
+        case wgpu::FeatureName::ChromiumExperimentalTimestampQueryInsidePasses:
         case wgpu::FeatureName::D3D11MultithreadProtected:
         case wgpu::FeatureName::DawnInternalUsages:
         case wgpu::FeatureName::DawnMultiPlanarFormats:
         case wgpu::FeatureName::DawnNative:
+        case wgpu::FeatureName::DrmFormatCapabilities:
         case wgpu::FeatureName::DualSourceBlending:
+        case wgpu::FeatureName::FormatCapabilities:
+        case wgpu::FeatureName::FramebufferFetch:
+        case wgpu::FeatureName::HostMappedPointer:
         case wgpu::FeatureName::ImplicitDeviceSynchronization:
         case wgpu::FeatureName::MSAARenderToSingleSampled:
         case wgpu::FeatureName::MultiPlanarFormatExtendedUsages:
         case wgpu::FeatureName::MultiPlanarFormatP010:
+        case wgpu::FeatureName::MultiPlanarFormatP210:
+        case wgpu::FeatureName::MultiPlanarFormatP410:
+        case wgpu::FeatureName::MultiPlanarFormatNv16:
+        case wgpu::FeatureName::MultiPlanarFormatNv24:
         case wgpu::FeatureName::MultiPlanarFormatNv12a:
+        case wgpu::FeatureName::MultiPlanarRenderTargets:
         case wgpu::FeatureName::Norm16TextureFormats:
+        case wgpu::FeatureName::Unorm16TextureFormats:
+        case wgpu::FeatureName::Snorm16TextureFormats:
         case wgpu::FeatureName::PixelLocalStorageCoherent:
         case wgpu::FeatureName::PixelLocalStorageNonCoherent:
+        case wgpu::FeatureName::R8UnormStorage:
+        case wgpu::FeatureName::ShaderModuleCompilationOptions:
+        case wgpu::FeatureName::SharedBufferMemoryD3D12Resource:
         case wgpu::FeatureName::SharedFenceDXGISharedHandle:
         case wgpu::FeatureName::SharedFenceMTLSharedEvent:
         case wgpu::FeatureName::SharedFenceVkSemaphoreOpaqueFD:
@@ -1521,15 +1551,11 @@ bool Converter::Convert(interop::GPUFeatureName& out, wgpu::FeatureName in) {
         case wgpu::FeatureName::SharedTextureMemoryOpaqueFD:
         case wgpu::FeatureName::SharedTextureMemoryVkDedicatedAllocation:
         case wgpu::FeatureName::SharedTextureMemoryZirconHandle:
+        case wgpu::FeatureName::StaticSamplers:
         case wgpu::FeatureName::SurfaceCapabilities:
-        case wgpu::FeatureName::ChromiumExperimentalTimestampQueryInsidePasses:
         case wgpu::FeatureName::TransientAttachments:
-        case wgpu::FeatureName::HostMappedPointer:
-        case wgpu::FeatureName::MultiPlanarRenderTargets:
-        case wgpu::FeatureName::FramebufferFetch:
-        case wgpu::FeatureName::BufferMapExtendedUsages:
-        case wgpu::FeatureName::AdapterPropertiesMemoryHeaps:
-        case wgpu::FeatureName::Undefined:
+        case wgpu::FeatureName::YCbCrVulkanSamplers:
+        case wgpu::FeatureName::DawnLoadResolveTexture:
             return false;
     }
     return false;
@@ -1568,7 +1594,6 @@ bool Converter::Convert(interop::WGSLFeatureName& out, wgpu::WGSLFeatureName in)
             out = interop::WGSLFeatureName::kPointerCompositeAccess;
             return true;
 
-        case wgpu::WGSLFeatureName::Undefined:
         case wgpu::WGSLFeatureName::ChromiumTestingUnimplemented:
         case wgpu::WGSLFeatureName::ChromiumTestingUnsafeExperimental:
         case wgpu::WGSLFeatureName::ChromiumTestingExperimental:

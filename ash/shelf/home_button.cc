@@ -339,7 +339,7 @@ HomeButton::HomeButton(Shelf* shelf)
       jelly_enabled_(chromeos::features::IsJellyEnabled()),
       shelf_(shelf),
       controller_(this) {
-  SetAccessibleName(
+  GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_ASH_SHELF_APP_LIST_LAUNCHER_TITLE));
   button_controller()->set_notify_action(
       views::ButtonController::NotifyAction::kOnPress);
@@ -391,9 +391,10 @@ HomeButton::~HomeButton() {
   ShelfConfig::Get()->RemoveObserver(this);
 }
 
-gfx::Size HomeButton::CalculatePreferredSize() const {
+gfx::Size HomeButton::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   const gfx::Size control_button_size =
-      ShelfControlButton::CalculatePreferredSize();
+      ShelfControlButton::CalculatePreferredSize(available_size);
 
   // Take the preferred size of the expandable container into consideration when
   // it is visible. Note that the button width is already included in the label
@@ -412,7 +413,7 @@ void HomeButton::Layout(PassKey) {
   LayoutSuperclass<ShelfControlButton>(this);
 
   button_image_view_->SetBoundsRect(
-      gfx::Rect(ShelfControlButton::CalculatePreferredSize()));
+      gfx::Rect(ShelfControlButton::CalculatePreferredSize({})));
 
   if (expandable_container_) {
     if (shelf_->IsHorizontalAlignment()) {
@@ -428,13 +429,13 @@ void HomeButton::Layout(PassKey) {
         expandable_container_->SetBorder(
             views::CreateEmptyBorder(gfx::Insets::TLBR(
                 0,
-                ShelfControlButton::CalculatePreferredSize().width() +
+                ShelfControlButton::CalculatePreferredSize({}).width() +
                     kQuickAppStartMargin,
                 0, 0)));
       } else {
         expandable_container_->SetBorder(
             views::CreateEmptyBorder(gfx::Insets::TLBR(
-                ShelfControlButton::CalculatePreferredSize().height() +
+                ShelfControlButton::CalculatePreferredSize({}).height() +
                     kQuickAppStartMargin,
                 0, 0, 0)));
       }
@@ -451,7 +452,8 @@ void HomeButton::OnGestureEvent(ui::GestureEvent* event) {
 
 std::u16string HomeButton::GetTooltipText(const gfx::Point& p) const {
   // Don't show a tooltip if we're already showing the app list.
-  return IsShowingAppList() ? std::u16string() : GetAccessibleName();
+  return IsShowingAppList() ? std::u16string()
+                            : GetViewAccessibility().GetCachedName();
 }
 
 void HomeButton::OnShelfButtonAboutToRequestFocusFromTabTraversal(
@@ -529,7 +531,7 @@ bool HomeButton::IsShowingAppList() const {
 }
 
 void HomeButton::HandleLocaleChange() {
-  SetAccessibleName(
+  GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_ASH_SHELF_APP_LIST_LAUNCHER_TITLE));
   TooltipTextChanged();
   // Reset the bounds rect so the child layer bounds get updated on next shelf
@@ -675,7 +677,7 @@ void HomeButton::OnThemeChanged() {
 
 void HomeButton::CreateExpandableContainer() {
   const int home_button_width =
-      ShelfControlButton::CalculatePreferredSize().width();
+      ShelfControlButton::CalculatePreferredSize({}).width();
 
   // Add container at 0 index so it's stacked under other views (e.g.
   // `button_image_view_`, and focus ring).
@@ -700,7 +702,7 @@ void HomeButton::CreateNudgeLabel() {
 
   CreateExpandableContainer();
   expandable_container_->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(
-      0, ShelfControlButton::CalculatePreferredSize().width(), 0, 16)));
+      0, ShelfControlButton::CalculatePreferredSize({}).width(), 0, 16)));
 
   // Create a view to clip the `nudge_label_` to the area right of the home
   // button during nudge label animation.
@@ -734,14 +736,14 @@ void HomeButton::CreateNudgeLabel() {
 void HomeButton::CreateQuickAppButton() {
   CreateExpandableContainer();
   if (shelf_->IsHorizontalAlignment()) {
-    expandable_container_->SetBorder(views::CreateEmptyBorder(
-        gfx::Insets::TLBR(0,
-                          ShelfControlButton::CalculatePreferredSize().width() +
-                              kQuickAppStartMargin,
-                          0, 0)));
+    expandable_container_->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(
+        0,
+        ShelfControlButton::CalculatePreferredSize({}).width() +
+            kQuickAppStartMargin,
+        0, 0)));
   } else {
     expandable_container_->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(
-        ShelfControlButton::CalculatePreferredSize().height() +
+        ShelfControlButton::CalculatePreferredSize({}).height() +
             kQuickAppStartMargin,
         0, 0, 0)));
   }
@@ -749,10 +751,11 @@ void HomeButton::CreateQuickAppButton() {
   quick_app_button_ = expandable_container_->AddChildView(
       std::make_unique<views::ImageButton>(base::BindRepeating(
           &HomeButton::QuickAppButtonPressed, base::Unretained(this))));
-  quick_app_button_->SetAccessibleName(
+  quick_app_button_->GetViewAccessibility().SetName(
       AppListModelProvider::Get()->quick_app_access_model()->GetAppName());
 
-  const int control_size = ShelfControlButton::CalculatePreferredSize().width();
+  const int control_size =
+      ShelfControlButton::CalculatePreferredSize({}).width();
 
   const gfx::Size preferred_size = gfx::Size(control_size, control_size);
 
@@ -778,7 +781,8 @@ void HomeButton::CreateQuickAppButton() {
 void HomeButton::QuickAppButtonPressed() {
   ash::Shell::Get()->app_list_controller()->ActivateItem(
       AppListModelProvider::Get()->quick_app_access_model()->quick_app_id(),
-      /*event_flags=*/0, ash::AppListLaunchedFrom::kLaunchedFromQuickAppAccess);
+      /*event_flags=*/0, ash::AppListLaunchedFrom::kLaunchedFromQuickAppAccess,
+      /*is_above_the_fold=*/false);
   AppListModelProvider::Get()->quick_app_access_model()->SetQuickAppActivated();
 }
 
@@ -787,7 +791,8 @@ void HomeButton::AnimateNudgeRipple(views::AnimationBuilder& builder) {
   nudge_ripple_layer_.Reset(std::make_unique<ui::Layer>());
   ui::Layer* ripple_layer = nudge_ripple_layer_.layer();
 
-  float ripple_diameter = ShelfControlButton::CalculatePreferredSize().width();
+  float ripple_diameter =
+      ShelfControlButton::CalculatePreferredSize({}).width();
   auto* color_provider = GetColorProvider();
   DCHECK(color_provider);
   ripple_layer_delegate_ = std::make_unique<views::CircleLayerDelegate>(
@@ -1050,7 +1055,8 @@ void HomeButton::OnQuickAppIconChanged() {
     return;
   }
 
-  const int control_size = ShelfControlButton::CalculatePreferredSize().width();
+  const int control_size =
+      ShelfControlButton::CalculatePreferredSize({}).width();
   quick_app_button_->SetImageModel(
       views::Button::STATE_NORMAL,
       ui::ImageModel::FromImageSkia(
@@ -1127,7 +1133,7 @@ void HomeButton::OnQuickAppButtonSlideOutDone() {
 
 gfx::Transform HomeButton::GetTransformForContainerChildBehindHomeButton() {
   const int home_button_width =
-      ShelfControlButton::CalculatePreferredSize().width();
+      ShelfControlButton::CalculatePreferredSize({}).width();
 
   const int container_visible_width =
       expandable_container_->width() - home_button_width;
@@ -1146,7 +1152,7 @@ gfx::Transform HomeButton::GetTransformForContainerChildBehindHomeButton() {
 
 gfx::Rect HomeButton::GetExpandableContainerClipRectToHomeButton() {
   const int home_button_width =
-      ShelfControlButton::CalculatePreferredSize().width();
+      ShelfControlButton::CalculatePreferredSize({}).width();
   const int container_visible_width =
       expandable_container_->width() - home_button_width;
 

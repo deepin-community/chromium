@@ -19,7 +19,6 @@ source_set("profiles") {
   if (is_android) {
     sources += [
       "profile_android.cc",
-      "profile_android.h",
       "profile_key_android.cc",
       "profile_key_android.h",
     ]
@@ -55,13 +54,6 @@ source_set("profile") {
     "refcounted_profile_keyed_service_factory.cc",
     "refcounted_profile_keyed_service_factory.h",
   ]
-
-  if (is_chromeos_ash) {
-    sources += [
-      "profile_types_ash.cc",
-      "profile_types_ash.h",
-    ]
-  }
 
   public_deps = [ "//base" ]
 

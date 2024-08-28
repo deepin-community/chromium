@@ -15,6 +15,7 @@
 #include "gpu/command_buffer/client/raster_interface.h"
 #include "gpu/command_buffer/client/shared_image_interface.h"
 #include "gpu/command_buffer/common/capabilities.h"
+#include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/common/sync_token.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_graphics_context_3d_provider.h"
@@ -82,6 +83,30 @@ AcceleratedStaticBitmapImage::CreateFromCanvasMailbox(
 
 // static
 scoped_refptr<AcceleratedStaticBitmapImage>
+AcceleratedStaticBitmapImage::CreateFromCanvasSharedImage(
+    scoped_refptr<gpu::ClientSharedImage> shared_image,
+    const gpu::SyncToken& sync_token,
+    GLuint shared_image_texture_id,
+    const SkImageInfo& sk_image_info,
+    GLenum texture_target,
+    bool is_origin_top_left,
+    base::WeakPtr<WebGraphicsContext3DProviderWrapper> context_provider_wrapper,
+    base::PlatformThreadRef context_thread_ref,
+    scoped_refptr<base::SingleThreadTaskRunner> context_task_runner,
+    viz::ReleaseCallback release_callback,
+    bool supports_display_compositing,
+    bool is_overlay_candidate) {
+  return base::AdoptRef(new AcceleratedStaticBitmapImage(
+      std::move(shared_image), sync_token, shared_image_texture_id,
+      sk_image_info, texture_target, is_origin_top_left,
+      supports_display_compositing, is_overlay_candidate,
+      ImageOrientationEnum::kDefault, std::move(context_provider_wrapper),
+      context_thread_ref, std::move(context_task_runner),
+      std::move(release_callback)));
+}
+
+// static
+scoped_refptr<AcceleratedStaticBitmapImage>
 AcceleratedStaticBitmapImage::CreateFromExternalMailbox(
     const gpu::MailboxHolder& mailbox_holder,
     uint32_t usage,
@@ -113,7 +138,8 @@ AcceleratedStaticBitmapImage::CreateFromExternalMailbox(
           gfx::SkISizeToSize(sk_image_info.dimensions()), color_space,
           (is_origin_top_left) ? kTopLeft_GrSurfaceOrigin
                                : kBottomLeft_GrSurfaceOrigin,
-          sk_image_info.alphaType(), usage);
+          sk_image_info.alphaType(), gpu::SharedImageUsageSet(usage),
+          mailbox_holder.texture_target);
   auto release_token = sii->GenVerifiedSyncToken();
   // No need to keep the original image after the new reference has been added.
   // Need to update the sync token, however.
@@ -173,8 +199,41 @@ AcceleratedStaticBitmapImage::AcceleratedStaticBitmapImage(
                                            std::move(release_callback))),
       paint_image_content_id_(cc::PaintImage::GetNextContentId()) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  DCHECK(mailbox_.IsSharedImage());
+  if (shared_image_texture_id) {
+    InitializeTextureBacking(shared_image_texture_id);
+  }
+}
 
+AcceleratedStaticBitmapImage::AcceleratedStaticBitmapImage(
+    scoped_refptr<gpu::ClientSharedImage> shared_image,
+    const gpu::SyncToken& sync_token,
+    GLuint shared_image_texture_id,
+    const SkImageInfo& sk_image_info,
+    GLenum texture_target,
+    bool is_origin_top_left,
+    bool supports_display_compositing,
+    bool is_overlay_candidate,
+    const ImageOrientation& orientation,
+    base::WeakPtr<WebGraphicsContext3DProviderWrapper> context_provider_wrapper,
+    base::PlatformThreadRef context_thread_ref,
+    scoped_refptr<base::SingleThreadTaskRunner> context_task_runner,
+    viz::ReleaseCallback release_callback)
+    : StaticBitmapImage(orientation),
+      shared_image_(std::move(shared_image)),
+      mailbox_(shared_image_->mailbox()),
+      sk_image_info_(sk_image_info),
+      texture_target_(texture_target),
+      is_origin_top_left_(is_origin_top_left),
+      supports_display_compositing_(supports_display_compositing),
+      is_overlay_candidate_(is_overlay_candidate),
+      context_provider_wrapper_(std::move(context_provider_wrapper)),
+      mailbox_ref_(
+          base::MakeRefCounted<MailboxRef>(sync_token,
+                                           context_thread_ref,
+                                           std::move(context_task_runner),
+                                           std::move(release_callback))),
+      paint_image_content_id_(cc::PaintImage::GetNextContentId()) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (shared_image_texture_id)
     InitializeTextureBacking(shared_image_texture_id);
 }
@@ -211,7 +270,6 @@ bool AcceleratedStaticBitmapImage::CopyToTexture(
   // wasting overhead.
   DCHECK(mailbox_ref_->is_cross_thread() ||
          dest_gl != ContextProvider()->ContextGL());
-  DCHECK(mailbox_.IsSharedImage());
 
   // Get a texture id that |destProvider| knows about and copy from it.
   dest_gl->WaitSyncTokenCHROMIUM(mailbox_ref_->sync_token().GetConstData());
@@ -253,34 +311,21 @@ bool AcceleratedStaticBitmapImage::CopyToResourceProvider(
   if (!IsValid())
     return false;
 
-  DCHECK(mailbox_.IsSharedImage());
-
-  base::WeakPtr<WebGraphicsContext3DProviderWrapper> shared_context_wrapper =
-      SharedGpuContext::ContextProviderWrapper();
-  if (!shared_context_wrapper || !shared_context_wrapper->ContextProvider())
-    return false;
-
-  const auto& dst_mailbox = resource_provider->GetBackingMailboxForOverwrite(
-      MailboxSyncMode::kOrderingBarrier);
-  if (dst_mailbox.IsZero())
-    return false;
-
-  const GLenum dst_target = resource_provider->GetBackingTextureTarget();
   const bool unpack_flip_y =
-      IsOriginTopLeft() != resource_provider->IsOriginTopLeft();
-  const bool unpack_premultiply_alpha = false;
+      (IsOriginTopLeft() != resource_provider->IsOriginTopLeft());
 
-  auto* ri = shared_context_wrapper->ContextProvider()->RasterInterface();
-  DCHECK(ri);
-  ri->WaitSyncTokenCHROMIUM(mailbox_ref_->sync_token().GetConstData());
-  ri->CopySharedImage(mailbox_, dst_mailbox, dst_target, 0, 0, copy_rect.x(),
-                      copy_rect.y(), copy_rect.width(), copy_rect.height(),
-                      unpack_flip_y, unpack_premultiply_alpha);
+  const gpu::SyncToken& ready_sync_token = mailbox_ref_->sync_token();
+  gpu::SyncToken completion_sync_token;
+  if (!resource_provider->OverwriteImage(mailbox_, copy_rect, unpack_flip_y,
+                                         /*unpack_premultiply_alpha=*/false,
+                                         ready_sync_token,
+                                         completion_sync_token)) {
+    return false;
+  }
+
   // We need to update the texture holder's sync token to ensure that when this
   // mailbox is recycled or deleted, it is done after the copy operation above.
-  gpu::SyncToken sync_token;
-  ri->GenUnverifiedSyncTokenCHROMIUM(sync_token.GetData());
-  mailbox_ref_->set_sync_token(sync_token);
+  mailbox_ref_->set_sync_token(completion_sync_token);
   return true;
 }
 

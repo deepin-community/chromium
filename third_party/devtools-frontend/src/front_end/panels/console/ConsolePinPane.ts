@@ -97,12 +97,15 @@ export class ConsolePinPane extends UI.ThrottledWidget.ThrottledWidget {
         const targetPin = elementToConsolePin.get(targetPinElement);
         if (targetPin) {
           contextMenu.editSection().appendItem(
-              i18nString(UIStrings.removeExpression), this.removePin.bind(this, targetPin));
+              i18nString(UIStrings.removeExpression), this.removePin.bind(this, targetPin),
+              {jslogContext: 'remove-expression'});
           targetPin.appendToContextMenu(contextMenu);
         }
       }
     }
-    contextMenu.editSection().appendItem(i18nString(UIStrings.removeAllExpressions), this.removeAllPins.bind(this));
+    contextMenu.editSection().appendItem(
+        i18nString(UIStrings.removeAllExpressions), this.removeAllPins.bind(this),
+        {jslogContext: 'remove-all-expressions'});
     void contextMenu.show();
   }
 
@@ -196,7 +199,7 @@ export class ConsolePin {
   <div class='console-pin'>
   ${this.deletePinIcon}
   <div class='console-pin-name' $='name' jslog="${VisualLogging.textField().track({
-      keydown: true,
+      change: true,
     })}"></div>
   <div class='console-pin-preview' $='preview'></div>
   </div>`;
@@ -260,10 +263,22 @@ export class ConsolePin {
             return true;
           },
         },
+        {
+          key: 'Tab',
+          run: (view: CodeMirror.EditorView) => {
+            if (CodeMirror.completionStatus !== null) {
+              return false;
+            }
+            // User should be able to tab out of edit field after auto complete is done
+            view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: this.committedExpression}});
+            this.focusOut();
+            return true;
+          },
+        },
       ]),
       CodeMirror.EditorView.domEventHandlers({blur: (_e, view) => this.onBlur(view)}),
       TextEditor.Config.baseConfiguration(doc),
-      TextEditor.Config.closeBrackets,
+      TextEditor.Config.closeBrackets.instance(),
       TextEditor.Config.autocompletion.instance(),
     ];
     if (Root.Runtime.Runtime.queryParam('noJavaScriptCompletion') !== 'true') {

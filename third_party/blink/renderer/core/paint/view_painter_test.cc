@@ -99,15 +99,18 @@ TEST_P(ViewPainterTest, DocumentBackgroundWithScroll) {
     <div style='height: 5000px'></div>
   )HTML");
 
-  HitTestData scroll_hit_test_data;
-  scroll_hit_test_data.scroll_translation =
-      GetLayoutView().FirstFragment().PaintProperties()->ScrollTranslation();
-  scroll_hit_test_data.scroll_hit_test_rect = gfx::Rect(0, 0, 800, 600);
+  HitTestData scroll_hit_test_data = {
+      .scroll_hit_test_rect = gfx::Rect(0, 0, 800, 600),
+      .scroll_translation = GetLayoutView()
+                                .FirstFragment()
+                                .PaintProperties()
+                                ->ScrollTranslation(),
+      .scrolling_contents_cull_rect = gfx::Rect(0, 0, 800, 4600)};
   // The scroll hit test should be before the scrolled contents to ensure the
   // hit test does not prevent the background squashing with the scrolling
   // contents.
   EXPECT_THAT(
-      RootPaintController().PaintChunks()[0],
+      RootPaintController().GetPaintChunks()[0],
       IsPaintChunk(
           0, 0,
           PaintChunk::Id(GetLayoutView().Id(), DisplayItem::kScrollHitTest),
@@ -135,7 +138,7 @@ TEST_P(ViewPainterTest, FrameScrollHitTestProperties) {
               ElementsAre(VIEW_SCROLLING_BACKGROUND_DISPLAY_ITEM,
                           IsSameId(child.Id(), kBackgroundType)));
 
-  const auto& paint_chunks = RootPaintController().PaintChunks();
+  const auto& paint_chunks = RootPaintController().GetPaintChunks();
   HitTestData scroll_hit_test_data;
   scroll_hit_test_data.scroll_translation =
       GetLayoutView().FirstFragment().PaintProperties()->ScrollTranslation();
@@ -218,12 +221,12 @@ TEST_P(ViewPainterTest, TouchActionRect) {
       GetLayoutView().FirstFragment().PaintProperties()->ScrollTranslation();
   scroll_hit_test_data.scroll_hit_test_rect = gfx::Rect(0, 0, 800, 600);
   EXPECT_THAT(
-      RootPaintController().PaintChunks()[0],
+      RootPaintController().GetPaintChunks()[0],
       IsPaintChunk(
           0, 1, PaintChunk::Id(view->Layer()->Id(), DisplayItem::kLayerChunk),
           non_scrolling_properties, &view_hit_test_data,
           gfx::Rect(0, 0, 800, 600)));
-  EXPECT_THAT(RootPaintController().PaintChunks()[1],
+  EXPECT_THAT(RootPaintController().GetPaintChunks()[1],
               IsPaintChunk(
                   1, 1, PaintChunk::Id(view->Id(), DisplayItem::kScrollHitTest),
                   non_scrolling_properties, &scroll_hit_test_data,

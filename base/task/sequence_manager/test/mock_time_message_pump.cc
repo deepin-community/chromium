@@ -54,13 +54,9 @@ void MockTimeMessagePump::Run(Delegate* delegate) {
     if (info.is_immediate())
       continue;
 
-    bool have_immediate_work = delegate->DoIdleWork();
-
+    delegate->DoIdleWork();
     if (!keep_running_)
       break;
-
-    if (have_immediate_work)
-      continue;
 
     if (MaybeAdvanceTime(info.delayed_run_time))
       continue;
@@ -70,8 +66,9 @@ void MockTimeMessagePump::Run(Delegate* delegate) {
     if (stop_when_message_pump_is_idle_)
       return;
 
-    NOTREACHED() << "Pump would go to sleep. Probably not what you wanted, "
-                    "consider rewriting your test.";
+    NOTREACHED_IN_MIGRATION()
+        << "Pump would go to sleep. Probably not what you wanted, "
+           "consider rewriting your test.";
   }
 }
 

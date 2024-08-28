@@ -172,6 +172,9 @@ ash::ShelfLaunchSource ConvertLaunchSource(apps::LaunchSource launch_source) {
     case apps::LaunchSource::kFromSysTrayCalendar:
     case apps::LaunchSource::kFromInstaller:
     case apps::LaunchSource::kFromFirstRun:
+    case apps::LaunchSource::kFromWelcomeTour:
+    case apps::LaunchSource::kFromFocusMode:
+    case apps::LaunchSource::kFromSparky:
       return ash::LAUNCH_FROM_UNKNOWN;
   }
 }
@@ -853,12 +856,6 @@ bool ExtensionAppsChromeOs::Accepts(const extensions::Extension* extension) {
       return false;
     }
 
-    // Allow MV3 file handlers.
-    if (extensions::WebFileHandlers::SupportsWebFileHandlers(*extension) &&
-        extensions::WebFileHandlers::HasFileHandlers(*extension)) {
-      return true;
-    }
-
     // QuickOffice has file_handlers which we need to register.
     if (extension_misc::IsQuickOfficeExtension(extension->id())) {
       // Don't publish quickoffice in ash if 1st party ash extension keep list
@@ -869,6 +866,12 @@ bool ExtensionAppsChromeOs::Accepts(const extensions::Extension* extension) {
     // Do not publish extensions in Ash if it should run in Lacros instead.
     if (crosapi::browser_util::ShouldEnforceAshExtensionKeepList()) {
       return false;
+    }
+
+    // Allow MV3 file handlers.
+    if (extensions::WebFileHandlers::SupportsWebFileHandlers(*extension) &&
+        extensions::WebFileHandlers::HasFileHandlers(*extension)) {
+      return true;
     }
 
     // Only accept extensions with file_browser_handlers.

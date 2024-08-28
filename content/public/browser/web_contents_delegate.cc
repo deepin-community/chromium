@@ -30,8 +30,10 @@ namespace content {
 
 WebContentsDelegate::WebContentsDelegate() = default;
 
-WebContents* WebContentsDelegate::OpenURLFromTab(WebContents* source,
-                                                 const OpenURLParams& params) {
+WebContents* WebContentsDelegate::OpenURLFromTab(
+    WebContents* source,
+    const OpenURLParams& params,
+    base::OnceCallback<void(NavigationHandle&)> navigation_handle_callback) {
   return nullptr;
 }
 
@@ -96,13 +98,13 @@ bool WebContentsDelegate::HandleContextMenu(RenderFrameHost& render_frame_host,
 
 KeyboardEventProcessingResult WebContentsDelegate::PreHandleKeyboardEvent(
     WebContents* source,
-    const NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   return KeyboardEventProcessingResult::NOT_HANDLED;
 }
 
 bool WebContentsDelegate::HandleKeyboardEvent(
     WebContents* source,
-    const NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   return false;
 }
 
@@ -186,8 +188,7 @@ FullscreenState WebContentsDelegate::GetFullscreenState(
 }
 
 bool WebContentsDelegate::CanEnterFullscreenModeForTab(
-    RenderFrameHost* requesting_frame,
-    const blink::mojom::FullscreenOptions& options) {
+    RenderFrameHost* requesting_frame) {
   return true;
 }
 
@@ -210,10 +211,14 @@ void WebContentsDelegate::RequestPointerLock(WebContents* web_contents,
 
 void WebContentsDelegate::RequestKeyboardLock(WebContents* web_contents,
                                               bool esc_key_locked) {
-  web_contents->GotResponseToKeyboardLockRequest(false);
+  // Notify `web_contents` that the request is accepted and the JavaScript
+  // promise for the request can be resolved. This can be overridden by a
+  // subclass that wants to conditionally accept the request, e.g., depending
+  // on the permissions state.
+  web_contents->GotResponseToKeyboardLockRequest(true);
 }
 
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_APPLE)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 std::unique_ptr<ColorChooser> WebContentsDelegate::OpenColorChooser(
     WebContents* web_contents,
     SkColor color,
@@ -365,7 +370,8 @@ bool WebContentsDelegate::ShouldAllowLazyLoad() {
   return true;
 }
 
-bool WebContentsDelegate::IsBackForwardCacheSupported() {
+bool WebContentsDelegate::IsBackForwardCacheSupported(
+    WebContents& web_contents) {
   return false;
 }
 
@@ -379,11 +385,9 @@ WebContentsDelegate::ShouldOverrideUserAgentForPrerender2() {
   return NavigationController::UA_OVERRIDE_INHERIT;
 }
 
-void WebContentsDelegate::UpdateInspectedWebContentsIfNecessary(
-    WebContents* old_contents,
-    WebContents* new_contents,
-    base::OnceCallback<void()> callback) {
-  std::move(callback).Run();
+bool WebContentsDelegate::ShouldAllowPartialParamMismatchOfPrerender2(
+    NavigationHandle& navigation_handle) {
+  return false;
 }
 
 bool WebContentsDelegate::ShouldShowStaleContentOnEviction(
@@ -396,10 +400,6 @@ WebContentsDelegate::GetInstalledWebappGeolocationContext() {
   return nullptr;
 }
 
-base::WeakPtr<WebContentsDelegate> WebContentsDelegate::GetDelegateWeakPtr() {
-  return nullptr;
-}
-
 bool WebContentsDelegate::IsPrivileged() {
   return false;
 }
@@ -409,5 +409,10 @@ bool WebContentsDelegate::ShouldUseInstancedSystemMediaControls() const {
   return false;
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+bool WebContentsDelegate::MaybeCopyContentAreaAsBitmap(
+    base::OnceCallback<void(const SkBitmap&)> callback) {
+  return false;
+}
 
 }  // namespace content

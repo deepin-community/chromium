@@ -18,6 +18,7 @@
 #include "src/compiler/state-values-utils.h"
 #include "src/execution/protectors.h"
 #include "src/objects/arguments.h"
+#include "src/objects/contexts.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/heap-number.h"
 #include "src/objects/js-collection-iterator.h"
@@ -100,6 +101,8 @@ Reduction JSCreateLowering::Reduce(Node* node) {
       return ReduceJSCreateGeneratorObject(node);
     case IrOpcode::kJSCreateObject:
       return ReduceJSCreateObject(node);
+    case IrOpcode::kJSCreateStringWrapper:
+      return ReduceJSCreateStringWrapper(node);
     default:
       break;
   }
@@ -1429,6 +1432,29 @@ Reduction JSCreateLowering::ReduceJSCreateObject(Node* node) {
   return Replace(value);
 }
 
+Reduction JSCreateLowering::ReduceJSCreateStringWrapper(Node* node) {
+  DCHECK_EQ(IrOpcode::kJSCreateStringWrapper, node->opcode());
+  Node* effect = NodeProperties::GetEffectInput(node);
+  Node* primitive_value = NodeProperties::GetValueInput(node, 0);
+
+  MapRef map = native_context().string_function(broker()).initial_map(broker());
+  DCHECK_EQ(map.instance_size(), JSPrimitiveWrapper::kHeaderSize);
+  CHECK(!map.IsInobjectSlackTrackingInProgress());
+
+  // Emit code to allocate the JSPrimitiveWrapper instance for the given {map}.
+  AllocationBuilder a(jsgraph(), broker(), effect, graph()->start());
+  a.Allocate(JSPrimitiveWrapper::kHeaderSize, AllocationType::kYoung,
+             Type::StringWrapper());
+  a.Store(AccessBuilder::ForMap(), map);
+  a.Store(AccessBuilder::ForJSObjectPropertiesOrHash(),
+          jsgraph()->EmptyFixedArrayConstant());
+  a.Store(AccessBuilder::ForJSObjectElements(),
+          jsgraph()->EmptyFixedArrayConstant());
+  a.Store(AccessBuilder::ForJSPrimitiveWrapperValue(), primitive_value);
+  a.FinishAndChange(node);
+  return Changed(node);
+}
+
 // Helper that allocates a FixedArray holding argument values recorded in the
 // given {frame_state}. Serves as backing store for JSCreateArguments nodes.
 Node* JSCreateLowering::TryAllocateArguments(Node* effect, Node* control,
@@ -1787,7 +1813,7 @@ base::Optional<Node*> JSCreateLowering::TryAllocateFastLiteral(
       builder.Allocate(sizeof(HeapNumber), allocation);
       builder.Store(AccessBuilder::ForMap(), broker()->heap_number_map());
       builder.Store(AccessBuilder::ForHeapNumberValue(),
-                    jsgraph()->ConstantNoHole(number));
+                    jsgraph()->ConstantMaybeHole(number));
       value = effect = builder.Finish();
     } else {
       // It's fine to store the 'uninitialized' marker into a Smi field since

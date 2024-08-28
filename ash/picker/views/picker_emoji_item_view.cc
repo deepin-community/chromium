@@ -9,11 +9,10 @@
 
 #include "ash/ash_element_identifiers.h"
 #include "ash/picker/views/picker_item_view.h"
-#include "ash/style/style_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/font_list.h"
-#include "ui/gfx/geometry/rounded_corners_f.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/view_class_properties.h"
 
@@ -26,7 +25,7 @@ const gfx::FontList kPickerEmojiFont({"Google Sans", "Roboto"},
                                      kPickerEmojiFontSize,
                                      gfx::Font::Weight::NORMAL);
 
-constexpr auto kPickerEmojiItemCornerRadius = gfx::RoundedCornersF(4);
+constexpr int kPickerEmojiItemCornerRadius = 4;
 
 }  // namespace
 
@@ -35,17 +34,14 @@ PickerEmojiItemView::PickerEmojiItemView(
     const std::u16string& emoji)
     : PickerItemView(std::move(select_item_callback)) {
   SetUseDefaultFillLayout(true);
-  SetProperty(views::kElementIdentifierKey,
-              kPickerSearchResultsEmojiItemElementId);
+  SetCornerRadius(kPickerEmojiItemCornerRadius);
+  SetProperty(views::kElementIdentifierKey, kPickerEmojiItemElementId);
 
   emoji_label_ = AddChildView(views::Builder<views::Label>()
                                   .SetText(emoji)
                                   .SetFontList(kPickerEmojiFont)
                                   .Build());
-  SetAccessibleName(emoji_label_);
-
-  StyleUtil::InstallRoundedCornerHighlightPathGenerator(
-      this, kPickerEmojiItemCornerRadius);
+  GetViewAccessibility().SetName(*emoji_label_);
 }
 
 std::u16string_view PickerEmojiItemView::GetTextForTesting() const {

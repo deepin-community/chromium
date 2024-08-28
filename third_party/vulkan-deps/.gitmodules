@@ -1,6 +1,9 @@
 [submodule "glslang/src"]
 	path = glslang/src
 	url = https://chromium.googlesource.com/external/github.com/KhronosGroup/glslang
+[submodule "lunarg-vulkantools/src"]
+	path = lunarg-vulkantools/src
+	url = https://chromium.googlesource.com/external/github.com/LunarG/VulkanTools
 [submodule "spirv-cross/src"]
 	path = spirv-cross/src
 	url = https://chromium.googlesource.com/external/github.com/KhronosGroup/SPIRV-Cross

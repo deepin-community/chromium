@@ -12,12 +12,12 @@
 
 namespace autofill {
 
-// TODO(crbug.com/1483969): Refactor these methods and create separate
+// TODO(crbug.com/40932427): Refactor these methods and create separate
 // constructors that are specific to each offer.
 // static
 AutofillOfferData AutofillOfferData::GPayCardLinkedOffer(
     int64_t offer_id,
-    const base::Time& expiry,
+    base::Time expiry,
     const std::vector<GURL>& merchant_origins,
     const GURL& offer_details_url,
     const DisplayStrings& display_strings,
@@ -31,7 +31,7 @@ AutofillOfferData AutofillOfferData::GPayCardLinkedOffer(
 // static
 AutofillOfferData AutofillOfferData::FreeListingCouponOffer(
     int64_t offer_id,
-    const base::Time& expiry,
+    base::Time expiry,
     const std::vector<GURL>& merchant_origins,
     const GURL& offer_details_url,
     const DisplayStrings& display_strings,
@@ -47,7 +47,7 @@ AutofillOfferData AutofillOfferData::FreeListingCouponOffer(
 // static
 AutofillOfferData AutofillOfferData::GPayPromoCodeOffer(
     int64_t offer_id,
-    const base::Time& expiry,
+    base::Time expiry,
     const std::vector<GURL>& merchant_origins,
     const GURL& offer_details_url,
     const DisplayStrings& display_strings,
@@ -166,7 +166,7 @@ bool AutofillOfferData::IsMerchantWideOffer() const {
 
 AutofillOfferData::AutofillOfferData(
     int64_t offer_id,
-    const base::Time& expiry,
+    base::Time expiry,
     const std::vector<GURL>& merchant_origins,
     const GURL& offer_details_url,
     const DisplayStrings& display_strings,
@@ -184,7 +184,7 @@ AutofillOfferData::AutofillOfferData(
 AutofillOfferData::AutofillOfferData(
     OfferType offer_type,
     int64_t offer_id,
-    const base::Time& expiry,
+    base::Time expiry,
     const std::vector<GURL>& merchant_origins,
     const GURL& offer_details_url,
     const DisplayStrings& display_strings,

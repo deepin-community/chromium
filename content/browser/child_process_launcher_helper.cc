@@ -6,8 +6,10 @@
 
 #include <optional>
 
+#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
+#include "base/memory/shared_memory_switch.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/histogram_shared_memory.h"
 #include "base/no_destructor.h"
@@ -19,18 +21,25 @@
 #include "base/task/single_thread_task_runner_thread_mode.h"
 #include "base/task/task_traits.h"
 #include "build/build_config.h"
+#include "components/tracing/common/tracing_switches.h"
 #include "components/variations/active_field_trials.h"
 #include "content/browser/child_process_launcher.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_launcher_utils.h"
 #include "content/public/common/content_descriptors.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/sandboxed_process_launcher_delegate.h"
 #include "mojo/core/configuration.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
+#include "services/tracing/public/cpp/trace_startup.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "content/browser/android/launcher_thread.h"
+#endif
+
+#if BUILDFLAG(IS_IOS)
+#include "base/mac/mach_port_rendezvous.h"
 #endif
 
 namespace content {
@@ -63,7 +72,7 @@ void PassHistogramSharedMemoryHandle(
     [[maybe_unused]] base::CommandLine* command_line,
     [[maybe_unused]] base::LaunchOptions* launch_options,
     [[maybe_unused]] FileMappedForLaunch* files_to_register) {
-  // TODO(crbug.com/1028263): Once all process types support histogram shared
+  // TODO(crbug.com/40109064): Once all process types support histogram shared
   // memory being passed at launch, remove this if.
   if (!histogram_memory_region.IsValid()) {
     return;
@@ -72,7 +81,7 @@ void PassHistogramSharedMemoryHandle(
   CHECK(command_line);
   CHECK(histogram_memory_region.IsValid());
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-  // TODO(crbug.com/1028263): content::FileMappedForLaunch (POSIX) is redundant
+  // TODO(crbug.com/40109064): content::FileMappedForLaunch (POSIX) is redundant
   // wrt the base::LaunchOptions::<platform-specific-handles-to-transfer>
   // members. Refactor this so that the details of base::Launch vs Zygote on
   // (some) POSIX platforms is an implementation detail and not exposed here.
@@ -116,7 +125,7 @@ void PassFieldTrialSharedMemoryHandle(
     [[maybe_unused]] FileMappedForLaunch* files_to_register) {
   CHECK(command_line);
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-  // TODO(crbug.com/1028263): content::FileMappedForLaunch (POSIX) is redundant
+  // TODO(crbug.com/40109064): content::FileMappedForLaunch (POSIX) is redundant
   // wrt the base::LaunchOptions::<platform-specific-handles-to-transfer>
   // members. Refactor this so that the details of base::Launch vs Zygote on
   // (some) POSIX platforms is an implementation detail and not exposed here.
@@ -142,6 +151,41 @@ void PassFieldTrialSharedMemoryHandle(
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
   if (descriptor_to_transfer.is_valid()) {
     files_to_register->Transfer(kFieldTrialDescriptor,
+                                std::move(descriptor_to_transfer));
+  }
+#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
+#endif  // BUILDFLAG(USE_BLINK)
+}
+
+void PassStartupTracingConfigSharedMemoryHandle(
+    [[maybe_unused]] base::ReadOnlySharedMemoryRegion read_only_memory_region,
+    [[maybe_unused]] base::CommandLine* command_line,
+    [[maybe_unused]] base::LaunchOptions* launch_options,
+    [[maybe_unused]] FileMappedForLaunch* files_to_register) {
+  CHECK(command_line);
+  if (!read_only_memory_region.IsValid()) {
+    return;
+  }
+
+  CHECK(read_only_memory_region.IsValid());
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
+  CHECK(files_to_register);
+  base::ScopedFD descriptor_to_transfer;
+#else
+  CHECK(launch_options);
+#endif
+
+#if BUILDFLAG(USE_BLINK)
+  tracing::AddTraceConfigToLaunchParameters(std::move(read_only_memory_region),
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
+                                            kTraceConfigSharedMemoryDescriptor,
+                                            descriptor_to_transfer,
+#endif
+                                            command_line, launch_options);
+
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
+  if (descriptor_to_transfer.is_valid()) {
+    files_to_register->Transfer(kTraceConfigSharedMemoryDescriptor,
                                 std::move(descriptor_to_transfer));
   }
 #endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
@@ -183,7 +227,8 @@ ChildProcessLauncherHelper::ChildProcessLauncherHelper(
     mojo::OutgoingInvitation mojo_invitation,
     const mojo::ProcessErrorCallback& process_error_callback,
     std::unique_ptr<ChildProcessLauncherFileData> file_data,
-    base::UnsafeSharedMemoryRegion histogram_memory_region)
+    base::UnsafeSharedMemoryRegion histogram_memory_region,
+    base::ReadOnlySharedMemoryRegion tracing_config_memory_region)
     : child_process_id_(child_process_id),
       client_task_runner_(base::SequencedTaskRunner::GetCurrentDefault()),
       command_line_(std::move(command_line)),
@@ -196,7 +241,8 @@ ChildProcessLauncherHelper::ChildProcessLauncherHelper(
 #if BUILDFLAG(IS_ANDROID)
       can_use_warm_up_connection_(can_use_warm_up_connection),
 #endif
-      histogram_memory_region_(std::move(histogram_memory_region)) {
+      histogram_memory_region_(std::move(histogram_memory_region)),
+      tracing_config_memory_region_(std::move(tracing_config_memory_region)) {
   if (!mojo::core::GetConfiguration().is_broker_process &&
       !command_line_->HasSwitch(switches::kDisableMojoBroker)) {
     command_line_->AppendSwitch(switches::kDisableMojoBroker);
@@ -206,7 +252,14 @@ ChildProcessLauncherHelper::ChildProcessLauncherHelper(
   command_line_->DetachFromCurrentSequence();
 }
 
-ChildProcessLauncherHelper::~ChildProcessLauncherHelper() = default;
+ChildProcessLauncherHelper::~ChildProcessLauncherHelper() {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (base::FeatureList::IsEnabled(features::kSchedQoSOnResourcedForChrome) &&
+      process_id_.has_value()) {
+    base::Process::Open(process_id_.value()).ForgetPriority();
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+}
 
 void ChildProcessLauncherHelper::StartLaunchOnClientThread() {
   DCHECK(client_task_runner_->RunsTasksInCurrentSequence());
@@ -261,6 +314,12 @@ void ChildProcessLauncherHelper::LaunchOnLauncherThread() {
                                   files_to_register.get());
   PassFieldTrialSharedMemoryHandle(command_line(), options_ptr,
                                    files_to_register.get());
+  PassStartupTracingConfigSharedMemoryHandle(
+      std::move(tracing_config_memory_region_), command_line(), options_ptr,
+      files_to_register.get());
+
+  // Transfer logging switches & handles if necessary.
+  PassLoggingSwitches(options_ptr, command_line());
 
   // Launch the child process.
   Process process;
@@ -381,6 +440,24 @@ void ChildProcessLauncherHelper::ForceNormalProcessTerminationAsync(
           &ChildProcessLauncherHelper::ForceNormalProcessTerminationSync,
           std::move(process)));
 }
+
+#if !BUILDFLAG(IS_WIN)
+void ChildProcessLauncherHelper::PassLoggingSwitches(
+    base::LaunchOptions* launch_options,
+    base::CommandLine* cmd_line) {
+  const base::CommandLine& browser_command_line =
+      *base::CommandLine::ForCurrentProcess();
+  constexpr const char* kForwardSwitches[] = {
+      switches::kDisableLogging,
+      switches::kEnableLogging,
+      switches::kLogFile,
+      switches::kLoggingLevel,
+      switches::kV,
+      switches::kVModule,
+  };
+  cmd_line->CopySwitchesFrom(browser_command_line, kForwardSwitches);
+}
+#endif  // !BUILDFLAG(IS_WIN)
 
 }  // namespace internal
 

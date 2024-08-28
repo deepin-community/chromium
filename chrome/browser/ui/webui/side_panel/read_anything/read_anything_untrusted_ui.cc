@@ -30,24 +30,14 @@
 #include "ui/views/style/platform_style.h"
 
 ReadAnythingUIUntrustedConfig::ReadAnythingUIUntrustedConfig()
-    : WebUIConfig(content::kChromeUIUntrustedScheme,
-                  chrome::kChromeUIUntrustedReadAnythingSidePanelHost) {}
+    : DefaultTopChromeWebUIConfig(
+          content::kChromeUIUntrustedScheme,
+          chrome::kChromeUIUntrustedReadAnythingSidePanelHost) {}
 
 ReadAnythingUIUntrustedConfig::~ReadAnythingUIUntrustedConfig() = default;
 
-std::unique_ptr<content::WebUIController>
-ReadAnythingUIUntrustedConfig::CreateWebUIController(content::WebUI* web_ui,
-                                                     const GURL& url) {
-  return std::make_unique<ReadAnythingUntrustedUI>(web_ui);
-}
-
-bool ReadAnythingUIUntrustedConfig::IsWebUIEnabled(
-    content::BrowserContext* browser_context) {
-  return features::IsReadAnythingEnabled();
-}
-
 ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
-    : ui::UntrustedBubbleWebUIController(web_ui) {
+    : UntrustedTopChromeWebUIController(web_ui) {
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       web_ui->GetWebContents()->GetBrowserContext(),
       chrome::kChromeUIUntrustedReadAnythingSidePanelURL);
@@ -82,10 +72,15 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
       {"playDescription", IDS_READING_MODE_PLAY_DESCRIPTION},
       {"playLabel", IDS_READING_MODE_PLAY_SPEECH},
       {"pauseLabel", IDS_READING_MODE_PAUSE_SPEECH},
+      {"stopLabel", IDS_READING_MODE_STOP_SPEECH},
+      {"playTooltip", IDS_READING_MODE_PLAY_TOOLTIP},
+      {"previewTooltip", IDS_READING_MODE_PREVIEW_TOOLTIP},
+      {"pauseTooltip", IDS_READING_MODE_PAUSE_TOOLTIP},
       {"previousSentenceLabel", IDS_READING_MODE_NAVIGATE_PREVIOUS_SENTENCE},
       {"nextSentenceLabel", IDS_READING_MODE_NAVIGATE_NEXT_SENTENCE},
       {"moreOptionsLabel", IDS_READING_MODE_MORE_OPTIONS},
       {"voiceSpeedLabel", IDS_READING_MODE_VOICE_SPEED},
+      {"voiceSpeedWithRateLabel", IDS_READING_MODE_VOICE_SPEED_WITH_RATE},
       {"voiceSelectionLabel", IDS_READING_MODE_VOICE_SELECTION},
       {"increaseFontSizeLabel",
        IDS_READING_MODE_INCREASE_FONT_SIZE_BUTTON_LABEL},
@@ -93,8 +88,46 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
        IDS_READING_MODE_DECREASE_FONT_SIZE_BUTTON_LABEL},
       {"disableLinksLabel", IDS_READING_MODE_DISABLE_LINKS_BUTTON_LABEL},
       {"enableLinksLabel", IDS_READING_MODE_ENABLE_LINKS_BUTTON_LABEL},
+      {"disableImagesLabel", IDS_READING_MODE_DISABLE_IMAGES_BUTTON_LABEL},
+      {"enableImagesLabel", IDS_READING_MODE_ENABLE_IMAGES_BUTTON_LABEL},
       {"readingModeToolbarLabel", IDS_READING_MODE_TOOLBAR_LABEL},
+      {"readingModeReadAloudToolbarLabel",
+       IDS_READING_MODE_READ_ALOUD_TOOLBAR_LABEL},
       {"readingModeVoicePreviewText", IDS_READING_MODE_VOICE_PREVIEW_STRING},
+      {"readingModeVoiceMenuDownloading",
+       IDS_READING_MODE_VOICE_MENU_DOWNLOADING},
+      {"readingModeFontLoadingText", IDS_READING_MODE_FONT_LOADING_STRING},
+      {"readingModeLanguageMenu", IDS_READING_MODE_LANGUAGE_MENU},
+      {"readingModeLanguageMenuTitle", IDS_READING_MODE_LANGUAGE_MENU_TITLE},
+      {"readingModeLanguageMenuClose", IDS_READING_MODE_LANGUAGE_MENU_CLOSE},
+      {"readingModeLanguageMenuSearchLabel",
+       IDS_READING_MODE_LANGUAGE_MENU_SEARCH_LABEL},
+      {"readingModeLanguageMenuSearchClear",
+       IDS_READING_MODE_LANGUAGE_MENU_SEARCH_CLEAR},
+      {"readingModeLanguageMenuDownloading",
+       IDS_READING_MODE_LANGUAGE_MENU_DOWNLOADING},
+      {"readingModeLanguageMenuVoicesUnavailable",
+       IDS_READING_MODE_LANGUAGE_MENU_VOICES_UNAVAILABLE},
+      {"readingModeLanguageMenuNoInternet",
+       IDS_READING_MODE_LANGUAGE_MENU_NO_INTERNET},
+      {"readingModeLanguageMenuNoSpace",
+       IDS_READING_MODE_LANGUAGE_MENU_NO_SPACE},
+      {"readingModeLanguageMenuNoSpaceButVoicesExist",
+       IDS_READING_MODE_LANGUAGE_MENU_NO_SPACE_BUT_VOICES_EXIST},
+      {"previewVoiceAccessibilityLabel",
+       IDS_READING_MODE_VOICE_MENU_PREVIEW_LANGUAGE},
+      {"languageMenuNoResults", IDS_READING_MODE_LANGUAGE_MENU_NO_RESULTS},
+      {"readingModeVoiceDownloadedTitle",
+       IDS_READING_MODE_VOICE_DOWNLOADED_TITLE},
+      {"readingModeVoiceDownloadedMessage",
+       IDS_READING_MODE_VOICE_DOWNLOADED_MESSAGE},
+      {"menu", IDS_MENU},
+      {"selected", IDS_READING_MODE_ITEM_SELECTED},
+      {"allocationError", IDS_READING_MODE_LANGUAGE_MENU_NO_SPACE},
+      {"allocationErrorHighQuality",
+       IDS_READING_MODE_LANGUAGE_MENU_NO_SPACE_BUT_VOICES_EXIST},
+      {"languageMenuDownloadFailed",
+       IDS_READING_MODE_LANGUAGE_MENU_DOWNLOAD_FAILED},
   };
   for (const auto& str : kLocalizedStrings) {
     webui::AddLocalizedString(source, str.name, str.id);
@@ -110,7 +143,6 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
                           IDR_WEBUI_JS_TEST_LOADER_UTIL_JS);
   source->AddResourcePath("test_loader.html", IDR_WEBUI_TEST_LOADER_HTML);
   webui::EnableTrustedTypesCSP(source);
-  webui::SetupChromeRefresh2023(source);
   source->AddResourcePaths(base::make_span(
       kSidePanelReadAnythingResources, kSidePanelReadAnythingResourcesSize));
   source->AddResourcePath("", IDR_SIDE_PANEL_READ_ANYTHING_READ_ANYTHING_HTML);
@@ -147,10 +179,8 @@ WEB_UI_CONTROLLER_TYPE_IMPL(ReadAnythingUntrustedUI)
 void ReadAnythingUntrustedUI::BindInterface(
     mojo::PendingReceiver<color_change_listener::mojom::PageHandler>
         pending_receiver) {
-  if (features::IsReadAnythingWebUIToolbarEnabled()) {
-    color_provider_handler_ = std::make_unique<ui::ColorChangeHandler>(
-        web_ui()->GetWebContents(), std::move(pending_receiver));
-  }
+  color_provider_handler_ = std::make_unique<ui::ColorChangeHandler>(
+      web_ui()->GetWebContents(), std::move(pending_receiver));
 }
 
 void ReadAnythingUntrustedUI::BindInterface(
@@ -168,6 +198,16 @@ void ReadAnythingUntrustedUI::CreateUntrustedPageHandler(
   read_anything_untrusted_page_handler_ =
       std::make_unique<ReadAnythingUntrustedPageHandler>(
           std::move(page), std::move(receiver), web_ui());
+
+  // This code is called as part of a screen2x data generation workflow, where
+  // the browser is opened by a CLI and the read-anything side panel is
+  // automatically opened. Therefore we force the UI to show right away rather
+  // than waiting for all UI artifacts to load, as in the general case.
+  if (features::IsDataCollectionModeForScreen2xEnabled()) {
+    if (embedder()) {
+      embedder()->ShowUI();
+    }
+  }
 }
 
 void ReadAnythingUntrustedUI::ShouldShowUI() {

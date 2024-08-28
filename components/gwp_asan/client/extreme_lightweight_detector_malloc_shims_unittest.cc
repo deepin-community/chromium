@@ -4,11 +4,11 @@
 
 #include "components/gwp_asan/client/extreme_lightweight_detector_malloc_shims.h"
 
-#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 
 #include "base/test/multiprocess_test.h"
 #include "base/test/test_timeouts.h"
-#include "partition_alloc/partition_alloc_buildflags.h"
+#include "partition_alloc/buildflags.h"
 #include "partition_alloc/shim/allocator_shim_default_dispatch_to_partition_alloc.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/multiprocess_func_list.h"
@@ -18,6 +18,7 @@ namespace gwp_asan::internal {
 namespace {
 
 constexpr size_t kSamplingFrequency = 10;
+constexpr size_t kQuarantineCapacityInBytes = 4096;
 
 // Number of loop iterations required to definitely hit a sampled allocation.
 constexpr size_t kLoopIterations = kSamplingFrequency * 10;
@@ -29,8 +30,12 @@ class ExtremeLightweightDetectorMallocShimsTest
     : public base::MultiProcessTest {
  public:
   static void MultiprocessTestSetup() {
-    allocator_shim::ConfigurePartitionsForTesting();
-    InstallExtremeLightweightDetectorHooks(kSamplingFrequency);
+    bool enable_memory_tagging_if_available = false;
+    allocator_shim::ConfigurePartitionsForTesting(
+        enable_memory_tagging_if_available);
+    InstallExtremeLightweightDetectorHooks(
+        {.sampling_frequency = kSamplingFrequency,
+         .quarantine_capacity_in_bytes = kQuarantineCapacityInBytes});
   }
 
  protected:
@@ -81,4 +86,4 @@ TEST_F(ExtremeLightweightDetectorMallocShimsTest, Basic) {
 
 }  // namespace gwp_asan::internal
 
-#endif  // BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)

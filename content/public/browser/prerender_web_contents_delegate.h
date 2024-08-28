@@ -19,7 +19,9 @@ class CONTENT_EXPORT PrerenderWebContentsDelegate : public WebContentsDelegate {
 
   // WebContentsDelegate overrides.
   WebContents* OpenURLFromTab(WebContents* source,
-                              const OpenURLParams& params) override;
+                              const OpenURLParams& params,
+                              base::OnceCallback<void(NavigationHandle&)>
+                                  navigation_handle_callback) override;
   void AddNewContents(WebContents* source,
                       std::unique_ptr<WebContents> new_contents,
                       const GURL& target_url,
@@ -40,9 +42,7 @@ class CONTENT_EXPORT PrerenderWebContentsDelegate : public WebContentsDelegate {
                           const std::string& frame_name,
                           const GURL& target_url,
                           WebContents* new_contents) override;
-  bool CanEnterFullscreenModeForTab(
-      RenderFrameHost* requesting_frame,
-      const blink::mojom::FullscreenOptions& options) override;
+  bool CanEnterFullscreenModeForTab(RenderFrameHost* requesting_frame) override;
   void EnterFullscreenModeForTab(
       RenderFrameHost* requesting_frame,
       const blink::mojom::FullscreenOptions& options) override;
@@ -62,10 +62,6 @@ class CONTENT_EXPORT PrerenderWebContentsDelegate : public WebContentsDelegate {
                                          const GURL& resource_url) override;
   PreloadingEligibility IsPrerender2Supported(
       WebContents& web_contents) override;
-  void UpdateInspectedWebContentsIfNecessary(
-      WebContents* old_contents,
-      WebContents* new_contents,
-      base::OnceCallback<void()> callback) override;
 };
 
 }  // namespace content

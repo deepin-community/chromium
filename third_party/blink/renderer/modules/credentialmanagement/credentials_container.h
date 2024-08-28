@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_CREDENTIALMANAGEMENT_CREDENTIALS_CONTAINER_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_CREDENTIALMANAGEMENT_CREDENTIALS_CONTAINER_H_
 
+#include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 
@@ -13,8 +14,8 @@ namespace blink {
 class Credential;
 class CredentialCreationOptions;
 class CredentialRequestOptions;
+class CredentialReportOptions;
 class ExceptionState;
-class ScriptPromise;
 class ScriptState;
 
 class MODULES_EXPORT CredentialsContainer : public ScriptWrappable {
@@ -24,14 +25,17 @@ class MODULES_EXPORT CredentialsContainer : public ScriptWrappable {
   ~CredentialsContainer() override = default;
 
   // credentials_container.idl
-  virtual ScriptPromise get(ScriptState*,
-                            const CredentialRequestOptions*,
-                            ExceptionState&) = 0;
-  virtual ScriptPromise store(ScriptState*, Credential*) = 0;
-  virtual ScriptPromise create(ScriptState*,
-                               const CredentialCreationOptions*,
-                               ExceptionState&) = 0;
-  virtual ScriptPromise preventSilentAccess(ScriptState*) = 0;
+  virtual ScriptPromise<IDLNullable<Credential>>
+  get(ScriptState*, const CredentialRequestOptions*, ExceptionState&) = 0;
+  virtual ScriptPromise<Credential> store(ScriptState*,
+                                          Credential*,
+                                          ExceptionState&) = 0;
+  virtual ScriptPromise<IDLNullable<Credential>>
+  create(ScriptState*, const CredentialCreationOptions*, ExceptionState&) = 0;
+  virtual ScriptPromise<IDLUndefined> preventSilentAccess(ScriptState*) = 0;
+  virtual ScriptPromise<IDLUndefined> report(ScriptState*,
+                                             const CredentialReportOptions*,
+                                             ExceptionState&) = 0;
 
   void Trace(Visitor*) const override;
 };

@@ -8,6 +8,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/text_utils.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/badge_painter.h"
 #include "ui/views/border.h"
 #include "ui/views/metadata/type_conversion.h"
@@ -32,7 +33,15 @@ NewBadgeLabel::NewBadgeLabel(const std::u16string& text, const CustomFont& font)
 
 NewBadgeLabel::~NewBadgeLabel() = default;
 
-void NewBadgeLabel::SetDisplayNewBadge(bool display_new_badge) {
+void NewBadgeLabel::SetDisplayNewBadge(DisplayNewBadge display_new_badge) {
+  SetDisplayNewBadgeImpl(display_new_badge);
+}
+
+void NewBadgeLabel::SetDisplayNewBadgeForTesting(bool display_new_badge) {
+  SetDisplayNewBadgeImpl(display_new_badge);
+}
+
+void NewBadgeLabel::SetDisplayNewBadgeImpl(bool display_new_badge) {
   DCHECK(!GetWidget() || !GetVisible() || !GetWidget()->IsVisible())
       << "New badge display should not be toggled while this element is "
          "visible.";
@@ -79,7 +88,7 @@ void NewBadgeLabel::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   std::u16string accessible_name = GetText();
   if (display_new_badge_) {
     accessible_name.push_back(' ');
-    accessible_name.append(GetAccessibleDescription());
+    accessible_name.append(GetViewAccessibility().GetCachedDescription());
   }
   node_data->SetNameChecked(accessible_name);
 }
@@ -119,7 +128,8 @@ void NewBadgeLabel::OnPaint(gfx::Canvas* canvas) {
   const gfx::Rect contents_bounds = GetContentsBounds();
   int extra_width = 0;
   if (badge_placement_ == BadgePlacement::kImmediatelyAfterText)
-    extra_width = std::max(0, width() - GetPreferredSize().width());
+    extra_width = std::max(
+        0, width() - GetPreferredSize(views::SizeBounds(width(), {})).width());
   const int badge_x = views::BadgePainter::kBadgeHorizontalMargin -
                       extra_width +
                       (base::i18n::IsRTL() ? width() - contents_bounds.x()
@@ -171,11 +181,11 @@ std::u16string NewBadgeLabel::GetAccessibleDescription() const {
 }
 
 void NewBadgeLabel::SetBorder(std::unique_ptr<views::Border> b) {
-  NOTREACHED() << "Calling SetBorder() externally is currently not allowed.";
+  NOTREACHED_IN_MIGRATION()
+      << "Calling SetBorder() externally is currently not allowed.";
 }
 
 BEGIN_METADATA(NewBadgeLabel)
-ADD_PROPERTY_METADATA(bool, DisplayNewBadge)
 ADD_PROPERTY_METADATA(NewBadgeLabel::BadgePlacement, BadgePlacement)
 ADD_PROPERTY_METADATA(bool, PadAfterNewBadge)
 END_METADATA

@@ -17,7 +17,7 @@ import {openSourcesPanel} from '../helpers/sources-helpers.js';
 
 const SNIPPETS_TAB_SELECTOR = '[aria-label="Snippets"]';
 
-describe('Snippets', async function() {
+describe('Snippets', function() {
   it('with special characters in their name can be deleted', async () => {
     await goToResource('empty.html');
     await openSourcesPanel();

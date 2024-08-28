@@ -115,17 +115,8 @@ class ConsentSyncBridgeImplTest : public testing::Test {
   ConsentSyncBridgeImpl* bridge() { return bridge_.get(); }
   MockModelTypeChangeProcessor* processor() { return &mock_processor_; }
 
-  std::map<std::string, sync_pb::EntitySpecifics> GetAllData() {
-    base::RunLoop loop;
-    std::unique_ptr<DataBatch> batch;
-    bridge_->GetAllDataForDebugging(base::BindOnce(
-        [](base::RunLoop* loop, std::unique_ptr<DataBatch>* out_batch,
-           std::unique_ptr<DataBatch> batch) {
-          *out_batch = std::move(batch);
-          loop->Quit();
-        },
-        &loop, &batch));
-    loop.Run();
+  std::map<std::string, sync_pb::EntitySpecifics> GetAllDataForDebugging() {
+    std::unique_ptr<DataBatch> batch = bridge_->GetAllDataForDebugging();
     EXPECT_NE(nullptr, batch);
 
     std::map<std::string, sync_pb::EntitySpecifics> storage_key_to_specifics;
@@ -138,20 +129,9 @@ class ConsentSyncBridgeImplTest : public testing::Test {
     return storage_key_to_specifics;
   }
 
-  std::unique_ptr<sync_pb::EntitySpecifics> GetData(
+  std::unique_ptr<sync_pb::EntitySpecifics> GetDataForCommit(
       const std::string& storage_key) {
-    base::RunLoop loop;
-    std::unique_ptr<DataBatch> batch;
-    bridge_->GetData(
-        {storage_key},
-        base::BindOnce(
-            [](base::RunLoop* loop, std::unique_ptr<DataBatch>* out_batch,
-               std::unique_ptr<DataBatch> batch) {
-              *out_batch = std::move(batch);
-              loop->Quit();
-            },
-            &loop, &batch));
-    loop.Run();
+    std::unique_ptr<DataBatch> batch = bridge_->GetDataForCommit({storage_key});
     EXPECT_NE(nullptr, batch);
 
     std::unique_ptr<sync_pb::EntitySpecifics> specifics;
@@ -175,6 +155,22 @@ TEST_F(ConsentSyncBridgeImplTest, ShouldCallModelReadyToSyncOnStartup) {
   WaitUntilModelReadyToSync("account_id");
 }
 
+TEST_F(ConsentSyncBridgeImplTest, ShouldGetDataForCommit) {
+  WaitUntilModelReadyToSync("account_id");
+  const UserConsentSpecifics specifics(
+      CreateSpecifics(/*client_consent_time_usec=*/1u));
+  std::string storage_key;
+  EXPECT_CALL(*processor(), Put(_, _, _))
+      .WillOnce(WithArg<0>(SaveArg<0>(&storage_key)));
+  bridge()->RecordConsent(std::make_unique<UserConsentSpecifics>(specifics));
+
+  // Existing specifics should be returned.
+  EXPECT_THAT(GetDataForCommit(storage_key),
+              Pointee(MatchesUserConsent(specifics)));
+  // GetDataForCommit() should handle arbitrary storage key.
+  EXPECT_THAT(GetDataForCommit("bogus"), IsNull());
+}
+
 TEST_F(ConsentSyncBridgeImplTest, ShouldRecordSingleConsent) {
   WaitUntilModelReadyToSync("account_id");
   const UserConsentSpecifics specifics(
@@ -184,9 +180,9 @@ TEST_F(ConsentSyncBridgeImplTest, ShouldRecordSingleConsent) {
       .WillOnce(WithArg<0>(SaveArg<0>(&storage_key)));
   bridge()->RecordConsent(std::make_unique<UserConsentSpecifics>(specifics));
 
-  EXPECT_THAT(GetData(storage_key), Pointee(MatchesUserConsent(specifics)));
-  EXPECT_THAT(GetData("bogus"), IsNull());
-  EXPECT_THAT(GetAllData(),
+  EXPECT_THAT(GetDataForCommit(storage_key),
+              Pointee(MatchesUserConsent(specifics)));
+  EXPECT_THAT(GetAllDataForDebugging(),
               ElementsAre(Pair(storage_key, MatchesUserConsent(specifics))));
 }
 
@@ -196,14 +192,14 @@ TEST_F(ConsentSyncBridgeImplTest, ShouldNotDeleteConsentsWhenSyncIsDisabled) {
       CreateSpecifics(/*client_consent_time_usec=*/2u));
   bridge()->RecordConsent(
       std::make_unique<UserConsentSpecifics>(user_consent_specifics));
-  ASSERT_THAT(GetAllData(), SizeIs(1));
+  ASSERT_THAT(GetAllDataForDebugging(), SizeIs(1));
 
   bridge()->ApplyDisableSyncChanges(WriteBatch::CreateMetadataChangeList());
   // The bridge may asynchronously query the store to choose what to delete.
   base::RunLoop().RunUntilIdle();
 
   // User consent specific must be persisted when sync is disabled.
-  EXPECT_THAT(GetAllData(),
+  EXPECT_THAT(GetAllDataForDebugging(),
               ElementsAre(Pair(_, MatchesUserConsent(user_consent_specifics))));
 }
 
@@ -226,7 +222,7 @@ TEST_F(ConsentSyncBridgeImplTest,
   bridge()->RecordConsent(SpecificsUniquePtr(/*client_consent_time_usec=*/2u));
 
   EXPECT_EQ(2u, unique_storage_keys.size());
-  EXPECT_THAT(GetAllData(), SizeIs(2));
+  EXPECT_THAT(GetAllDataForDebugging(), SizeIs(2));
 }
 
 TEST_F(ConsentSyncBridgeImplTest,
@@ -240,16 +236,16 @@ TEST_F(ConsentSyncBridgeImplTest,
 
   bridge()->RecordConsent(SpecificsUniquePtr(/*client_consent_time_usec=*/1u));
   bridge()->RecordConsent(SpecificsUniquePtr(/*client_consent_time_usec=*/2u));
-  ASSERT_THAT(GetAllData(), SizeIs(2));
+  ASSERT_THAT(GetAllDataForDebugging(), SizeIs(2));
 
   syncer::EntityChangeList entity_change_list;
   entity_change_list.push_back(EntityChange::CreateDelete(first_storage_key));
   auto error_on_delete = bridge()->ApplyIncrementalSyncChanges(
       bridge()->CreateMetadataChangeList(), std::move(entity_change_list));
   EXPECT_FALSE(error_on_delete);
-  EXPECT_THAT(GetAllData(), SizeIs(1));
-  EXPECT_THAT(GetData(first_storage_key), IsNull());
-  EXPECT_THAT(GetData(second_storage_key), NotNull());
+  EXPECT_THAT(GetAllDataForDebugging(), SizeIs(1));
+  EXPECT_THAT(GetDataForCommit(first_storage_key), IsNull());
+  EXPECT_THAT(GetDataForCommit(second_storage_key), NotNull());
 }
 
 TEST_F(ConsentSyncBridgeImplTest, ShouldRecordConsentsBeforeSyncEnabled) {
@@ -295,7 +291,7 @@ TEST_F(ConsentSyncBridgeImplTest,
 
   // Both the pre-initialization and post-initialization consents must be
   // handled after initialization as usual.
-  EXPECT_THAT(GetAllData(),
+  EXPECT_THAT(GetAllDataForDebugging(),
               UnorderedElementsAre(Pair(GetStorageKey(first_consent),
                                         MatchesUserConsent(first_consent)),
                                    Pair(GetStorageKey(second_consent),
@@ -318,7 +314,7 @@ TEST_F(ConsentSyncBridgeImplTest,
   // The bridge may asynchronously query the store to choose what to delete.
   base::RunLoop().RunUntilIdle();
 
-  ASSERT_THAT(GetAllData(), SizeIs(1));
+  ASSERT_THAT(GetAllDataForDebugging(), SizeIs(1));
 
   // Reenable sync.
   EXPECT_CALL(*processor(), Put(GetStorageKey(consent), _, _));
@@ -339,7 +335,7 @@ TEST_F(ConsentSyncBridgeImplTest,
   consent.set_account_id("account_id");
   bridge()->RecordConsent(std::make_unique<UserConsentSpecifics>(consent));
   base::RunLoop().RunUntilIdle();
-  ASSERT_THAT(GetAllData(), SizeIs(1));
+  ASSERT_THAT(GetAllDataForDebugging(), SizeIs(1));
 
   // Restart the bridge, mimic-ing a browser restart.
   EXPECT_CALL(*processor(), Put(GetStorageKey(consent), _, _));
@@ -357,7 +353,7 @@ TEST_F(ConsentSyncBridgeImplTest, ShouldReportPersistedConsentsOnSyncEnabled) {
   consent.set_account_id("account_id");
   bridge()->RecordConsent(std::make_unique<UserConsentSpecifics>(consent));
   base::RunLoop().RunUntilIdle();
-  ASSERT_THAT(GetAllData(), SizeIs(1));
+  ASSERT_THAT(GetAllDataForDebugging(), SizeIs(1));
 
   // Restart the bridge, mimic-ing a browser restart. We expect no Put()
   // until sync is enabled.
@@ -381,13 +377,13 @@ TEST_F(ConsentSyncBridgeImplTest,
   user_consent_specifics.set_account_id("first_account");
   bridge()->RecordConsent(
       std::make_unique<UserConsentSpecifics>(user_consent_specifics));
-  ASSERT_THAT(GetAllData(), SizeIs(1));
+  ASSERT_THAT(GetAllDataForDebugging(), SizeIs(1));
 
   bridge()->ApplyDisableSyncChanges(WriteBatch::CreateMetadataChangeList());
   // The bridge may asynchronously query the store to choose what to delete.
   base::RunLoop().RunUntilIdle();
 
-  ASSERT_THAT(GetAllData(),
+  ASSERT_THAT(GetAllDataForDebugging(),
               ElementsAre(Pair(_, MatchesUserConsent(user_consent_specifics))));
 
   // A new user signs in and enables sync.

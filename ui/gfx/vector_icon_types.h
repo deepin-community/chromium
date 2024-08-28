@@ -19,8 +19,11 @@ namespace gfx {
 // The alternative would be to have the template files pull in the whole gfx
 // namespace via using-directives, which is banned by the style guide.
 #define DECLARE_VECTOR_COMMANDS                                                \
-  /* A new <path> element. For the first path, this is assumed. */             \
+  /* A new <path> element. For the first path, this is assumed. By default */  \
+  /* the path has the 'kEvenOdd' fill type. */                                 \
   DECLARE_VECTOR_COMMAND(NEW_PATH)                                             \
+  /* Set the fill type to Non-zero aka 'kWinding'. */                          \
+  DECLARE_VECTOR_COMMAND(FILL_RULE_NONZERO)                                    \
   /* Sets the alpha for the current path. */                                   \
   DECLARE_VECTOR_COMMAND(PATH_COLOR_ALPHA)                                     \
   /* Sets the color for the current path. */                                   \
@@ -93,8 +96,7 @@ struct VectorIconRep {
   VectorIconRep(const VectorIconRep&) = delete;
   VectorIconRep& operator=(const VectorIconRep&) = delete;
 
-  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
-  // #global-scope, #constexpr-ctor-field-initializer
+  // RAW_PTR_EXCLUSION: #global-scope
   RAW_PTR_EXCLUSION const PathElement* path = nullptr;
 
   // The length of |path|.
@@ -115,8 +117,7 @@ struct VectorIcon {
 
   bool is_empty() const { return !reps; }
 
-  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
-  // #global-scope, #constexpr-ctor-field-initializer
+  // RAW_PTR_EXCLUSION: #global-scope
   RAW_PTR_EXCLUSION const VectorIconRep* const reps = nullptr;
   size_t reps_size = 0u;
 

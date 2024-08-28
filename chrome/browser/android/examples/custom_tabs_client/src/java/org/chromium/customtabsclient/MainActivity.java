@@ -109,6 +109,9 @@ public class MainActivity extends AppCompatActivity
     private static final String SHARED_PREF_SIDE_SHEET_MAX_BUTTON = "SideSheetMaxButton";
     private static final String SHARED_PREF_SIDE_SHEET_ROUNDED_CORNER = "RoundedCorner";
     private static final String SHARED_PREF_CONTENT_SCROLL = "ContentScrollMayResizeTab";
+    private static final String SHARED_PREF_SEARCH_IN_CCT = "SearchInCCT";
+    private static final String SHARED_PREF_SEND_TO_EXTERNAL_APP = "SendToExternalApp";
+    private static final String SHARED_PREF_SHARE_IDENTITY = "ShareIdentity";
     private static final String SHARED_PREF_CONNECT_BUTTON = "ConnectButton";
     private static final String SHARED_PREF_DISCONNECT_BUTTON = "DisconnectButton";
     private static final String SHARED_PREF_WARMUP_BUTTON = "WarmupButton";
@@ -160,6 +163,9 @@ public class MainActivity extends AppCompatActivity
     private CheckBox mSideSheetMaxButtonCheckbox;
     private CheckBox mSideSheetRoundedCornerCheckbox;
     private CheckBox mContentScrollCheckbox;
+    private CheckBox mSearchInCCTCheckbox;
+    private CheckBox mSendToExternalAppCheckbox;
+    private CheckBox mShareIdentityCheckbox;
     private TextView mPcctBreakpointLabel;
     private SeekBar mPcctBreakpointSlider;
     private TextView mPcctInitialHeightLabel;
@@ -175,6 +181,8 @@ public class MainActivity extends AppCompatActivity
 
     public static final String EXTRA_ACTIVITY_SCROLL_CONTENT_RESIZE =
             "androidx.browser.customtabs.extra.ACTIVITY_SCROLL_CONTENT_RESIZE";
+    private static final String EXTRA_OMNIBOX_ENABLED =
+            "org.chromium.chrome.browser.customtabs.OMNIBOX_ENABLED";
 
     /** Once per second, asks the framework for the process importance, and logs any change. */
     private Runnable mLogImportance =
@@ -429,7 +437,8 @@ public class MainActivity extends AppCompatActivity
                 editor.apply();
             }
         } else {
-            // TODO(1369795) Refactor the way ordering is stored so it's not mixed with URLs
+            // TODO(crbug.com/40240792) Refactor the way ordering is stored so it's not mixed with
+            // URLs
             savedUrlSet = new HashSet<String>();
             if (!TextUtils.isEmpty(url)) {
                 savedUrlSet.add("1" + url);
@@ -495,6 +504,7 @@ public class MainActivity extends AppCompatActivity
         Spinner colorSpinner = (Spinner) findViewById(R.id.color_spinner);
         HashMap<String, String> colors = new HashMap<String, String>();
         colors.put("Default", "");
+        colors.put("White (AGA Light)", "#ffffff");
         colors.put("Orange", "#ef6c00");
         colors.put("Red", "#c63d3c");
         colors.put("Green", "#369f3d");
@@ -659,6 +669,14 @@ public class MainActivity extends AppCompatActivity
         mContentScrollCheckbox = findViewById(R.id.content_scroll_checkbox);
         mContentScrollCheckbox.setChecked(
                 mSharedPref.getInt(SHARED_PREF_CONTENT_SCROLL, UNCHECKED) == CHECKED);
+        mSearchInCCTCheckbox = findViewById(R.id.search_in_cct_checkbox);
+        mSearchInCCTCheckbox.setChecked(mSharedPref.getBoolean(SHARED_PREF_SEARCH_IN_CCT, false));
+        mShareIdentityCheckbox = findViewById(R.id.share_identity_checkbox);
+        mShareIdentityCheckbox.setChecked(
+                mSharedPref.getInt(SHARED_PREF_SHARE_IDENTITY, UNCHECKED) == CHECKED);
+        mSendToExternalAppCheckbox = findViewById(R.id.send_to_external_app_checkbox);
+        mSendToExternalAppCheckbox.setChecked(
+                mSharedPref.getInt(SHARED_PREF_SEND_TO_EXTERNAL_APP, UNCHECKED) == CHECKED);
     }
 
     private void initializeCctSpinner() {
@@ -833,6 +851,7 @@ public class MainActivity extends AppCompatActivity
             editor.putBoolean(SHARED_PREF_MAY_LAUNCH_BUTTON, mMayLaunchButton.isEnabled());
             editor.putBoolean(
                     SHARED_PREF_ENGAGEMENT_SIGNALS_BUTTON, mEngagementSignalsButton.isEnabled());
+            editor.putBoolean(SHARED_PREF_SEARCH_IN_CCT, mSearchInCCTCheckbox.isChecked());
             editor.apply();
         }
         super.onDestroy();
@@ -944,6 +963,11 @@ public class MainActivity extends AppCompatActivity
             decorationType = ACTIVITY_SIDE_SHEET_DECORATION_TYPE_NONE;
         }
 
+        if (mShareIdentityCheckbox.isChecked()) builder.setShareIdentityEnabled(true);
+        if (mSendToExternalAppCheckbox.isChecked()) {
+            builder.setSendToExternalDefaultHandlerEnabled(true);
+        }
+
         CustomTabsIntent customTabsIntent;
 
         if (isPCCT) {
@@ -1011,6 +1035,8 @@ public class MainActivity extends AppCompatActivity
                     mCctType.equals("Incognito CCT"));
             customTabsIntent.intent.putExtra(EXTRA_CLOSE_BUTTON_POSITION, closeButtonPosition);
         }
+
+        customTabsIntent.intent.putExtra(EXTRA_OMNIBOX_ENABLED, mSearchInCCTCheckbox.isChecked());
 
         if (startActivityForResult) {
             customTabsIntent.intent.setData(Uri.parse(url));

@@ -14,6 +14,7 @@ import android.widget.FrameLayout;
 import android.widget.Space;
 
 import androidx.test.InstrumentationRegistry;
+import androidx.test.annotation.UiThreadTest;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
@@ -22,7 +23,6 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.test.BaseJUnit4ClassRunner;
-import org.chromium.base.test.UiThreadTest;
 import org.chromium.base.test.util.Batch;
 import org.chromium.components.browser_ui.widget.DualControlLayout.ButtonType;
 import org.chromium.components.browser_ui.widget.DualControlLayout.DualControlLayoutAlignment;
@@ -321,7 +321,7 @@ public class DualControlLayoutTest {
                         mContext, ButtonType.PRIMARY_FILLED, "Done", null));
         inflatedLayout.addView(
                 DualControlLayout.createButtonForLayout(
-                        mContext, ButtonType.SECONDARY, "Cancel", null));
+                        mContext, ButtonType.SECONDARY_TEXT, "Cancel", null));
 
         Button newPrimaryButton = inflatedLayout.findViewById(R.id.button_primary);
         Assert.assertNotNull(newPrimaryButton);

@@ -910,6 +910,37 @@ TEST_P(DcSctpSocketParametrizedTest, ExpectHeartbeatToBeSent) {
   MaybeHandoverSocketAndSendMessage(a, std::move(z));
 }
 
+TEST(DcSctpSocketParametrizedTest, BothSidesSendHeartbeats) {
+  // On an idle connection, both sides send heartbeats, and both sides acks.
+
+  // Make them have slightly different heartbeat intervals, to validate that
+  // sending an ack by Z doesn't restart its heartbeat timer.
+  DcSctpOptions options_a = {.heartbeat_interval = DurationMs(1000)};
+  SocketUnderTest a("A", options_a);
+
+  DcSctpOptions options_z = {.heartbeat_interval = DurationMs(1100)};
+  SocketUnderTest z("Z", options_z);
+
+  ConnectSockets(a, z);
+
+  AdvanceTime(a, z, TimeDelta::Millis(1000));
+
+  std::vector<uint8_t> packet_a = a.cb.ConsumeSentPacket();
+  EXPECT_THAT(packet_a, HasChunks(ElementsAre(IsHeartbeatRequest(_))));
+  // Z receives heartbeat, sends ACK.
+  z.socket.ReceivePacket(packet_a);
+  a.socket.ReceivePacket(z.cb.ConsumeSentPacket());
+
+  // A little while later, Z should send heartbeats to A.
+  AdvanceTime(a, z, TimeDelta::Millis(100));
+
+  std::vector<uint8_t> packet_z = z.cb.ConsumeSentPacket();
+  EXPECT_THAT(packet_z, HasChunks(ElementsAre(IsHeartbeatRequest(_))));
+  // A receives heartbeat, sends ACK.
+  a.socket.ReceivePacket(packet_z);
+  z.socket.ReceivePacket(a.cb.ConsumeSentPacket());
+}
+
 TEST_P(DcSctpSocketParametrizedTest,
        CloseConnectionAfterTooManyLostHeartbeats) {
   SocketUnderTest a("A");
@@ -1692,6 +1723,37 @@ TEST_P(DcSctpSocketParametrizedTest,
   EXPECT_FALSE(z->cb.ConsumeReceivedMessage().has_value());
 
   MaybeHandoverSocketAndSendMessage(a, std::move(z));
+}
+
+TEST(DcSctpSocketTest, RespectsPerStreamQueueLimit) {
+  DcSctpOptions options = {.max_send_buffer_size = 4000,
+                           .per_stream_send_queue_limit = 1000};
+  SocketUnderTest a("A", options);
+  EXPECT_EQ(a.socket.Send(
+                DcSctpMessage(StreamID(1), PPID(53), std::vector<uint8_t>(600)),
+                kSendOptions),
+            SendStatus::kSuccess);
+  EXPECT_EQ(a.socket.Send(
+                DcSctpMessage(StreamID(1), PPID(53), std::vector<uint8_t>(600)),
+                kSendOptions),
+            SendStatus::kSuccess);
+  EXPECT_EQ(a.socket.Send(
+                DcSctpMessage(StreamID(1), PPID(53), std::vector<uint8_t>(600)),
+                kSendOptions),
+            SendStatus::kErrorResourceExhaustion);
+  // The per-stream limit for SID=1 is reached, but not SID=2.
+  EXPECT_EQ(a.socket.Send(
+                DcSctpMessage(StreamID(2), PPID(53), std::vector<uint8_t>(600)),
+                kSendOptions),
+            SendStatus::kSuccess);
+  EXPECT_EQ(a.socket.Send(
+                DcSctpMessage(StreamID(2), PPID(53), std::vector<uint8_t>(600)),
+                kSendOptions),
+            SendStatus::kSuccess);
+  EXPECT_EQ(a.socket.Send(
+                DcSctpMessage(StreamID(2), PPID(53), std::vector<uint8_t>(600)),
+                kSendOptions),
+            SendStatus::kErrorResourceExhaustion);
 }
 
 TEST_P(DcSctpSocketParametrizedTest, HasReasonableBufferedAmountValues) {

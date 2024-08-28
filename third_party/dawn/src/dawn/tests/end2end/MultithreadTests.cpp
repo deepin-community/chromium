@@ -62,7 +62,7 @@ class LockStep {
 
     void Wait(Step step) {
         std::unique_lock<std::mutex> lg(mMutex);
-        mCv.wait(lg, [=] { return mStep == step; });
+        mCv.wait(lg, [this, step] { return mStep == step; });
     }
 
   private:
@@ -168,30 +168,25 @@ TEST_P(MultithreadTests, Device_DroppedInCallback_OnAnotherThread) {
     // Create threads
     utils::RunInParallel(static_cast<uint32_t>(devices.size()), [&devices, this](uint32_t index) {
         auto additionalDevice = std::move(devices[index]);
-        struct UserData {
-            wgpu::Device device2ndRef;
-            std::atomic_bool isCompleted{false};
-        } userData;
-
-        userData.device2ndRef = additionalDevice;
+        wgpu::Device device2ndRef = additionalDevice;
+        std::atomic_bool isCompleted{false};
 
         // Drop the last ref inside a callback.
         additionalDevice.PushErrorScope(wgpu::ErrorFilter::Validation);
         additionalDevice.PopErrorScope(
-            [](WGPUErrorType type, const char*, void* userdataPtr) {
-                auto userdata = static_cast<UserData*>(userdataPtr);
-                userdata->device2ndRef = nullptr;
-                userdata->isCompleted = true;
-            },
-            &userData);
+            wgpu::CallbackMode::AllowProcessEvents,
+            [&device2ndRef, &isCompleted](wgpu::PopErrorScopeStatus, wgpu::ErrorType, const char*) {
+                device2ndRef = nullptr;
+                isCompleted = true;
+            });
         // main ref dropped.
         additionalDevice = nullptr;
 
         do {
             WaitABit();
-        } while (!userData.isCompleted.load());
+        } while (!isCompleted.load());
 
-        EXPECT_EQ(userData.device2ndRef, nullptr);
+        EXPECT_EQ(device2ndRef, nullptr);
     });
 }
 
@@ -206,26 +201,20 @@ TEST_P(MultithreadTests, Buffers_MapInParallel) {
 
     constexpr uint32_t kSize = static_cast<uint32_t>(kDataSize * sizeof(uint32_t));
 
-    utils::RunInParallel(10, [=, &myData = std::as_const(myData)](uint32_t) {
-        wgpu::Buffer buffer;
-        std::atomic<bool> mapCompleted(false);
-
+    utils::RunInParallel(10, [this, &myData = std::as_const(myData)](uint32_t) {
         // Create buffer and request mapping.
-        buffer = CreateBuffer(kSize, wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc);
-
-        buffer.MapAsync(
-            wgpu::MapMode::Write, 0, kSize,
-            [](WGPUBufferMapAsyncStatus status, void* userdata) {
-                EXPECT_EQ(WGPUBufferMapAsyncStatus_Success, status);
-                (*static_cast<std::atomic<bool>*>(userdata)) = true;
-            },
-            &mapCompleted);
+        wgpu::Buffer buffer =
+            CreateBuffer(kSize, wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc);
 
         // Wait for the mapping to complete
-        while (!mapCompleted.load()) {
-            device.Tick();
-            FlushWire();
-        }
+        ASSERT_EQ(instance.WaitAny(buffer.MapAsync(wgpu::MapMode::Write, 0, kSize,
+                                                   wgpu::CallbackMode::AllowProcessEvents,
+                                                   [](wgpu::MapAsyncStatus status, const char*) {
+                                                       ASSERT_EQ(status,
+                                                                 wgpu::MapAsyncStatus::Success);
+                                                   }),
+                                   UINT64_MAX),
+                  wgpu::WaitStatus::Success);
 
         // Buffer is mapped, write into it and unmap .
         memcpy(buffer.GetMappedRange(0, kSize), myData.data(), kSize);
@@ -234,6 +223,47 @@ TEST_P(MultithreadTests, Buffers_MapInParallel) {
         // Check the content of the buffer.
         EXPECT_BUFFER_U32_RANGE_EQ(myData.data(), buffer, 0, kDataSize);
     });
+}
+
+// Test CreateShaderModule on multiple threads. Cache hits should share compilation warnings.
+TEST_P(MultithreadTests, CreateShaderModuleInParallel) {
+    constexpr uint32_t kCacheHitFactor = 4;  // 4 threads will create the same shader module.
+
+    std::vector<std::string> shaderSources(10);
+    std::vector<wgpu::ShaderModule> shaderModules(shaderSources.size() * kCacheHitFactor);
+
+    std::string shader = R"(@fragment
+    fn main(@location(0) x : f32) {
+        return;
+        return;
+    };)";
+    for (uint32_t i = 0; i < shaderSources.size(); ++i) {
+        // Insert newlines to make the shaders unique.
+        shader = "\n" + shader;
+        shaderSources[i] = shader;
+    }
+
+    // Create shader modules in parallel.
+    utils::RunInParallel(static_cast<uint32_t>(shaderModules.size()), [&](uint32_t index) {
+        uint32_t sourceIndex = index / kCacheHitFactor;
+        shaderModules[index] =
+            utils::CreateShaderModule(device, shaderSources[sourceIndex].c_str());
+    });
+
+    // Check that the compilation info is correct for every shader module.
+    for (uint32_t index = 0; index < shaderModules.size(); ++index) {
+        uint32_t sourceIndex = index / kCacheHitFactor;
+        shaderModules[index].GetCompilationInfo(
+            wgpu::CallbackMode::AllowProcessEvents,
+            [sourceIndex](wgpu::CompilationInfoRequestStatus status,
+                          const wgpu::CompilationInfo* info) {
+                ASSERT_EQ(wgpu::CompilationInfoRequestStatus::Success, status);
+                for (size_t i = 0; i < info->messageCount; ++i) {
+                    EXPECT_THAT(info->messages[i].message, testing::HasSubstr("unreachable"));
+                    EXPECT_EQ(info->messages[i].lineNum, 5u + sourceIndex);
+                }
+            });
+    }
 }
 
 // Test CreateComputePipelineAsync on multiple threads.
@@ -273,24 +303,87 @@ TEST_P(MultithreadTests, CreateComputePipelineAsyncInParallel) {
             wgpu::ComputePipeline computePipeline;
             std::atomic<bool> isCompleted{false};
         } task;
-        device.CreateComputePipelineAsync(
-            &csDesc,
-            [](WGPUCreatePipelineAsyncStatus status, WGPUComputePipeline returnPipeline,
-               const char* message, void* userdata) {
-                EXPECT_EQ(WGPUCreatePipelineAsyncStatus::WGPUCreatePipelineAsyncStatus_Success,
-                          status);
+        device.CreateComputePipelineAsync(&csDesc, wgpu::CallbackMode::AllowProcessEvents,
+                                          [&task](wgpu::CreatePipelineAsyncStatus status,
+                                                  wgpu::ComputePipeline pipeline, const char*) {
+                                              EXPECT_EQ(wgpu::CreatePipelineAsyncStatus::Success,
+                                                        status);
 
-                auto task = static_cast<Task*>(userdata);
-                task->computePipeline = wgpu::ComputePipeline::Acquire(returnPipeline);
-                task->isCompleted = true;
-            },
-            &task);
+                                              task.computePipeline = std::move(pipeline);
+                                              task.isCompleted = true;
+                                          });
 
         while (!task.isCompleted.load()) {
             WaitABit();
         }
 
         pipelines[index] = task.computePipeline;
+    });
+
+    // Verify pipelines' executions
+    for (uint32_t i = 0; i < pipelines.size(); ++i) {
+        wgpu::Buffer ssbo =
+            CreateBuffer(sizeof(uint32_t), wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc);
+
+        wgpu::CommandBuffer commands;
+        {
+            wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+            wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
+
+            ASSERT_NE(nullptr, pipelines[i].Get());
+            wgpu::BindGroup bindGroup =
+                utils::MakeBindGroup(device, pipelines[i].GetBindGroupLayout(0),
+                                     {
+                                         {0, ssbo, 0, sizeof(uint32_t)},
+                                     });
+            pass.SetBindGroup(0, bindGroup);
+            pass.SetPipeline(pipelines[i]);
+
+            pass.DispatchWorkgroups(1);
+            pass.End();
+
+            commands = encoder.Finish();
+        }
+
+        queue.Submit(1, &commands);
+
+        EXPECT_BUFFER_U32_EQ(expectedValues[i], ssbo, 0);
+    }
+}
+
+// Test CreateComputePipeline on multiple threads.
+TEST_P(MultithreadTests, CreateComputePipelineInParallel) {
+    // TODO(crbug.com/dawn/1766): TSAN reported race conditions in NVIDIA's vk driver.
+    DAWN_SUPPRESS_TEST_IF(IsVulkan() && IsNvidia() && IsTsan());
+
+    std::vector<wgpu::ComputePipeline> pipelines(10);
+    std::vector<std::string> shaderSources(pipelines.size());
+    std::vector<uint32_t> expectedValues(shaderSources.size());
+
+    for (uint32_t i = 0; i < pipelines.size(); ++i) {
+        expectedValues[i] = i + 1;
+
+        std::ostringstream ss;
+        ss << R"(
+        struct SSBO {
+            value : u32
+        }
+        @group(0) @binding(0) var<storage, read_write> ssbo : SSBO;
+
+        @compute @workgroup_size(1) fn main() {
+            ssbo.value =
+        )";
+        ss << expectedValues[i];
+        ss << ";}";
+
+        shaderSources[i] = ss.str();
+    }
+
+    // Create pipelines in parallel
+    utils::RunInParallel(static_cast<uint32_t>(pipelines.size()), [&](uint32_t index) {
+        wgpu::ComputePipelineDescriptor csDesc;
+        csDesc.compute.module = utils::CreateShaderModule(device, shaderSources[index].c_str());
+        pipelines[index] = device.CreateComputePipeline(&csDesc);
     });
 
     // Verify pipelines' executions
@@ -377,23 +470,101 @@ TEST_P(MultithreadTests, CreateRenderPipelineAsyncInParallel) {
             std::atomic<bool> isCompleted{false};
         } task;
         device.CreateRenderPipelineAsync(
-            &renderPipelineDescriptor,
-            [](WGPUCreatePipelineAsyncStatus status, WGPURenderPipeline returnPipeline,
-               const char* message, void* userdata) {
-                EXPECT_EQ(WGPUCreatePipelineAsyncStatus::WGPUCreatePipelineAsyncStatus_Success,
-                          status);
+            &renderPipelineDescriptor, wgpu::CallbackMode::AllowProcessEvents,
+            [&task](wgpu::CreatePipelineAsyncStatus status, wgpu::RenderPipeline pipeline,
+                    const char*) {
+                EXPECT_EQ(wgpu::CreatePipelineAsyncStatus::Success, status);
 
-                auto* task = static_cast<Task*>(userdata);
-                task->renderPipeline = wgpu::RenderPipeline::Acquire(returnPipeline);
-                task->isCompleted = true;
-            },
-            &task);
+                task.renderPipeline = std::move(pipeline);
+                task.isCompleted = true;
+            });
 
         while (!task.isCompleted) {
             WaitABit();
         }
 
         pipelines[index] = task.renderPipeline;
+    });
+
+    // Verify pipelines' executions
+    for (uint32_t i = 0; i < pipelines.size(); ++i) {
+        wgpu::Texture outputTexture =
+            CreateTexture(1, 1, kRenderAttachmentFormat,
+                          wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc);
+
+        utils::ComboRenderPassDescriptor renderPassDescriptor({outputTexture.CreateView()});
+        renderPassDescriptor.cColorAttachments[0].loadOp = wgpu::LoadOp::Clear;
+        renderPassDescriptor.cColorAttachments[0].clearValue = {1.f, 0.f, 0.f, 1.f};
+
+        wgpu::CommandBuffer commands;
+        {
+            wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+            wgpu::RenderPassEncoder renderPassEncoder =
+                encoder.BeginRenderPass(&renderPassDescriptor);
+
+            ASSERT_NE(nullptr, pipelines[i].Get());
+
+            renderPassEncoder.SetPipeline(pipelines[i]);
+            renderPassEncoder.Draw(1);
+            renderPassEncoder.End();
+            commands = encoder.Finish();
+        }
+
+        queue.Submit(1, &commands);
+
+        EXPECT_PIXEL_RGBA8_BETWEEN(minExpectedValues[i], maxExpectedValues[i], outputTexture, 0, 0);
+    }
+}
+
+// Test CreateRenderPipeline on multiple threads.
+TEST_P(MultithreadTests, CreateRenderPipelineInParallel) {
+    // TODO(crbug.com/dawn/1766): TSAN reported race conditions in NVIDIA's vk driver.
+    DAWN_SUPPRESS_TEST_IF(IsVulkan() && IsNvidia() && IsTsan());
+
+    constexpr uint32_t kNumThreads = 10;
+    constexpr wgpu::TextureFormat kRenderAttachmentFormat = wgpu::TextureFormat::RGBA8Unorm;
+    constexpr uint8_t kColorStep = 250 / kNumThreads;
+
+    std::vector<wgpu::RenderPipeline> pipelines(kNumThreads);
+    std::vector<std::string> fragmentShaderSources(kNumThreads);
+    std::vector<utils::RGBA8> minExpectedValues(kNumThreads);
+    std::vector<utils::RGBA8> maxExpectedValues(kNumThreads);
+
+    for (uint32_t i = 0; i < kNumThreads; ++i) {
+        // Due to floating point precision, we need to use min & max values to compare the
+        // expectations.
+        auto expectedGreen = kColorStep * i;
+        minExpectedValues[i] =
+            utils::RGBA8(0, expectedGreen == 0 ? 0 : (expectedGreen - 2), 0, 255);
+        maxExpectedValues[i] =
+            utils::RGBA8(0, expectedGreen == 255 ? 255 : (expectedGreen + 2), 0, 255);
+
+        std::ostringstream ss;
+        ss << R"(
+        @fragment fn main() -> @location(0) vec4f {
+            return vec4f(0.0,
+        )";
+        ss << expectedGreen / 255.0;
+        ss << ", 0.0, 1.0);}";
+
+        fragmentShaderSources[i] = ss.str();
+    }
+
+    // Create pipelines in parallel
+    utils::RunInParallel(kNumThreads, [&](uint32_t index) {
+        utils::ComboRenderPipelineDescriptor renderPipelineDescriptor;
+        wgpu::ShaderModule vsModule = utils::CreateShaderModule(device, R"(
+        @vertex fn main() -> @builtin(position) vec4f {
+            return vec4f(0.0, 0.0, 0.0, 1.0);
+        })");
+        wgpu::ShaderModule fsModule =
+            utils::CreateShaderModule(device, fragmentShaderSources[index].c_str());
+        renderPipelineDescriptor.vertex.module = vsModule;
+        renderPipelineDescriptor.cFragment.module = fsModule;
+        renderPipelineDescriptor.cTargets[0].format = kRenderAttachmentFormat;
+        renderPipelineDescriptor.primitive.topology = wgpu::PrimitiveTopology::PointList;
+
+        pipelines[index] = device.CreateRenderPipeline(&renderPipelineDescriptor);
     });
 
     // Verify pipelines' executions
@@ -547,7 +718,8 @@ TEST_P(MultithreadEncodingTests, RenderPassEncodersInParallel) {
 
     std::vector<wgpu::CommandBuffer> commandBuffers(kNumThreads);
 
-    utils::RunInParallel(kNumThreads, [=, &commandBuffers](uint32_t index) {
+    utils::RunInParallel(kNumThreads, [this, msaaRenderTargetView, resolveTargetView,
+                                       &commandBuffers](uint32_t index) {
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
 
         // Clear the renderTarget to red.
@@ -597,7 +769,8 @@ TEST_P(MultithreadEncodingTests, RenderPassEncoders_ResolveToMipLevelOne_InParal
 
     std::vector<wgpu::CommandBuffer> commandBuffers(kNumThreads);
 
-    utils::RunInParallel(kNumThreads, [=, &commandBuffers](uint32_t index) {
+    utils::RunInParallel(kNumThreads, [this, msaaRenderTargetView, resolveTargetView,
+                                       &commandBuffers](uint32_t index) {
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
 
         // Clear the renderTarget to red.
@@ -646,7 +819,7 @@ TEST_P(MultithreadEncodingTests, ComputePassEncodersInParallel) {
 
     std::vector<wgpu::CommandBuffer> commandBuffers(kNumThreads);
 
-    utils::RunInParallel(kNumThreads, [=, &commandBuffers](uint32_t index) {
+    utils::RunInParallel(kNumThreads, [this, pipeline, bindGroup, &commandBuffers](uint32_t index) {
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
         wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
         pass.SetPipeline(pipeline);
@@ -671,10 +844,6 @@ class MultithreadTextureCopyTests : public MultithreadTests {
   protected:
     void SetUp() override {
         MultithreadTests::SetUp();
-
-        // TODO(crbug.com/dawn/1291): These tests are failing on GLES (both native and ANGLE)
-        // when using Tint/GLSL.
-        DAWN_TEST_UNSUPPORTED_IF(IsOpenGLES());
     }
 
     wgpu::Texture CreateAndWriteTexture(uint32_t width,
@@ -744,6 +913,9 @@ class MultithreadTextureCopyTests : public MultithreadTests {
 // CopyTextureToTexture() command might internally allocate resources and we need to make sure that
 // it won't race with other threads' works.
 TEST_P(MultithreadTextureCopyTests, CopyDepthToDepthNoRace) {
+    // TODO(crbug.com/dawn/1766): TSAN reported race conditions in NVIDIA's vk driver.
+    DAWN_SUPPRESS_TEST_IF(IsVulkan() && IsNvidia() && IsTsan());
+
     enum class Step {
         Begin,
         WriteTexture,
@@ -885,12 +1057,11 @@ TEST_P(MultithreadTextureCopyTests, CopyStencilToStencilNoRace) {
     // combination.
     DAWN_SUPPRESS_TEST_IF(IsANGLE());
 
-    // TODO(crbug.com/dawn/667): Work around the fact that some platforms are unable to read
-    // stencil.
-    DAWN_TEST_UNSUPPORTED_IF(HasToggleEnabled("disable_depth_stencil_read"));
-
     // TODO(dawn:1924): Intel Gen9 specific.
     DAWN_SUPPRESS_TEST_IF(IsD3D11() && IsIntelGen9());
+
+    // TODO(crbug.com/dawn/1766): TSAN reported race conditions in NVIDIA's vk driver.
+    DAWN_SUPPRESS_TEST_IF(IsVulkan() && IsNvidia() && IsTsan());
 
     enum class Step {
         Begin,
@@ -1008,8 +1179,6 @@ TEST_P(MultithreadTextureCopyTests, CopyBufferToStencilNoRace) {
 // This test is needed since CopyTextureForBrowser() command might internally allocate resources and
 // we need to make sure that it won't race with other threads' works.
 TEST_P(MultithreadTextureCopyTests, CopyTextureForBrowserNoRace) {
-    // TODO(crbug.com/dawn/1232): Program link error on OpenGLES backend
-    DAWN_SUPPRESS_TEST_IF(IsOpenGLES());
     DAWN_SUPPRESS_TEST_IF(IsOpenGL() && IsLinux());
 
     enum class Step {
@@ -1077,8 +1246,6 @@ TEST_P(MultithreadTextureCopyTests, CopyTextureForBrowserNoRace) {
 
 // Test that error from CopyTextureForBrowser() won't cause deadlock.
 TEST_P(MultithreadTextureCopyTests, CopyTextureForBrowserErrorNoDeadLock) {
-    // TODO(crbug.com/dawn/1232): Program link error on OpenGLES backend
-    DAWN_SUPPRESS_TEST_IF(IsOpenGLES());
     DAWN_SUPPRESS_TEST_IF(IsOpenGL() && IsLinux());
 
     DAWN_TEST_UNSUPPORTED_IF(HasToggleEnabled("skip_validation"));
@@ -1138,12 +1305,12 @@ TEST_P(MultithreadTextureCopyTests, CopyTextureForBrowserErrorNoDeadLock) {
 
         std::atomic<bool> errorThrown(false);
         device.PopErrorScope(
-            [](WGPUErrorType type, char const* message, void* userdata) {
-                EXPECT_EQ(type, WGPUErrorType_Validation);
-                auto error = static_cast<std::atomic<bool>*>(userdata);
-                *error = true;
-            },
-            &errorThrown);
+            wgpu::CallbackMode::AllowProcessEvents,
+            [&errorThrown](wgpu::PopErrorScopeStatus status, wgpu::ErrorType type, char const*) {
+                EXPECT_EQ(status, wgpu::PopErrorScopeStatus::Success);
+                EXPECT_EQ(type, wgpu::ErrorType::Validation);
+                errorThrown = true;
+            });
         instance.ProcessEvents();
         EXPECT_TRUE(errorThrown.load());
 
@@ -1271,7 +1438,7 @@ TEST_P(MultithreadDrawIndexedIndirectTests, IndirectOffsetInParallel) {
     utils::RGBA8 filled(0, 255, 0, 255);
     utils::RGBA8 notFilled(0, 0, 0, 0);
 
-    utils::RunInParallel(10, [=](uint32_t) {
+    utils::RunInParallel(10, [this, filled, notFilled](uint32_t) {
         // Test an offset draw call, with indirect buffer containing 2 calls:
         // 1) first 3 indices of the second quad (top right triangle)
         // 2) last 3 indices of the second quad
@@ -1295,7 +1462,7 @@ class TimestampExpectation : public detail::Expectation {
         for (size_t i = 0; i < size / sizeof(uint64_t); i++) {
             if (timestamps[i] == 0) {
                 return testing::AssertionFailure()
-                       << "Expected data[" << i << "] to be greater than 0." << std::endl;
+                       << "Expected data[" << i << "] to be greater than 0.\n";
             }
         }
 

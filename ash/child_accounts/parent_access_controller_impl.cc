@@ -229,7 +229,7 @@ void RecordParentAccessUsage(const AccountId& child_account_id,
           ParentAccessControllerImpl::UMAUsage::kReauhLoginScreen);
       return;
   }
-  NOTREACHED() << "Unknown SupervisedAction";
+  NOTREACHED_IN_MIGRATION() << "Unknown SupervisedAction";
 }
 
 PinRequestView::SubmissionResult ParentAccessControllerImpl::OnPinSubmitted(
@@ -263,7 +263,7 @@ void ParentAccessControllerImpl::OnBack() {
 
 void ParentAccessControllerImpl::OnHelp() {
   RecordParentAccessAction(ParentAccessControllerImpl::UMAAction::kGetHelp);
-  // TODO(https://crbug.com/999387): Remove this when handling touch
+  // TODO(crbug.com/40642787): Remove this when handling touch
   // cancellation is fixed for system modal windows.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce([]() {

@@ -25,10 +25,7 @@
 
 namespace {
 bool CacheIsEnabled() {
-  // Do not use cache for the testing population.
-  return !base::FeatureList::IsEnabled(
-             features::kCookieDeprecationFacilitatedTesting) &&
-         base::FeatureList::IsEnabled(features::kFledgeUseInterestGroupCache);
+  return base::FeatureList::IsEnabled(features::kFledgeUseInterestGroupCache);
 }
 
 std::optional<content::SingleStorageInterestGroup>
@@ -175,7 +172,8 @@ void InterestGroupCachingStorage::GetInterestGroupsForOwner(
 void InterestGroupCachingStorage::JoinInterestGroup(
     const blink::InterestGroup& group,
     const GURL& main_frame_joining_url,
-    base::OnceClosure callback) {
+    base::OnceCallback<void(std::optional<InterestGroupKanonUpdateParameter>)>
+        callback) {
   InvalidateCachedInterestGroupsForOwner(group.owner);
   interest_group_storage_.AsyncCall(&InterestGroupStorage::JoinInterestGroup)
       .WithArgs(std::move(group), std::move(main_frame_joining_url))
@@ -208,11 +206,20 @@ void InterestGroupCachingStorage::ClearOriginJoinedInterestGroups(
 void InterestGroupCachingStorage::UpdateInterestGroup(
     const blink::InterestGroupKey& group_key,
     InterestGroupUpdate update,
-    base::OnceCallback<void(bool)> notify_callback) {
+    base::OnceCallback<void(std::optional<InterestGroupKanonUpdateParameter>)>
+        callback) {
   InvalidateCachedInterestGroupsForOwner(group_key.owner);
   interest_group_storage_.AsyncCall(&InterestGroupStorage::UpdateInterestGroup)
       .WithArgs(group_key, std::move(update))
-      .Then(std::move(notify_callback));
+      .Then(std::move(callback));
+}
+
+void InterestGroupCachingStorage::AllowUpdateIfOlderThan(
+    const blink::InterestGroupKey& group_key,
+    base::TimeDelta update_if_older_than) {
+  interest_group_storage_
+      .AsyncCall(&InterestGroupStorage::AllowUpdateIfOlderThan)
+      .WithArgs(group_key, update_if_older_than);
 }
 
 void InterestGroupCachingStorage::ReportUpdateFailed(
@@ -277,32 +284,36 @@ void InterestGroupCachingStorage::RecordDebugReportCooldown(
 }
 
 void InterestGroupCachingStorage::UpdateKAnonymity(
-    const StorageInterestGroup::KAnonymityData& data) {
+    const blink::InterestGroupKey& interest_group_key,
+    const std::vector<std::string>& positive_hashed_keys,
+    const base::Time update_time,
+    bool replace_existing_values) {
   // We do not know the affected owners without looking them up from the
   // database or calculating k-anon keys for all the ads in the cache. Both are
   // expensive, and this function will run many times per interest group, so
   // prefer to over-delete data here.
   InvalidateAllCachedInterestGroups();
   interest_group_storage_.AsyncCall(&InterestGroupStorage::UpdateKAnonymity)
-      .WithArgs(data);
+      .WithArgs(interest_group_key, positive_hashed_keys, update_time,
+                replace_existing_values);
 }
 
 void InterestGroupCachingStorage::GetLastKAnonymityReported(
-    const std::string& key,
+    const std::string& hashed_key,
     base::OnceCallback<void(std::optional<base::Time>)> callback) {
   interest_group_storage_
       .AsyncCall(&InterestGroupStorage::GetLastKAnonymityReported)
-      .WithArgs(key)
+      .WithArgs(hashed_key)
       .Then(std::move(callback));
 }
 
 void InterestGroupCachingStorage::UpdateLastKAnonymityReported(
-    const std::string& key) {
+    const std::string& hashed_key) {
   // We don't need to invalidate any cached objects here because this value is
   // not loaded in GetInterestGroupsForOwner.
   interest_group_storage_
       .AsyncCall(&InterestGroupStorage::UpdateLastKAnonymityReported)
-      .WithArgs(key);
+      .WithArgs(hashed_key);
 }
 
 void InterestGroupCachingStorage::GetInterestGroup(
@@ -352,16 +363,6 @@ void InterestGroupCachingStorage::GetInterestGroupsForUpdate(
   interest_group_storage_
       .AsyncCall(&InterestGroupStorage::GetInterestGroupsForUpdate)
       .WithArgs(owner, groups_limit)
-      .Then(std::move(callback));
-}
-
-void InterestGroupCachingStorage::GetKAnonymityDataForUpdate(
-    const blink::InterestGroupKey& group_key,
-    base::OnceCallback<void(
-        const std::vector<StorageInterestGroup::KAnonymityData>&)> callback) {
-  interest_group_storage_
-      .AsyncCall(&InterestGroupStorage::GetKAnonymityDataForUpdate)
-      .WithArgs(group_key)
       .Then(std::move(callback));
 }
 

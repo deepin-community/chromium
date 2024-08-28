@@ -34,6 +34,22 @@ enum class WebFilterType {
   kMaxValue = kMixed,
 };
 
+// Returns the string equivalent of a Web Filter type. This is a user-visible
+// string included in the user feedback log.
+std::string WebFilterTypeToDisplayString(WebFilterType web_filter_type);
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(ToggleState)
+enum class ToggleState {
+  kDisabled = 0,
+  kEnabled = 1,
+  kMixed = 2,
+  kMaxValue = kMixed,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/families/enums.xml:SupervisedUserToggleState)
+
 // These values corresponds to SupervisedUserSafetyFilterResult in
 // tools/metrics/histograms/enums.xml. If you change anything here, make
 // sure to also update enums.xml accordingly.
@@ -78,7 +94,6 @@ extern const char kContentPackDefaultFilteringBehavior[];
 extern const char kContentPackManualBehaviorHosts[];
 extern const char kContentPackManualBehaviorURLs[];
 extern const char kCookiesAlwaysAllowed[];
-extern const char kForceSafeSearch[];
 extern const char kGeolocationDisabled[];
 extern const char kSafeSitesEnabled[];
 extern const char kSigninAllowed[];
@@ -114,12 +129,27 @@ extern const char kFamilyLinkUserLogSegmentHistogramName[];
 // This filter only applies to supervised user accounts.
 extern const char kFamilyLinkUserLogSegmentWebFilterHistogramName[];
 
+// Histogram name to log Family Link site permissions toggle state.
+extern const char kSitesMayRequestCameraMicLocationHistogramName[];
+
+// Histogram name to log Family Link extensions permissions toggle state.
+extern const char kSkipParentApprovalToInstallExtensionsHistogramName[];
+
 // Histogram name to log URL filtering results with reason for filter and page
 // transition.
 extern const char kSupervisedUserURLFilteringResultHistogramName[];
 
 // Histogram name to log top level URL filtering results with reason for filter.
 extern const char kSupervisedUserTopLevelURLFilteringResultHistogramName[];
+
+// The URL which the "Managed by your parent" UI links to.
+extern const char kManagedByParentUiMoreInfoUrl[];
+
+// The string used to denote an account that does not have a family member role.
+extern const char kDefaultEmptyFamilyMemberRole[];
+
+// Feedback source name for family member role in Family Link.
+extern const char kFamilyMemberRoleFeedbackTag[];
 
 }  // namespace supervised_user
 

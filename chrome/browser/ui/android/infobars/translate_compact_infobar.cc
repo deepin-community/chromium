@@ -15,12 +15,14 @@
 #include "base/functional/bind.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/types/cxx23_to_underlying.h"
-#include "chrome/android/chrome_jni_headers/TranslateCompactInfoBar_jni.h"
 #include "chrome/browser/android/tab_android.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/translate/core/browser/translate_infobar_delegate.h"
 #include "components/translate/core/browser/translate_metrics_logger.h"
 #include "content/public/browser/browser_context.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/TranslateCompactInfoBar_jni.h"
 
 using base::android::JavaParamRef;
 using base::android::ScopedJavaLocalRef;
@@ -232,7 +234,7 @@ translate::TranslateInfoBarDelegate* TranslateCompactInfoBar::GetDelegate() {
 void TranslateCompactInfoBar::OnTranslateStepChanged(
     translate::TranslateStep step,
     translate::TranslateErrors error_type) {
-  // TODO(crbug/1093320): intended to mitigate a crash where
+  // TODO(crbug.com/40698822): intended to mitigate a crash where
   // the java infobar is gone. If this works, look into root cause.
   if (!HasSetJavaInfoBar())
     return;  // No connected Java infobar
@@ -257,7 +259,7 @@ void TranslateCompactInfoBar::OnTranslateStepChanged(
 
 void TranslateCompactInfoBar::OnTargetLanguageChanged(
     const std::string& target_language_code) {
-  // TODO(crbug/1093320): intended to mitigate a crash where
+  // TODO(crbug.com/40698822): intended to mitigate a crash where
   // the java infobar is gone. If this works, look into root cause.
   if (!HasSetJavaInfoBar())
     return;  // No connected Java infobar

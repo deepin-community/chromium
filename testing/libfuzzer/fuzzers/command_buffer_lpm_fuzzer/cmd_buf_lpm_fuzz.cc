@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <stddef.h>
-#include <stdint.h>
+#include "testing/libfuzzer/fuzzers/command_buffer_lpm_fuzzer/cmd_buf_lpm_fuzz.h"
 
 #include <dawn/dawn_proc.h>
 #include <dawn/webgpu_cpp.h>
+#include <stddef.h>
+#include <stdint.h>
+
 #include <memory>
 #include <vector>
 
@@ -30,19 +32,14 @@
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "gpu/config/gpu_preferences.h"
 #include "gpu/config/gpu_switches.h"
-#include "gpu/ipc/host/gpu_memory_buffer_support.h"
 #include "gpu/ipc/in_process_command_buffer.h"
 #include "gpu/ipc/webgpu_in_process_context.h"
 #include "mojo/core/embedder/embedder.h"
-#include "ui/gl/gl_switches.h"
-#include "ui/gl/init/gl_factory.h"
-#include "ui/gl/test/gl_surface_test_support.h"
-
-#include "testing/libfuzzer/fuzzers/command_buffer_lpm_fuzzer/cmd_buf_lpm_fuzz.h"
 #include "testing/libfuzzer/fuzzers/command_buffer_lpm_fuzzer/cmd_buf_lpm_fuzz.pb.h"
 #include "testing/libfuzzer/fuzzers/command_buffer_lpm_fuzzer/webgpu_support.h"
 #include "testing/libfuzzer/libfuzzer_exports.h"
 #include "testing/libfuzzer/proto/lpm_interface.h"
+#include "ui/gl/test/gl_surface_test_support.h"
 
 namespace gpu::cmdbuf::fuzzing {
 
@@ -89,19 +86,10 @@ void CmdBufFuzz::GfxInit() {
   preferences.enable_unsafe_webgpu = true;
   preferences.enable_gpu_service_logging_gpu = true;
 
-  // Initializing some portion of Chromium's windowing feature seems to be
-  // required to use gpu::CreateBufferUsageAndFormatExceptionList().
+  // Configure the GL implementation to use stub bindings to ensure that any
+  // later creation of the GL surface succeeds.
+  CHECK(gl::GLSurfaceTestSupport::InitializeOneOffWithStubBindings());
 
-  // TODO(bookholt): It's not obvious whether having legit values from
-  // gpu::CreateBufferUsageAndFormatExceptionList() is really desired for
-  // fuzzing, but it's a starting point.
-
-  // TODO(bookholt): OS specific windowing init.
-  VLOG(3) << "Aura + Ozone init";
-  gl_display_ = gl::GLSurfaceTestSupport::InitializeOneOffWithStubBindings();
-  CHECK(gl_display_);
-  preferences.texture_target_exception_list =
-      gpu::CreateBufferUsageAndFormatExceptionList();
   VLOG(3) << "TestGpuServiceHolder: starting GPU threads";
   gpu_service_holder_ =
       std::make_unique<viz::TestGpuServiceHolder>(preferences);
@@ -141,17 +129,16 @@ void CmdBufFuzz::GfxInit() {
 
   VLOG(3) << "Wire protocol setup";
   wire_channel_ = webgpu()->GetAPIChannel();
-  dawn_procs_ = std::make_unique<DawnProcTable>(wire_channel_->GetProcs());
-  dawnProcSetProcs(dawn_procs_.get());
+  dawnProcSetProcs(&dawn::wire::client::GetProcs());
   dawn_wire_services_ =
       static_cast<webgpu::DawnWireServices*>(wire_channel_.get());
   dawn_wire_serializer_ = dawn_wire_services_->serializer();
   wire_descriptor_ = std::make_unique<dawn::wire::WireServerDescriptor>();
-  wire_descriptor_->procs = dawn_procs_.get();
+  wire_descriptor_->procs = &dawn::wire::client::GetProcs();
   wire_descriptor_->serializer = dawn_wire_serializer_.get();
   wire_server_ = std::make_unique<dawn::wire::WireServer>(*wire_descriptor_);
   dawn_instance_ = std::make_unique<dawn::native::Instance>();
-  wire_server_->InjectInstance(dawn_instance_->Get(), 1, 0);
+  wire_server_->InjectInstance(dawn_instance_->Get(), {1, 0});
 
   VLOG(3) << "Populate data structure grab bag";
   command_buffer_ = webgpu_context_->GetCommandBufferForTest();
@@ -162,11 +149,8 @@ void CmdBufFuzz::GfxInit() {
       std::make_unique<webgpu::WebGPUCmdHelper>(command_buffer_.get());
   task_executor_ = command_buffer_->service_for_testing();
   // task_executor_->GetSharedContextState()->surface();
-  surface_ = gl::init::CreateOffscreenGLSurface(gl_display_, gfx::Size());
-  CHECK(surface_.get());
   decoder_ = command_buffer_->GetWebGPUDecoderForTest();
-  webgpu_instance_ =
-      std::make_unique<wgpu::Instance>(wire_channel_->GetWGPUInstance());
+  webgpu_instance_ = wgpu::Instance(wire_channel_->GetWGPUInstance());
   buffer_ = cmd_helper_->get_ring_buffer();
   CHECK(buffer_);
   command_buffer_id_ = cmd_helper_->get_ring_buffer_id();
@@ -470,9 +454,11 @@ void CmdBufFuzz::RunCommandBuffer(fuzzing::CmdBufSession session) {
             // Passing totally unstructured data leads to hitting validation
             // errors in webgpu_decoder_impl.cc.
 
-            // TODO(bookholt): Explore whether it's worth giving some structure
-            // to data sent to HandleReturnData().
-            command_buffer_->HandleReturnData(data_span);
+            // We don't fuzz HandleReturnData because, as of right now, that
+            // command is exclusively used by the client in the renderer.
+            // {GPU Process}->{Renderer Process} attacks are not in our threat
+            // model.
+            // command_buffer_->HandleReturnData(data_span);
             break;
           }
 

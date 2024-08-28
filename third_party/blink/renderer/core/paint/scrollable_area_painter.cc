@@ -77,11 +77,11 @@ void ScrollableAreaPainter::PaintResizer(GraphicsContext& context,
     larger_corner.set_size(
         gfx::Size(larger_corner.width() + 1, larger_corner.height() + 1));
     context.SetStrokeColor(Color(217, 217, 217));
-    context.SetStrokeStyle(kSolidStroke);
+    context.SetStrokeThickness(1);
     gfx::RectF corner_outline(larger_corner);
     corner_outline.Inset(0.5f);
     context.StrokeRect(
-        corner_outline, 1,
+        corner_outline,
         PaintAutoDarkMode(box->StyleRef(),
                           DarkModeFilter::ElementRole::kBackground));
   }
@@ -140,7 +140,7 @@ void ScrollableAreaPainter::DrawPlatformResizerImage(
   paint_flags.setStyle(cc::PaintFlags::kStroke_Style);
   paint_flags.setStrokeWidth(std::ceil(paint_scale));
 
-  SkPathBuilder line_path;
+  SkPath line_path;
 
   AutoDarkMode auto_dark_mode(
       PaintAutoDarkMode(GetScrollableArea().GetLayoutBox()->StyleRef(),
@@ -152,18 +152,19 @@ void ScrollableAreaPainter::DrawPlatformResizerImage(
   line_path.moveTo(points[2].x(), points[2].y());
   line_path.lineTo(points[3].x(), points[3].y());
   paint_flags.setColor(SkColorSetARGB(153, 0, 0, 0));
-  context.DrawPath(line_path.detach(), paint_flags, auto_dark_mode);
+  context.DrawPath(line_path, paint_flags, auto_dark_mode);
 
   // Draw a light line one pixel below the light line,
   // to ensure contrast against a dark background
   int v_offset = std::ceil(paint_scale);
   int h_offset = on_left ? -v_offset : v_offset;
+  line_path.reset();
   line_path.moveTo(points[0].x(), points[0].y() + v_offset);
   line_path.lineTo(points[1].x() + h_offset, points[1].y());
   line_path.moveTo(points[2].x(), points[2].y() + v_offset);
   line_path.lineTo(points[3].x() + h_offset, points[3].y());
   paint_flags.setColor(SkColorSetARGB(153, 255, 255, 255));
-  context.DrawPath(line_path.detach(), paint_flags, auto_dark_mode);
+  context.DrawPath(line_path, paint_flags, auto_dark_mode);
 }
 
 bool ScrollableAreaPainter::PaintOverflowControls(
@@ -371,7 +372,7 @@ void ScrollableAreaPainter::PaintScrollCorner(GraphicsContext& context,
   } else if (GetScrollableArea().VerticalScrollbar()) {
     theme = &GetScrollableArea().VerticalScrollbar()->GetTheme();
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 
   const auto& client = GetScrollableArea().GetScrollCornerDisplayItemClient();
@@ -388,8 +389,9 @@ void ScrollableAreaPainter::PaintScrollCorner(GraphicsContext& context,
       GetScrollableArea().UsedColorSchemeScrollbars();
   const ui::ColorProvider* color_provider =
       GetScrollableArea().GetColorProvider(color_scheme);
-  theme->PaintScrollCorner(context, GetScrollableArea().VerticalScrollbar(),
-                           client, visual_rect, color_scheme, color_provider);
+  theme->PaintScrollCorner(
+      context, GetScrollableArea().VerticalScrollbar(), client, visual_rect,
+      color_scheme, GetScrollableArea().InForcedColorsMode(), color_provider);
 }
 
 PaintLayerScrollableArea& ScrollableAreaPainter::GetScrollableArea() const {

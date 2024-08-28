@@ -69,7 +69,6 @@ class WebContentsViewAndroid : public WebContentsView,
   void RestoreFocus() override;
   void FocusThroughTabTraversal(bool reverse) override;
   DropData* GetDropData() const override;
-  void TransferDragSecurityInfo(WebContentsView* view) override;
   gfx::Rect GetViewBounds() const override;
   void CreateView(gfx::NativeView context) override;
   RenderWidgetHostViewBase* CreateViewForWidget(
@@ -151,7 +150,7 @@ class WebContentsViewAndroid : public WebContentsView,
   // `true` means the screenshot will be placed right above
   // `parent_for_web_page_widgets_`; `false` means right below it.
   //
-  // TODO(crbug/1488075): The boolean might not be enough if
+  // TODO(crbug.com/40283503): The boolean might not be enough if
   // `parent_for_web_page_widgets_` has more siblings, and we need finer control
   // of the position.
   void AddScreenshotLayerForNavigationTransitions(
@@ -212,7 +211,7 @@ class WebContentsViewAndroid : public WebContentsView,
   //   |                |- Overscroll
   //   |                |- SelectionHandle
   //   |
-  //   |- `NavigationEntryScreenshot`  // TODO(https://crbug.com/1509888)
+  //   |- `NavigationEntryScreenshot`
   //
   // ViewAndroid hierarchy:
   // `view_`

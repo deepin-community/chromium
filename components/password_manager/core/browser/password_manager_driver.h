@@ -18,7 +18,7 @@
 class GURL;
 
 namespace autofill {
-struct FormData;
+class FormData;
 struct ParsingResult;
 struct PasswordFormGenerationData;
 struct PasswordFormFillData;
@@ -59,7 +59,7 @@ class PasswordManagerDriver {
   // should be shown even without password suggestions. This is set to true if
   // the popup will include another item that the driver doesn't know about
   // (e.g. a promo to unlock passwords from the user's Google Account).
-  // TODO(https://crbug.com/621355): Remove and observe FormFetcher instead.
+  // TODO(crbug.com/41259715): Remove and observe FormFetcher instead.
   virtual void InformNoSavedCredentials(
       bool should_show_popup_without_passwords) {}
 
@@ -69,7 +69,8 @@ class PasswordManagerDriver {
       const autofill::PasswordFormGenerationData& form) {}
 
   // Notifies the driver that the user has accepted a generated password.
-  // TODO(crbug/936011): delete this method. The UI should call the one below.
+  // TODO(crbug.com/40615624): delete this method. The UI should call the one
+  // below.
   virtual void GeneratedPasswordAccepted(const std::u16string& password) = 0;
 
   // Notifies the password manager that the user has accepted a generated
@@ -84,6 +85,9 @@ class PasswordManagerDriver {
   // field after password fields (assuming that password fields are adjacent
   // in account creation).
   virtual void FocusNextFieldAfterPasswords() {}
+
+  // Tells the renderer to fill the given `value` into the triggering field.
+  virtual void FillField(const std::u16string& value) {}
 
   // Tells the driver to fill the form with the `username` and `password`.
   virtual void FillSuggestion(const std::u16string& username,
@@ -105,6 +109,11 @@ class PasswordManagerDriver {
   // Triggers form submission on the last interacted web input element.
   virtual void TriggerFormSubmission() {}
 #endif
+
+  // Tells the renderer to preview the given `value` into the field identified
+  // by the `field_id`.
+  virtual void PreviewField(autofill::FieldRendererId field_id,
+                            const std::u16string& value) {}
 
   // Tells the driver to preview filling form with the `username` and
   // `password`.

@@ -7,16 +7,27 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/containers/span.h"
 #include "base/dcheck_is_on.h"
+#include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/sequence_checker.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "base/time/time.h"
+#include "sql/database.h"
 #include "sql/sqlite_result_code.h"
 #include "sql/sqlite_result_code_values.h"
 #include "third_party/sqlite/sqlite3.h"
@@ -311,7 +322,7 @@ void Statement::BindCString(int param_index, const char* val) {
   DCHECK_EQ(sqlite_result_code, SQLITE_OK);
 }
 
-void Statement::BindString(int param_index, base::StringPiece value) {
+void Statement::BindString(int param_index, std::string_view value) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
 #if DCHECK_IS_ON()
@@ -326,8 +337,8 @@ void Statement::BindString(int param_index, base::StringPiece value) {
   DCHECK_LT(param_index, sqlite3_bind_parameter_count(ref_->stmt()))
       << "Invalid parameter index";
 
-  // base::StringPiece::data() may return null for empty pieces. In particular,
-  // this may happen when the StringPiece is created from the default
+  // std::string_view::data() may return null for empty pieces. In particular,
+  // this may happen when the std::string_view is created from the default
   // constructor.
   //
   // However, sqlite3_bind_text() always interprets a nullptr data argument as a
@@ -347,7 +358,7 @@ void Statement::BindString(int param_index, base::StringPiece value) {
   DCHECK_EQ(sqlite_result_code, SQLITE_OK);
 }
 
-void Statement::BindString16(int param_index, base::StringPiece16 value) {
+void Statement::BindString16(int param_index, std::u16string_view value) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   return BindString(param_index, base::UTF16ToUTF8(value));

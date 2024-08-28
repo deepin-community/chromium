@@ -5,6 +5,7 @@
 #include "chrome/browser/ash/app_list/search/essential_search/essential_search_manager.h"
 
 #include "base/check_is_test.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/app_list/search/essential_search/socs_cookie_fetcher.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
@@ -30,6 +31,11 @@ namespace app_list {
 namespace {
 constexpr base::TimeDelta kOneDay = base::Days(1);
 const char kCookieName[] = "SOCS";
+
+void LogStatus(SocsCookieFetcher::Status status) {
+  base::UmaHistogramEnumeration("Ash.EssentialSearch.Status", status);
+}
+
 }  // namespace
 
 const net::BackoffEntry::Policy
@@ -181,6 +187,12 @@ void EssentialSearchManager::RemoveSocsCookie() {
 
 void EssentialSearchManager::OnCookieDeleted(
     uint32_t number_of_cookies_deleted) {
+  // Notify the test that OnCookieDeleted has been triggered.
+  if (cookie_deletion_closure_for_test_) {
+    CHECK_IS_TEST();
+    std::move(cookie_deletion_closure_for_test_).Run();
+  }
+
   if (number_of_cookies_deleted != 1) {
     LOG(WARNING) << "Failed to remove SOCS cookie";
   }
@@ -195,7 +207,9 @@ void EssentialSearchManager::OnCookieFetched(const std::string& cookie_header) {
 
   std::unique_ptr<net::CanonicalCookie> cc(net::CanonicalCookie::Create(
       google_url, cookie_header, base::Time::Now(),
-      std::nullopt /* server_time */, std::nullopt /* cookie_partition_key */));
+      std::nullopt /* server_time */, std::nullopt /* cookie_partition_key */,
+      net::CookieSourceType::kOther,
+      /*status=*/nullptr));
 
   if (!cc) {
     LOG(ERROR) << "Invalid cookie header";
@@ -215,6 +229,12 @@ void EssentialSearchManager::OnCookieFetched(const std::string& cookie_header) {
 
 void EssentialSearchManager::OnCookieAddedToUserProfile(
     net::CookieAccessResult result) {
+  // Notify the test that OnCookieAddedToUserProfile has been triggered.
+  if (cookie_insertion_closure_for_test_) {
+    CHECK_IS_TEST();
+    std::move(cookie_insertion_closure_for_test_).Run();
+  }
+
   if (!result.status.IsInclude()) {
     // Handle SOCS cookie insertion failure.
     LOG(WARNING) << "Failed to add SOCS cookie to user profile. Retrying.";
@@ -222,6 +242,9 @@ void EssentialSearchManager::OnCookieAddedToUserProfile(
     OnApiCallFailed(SocsCookieFetcher::Status::kCookieInsertionFailure);
     return;
   }
+
+  // Log success of fetching the cookie and adding it to the user profile.
+  LogStatus(SocsCookieFetcher::Status::kOk);
 
   // After the SOCS cookie is added to the user profile, Schedule a SOCS cookie
   // refresh to ensure a valid SOCS cookie is maintained.
@@ -256,7 +279,7 @@ void EssentialSearchManager::CancelPendingRequests() {
 }
 
 void EssentialSearchManager::OnApiCallFailed(SocsCookieFetcher::Status status) {
-  // TODO(b/312542928): collect UMA with the error type.
+  LogStatus(status);
   retry_backoff_.InformOfRequest(false);
   RefetchAfter(retry_backoff_.GetTimeUntilRelease());
 }

@@ -34,10 +34,6 @@
 #include <vector>
 
 #include "src/tint/api/common/binding_point.h"
-#include "src/tint/api/options/array_length_from_uniform.h"
-#include "src/tint/api/options/binding_remapper.h"
-#include "src/tint/api/options/external_texture.h"
-#include "src/tint/api/options/pixel_local.h"
 #include "src/tint/lang/core/access.h"
 #include "src/tint/utils/math/hash.h"
 #include "src/tint/utils/reflection/reflection.h"
@@ -140,8 +136,49 @@ struct Bindings {
 /// D3D11_PS_INPUT_REGISTER_COUNT == D3D12_PS_INPUT_REGISTER_COUNT
 constexpr uint32_t kMaxInterStageLocations = 30;
 
+/// Options used to specify a mapping of binding points to indices into a UBO
+/// from which to load buffer sizes.
+struct ArrayLengthFromUniformOptions {
+    /// The HLSL binding point to use to generate a uniform buffer from which to read buffer sizes.
+    binding::Uniform ubo_binding;
+    /// The mapping from the storage buffer binding points in WGSL binding-point space to the index
+    /// into the uniform buffer where the length of the buffer is stored.
+    std::unordered_map<BindingPoint, uint32_t> bindpoint_to_size_index;
+
+    /// Reflect the fields of this class so that it can be used by tint::ForeachField()
+    TINT_REFLECT(ArrayLengthFromUniformOptions, ubo_binding, bindpoint_to_size_index);
+};
+
+/// Data used to specify pixel local mappings
+struct PixelLocalOptions {
+    /// Index of pixel_local structure member index to attachment index
+    std::unordered_map<uint32_t, uint32_t> attachments;
+
+    /// The supported pixel local storage attachment format
+    enum class TexelFormat : uint8_t {
+        kR32Sint,
+        kR32Uint,
+        kR32Float,
+        kUndefined,
+    };
+    /// Index of pixel_local structure member index to pixel local storage attachment format
+    std::unordered_map<uint32_t, TexelFormat> attachment_formats;
+
+    /// The bind group index of all pixel local storage attachments
+    uint32_t group_index = 0;
+
+    /// Reflect the fields of this class so that it can be used by tint::ForeachField()
+    TINT_REFLECT(PixelLocalOptions, attachments, attachment_formats, group_index);
+};
+
 /// Configuration options used for generating HLSL.
 struct Options {
+    /// The downstream compiler to be used
+    enum class Compiler : uint8_t {
+        kFXC,
+        kDXC,
+    };
+
     /// Constructor
     Options();
     /// Destructor
@@ -174,6 +211,9 @@ struct Options {
     /// `unpack4xI8` and `unpack4xU8` builtins
     bool polyfill_pack_unpack_4x8 = false;
 
+    /// The downstream compiler which will be used
+    Compiler compiler = Compiler::kDXC;
+
     /// Options used to specify a mapping of binding points to indices into a UBO
     /// from which to load buffer sizes.
     ArrayLengthFromUniformOptions array_length_from_uniform = {};
@@ -188,8 +228,8 @@ struct Options {
     /// The bindings
     Bindings bindings;
 
-    /// Options used to deal with pixel local storage variables
-    PixelLocalOptions pixel_local_options = {};
+    /// Pixel local configuration
+    PixelLocalOptions pixel_local;
 
     /// Reflect the fields of this class so that it can be used by tint::ForeachField()
     TINT_REFLECT(Options,
@@ -200,13 +240,22 @@ struct Options {
                  polyfill_dot_4x8_packed,
                  disable_polyfill_integer_div_mod,
                  polyfill_pack_unpack_4x8,
+                 compiler,
                  array_length_from_uniform,
                  interstage_locations,
                  root_constant_binding_point,
                  bindings,
-                 pixel_local_options);
+                 pixel_local);
 };
 
 }  // namespace tint::hlsl::writer
+
+namespace tint {
+
+/// Reflect valid value ranges for the PixelLocalOptions::TexelFormat enum.
+TINT_REFLECT_ENUM_RANGE(hlsl::writer::PixelLocalOptions::TexelFormat, kR32Sint, kR32Float);
+TINT_REFLECT_ENUM_RANGE(hlsl::writer::Options::Compiler, kFXC, kDXC);
+
+}  // namespace tint
 
 #endif  // SRC_TINT_LANG_HLSL_WRITER_COMMON_OPTIONS_H_

@@ -17,6 +17,7 @@
 #include "base/time/time.h"
 #include "components/autofill/core/browser/data_model/credit_card_benefit.h"
 #include "components/sync/base/model_type.h"
+#include "components/sync/protocol/autofill_specifics.pb.h"
 #include "components/webdata/common/web_database_table.h"
 
 class WebDatabase;
@@ -335,6 +336,18 @@ struct ServerCvc {
 //   merchant_domain    Origin for merchant websites on which this benefit
 //                      would apply.
 // -----------------------------------------------------------------------------
+// generic_payment_instruments
+//                      Contains serialized versions of payment instruments such
+//                      as eWallets.
+//
+//   instrument_id      The server-generated ID for the payment instrument.
+//   payment_instrument_type
+//                      An enum indicating the type of details associated with
+//                      the payment instrument.
+//   serialized_value_encrypted
+//                      A byte-encoded representation of the payment
+//                      instrument's protobuf, encrypted.
+// -----------------------------------------------------------------------------
 class PaymentsAutofillTable : public WebDatabaseTable {
  public:
   PaymentsAutofillTable();
@@ -389,11 +402,9 @@ class PaymentsAutofillTable : public WebDatabaseTable {
   // credit card to remove.
   bool RemoveCreditCard(const std::string& guid);
 
-  // Adds to the masked_credit_cards table.
-  //
-  // TODO(crbug.com/1497734): Remove this method entirely; server cards should
-  // only be added via AddCreditCard.
-  bool AddFullServerCreditCard(const CreditCard& credit_card);
+  // Adds to the masked_credit_cards table. Only tests add cards this way - in
+  // production server cards are set directly via `SetServerCreditCards`.
+  bool AddServerCreditCardForTesting(const CreditCard& credit_card);
 
   // Retrieves a credit card with guid |guid|.
   std::unique_ptr<CreditCard> GetCreditCard(const std::string& guid);
@@ -406,15 +417,6 @@ class PaymentsAutofillTable : public WebDatabaseTable {
 
   // Replaces all server credit cards with the given vector.
   void SetServerCreditCards(const std::vector<CreditCard>& credit_cards);
-
-  // Cards synced from the server may be "masked" (only last 4 digits
-  // available) or "unmasked" (everything is available). These functions set
-  // that state.
-  //
-  // TODO(crbug.com/1497734): Remove these methods entirely.
-  bool UnmaskServerCreditCard(const CreditCard& masked,
-                              const std::u16string& full_number);
-  bool MaskServerCreditCard(const std::string& id);
 
   // Methods to add, update, remove, clear and get cvc in the
   // `server_stored_cvc` table. Return value indicates if the operation is
@@ -431,7 +433,9 @@ class PaymentsAutofillTable : public WebDatabaseTable {
   // Payment cannot delete the CVC from server side directly, and this has to be
   // done on the Chrome side. So this ReconcileServerCvc will be invoked when
   // card sync happens and will remove orphaned CVC from the current client.
-  bool ReconcileServerCvcs();
+  // The list of deleted CVCs will also be returned back to trigger the deletion
+  // flow for the sync server.
+  std::vector<std::unique_ptr<ServerCvc>> DeleteOrphanedServerCvcs();
   // Get all server cvcs from `server_stored_cvc` table.
   std::vector<std::unique_ptr<ServerCvc>> GetAllServerCvcs() const;
 
@@ -516,39 +520,44 @@ class PaymentsAutofillTable : public WebDatabaseTable {
   // "error").
   bool ClearAllServerData();
 
-  // Deletes all data from the local card table. Returns true if any data was
-  // deleted, false if not (so false means "commit not needed" rather than
-  // "error").
-  bool ClearAllLocalData();
-
   // Removes rows from credit_cards if they were created on or after
   // `delete_begin` and strictly before `delete_end`. Returns the list of
   // deleted cards in `credit_cards`. Return value is true if all rows were
   // successfully removed. Returns false on database error. In that case, the
   // output vector state is undefined, and may be partially filled.
-  // TODO(crbug.com/1135188): This function is solely used to remove browsing
+  // TODO(crbug.com/40151750): This function is solely used to remove browsing
   // data. Once explicit save dialogs are fully launched, it can be removed.
   bool RemoveAutofillDataModifiedBetween(
-      const base::Time& delete_begin,
-      const base::Time& delete_end,
+      base::Time delete_begin,
+      base::Time delete_end,
       std::vector<std::unique_ptr<CreditCard>>* credit_cards);
 
   // Removes origin URLs from the credit_cards tables if they were written on or
   // after `delete_begin` and strictly before `delete_end`. Returns true if all
   // rows were successfully updated and false on a database error.
-  bool RemoveOriginURLsModifiedBetween(const base::Time& delete_begin,
-                                       const base::Time& delete_end);
-
-  // Clear all local payment methods (credit cards and IBANs).
-  void ClearLocalPaymentMethodsData();
+  bool RemoveOriginURLsModifiedBetween(base::Time delete_begin,
+                                       base::Time delete_end);
 
   // Set, get, and clear the `credit_card_benefits` table and the
-  // 'benefit_merchant_domains' table.
+  // 'benefit_merchant_domains' table. Return true if the operation
+  // succeeded.
   bool SetCreditCardBenefits(
       const std::vector<CreditCardBenefit>& credit_card_benefits);
   bool GetAllCreditCardBenefits(
-      std::vector<CreditCardBenefit>* credit_card_benefits);
+      std::vector<CreditCardBenefit>& credit_card_benefits);
+  // Get all 'CreditCardBenefit` for the given `instrument_id`. If
+  // no `instrument_id` is provided, return all 'CreditCardBenefit`.
+  bool GetCreditCardBenefitsForInstrumentId(
+      std::optional<int64_t> instrument_id,
+      std::vector<CreditCardBenefit>& credit_card_benefits);
   bool ClearAllCreditCardBenefits();
+
+  // Sets and gets the `payment_instruments` table. Return true if the operation
+  // succeeded.
+  bool SetPaymentInstruments(
+      const std::vector<sync_pb::PaymentInstrument>& payment_instruments);
+  bool GetPaymentInstruments(
+      std::vector<sync_pb::PaymentInstrument>& payment_instruments);
 
   // Testing helper to access the database for checking the result of database
   // update.
@@ -581,25 +590,19 @@ class PaymentsAutofillTable : public WebDatabaseTable {
   bool
   MigrateToVersion124AndDeletePaymentInstrumentRelatedTablesAndAddMaskedBankAccountTable();
   bool MigrateToVersion125DeleteFullServerCardsTable();
+  bool MigrateToVersion129AddGenericPaymentInstrumentsTable();
 
  private:
   // Adds to |masked_credit_cards| and updates |server_card_metadata|.
   // Must already be in a transaction.
   void AddMaskedCreditCards(const std::vector<CreditCard>& credit_cards);
 
-  // Adds to |unmasked_credit_cards|.
-  //
-  // TODO(crbug.com/1497734): This method is now a no-op and should be removed.
-  void AddUnmaskedCreditCard(const std::string& id,
-                             const std::u16string& full_number);
-
   // Deletes server credit cards by |id|. Returns true if a row was deleted.
   bool DeleteFromMaskedCreditCards(const std::string& id);
-  bool DeleteFromUnmaskedCreditCards(const std::string& id);
 
   // Get the list of eligible merchant domains for the specific 'benefit_id`.
   base::flat_set<url::Origin> GetMerchantDomainsForBenefitId(
-      const CreditCardBenefitBase::BenefitId benefit_id);
+      const CreditCardBenefitBase::BenefitId& benefit_id);
 
   bool InitCreditCardsTable();
   bool InitLocalIbansTable();
@@ -619,6 +622,7 @@ class PaymentsAutofillTable : public WebDatabaseTable {
   bool InitMaskedBankAccountsMetadataTable();
   bool InitMaskedCreditCardBenefitsTable();
   bool InitBenefitMerchantDomainsTable();
+  bool InitGenericPaymentInstrumentsTable();
 
   std::unique_ptr<AutofillTableEncryptor> autofill_table_encryptor_;
 };

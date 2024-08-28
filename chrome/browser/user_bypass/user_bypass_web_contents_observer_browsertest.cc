@@ -11,10 +11,12 @@
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
+#include "components/content_settings/core/common/features.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/render_frame_host_test_support.h"
+#include "net/base/features.h"
 #include "net/dns/mock_host_resolver.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -78,7 +80,7 @@ IN_PROC_BROWSER_TEST_F(UserBypassWebContentsObserverBrowserTest,
   ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), url));
 
   // Check that there are no changes to the RenderFrameHost.
-  EXPECT_FALSE(IsDisableThirdPartyStoragePartitioningEnabled(
+  EXPECT_FALSE(IsDisableThirdPartyStoragePartitioning2Enabled(
       GetActiveWebContents()->GetPrimaryMainFrame()));
 }
 
@@ -95,7 +97,7 @@ IN_PROC_BROWSER_TEST_F(UserBypassWebContentsObserverBrowserTest,
   ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), url));
 
   // Check that the changes were applied to the RenderFrameHost.
-  EXPECT_TRUE(IsDisableThirdPartyStoragePartitioningEnabled(
+  EXPECT_TRUE(IsDisableThirdPartyStoragePartitioning2Enabled(
       GetActiveWebContents()->GetPrimaryMainFrame()));
 
   // Navigate the top-level frame to |kUserBypassDisabledHost|.
@@ -103,7 +105,7 @@ IN_PROC_BROWSER_TEST_F(UserBypassWebContentsObserverBrowserTest,
   ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), url));
 
   // Check that there are no changes to the RenderFrameHost.
-  EXPECT_FALSE(IsDisableThirdPartyStoragePartitioningEnabled(
+  EXPECT_FALSE(IsDisableThirdPartyStoragePartitioning2Enabled(
       GetActiveWebContents()->GetPrimaryMainFrame()));
 }
 
@@ -129,7 +131,7 @@ IN_PROC_BROWSER_TEST_F(UserBypassWebContentsObserverBrowserTest,
       NavigateToURL(GetActiveWebContents(), redirect_url, destination_url));
 
   // Check that there are no changes to the RenderFrameHost.
-  EXPECT_FALSE(IsDisableThirdPartyStoragePartitioningEnabled(
+  EXPECT_FALSE(IsDisableThirdPartyStoragePartitioning2Enabled(
       GetActiveWebContents()->GetPrimaryMainFrame()));
 }
 

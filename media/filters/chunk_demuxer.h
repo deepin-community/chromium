@@ -103,8 +103,8 @@ class MEDIA_EXPORT ChunkDemuxerStream : public DemuxerStream {
   // Returns base::TimeDelta() if the stream has no buffered data.
   base::TimeDelta GetBufferedDuration() const;
 
-  // Returns the size of the buffered data in bytes.
-  size_t GetBufferedSize() const;
+  // Returns the memory usage of the buffered data in bytes.
+  size_t GetMemoryUsage() const;
 
   // Signal to the stream that buffers handed in through subsequent calls to
   // Append() belong to a coded frame group that starts at |start_pts|.
@@ -236,8 +236,7 @@ class MEDIA_EXPORT ChunkDemuxer : public Demuxer {
   void Seek(base::TimeDelta time, PipelineStatusCallback cb) override;
   bool IsSeekable() const override;
   base::Time GetTimelineOffset() const override;
-  std::vector<raw_ptr<DemuxerStream, VectorExperimental>> GetAllStreams()
-      override;
+  std::vector<DemuxerStream*> GetAllStreams() override;
   base::TimeDelta GetStartTime() const override;
   int64_t GetMemoryUsage() const override;
   std::optional<container_names::MediaContainerName> GetContainerForMetrics()
@@ -330,8 +329,7 @@ class MEDIA_EXPORT ChunkDemuxer : public Demuxer {
   // otherwise alter their behavior to attempt to buffer media for further
   // playback.
   [[nodiscard]] bool AppendToParseBuffer(const std::string& id,
-                                         const uint8_t* data,
-                                         size_t length);
+                                         base::span<const uint8_t> data);
 
   // Tells the stream parser for the source buffer associated with `id` to parse
   // more of the data previously sent to it from this object's
@@ -598,9 +596,7 @@ class MEDIA_EXPORT ChunkDemuxer : public Demuxer {
 
   std::map<std::string, std::unique_ptr<SourceBufferState>> source_state_map_;
 
-  std::map<std::string,
-           std::vector<raw_ptr<ChunkDemuxerStream, VectorExperimental>>>
-      id_to_streams_map_;
+  std::map<std::string, std::vector<ChunkDemuxerStream*>> id_to_streams_map_;
   // Used to hold alive the demuxer streams that were created for removed /
   // released SourceBufferState objects. Demuxer clients might still have
   // references to these streams, so we need to keep them alive. But they'll be

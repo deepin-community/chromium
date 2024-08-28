@@ -4,11 +4,12 @@
 
 #include "ui/native_theme/native_theme_win.h"
 
+#include <windows.h>
+
 #include <stddef.h>
 #include <uxtheme.h>
 #include <vsstyle.h>
 #include <vssym32.h>
-#include <windows.h>
 
 #include <optional>
 #include <tuple>
@@ -21,6 +22,7 @@
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "base/win/dark_mode_support.h"
 #include "base/win/scoped_gdi_object.h"
 #include "base/win/scoped_hdc.h"
@@ -48,6 +50,7 @@
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/native_theme/common_theme.h"
+#include "ui/native_theme/native_theme.h"
 
 // This was removed from Winvers.h but is still used.
 #if !defined(COLOR_MENUHIGHLIGHT)
@@ -264,6 +267,7 @@ void NativeThemeWin::Paint(cc::PaintCanvas* canvas,
                            const gfx::Rect& rect,
                            const ExtraParams& extra,
                            ColorScheme color_scheme,
+                           bool in_forced_colors,
                            const std::optional<SkColor>& accent_color) const {
   if (rect.IsEmpty())
     return;
@@ -360,8 +364,18 @@ void NativeThemeWin::ConfigureWebInstance() {
       should_use_system_accent_color());
 }
 
+std::optional<base::TimeDelta> NativeThemeWin::GetPlatformCaretBlinkInterval()
+    const {
+  static const size_t system_value = ::GetCaretBlinkTime();
+  if (system_value != 0) {
+    return (system_value == INFINITE) ? base::TimeDelta()
+                                      : base::Milliseconds(system_value);
+  }
+  return std::nullopt;
+}
+
 NativeThemeWin::~NativeThemeWin() {
-  // TODO(https://crbug.com/787692): Calling CloseHandles() here breaks
+  // TODO(crbug.com/40551168): Calling CloseHandles() here breaks
   // certain tests and the reliability bots.
   // CloseHandles();
 }
@@ -516,7 +530,7 @@ void NativeThemeWin::PaintDirect(SkCanvas* destination_canvas,
       case kSliderTrack:
       case kSliderThumb:
       case kMaxPart:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
   }
 
@@ -635,7 +649,7 @@ void NativeThemeWin::PaintDirect(SkCanvas* destination_canvas,
     case kSliderTrack:
     case kSliderThumb:
     case kMaxPart:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 }
 
@@ -646,12 +660,14 @@ bool NativeThemeWin::SupportsNinePatch(Part part) const {
 }
 
 gfx::Size NativeThemeWin::GetNinePatchCanvasSize(Part part) const {
-  NOTREACHED() << "NativeThemeWin doesn't support nine-patch resources.";
+  NOTREACHED_IN_MIGRATION()
+      << "NativeThemeWin doesn't support nine-patch resources.";
   return gfx::Size();
 }
 
 gfx::Rect NativeThemeWin::GetNinePatchAperture(Part part) const {
-  NOTREACHED() << "NativeThemeWin doesn't support nine-patch resources.";
+  NOTREACHED_IN_MIGRATION()
+      << "NativeThemeWin doesn't support nine-patch resources.";
   return gfx::Rect();
 }
 
@@ -846,7 +862,7 @@ void NativeThemeWin::PaintButtonClassic(HDC hdc,
       classic_state |= DFCS_BUTTONPUSH;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 
@@ -932,7 +948,7 @@ void NativeThemeWin::PaintScrollbarArrowClassic(HDC hdc,
       classic_state = DFCS_SCROLLUP;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   switch (state) {
@@ -948,7 +964,7 @@ void NativeThemeWin::PaintScrollbarArrowClassic(HDC hdc,
       classic_state |= DFCS_PUSHED;
       break;
     case kNumStates:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   DrawFrameControl(hdc, rect, DFC_SCROLL, classic_state);
@@ -1187,7 +1203,7 @@ NativeThemeWin::ThemeName NativeThemeWin::GetThemeName(Part part) {
     case kSliderTrack:
     case kSliderThumb:
     case kMaxPart:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   return LAST;
 }
@@ -1262,7 +1278,7 @@ int NativeThemeWin::GetWindowsPart(Part part,
     case kSliderTrack:
     case kSliderThumb:
     case kMaxPart:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   return 0;
 }
@@ -1284,7 +1300,7 @@ int NativeThemeWin::GetWindowsState(Part part,
         case kPressed:
           return ABS_DOWNPRESSED;
         case kNumStates:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     case kScrollbarLeftArrow:
@@ -1300,7 +1316,7 @@ int NativeThemeWin::GetWindowsState(Part part,
         case kPressed:
           return ABS_LEFTPRESSED;
         case kNumStates:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     case kScrollbarRightArrow:
@@ -1316,7 +1332,7 @@ int NativeThemeWin::GetWindowsState(Part part,
         case kPressed:
           return ABS_RIGHTPRESSED;
         case kNumStates:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     case kScrollbarUpArrow:
@@ -1332,7 +1348,7 @@ int NativeThemeWin::GetWindowsState(Part part,
         case kPressed:
           return ABS_UPPRESSED;
         case kNumStates:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     case kCheckbox: {
@@ -1356,7 +1372,7 @@ int NativeThemeWin::GetWindowsState(Part part,
                                 : (button.indeterminate ? CBS_MIXEDPRESSED
                                                         : CBS_UNCHECKEDPRESSED);
         case kNumStates:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     }
@@ -1371,7 +1387,7 @@ int NativeThemeWin::GetWindowsState(Part part,
         case kPressed:
           return CBXS_PRESSED;
         case kNumStates:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     case kTextField:
@@ -1390,7 +1406,7 @@ int NativeThemeWin::GetWindowsState(Part part,
         case kPressed:
           return ETS_SELECTED;
         case kNumStates:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     case kMenuPopupArrow:
@@ -1416,7 +1432,7 @@ int NativeThemeWin::GetWindowsState(Part part,
         case kPressed:
           return PBS_PRESSED;
         case kNumStates:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     case kRadio: {
@@ -1431,7 +1447,7 @@ int NativeThemeWin::GetWindowsState(Part part,
         case kPressed:
           return button.checked ? RBS_CHECKEDPRESSED : RBS_UNCHECKEDPRESSED;
         case kNumStates:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     }
@@ -1456,7 +1472,7 @@ int NativeThemeWin::GetWindowsState(Part part,
         case kPressed:
           return SCRBS_PRESSED;
         case kNumStates:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     case kTrackbarThumb:
@@ -1471,7 +1487,7 @@ int NativeThemeWin::GetWindowsState(Part part,
         case kPressed:
           return TUS_PRESSED;
         case kNumStates:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     case kInnerSpinButton: {
@@ -1490,7 +1506,7 @@ int NativeThemeWin::GetWindowsState(Part part,
           return inner_spin.spin_up ? static_cast<int>(UPS_PRESSED)
                                     : static_cast<int>(DNS_PRESSED);
         case kNumStates:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     }
@@ -1506,7 +1522,7 @@ int NativeThemeWin::GetWindowsState(Part part,
         case kPressed:
           return 0;
         case kNumStates:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           return 0;
       }
     case kMenuPopupBackground:
@@ -1515,7 +1531,7 @@ int NativeThemeWin::GetWindowsState(Part part,
     case kSliderTrack:
     case kSliderThumb:
     case kMaxPart:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   return 0;
 }
@@ -1560,7 +1576,7 @@ HRESULT NativeThemeWin::PaintFrameControl(HDC hdc,
       break;
     case kPressed:
     case kNumStates:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   COLORREF old_bg_color = SetBkColor(hdc, GetSysColor(bg_color_key));
@@ -1622,7 +1638,7 @@ HANDLE NativeThemeWin::GetThemeHandle(ThemeName theme_name) const {
     handle = OpenThemeData(nullptr, L"Spin");
     break;
   case LAST:
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     break;
   }
   theme_handles_[theme_name] = handle;

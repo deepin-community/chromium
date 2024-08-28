@@ -204,7 +204,7 @@ bool ImplementationBase::OnMemoryDump(
           ->GetTracingProcessId();
 
   MemoryAllocatorDump* dump = pmd->CreateAllocatorDump(base::StringPrintf(
-      "gpu/transfer_buffer_memory/buffer_%d", transfer_buffer_->GetShmId()));
+      "gpu/transfer_buffer_memory/buffer_0x%x", transfer_buffer_->GetShmId()));
   dump->AddScalar(MemoryAllocatorDump::kNameSize,
                   MemoryAllocatorDump::kUnitsBytes,
                   transfer_buffer_->GetSize());
@@ -409,12 +409,12 @@ bool ImplementationBase::HasGrContextSupport() const {
 
 void ImplementationBase::WillCallGLFromSkia() {
   // Should only be called on subclasses that have GrContextSupport
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void ImplementationBase::DidCallGLFromSkia() {
   // Should only be called on subclasses that have GrContextSupport
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 }  // namespace gpu

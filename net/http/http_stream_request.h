@@ -129,11 +129,9 @@ class NET_EXPORT_PRIVATE HttpStreamRequest {
     virtual void SetPriority(RequestPriority priority) = 0;
   };
 
-  // Request will notify |job_controller| when it's destructed.
-  // Thus |job_controller| is valid for the lifetime of the |this| Request.
-  HttpStreamRequest(const GURL& url,
-                    Helper* helper,
-                    HttpStreamRequest::Delegate* delegate,
+  // Request will notify `helper` when it's destructed.
+  // Thus `helper` is valid for the lifetime of the `this` Request.
+  HttpStreamRequest(Helper* helper,
                     WebSocketHandshakeStreamBase::CreateHelper*
                         websocket_handshake_stream_create_helper,
                     const NetLogWithSource& net_log,
@@ -180,18 +178,24 @@ class NET_EXPORT_PRIVATE HttpStreamRequest {
   WebSocketHandshakeStreamBase::CreateHelper*
   websocket_handshake_stream_create_helper() const;
 
-  // The GURL from the HttpRequestInfo the started the Request.
-  const GURL& url() const { return url_; }
-
   const NetLogWithSource& net_log() const { return net_log_; }
 
   StreamType stream_type() const { return stream_type_; }
 
   bool completed() const { return completed_; }
 
- private:
-  const GURL url_;
+  void SetDnsResolutionTimeOverrides(
+      base::TimeTicks dns_resolution_start_time_override,
+      base::TimeTicks dns_resolution_end_time_override);
 
+  base::TimeTicks dns_resolution_start_time_override() const {
+    return dns_resolution_start_time_override_;
+  }
+  base::TimeTicks dns_resolution_end_time_override() const {
+    return dns_resolution_end_time_override_;
+  }
+
+ private:
   // Unowned. The helper must not be destroyed before this object is.
   raw_ptr<Helper> helper_;
 
@@ -208,6 +212,9 @@ class NET_EXPORT_PRIVATE HttpStreamRequest {
       AlternateProtocolUsage::ALTERNATE_PROTOCOL_USAGE_UNSPECIFIED_REASON;
   ConnectionAttempts connection_attempts_;
   const StreamType stream_type_;
+
+  base::TimeTicks dns_resolution_start_time_override_;
+  base::TimeTicks dns_resolution_end_time_override_;
 };
 
 }  // namespace net

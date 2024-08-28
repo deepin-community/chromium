@@ -32,8 +32,7 @@
 
 namespace {
 
-constexpr int kFrameNum = 10;
-constexpr int kFixedGOPSize = 10;
+constexpr int kShowFrameCount = 10;
 constexpr int kKeyframeQp = 10;
 constexpr int kLeafQp = 40;
 constexpr int kArfQp = 15;
@@ -48,14 +47,22 @@ class RateControllerForTest {
 
   vpx_rc_gop_decision_t GetCurrentGop() const {
     vpx_rc_gop_decision_t gop_decision;
-    gop_decision.use_key_frame = current_gop_ == 0 ? 1 : 0;
-    gop_decision.use_alt_ref = 1;
-    gop_decision.gop_coding_frames = kFixedGOPSize;
+    if (current_gop_ == 0) {
+      gop_decision.use_key_frame = 1;
+      gop_decision.use_alt_ref = 1;
+      gop_decision.gop_coding_frames =
+          kShowFrameCount - 1 + gop_decision.use_alt_ref;
+    } else {
+      // Pad a overlay-only GOP as the last GOP.
+      EXPECT_EQ(current_gop_, 1);
+      gop_decision.use_key_frame = 0;
+      gop_decision.use_alt_ref = 0;
+      gop_decision.gop_coding_frames = 1;
+    }
     return gop_decision;
   }
 
   int CalculateFrameDecision(int frame_index) {
-    EXPECT_LE(frame_index, kFixedGOPSize);
     if (current_gop_ == 0 && frame_index == 0) {
       // Key frame, first frame in the first GOP.
       return kKeyframeQp;
@@ -82,7 +89,7 @@ vpx_rc_status_t rc_test_create_model(
 vpx_rc_status_t rc_test_send_firstpass_stats(
     vpx_rc_model_t /*rate_ctrl_model*/,
     const vpx_rc_firstpass_stats_t *first_pass_stats) {
-  EXPECT_EQ(first_pass_stats->num_frames, kFrameNum);
+  EXPECT_EQ(first_pass_stats->num_frames, kShowFrameCount);
   for (int i = 0; i < first_pass_stats->num_frames; ++i) {
     EXPECT_DOUBLE_EQ(first_pass_stats->frame_stats[i].frame, i);
   }
@@ -129,14 +136,18 @@ class ExtRateCtrlTest : public ::libvpx_test::EncoderTest,
                         public ::testing::Test {
  protected:
   ExtRateCtrlTest()
-      : EncoderTest(&::libvpx_test::kVP9), frame_number_(0),
+      : EncoderTest(&::libvpx_test::kVP9), received_show_frame_count_(0),
         current_frame_qp_(0) {}
 
   ~ExtRateCtrlTest() override = default;
 
   void SetUp() override {
     InitializeConfig();
+#if CONFIG_REALTIME_ONLY
+    SetMode(::libvpx_test::kRealTime);
+#else
     SetMode(::libvpx_test::kTwoPassGood);
+#endif
   }
 
   void PreEncodeFrameHook(::libvpx_test::VideoSource *video,
@@ -164,27 +175,18 @@ class ExtRateCtrlTest : public ::libvpx_test::EncoderTest,
   }
 
   void FramePktHook(const vpx_codec_cx_pkt_t *pkt) override {
-    if (frame_number_ == 0) {
-      // This must be a key frame
-      EXPECT_TRUE((pkt->data.frame.flags & VPX_FRAME_IS_KEY) != 0);
-      EXPECT_EQ(current_frame_qp_, kKeyframeQp);
-      ++frame_number_;
-      return;
+    // We are not comparing current_frame_qp_ here because the encoder will
+    // pack ARF and the next show frame into one pkt. Therefore, we might
+    // receive two frames in one pkt. However, one thing we are sure is that
+    // each pkt will have just one show frame. Therefore, we can check if the
+    // received show frame count match the actual show frame count.
+    if (pkt->kind == VPX_CODEC_CX_FRAME_PKT) {
+      ++received_show_frame_count_;
     }
-
-    if ((pkt->data.frame.flags & VPX_FRAME_IS_INVISIBLE) != 0) {
-      // This is ARF
-      EXPECT_EQ(current_frame_qp_, kArfQp);
-      ++frame_number_;
-      return;
-    }
-
-    EXPECT_EQ(current_frame_qp_, kLeafQp);
-    ++frame_number_;
   }
 #endif  // CONFIG_VP9_DECODER
 
-  int frame_number_;
+  int received_show_frame_count_;
   int current_frame_qp_;
 };
 
@@ -195,10 +197,11 @@ TEST_F(ExtRateCtrlTest, EncodeTest) {
   std::unique_ptr<libvpx_test::VideoSource> video;
   video.reset(new (std::nothrow) libvpx_test::YUVVideoSource(
       "bus_352x288_420_f20_b8.yuv", VPX_IMG_FMT_I420, 352, 288, 30, 1, 0,
-      kFrameNum));
+      kShowFrameCount));
 
   ASSERT_NE(video, nullptr);
   ASSERT_NO_FATAL_FAILURE(RunLoop(video.get()));
+  EXPECT_EQ(received_show_frame_count_, kShowFrameCount);
 }
 
 }  // namespace

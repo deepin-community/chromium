@@ -13,7 +13,7 @@
 namespace content {
 
 namespace {
-// TODO(https://crbug.com/1414164): Consult with Clank team to see if we have
+// TODO(crbug.com/40256003): Consult with Clank team to see if we have
 // any metrics for this.
 #if BUILDFLAG(IS_ANDROID)
 constexpr static size_t kMaxNumThumbnails = 20U;
@@ -21,7 +21,7 @@ constexpr static size_t kMaxNumThumbnails = 20U;
 constexpr static size_t kMaxNumThumbnails = 0U;
 #endif
 
-// TODO(https://crbug.com/1414164): Optimise the memory budget. This is fine for
+// TODO(crbug.com/40256003): Optimise the memory budget. This is fine for
 // MVP, but we need to consult the Clank team for a more propriate budget size.
 static size_t GetMemoryBudget() {
   // Assume 4 bytes per pixel. This value estimates the max number of bytes of
@@ -126,10 +126,6 @@ void NavigationEntryScreenshotManager::Unregister(
 // One alternative is to always evict the navigation entries in LRU order,
 // regardless of which tab the entry is from. The pro of this alternative is to
 // have all the eviction logic inside the global manager.
-//
-// TODO(https://crbug.com/1420998): We need some metrics to understand if the
-// currently implementation affects the cache hit rate. (I.e., would the
-// alternative be a better approach?)
 void NavigationEntryScreenshotManager::EvictIfOutOfMemoryBudget() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(!IsEmpty());
@@ -157,11 +153,11 @@ void NavigationEntryScreenshotManager::OnMemoryPressure(
       base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL) {
     return;
   }
-  // Using a while loop because `Purge` erases the iterator.
+  // Using a while loop because `PurgeForMemoryPressure` erases the iterator.
   auto it = managed_caches_.begin();
   while (it != managed_caches_.end()) {
     auto* cache = *it;
-    cache->Purge();
+    cache->PurgeForMemoryPressure();
     CHECK(cache->IsEmpty());
     it = managed_caches_.begin();
   }

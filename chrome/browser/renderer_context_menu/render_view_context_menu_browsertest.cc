@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -37,7 +38,6 @@
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/pdf/pdf_extension_test_base.h"
 #include "chrome/browser/pdf/pdf_extension_test_util.h"
-#include "chrome/browser/pdf/pdf_frame_util.h"
 #include "chrome/browser/pdf/test_pdf_viewer_stream_manager.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
@@ -49,18 +49,22 @@
 #include "chrome/browser/sessions/session_restore.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
+#include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_user_data.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
+#include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
 #include "chrome/common/pref_names.h"
@@ -68,6 +72,8 @@
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chrome/test/base/search_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chrome/test/supervised_user/embedded_test_server_setup_mixin.h"
+#include "chrome/test/supervised_user/supervision_mixin.h"
 #include "components/compose/buildflags.h"
 #include "components/guest_view/browser/guest_view_manager_delegate.h"
 #include "components/guest_view/browser/test_guest_view_manager.h"
@@ -75,14 +81,18 @@
 #include "components/lens/lens_features.h"
 #include "components/lens/lens_metadata.mojom.h"
 #include "components/lens/lens_testing_utils.h"
+#include "components/pdf/browser/pdf_frame_util.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations.h"
 #include "components/privacy_sandbox/privacy_sandbox_attestations/scoped_privacy_sandbox_attestations.h"
 #include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_service.h"
-#include "components/supervised_user/core/common/buildflags.h"
+#include "components/supervised_user/core/browser/supervised_user_preferences.h"
+#include "components/supervised_user/core/browser/supervised_user_service.h"
+#include "components/supervised_user/core/browser/supervised_user_url_filter.h"
 #include "components/supervised_user/core/common/pref_names.h"
+#include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "components/supervised_user/test_support/kids_management_api_server_mock.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/browser/uninstall_result_code.h"
@@ -132,10 +142,10 @@
 #include "third_party/blink/public/common/page_state/page_state_serialization.h"
 #include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
+#include "third_party/blink/public/mojom/frame/frame.mojom.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom.h"
 #include "third_party/libwebp/src/src/webp/decode.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/base/emoji/emoji_panel_helper.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/gfx/codec/jpeg_codec.h"
@@ -143,22 +153,6 @@
 
 #if BUILDFLAG(ENABLE_COMPOSE)
 #include "chrome/browser/compose/mock_chrome_compose_client.h"
-#endif
-
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-#include "chrome/browser/supervised_user/supervised_user_service_factory.h"
-#include "chrome/test/supervised_user/embedded_test_server_setup_mixin.h"
-#include "chrome/test/supervised_user/supervision_mixin.h"
-#include "components/supervised_user/core/browser/supervised_user_preferences.h"
-#include "components/supervised_user/core/browser/supervised_user_service.h"
-#include "components/supervised_user/core/browser/supervised_user_url_filter.h"
-#include "components/supervised_user/core/common/features.h"
-#include "components/supervised_user/core/common/supervised_user_constants.h"
-#endif
-
-#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
-#include "chrome/browser/accessibility/pdf_ocr_controller.h"
-#include "chrome/browser/accessibility/pdf_ocr_controller_factory.h"
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -171,7 +165,10 @@
 #endif
 
 #if BUILDFLAG(ENABLE_LENS_DESKTOP_GOOGLE_BRANDED_FEATURES)
-#include "chrome/browser/ui/lens/lens_side_panel_helper.h"
+#include "base/test/run_until.h"
+#include "chrome/browser/ui/lens/lens_overlay_controller.h"
+#include "chrome/browser/ui/views/lens/lens_side_panel_helper.h"
+#include "components/lens/lens_overlay_permission_utils.h"
 #include "ui/events/test/event_generator.h"
 #endif
 
@@ -212,7 +209,7 @@ class ContextMenuBrowserTestBase : public MixinBasedInProcessBrowserTest {
  protected:
   ContextMenuBrowserTestBase() {
     scoped_feature_list_.InitWithFeatures(
-        {features::kReadAnything, media::kContextMenuSaveVideoFrameAs,
+        {media::kContextMenuSaveVideoFrameAs,
          media::kContextMenuSearchForVideoFrame},
         {});
   }
@@ -323,8 +320,8 @@ class ContextMenuBrowserTestBase : public MixinBasedInProcessBrowserTest {
   AppId InstallTestWebApp(const GURL& start_url,
                           web_app::mojom::UserDisplayMode display_mode =
                               web_app::mojom::UserDisplayMode::kStandalone) {
-    auto web_app_info = std::make_unique<web_app::WebAppInstallInfo>();
-    web_app_info->start_url = start_url;
+    auto web_app_info =
+        web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
     web_app_info->scope = start_url;
     web_app_info->title = u"Test app 🐐";
     web_app_info->description = u"Test description 🐐";
@@ -429,7 +426,7 @@ class ContextMenuBrowserTestBase : public MixinBasedInProcessBrowserTest {
   }
 
  private:
-  web_app::OsIntegrationManager::ScopedSuppressForTesting os_hooks_suppress_;
+  web_app::OsIntegrationTestOverrideBlockingRegistration faked_os_integration_;
   base::test::ScopedFeatureList scoped_feature_list_;
   AllowPreCommitInputFlagMixin allow_pre_commit_input_flag_mixin_{mixin_host_};
 };
@@ -441,13 +438,12 @@ class ContextMenuBrowserTest
   ContextMenuBrowserTest() {
     if (IsPreviewEnabled()) {
       scoped_feature_list_.InitWithFeatures(
-          {blink::features::kLinkPreview, features::kReadAnything,
-           media::kContextMenuSaveVideoFrameAs,
+          {blink::features::kLinkPreview, media::kContextMenuSaveVideoFrameAs,
            media::kContextMenuSearchForVideoFrame},
           {});
     } else {
       scoped_feature_list_.InitWithFeatures(
-          {features::kReadAnything, media::kContextMenuSaveVideoFrameAs,
+          {media::kContextMenuSaveVideoFrameAs,
            media::kContextMenuSearchForVideoFrame},
           {blink::features::kLinkPreview});
     }
@@ -518,7 +514,6 @@ class PdfPluginContextMenuBrowserTest : public PDFExtensionTestBase {
 
     WebContents* web_contents = GetActiveWebContents();
 
-    // The context menu will be created inside the extension frame.
     extension_frame_ =
         pdf_extension_test_util::GetOnlyPdfExtensionHost(web_contents);
     if (!extension_frame_) {
@@ -527,7 +522,18 @@ class PdfPluginContextMenuBrowserTest : public PDFExtensionTestBase {
     }
     EXPECT_NE(extension_frame_, web_contents->GetPrimaryMainFrame());
 
-    if (!UseOopif()) {
+    // The target frame for the context menu.
+    content::RenderFrameHost* target_frame;
+
+    if (UseOopif()) {
+      // In OOPIF PDF viewer, the target frame should be the PDF plugin frame.
+      target_frame =
+          pdf_extension_test_util::GetOnlyPdfPluginFrame(web_contents);
+      if (!target_frame) {
+        ADD_FAILURE() << "Failed to get PDF plugin frame.";
+        return nullptr;
+      }
+    } else {
       content::BrowserPluginGuestManager* guest_manager =
           web_contents->GetBrowserContext()->GetGuestManager();
       WebContents* guest_contents =
@@ -537,11 +543,15 @@ class PdfPluginContextMenuBrowserTest : public PDFExtensionTestBase {
         return nullptr;
       }
       EXPECT_EQ(extension_frame_, guest_contents->GetPrimaryMainFrame());
+
+      // In GuestView PDF viewer, the target frame should be the PDF extension
+      // frame.
+      target_frame = extension_frame_;
     }
 
     content::ContextMenuParams params;
     params.page_url = page_url;
-    params.frame_url = extension_frame_->GetLastCommittedURL();
+    params.frame_url = target_frame->GetLastCommittedURL();
     params.media_type = blink::mojom::ContextMenuDataMediaType::kPlugin;
     params.media_flags |= blink::ContextMenuData::kMediaCanRotate;
     params.selection_text = info.selection_text;
@@ -550,7 +560,7 @@ class PdfPluginContextMenuBrowserTest : public PDFExtensionTestBase {
       params.edit_flags |= blink::ContextMenuDataEditFlags::kCanCopy;
 
     auto menu =
-        std::make_unique<TestRenderViewContextMenu>(*extension_frame_, params);
+        std::make_unique<TestRenderViewContextMenu>(*target_frame, params);
     menu->Init();
     return menu;
   }
@@ -611,6 +621,40 @@ class PdfPluginContextMenuBrowserTest : public PDFExtensionTestBase {
 
     // The full page related items such as 'reload' should not be displayed.
     ASSERT_FALSE(menu.IsItemPresent(IDC_RELOAD));
+  }
+
+  // Helper method for testing rotation items in the context menu.
+  void TestRotate(std::unique_ptr<TestRenderViewContextMenu> menu,
+                  content::RenderFrameHost* target_rfh) {
+    auto cb = [](base::OnceClosure quit_loop,
+                 content::RenderFrameHost* expected_rfh,
+                 blink::mojom::PluginActionType expected_action_type,
+                 content::RenderFrameHost* rfh,
+                 blink::mojom::PluginActionType action_type) {
+      EXPECT_EQ(expected_rfh, rfh);
+      EXPECT_EQ(expected_action_type, action_type);
+      std::move(quit_loop).Run();
+    };
+
+    {
+      // Rotate clockwise.
+      base::RunLoop run_loop;
+      menu->RegisterExecutePluginActionCallbackForTesting(
+          base::BindOnce(cb, run_loop.QuitClosure(), target_rfh,
+                         blink::mojom::PluginActionType::kRotate90Clockwise));
+      menu->ExecuteCommand(IDC_CONTENT_CONTEXT_ROTATECW, 0);
+      run_loop.Run();
+    }
+
+    {
+      // Rotate counterclockwise.
+      base::RunLoop run_loop;
+      menu->RegisterExecutePluginActionCallbackForTesting(base::BindOnce(
+          cb, run_loop.QuitClosure(), target_rfh,
+          blink::mojom::PluginActionType::kRotate90Counterclockwise));
+      menu->ExecuteCommand(IDC_CONTENT_CONTEXT_ROTATECCW, 0);
+      run_loop.Run();
+    }
   }
 
   content::RenderFrameHost* extension_frame() { return extension_frame_; }
@@ -676,7 +720,6 @@ IN_PROC_BROWSER_TEST_P(ContextMenuBrowserTest,
   EXPECT_FALSE(menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_SAVELINKAS));
 }
 
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
 class ContextMenuForSupervisedUsersBrowserTest
     : public ContextMenuBrowserTestBase {
  protected:
@@ -703,152 +746,8 @@ class ContextMenuForSupervisedUsersBrowserTest
       }};
 };
 
-class ContextMenuWithoutFilteringForSupervisedUsersBrowserTest
-    : public ContextMenuForSupervisedUsersBrowserTest {
- public:
-  ContextMenuWithoutFilteringForSupervisedUsersBrowserTest() {
-    scoped_feature_list_.InitAndDisableFeature(
-        supervised_user::kFilterWebsitesForSupervisedUsersOnDesktopAndIOS);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(ContextMenuWithoutFilteringForSupervisedUsersBrowserTest,
+IN_PROC_BROWSER_TEST_F(ContextMenuForSupervisedUsersBrowserTest,
                        SaveLinkAsEntryIsDisabledForUrlsNotAccessibleForChild) {
-  // Block access to http://www.google.com/ in the URL filter.
-  std::map<std::string, bool> hosts;
-  hosts["www.google.com"] = false;
-  GetSupervisedUserService()->GetURLFilter()->SetManualHosts(std::move(hosts));
-
-  base::RunLoop().RunUntilIdle();
-
-  std::unique_ptr<TestRenderViewContextMenu> menu =
-      CreateContextMenuMediaTypeNone(GURL("http://www.google.com/"),
-                                     GURL("http://www.google.com/"));
-
-  ASSERT_TRUE(menu->IsItemPresent(IDC_CONTENT_CONTEXT_SAVELINKAS));
-
-  // The entry is only disabled for platforms on which URL filtering is enabled.
-  if (supervised_user::IsUrlFilteringEnabled(
-          *browser()->profile()->GetPrefs())) {
-    EXPECT_FALSE(menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_SAVELINKAS));
-  } else {
-    EXPECT_TRUE(menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_SAVELINKAS));
-  }
-}
-
-IN_PROC_BROWSER_TEST_F(
-    ContextMenuWithoutFilteringForSupervisedUsersBrowserTest,
-    SaveLinkAsEntryIsDisabledForUrlsBlockedByAsyncCheckerForChild) {
-  ContextMenuWaiter menu_observer;
-
-  base::RunLoop().RunUntilIdle();
-
-  if (supervised_user::IsUrlFilteringEnabled(
-          *browser()->profile()->GetPrefs())) {
-    kids_management_api_mock().RestrictSubsequentClassifyUrl();
-    EXPECT_CALL(kids_management_api_mock().classify_url_mock(), ClassifyUrl)
-        .Times(1);
-  }
-
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/download-anchor-same-origin.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-
-  // Open a context menu.
-  blink::WebMouseEvent mouse_event(
-      blink::WebInputEvent::Type::kMouseDown,
-      blink::WebInputEvent::kNoModifiers,
-      blink::WebInputEvent::GetStaticTimeStampForTests());
-  mouse_event.button = blink::WebMouseEvent::Button::kRight;
-  mouse_event.SetPositionInWidget(15, 15);
-  content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  tab->GetPrimaryMainFrame()
-      ->GetRenderViewHost()
-      ->GetWidget()
-      ->ForwardMouseEvent(mouse_event);
-  mouse_event.SetType(blink::WebInputEvent::Type::kMouseUp);
-  tab->GetPrimaryMainFrame()
-      ->GetRenderViewHost()
-      ->GetWidget()
-      ->ForwardMouseEvent(mouse_event);
-
-  // Wait for context menu to be visible.
-  menu_observer.WaitForMenuOpenAndClose();
-
-  std::u16string suggested_filename = menu_observer.params().suggested_filename;
-  // The save link as action is only blocked for platforms on which URL
-  // filtering is enabled.
-  if (supervised_user::IsUrlFilteringEnabled(
-          *browser()->profile()->GetPrefs())) {
-    const std::string kSuggestedFilename("");
-    ASSERT_EQ(kSuggestedFilename,
-              base::UTF16ToUTF8(suggested_filename).c_str());
-  } else {
-    const std::string kSuggestedFilename("test_filename.png");
-    ASSERT_EQ(kSuggestedFilename,
-              base::UTF16ToUTF8(suggested_filename).c_str());
-  }
-}
-
-IN_PROC_BROWSER_TEST_F(
-    ContextMenuWithoutFilteringForSupervisedUsersBrowserTest,
-    SaveLinkAsEntryIsEnabledForUrlsAllowedByAsyncCheckerForChild) {
-  ContextMenuWaiter menu_observer;
-
-  if (supervised_user::IsUrlFilteringEnabled(
-          *browser()->profile()->GetPrefs())) {
-    kids_management_api_mock().AllowSubsequentClassifyUrl();
-    EXPECT_CALL(kids_management_api_mock().classify_url_mock(), ClassifyUrl)
-        .Times(1);
-  }
-
-  base::RunLoop().RunUntilIdle();
-
-  ASSERT_TRUE(embedded_test_server()->Started());
-  GURL url(embedded_test_server()->GetURL("/download-anchor-same-origin.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-
-  // Open a context menu.
-  blink::WebMouseEvent mouse_event(
-      blink::WebInputEvent::Type::kMouseDown,
-      blink::WebInputEvent::kNoModifiers,
-      blink::WebInputEvent::GetStaticTimeStampForTests());
-  mouse_event.button = blink::WebMouseEvent::Button::kRight;
-  mouse_event.SetPositionInWidget(15, 15);
-  content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  tab->GetPrimaryMainFrame()
-      ->GetRenderViewHost()
-      ->GetWidget()
-      ->ForwardMouseEvent(mouse_event);
-  mouse_event.SetType(blink::WebInputEvent::Type::kMouseUp);
-  tab->GetPrimaryMainFrame()
-      ->GetRenderViewHost()
-      ->GetWidget()
-      ->ForwardMouseEvent(mouse_event);
-
-  // Wait for context menu to be visible.
-  menu_observer.WaitForMenuOpenAndClose();
-
-  const std::string kSuggestedFilename("test_filename.png");
-  std::u16string suggested_filename = menu_observer.params().suggested_filename;
-  ASSERT_EQ(kSuggestedFilename, base::UTF16ToUTF8(suggested_filename).c_str());
-}
-
-class ContextMenuWithFilteringForSupervisedUsersBrowserTest
-    : public ContextMenuForSupervisedUsersBrowserTest {
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{
-      supervised_user::kFilterWebsitesForSupervisedUsersOnDesktopAndIOS};
-};
-
-IN_PROC_BROWSER_TEST_F(
-    ContextMenuWithFilteringForSupervisedUsersBrowserTest,
-    SaveLinkAsEntryIsDisabledForUrlsNotAccessibleForChildWithFiltering) {
   // Set up child user profile.
   Profile* profile = browser()->profile();
 
@@ -872,7 +771,7 @@ IN_PROC_BROWSER_TEST_F(
 }
 
 IN_PROC_BROWSER_TEST_F(
-    ContextMenuWithFilteringForSupervisedUsersBrowserTest,
+    ContextMenuForSupervisedUsersBrowserTest,
     SaveLinkAsEntryIsDisabledForUrlsBlockedByAsyncCheckerForChild) {
   ContextMenuWaiter menu_observer;
 
@@ -913,7 +812,7 @@ IN_PROC_BROWSER_TEST_F(
 }
 
 IN_PROC_BROWSER_TEST_F(
-    ContextMenuWithFilteringForSupervisedUsersBrowserTest,
+    ContextMenuForSupervisedUsersBrowserTest,
     SaveLinkAsEntryIsEnabledForUrlsAllowedByAsyncCheckerForChild) {
   ContextMenuWaiter menu_observer;
 
@@ -953,8 +852,6 @@ IN_PROC_BROWSER_TEST_F(
   std::u16string suggested_filename = menu_observer.params().suggested_filename;
   ASSERT_EQ(kSuggestedFilename, base::UTF16ToUTF8(suggested_filename).c_str());
 }
-
-#endif  // BUILDFLAG(ENABLE_SUPERVISED_USERS)
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 IN_PROC_BROWSER_TEST_P(ContextMenuBrowserTest,
@@ -1065,7 +962,7 @@ IN_PROC_BROWSER_TEST_P(ContextMenuBrowserTest,
     provider->scheduler().RemoveUserUninstallableManagements(
         app_id, webapps::WebappUninstallSource::kAppMenu,
         base::BindLambdaForTesting([&](webapps::UninstallResultCode code) {
-          EXPECT_EQ(code, webapps::UninstallResultCode::kSuccess);
+          EXPECT_EQ(code, webapps::UninstallResultCode::kAppRemoved);
           run_loop.Quit();
         }));
 
@@ -1220,7 +1117,8 @@ IN_PROC_BROWSER_TEST_P(ContextMenuBrowserTest,
 IN_PROC_BROWSER_TEST_P(ContextMenuBrowserTest,
                        ContextMenuForEmojiPanel_NullBrowserCrash) {
   ui::SetShowEmojiKeyboardCallback(base::BindLambdaForTesting(
-      [](ui::EmojiPickerCategory unused) { ui::ShowTabletModeEmojiPanel(); }));
+      [](ui::EmojiPickerCategory unused, ui::EmojiPickerFocusBehavior,
+         const std::string&) { ui::ShowTabletModeEmojiPanel(); }));
   std::unique_ptr<content::WebContents> detached_web_contents =
       content::WebContents::Create(
           content::WebContents::CreateParams(browser()->profile()));
@@ -1249,7 +1147,9 @@ IN_PROC_BROWSER_TEST_P(ContextMenuBrowserTest,
                        ContextMenuForEmojiPanel_NoCallback) {
   // Reset the emoji callback.
   ui::SetShowEmojiKeyboardCallback(
-      base::RepeatingCallback<void(ui::EmojiPickerCategory)>());
+      base::RepeatingCallback<void(ui::EmojiPickerCategory,
+                                   ui::EmojiPickerFocusBehavior,
+                                   const std::string&)>());
 
   content::ContextMenuParams params;
   params.is_editable = true;
@@ -1932,9 +1832,19 @@ IN_PROC_BROWSER_TEST_P(ContextMenuBrowserTest, OpenLinkInProfileEntryPresent) {
   }
 
   // Open new window for the additional profile. This profile becomes active.
+  ui_test_utils::BrowserChangeObserver new_browser_observer(
+      nullptr, ui_test_utils::BrowserChangeObserver::ChangeType::kAdded);
   profiles::FindOrCreateNewWindowForProfile(
       profile, chrome::startup::IsProcessStartup::kNo,
       chrome::startup::IsFirstRun::kNo, false);
+
+  // ProfileManager will switch active profile upon observing
+  // BrowserListObserver::OnBrowserSetLastActive(). Wait until the event
+  // is observed if the active profile has not switched to `profile` yet.
+  bool wait_for_set_last_active_observed =
+      ProfileManager::GetLastUsedProfileIfLoaded() != profile;
+  ui_test_utils::WaitForBrowserSetLastActive(new_browser_observer.Wait(),
+                                             wait_for_set_last_active_observed);
 
   // On Lacros SessionStartupPref::ShouldRestoreLastSession() returns true for
   // the new profile. The session is then restored before the browser is shown
@@ -2221,7 +2131,7 @@ class ContextMenuFencedFrameTest : public ContextMenuBrowserTestBase {
 
 // Check which commands are present after opening the context menu for a
 // fencedframe.
-// TODO(crbug.com/1457589): Enable the test.
+// TODO(crbug.com/40273673): Enable the test.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_MenuContentsVerification_Fencedframe \
   DISABLED_MenuContentsVerification_Fencedframe
@@ -2271,7 +2181,617 @@ IN_PROC_BROWSER_TEST_F(ContextMenuFencedFrameTest,
                              IDC_CONTENT_CONTEXT_INSPECTELEMENT}));
 }
 
-// TODO(crbug.com/1491942): This fails with the field trial testing config.
+IN_PROC_BROWSER_TEST_F(ContextMenuFencedFrameTest,
+                       SaveLinkAsEntryIsDisabledAfterNetworkCutoff) {
+  // Add content/test/data for cross_site_iframe_factory.html.
+  https_server()->ServeFilesFromSourceDirectory("content/test/data");
+  ASSERT_TRUE(https_server()->Start());
+
+  // Navigate fenced frame to a page with an anchor element.
+  GURL fenced_frame_url(
+      https_server()->GetURL("a.test", "/download-anchor-same-origin.html"));
+
+  GURL main_url(https_server()->GetURL(
+      "a.test",
+      base::StringPrintf("/cross_site_iframe_factory.html?a.test(%s{fenced})",
+                         fenced_frame_url.spec().c_str())));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  // Get fenced frame render frame host.
+  std::vector<content::RenderFrameHost*> child_frames =
+      fenced_frame_test_helper().GetChildFencedFrameHosts(
+          primary_main_frame_host());
+  ASSERT_EQ(child_frames.size(), 1u);
+  content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
+  ASSERT_EQ(fenced_frame_rfh->GetLastCommittedURL(), fenced_frame_url);
+
+  // To avoid flakiness and ensure fenced_frame_rfh is ready for hit testing.
+  content::WaitForHitTestData(fenced_frame_rfh);
+
+  // Get the coordinate of the anchor element inside the fenced frame.
+  const gfx::PointF anchor_element =
+      GetCenterCoordinatesOfElementWithId(fenced_frame_rfh, "anchor");
+
+  // Open a context menu by right clicking on the anchor element.
+  ContextMenuWaiter menu_observer;
+  content::test::SimulateClickInFencedFrameTree(
+      fenced_frame_rfh, blink::WebMouseEvent::Button::kRight, anchor_element);
+
+  // Wait for context menu to be visible.
+  menu_observer.WaitForMenuOpenAndClose();
+
+  // "Save Link As..." should be present and enabled in the context menu.
+  EXPECT_THAT(menu_observer.GetCapturedCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVELINKAS));
+  EXPECT_THAT(menu_observer.GetCapturedEnabledCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVELINKAS));
+
+  // Disable fenced frame untrusted network access.
+  ASSERT_TRUE(ExecJs(fenced_frame_rfh, R"(
+    (async () => {
+      return window.fence.disableUntrustedNetwork();
+    })();
+  )"));
+
+  // Open the context menu again.
+  ContextMenuWaiter menu_observer_after_network_cutoff;
+  content::test::SimulateClickInFencedFrameTree(
+      fenced_frame_rfh, blink::WebMouseEvent::Button::kRight, anchor_element);
+
+  // Wait for context menu to be visible.
+  menu_observer_after_network_cutoff.WaitForMenuOpenAndClose();
+
+  // "Save Link As..." should be disabled in the context menu after fenced frame
+  // has untrusted network access revoked.
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVELINKAS));
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedEnabledCommandIds(),
+              testing::Not(testing::Contains(IDC_CONTENT_CONTEXT_SAVELINKAS)));
+}
+
+IN_PROC_BROWSER_TEST_F(
+    ContextMenuFencedFrameTest,
+    SaveLinkAsEntryIsDisabledInNestedIframeAfterNetworkCutoff) {
+  // Add content/test/data for cross_site_iframe_factory.html.
+  https_server()->ServeFilesFromSourceDirectory("content/test/data");
+  ASSERT_TRUE(https_server()->Start());
+
+  // Navigate the nested iframe to a page with an anchor element.
+  GURL nested_iframe_url(
+      https_server()->GetURL("a.test", "/download-anchor-same-origin.html"));
+
+  // The page has a fenced frame with a nested iframe inside.
+  GURL main_url(https_server()->GetURL(
+      "a.test",
+      base::StringPrintf(
+          "/cross_site_iframe_factory.html?a.test(a.test{fenced}(%s))",
+          nested_iframe_url.spec().c_str())));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  // Get fenced frame and nested iframe render frame host.
+  std::vector<content::RenderFrameHost*> child_frames =
+      fenced_frame_test_helper().GetChildFencedFrameHosts(
+          primary_main_frame_host());
+  ASSERT_EQ(child_frames.size(), 1u);
+  content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
+  content::RenderFrameHost* nested_iframe_rfh =
+      content::ChildFrameAt(fenced_frame_rfh, 0);
+  ASSERT_EQ(nested_iframe_rfh->GetLastCommittedURL(), nested_iframe_url);
+
+  // To avoid flakiness and ensure fenced_frame_rfh and nested_iframe_rfh is
+  // ready for hit testing.
+  content::WaitForHitTestData(fenced_frame_rfh);
+  content::WaitForHitTestData(nested_iframe_rfh);
+
+  // Get the coordinate of the anchor element inside the nested iframe.
+  gfx::PointF anchor_element =
+      GetCenterCoordinatesOfElementWithId(nested_iframe_rfh, "anchor");
+
+  // Because the mouse event is forwarded to the `RenderWidgetHost` of the
+  // fenced frame, the anchor element needs to be offset by the top left
+  // coordinates of the nested iframe relative to the fenced frame.
+  const gfx::PointF iframe_offset =
+      content::test::GetTopLeftCoordinatesOfElementWithId(fenced_frame_rfh,
+                                                          "child-0");
+  anchor_element.Offset(iframe_offset.x(), iframe_offset.y());
+
+  // Open a context menu by right clicking on the anchor element.
+  ContextMenuWaiter menu_observer;
+  content::test::SimulateClickInFencedFrameTree(
+      nested_iframe_rfh, blink::WebMouseEvent::Button::kRight, anchor_element);
+
+  // Wait for context menu to be visible.
+  menu_observer.WaitForMenuOpenAndClose();
+
+  // "Save Link As..." should be present and enabled in the context menu.
+  EXPECT_THAT(menu_observer.GetCapturedCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVELINKAS));
+  EXPECT_THAT(menu_observer.GetCapturedEnabledCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVELINKAS));
+
+  // Disable fenced frame untrusted network access.
+  ASSERT_TRUE(ExecJs(fenced_frame_rfh, R"(
+    (async () => {
+      return window.fence.disableUntrustedNetwork();
+    })();
+  )"));
+
+  // Open the context menu again.
+  ContextMenuWaiter menu_observer_after_network_cutoff;
+  content::test::SimulateClickInFencedFrameTree(
+      nested_iframe_rfh, blink::WebMouseEvent::Button::kRight, anchor_element);
+
+  // Wait for context menu to be visible.
+  menu_observer_after_network_cutoff.WaitForMenuOpenAndClose();
+
+  // "Save Link As..." should be disabled in the context menu after fenced frame
+  // has untrusted network access revoked.
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVELINKAS));
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedEnabledCommandIds(),
+              testing::Not(testing::Contains(IDC_CONTENT_CONTEXT_SAVELINKAS)));
+}
+
+IN_PROC_BROWSER_TEST_F(ContextMenuFencedFrameTest,
+                       SaveAudioAsEntryIsDisabledAfterNetworkCutoff) {
+  // Add content/test/data for cross_site_iframe_factory.html.
+  https_server()->ServeFilesFromSourceDirectory("content/test/data");
+  ASSERT_TRUE(https_server()->Start());
+
+  // Navigate fenced frame to a page with an audio element.
+  GURL fenced_frame_url(
+      https_server()->GetURL("a.test", "/accessibility/html/audio.html"));
+
+  GURL main_url(https_server()->GetURL(
+      "a.test",
+      base::StringPrintf("/cross_site_iframe_factory.html?a.test(%s{fenced})",
+                         fenced_frame_url.spec().c_str())));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  // Get fenced frame render frame host.
+  std::vector<content::RenderFrameHost*> child_frames =
+      fenced_frame_test_helper().GetChildFencedFrameHosts(
+          primary_main_frame_host());
+  ASSERT_EQ(child_frames.size(), 1u);
+  content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
+  ASSERT_EQ(fenced_frame_rfh->GetLastCommittedURL(), fenced_frame_url);
+
+  // To avoid flakiness and ensure fenced_frame_rfh is ready for hit testing.
+  content::WaitForHitTestData(fenced_frame_rfh);
+
+  // Click the audio element inside the fenced frame.
+  const gfx::PointF audio_element(15, 15);
+
+  // Open a context menu by right clicking on the audio element.
+  ContextMenuWaiter menu_observer;
+  content::test::SimulateClickInFencedFrameTree(
+      fenced_frame_rfh, blink::WebMouseEvent::Button::kRight, audio_element);
+
+  // Wait for context menu to be visible.
+  menu_observer.WaitForMenuOpenAndClose();
+
+  // "Save Audio As..." should be present and enabled in the context menu.
+  EXPECT_THAT(menu_observer.GetCapturedCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVEAVAS));
+  EXPECT_THAT(menu_observer.GetCapturedEnabledCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVEAVAS));
+
+  // Disable fenced frame untrusted network access.
+  ASSERT_TRUE(ExecJs(fenced_frame_rfh, R"(
+    (async () => {
+      return window.fence.disableUntrustedNetwork();
+    })();
+  )"));
+
+  // Open the context menu again.
+  ContextMenuWaiter menu_observer_after_network_cutoff;
+  content::test::SimulateClickInFencedFrameTree(
+      fenced_frame_rfh, blink::WebMouseEvent::Button::kRight, audio_element);
+
+  // Wait for context menu to be visible.
+  menu_observer_after_network_cutoff.WaitForMenuOpenAndClose();
+
+  // "Save Audio As..." should be disabled in the context menu after fenced
+  // frame has untrusted network access revoked.
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVEAVAS));
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedEnabledCommandIds(),
+              testing::Not(testing::Contains(IDC_CONTENT_CONTEXT_SAVEAVAS)));
+}
+
+IN_PROC_BROWSER_TEST_F(
+    ContextMenuFencedFrameTest,
+    SaveAudioAsEntryIsDisabledInNestedIframeAfterNetworkCutoff) {
+  // Add content/test/data for cross_site_iframe_factory.html.
+  https_server()->ServeFilesFromSourceDirectory("content/test/data");
+  ASSERT_TRUE(https_server()->Start());
+
+  // Navigate the nested iframe to a page with an audio element.
+  GURL nested_iframe_url(
+      https_server()->GetURL("a.test", "/accessibility/html/audio.html"));
+
+  // The page has a fenced frame with a nested iframe inside.
+  GURL main_url(https_server()->GetURL(
+      "a.test",
+      base::StringPrintf(
+          "/cross_site_iframe_factory.html?a.test(a.test{fenced}(%s))",
+          nested_iframe_url.spec().c_str())));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  // Get fenced frame and nested iframe render frame host.
+  std::vector<content::RenderFrameHost*> child_frames =
+      fenced_frame_test_helper().GetChildFencedFrameHosts(
+          primary_main_frame_host());
+  ASSERT_EQ(child_frames.size(), 1u);
+  content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
+  content::RenderFrameHost* nested_iframe_rfh =
+      content::ChildFrameAt(fenced_frame_rfh, 0);
+  ASSERT_EQ(nested_iframe_rfh->GetLastCommittedURL(), nested_iframe_url);
+
+  // To avoid flakiness and ensure fenced_frame_rfh and nested_iframe_rfh is
+  // ready for hit testing.
+  content::WaitForHitTestData(fenced_frame_rfh);
+  content::WaitForHitTestData(nested_iframe_rfh);
+
+  // Click the audio element inside the fenced frame.
+  gfx::PointF audio_element(15, 15);
+
+  // Because the mouse event is forwarded to the `RenderWidgetHost` of the
+  // fenced frame, the click point needs to be offset by the top left
+  // coordinates of the nested iframe relative to the fenced frame.
+  const gfx::PointF iframe_offset =
+      content::test::GetTopLeftCoordinatesOfElementWithId(fenced_frame_rfh,
+                                                          "child-0");
+  audio_element.Offset(iframe_offset.x(), iframe_offset.y());
+
+  // Open a context menu by right clicking on the audio element.
+  ContextMenuWaiter menu_observer;
+  content::test::SimulateClickInFencedFrameTree(
+      nested_iframe_rfh, blink::WebMouseEvent::Button::kRight, audio_element);
+
+  // Wait for context menu to be visible.
+  menu_observer.WaitForMenuOpenAndClose();
+
+  // "Save Audio As..." should be present and enabled in the context menu.
+  EXPECT_THAT(menu_observer.GetCapturedCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVEAVAS));
+  EXPECT_THAT(menu_observer.GetCapturedEnabledCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVEAVAS));
+
+  // Disable fenced frame untrusted network access.
+  ASSERT_TRUE(ExecJs(fenced_frame_rfh, R"(
+    (async () => {
+      return window.fence.disableUntrustedNetwork();
+    })();
+  )"));
+
+  // Open the context menu again.
+  ContextMenuWaiter menu_observer_after_network_cutoff;
+  content::test::SimulateClickInFencedFrameTree(
+      nested_iframe_rfh, blink::WebMouseEvent::Button::kRight, audio_element);
+
+  // Wait for context menu to be visible.
+  menu_observer_after_network_cutoff.WaitForMenuOpenAndClose();
+
+  // "Save Audio As..." should be disabled in the context menu after fenced
+  // frame has untrusted network access revoked.
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVEAVAS));
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedEnabledCommandIds(),
+              testing::Not(testing::Contains(IDC_CONTENT_CONTEXT_SAVEAVAS)));
+}
+
+IN_PROC_BROWSER_TEST_F(ContextMenuFencedFrameTest,
+                       SaveVideoAsEntryIsDisabledAfterNetworkCutoff) {
+  // Add content/test/data for cross_site_iframe_factory.html
+  https_server()->ServeFilesFromSourceDirectory("content/test/data");
+  ASSERT_TRUE(https_server()->Start());
+
+  // Navigate fenced frame to a page with a video element.
+  GURL fenced_frame_url(
+      https_server()->GetURL("a.test", "/media/video-player-autoplay.html"));
+
+  GURL main_url(https_server()->GetURL(
+      "a.test",
+      base::StringPrintf("/cross_site_iframe_factory.html?a.test(%s{fenced})",
+                         fenced_frame_url.spec().c_str())));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  // Get fenced frame render frame host.
+  std::vector<content::RenderFrameHost*> child_frames =
+      fenced_frame_test_helper().GetChildFencedFrameHosts(
+          primary_main_frame_host());
+  ASSERT_EQ(child_frames.size(), 1u);
+  content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
+  ASSERT_EQ(fenced_frame_rfh->GetLastCommittedURL(), fenced_frame_url);
+
+  // To avoid flakiness and ensure fenced_frame_rfh is ready for hit testing.
+  content::WaitForHitTestData(fenced_frame_rfh);
+  content::WaitForLoadStop(
+      content::WebContents::FromRenderFrameHost(fenced_frame_rfh));
+
+  // Click the video inside the fenced frame.
+  const gfx::PointF click_point(15, 15);
+
+  // Open a context menu by right clicking on the video element.
+  ContextMenuWaiter menu_observer;
+  content::test::SimulateClickInFencedFrameTree(
+      fenced_frame_rfh, blink::WebMouseEvent::Button::kRight, click_point);
+
+  // Wait for context menu to be visible.
+  menu_observer.WaitForMenuOpenAndClose();
+
+  // "Save Video As..." and "Save Video Frame As..." should be present and
+  // enabled in the context menu.
+  EXPECT_THAT(menu_observer.GetCapturedCommandIds(),
+              testing::IsSupersetOf({IDC_CONTENT_CONTEXT_SAVEAVAS,
+                                     IDC_CONTENT_CONTEXT_SAVEVIDEOFRAMEAS}));
+  EXPECT_THAT(menu_observer.GetCapturedEnabledCommandIds(),
+              testing::IsSupersetOf({IDC_CONTENT_CONTEXT_SAVEAVAS,
+                                     IDC_CONTENT_CONTEXT_SAVEVIDEOFRAMEAS}));
+
+  // Disable fenced frame untrusted network access.
+  ASSERT_TRUE(ExecJs(fenced_frame_rfh, R"(
+    (async () => {
+      return window.fence.disableUntrustedNetwork();
+    })();
+  )"));
+
+  // Open the context menu again.
+  ContextMenuWaiter menu_observer_after_network_cutoff;
+  content::test::SimulateClickInFencedFrameTree(
+      fenced_frame_rfh, blink::WebMouseEvent::Button::kRight, click_point);
+
+  // Wait for context menu to be visible.
+  menu_observer_after_network_cutoff.WaitForMenuOpenAndClose();
+
+  // "Save Video As..." and "Save Video Frame As..." should be disabled in the
+  // context menu after fenced frame has untrusted network access revoked.
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedCommandIds(),
+              testing::IsSupersetOf({IDC_CONTENT_CONTEXT_SAVEAVAS,
+                                     IDC_CONTENT_CONTEXT_SAVEVIDEOFRAMEAS}));
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedEnabledCommandIds(),
+              testing::Not(testing::Contains(IDC_CONTENT_CONTEXT_SAVEAVAS)));
+  EXPECT_THAT(
+      menu_observer_after_network_cutoff.GetCapturedEnabledCommandIds(),
+      testing::Not(testing::Contains(IDC_CONTENT_CONTEXT_SAVEVIDEOFRAMEAS)));
+}
+
+IN_PROC_BROWSER_TEST_F(
+    ContextMenuFencedFrameTest,
+    SaveVideoAsEntryIsDisabledInNestedIframeAfterNetworkCutoff) {
+  // Add content/test/data for cross_site_iframe_factory.html
+  https_server()->ServeFilesFromSourceDirectory("content/test/data");
+  ASSERT_TRUE(https_server()->Start());
+
+  // Navigate the nested iframe to a page with a video element.
+  GURL nested_iframe_url(
+      https_server()->GetURL("a.test", "/media/video-player-autoplay.html"));
+
+  // The page has a fenced frame with a nested iframe inside.
+  GURL main_url(https_server()->GetURL(
+      "a.test",
+      base::StringPrintf(
+          "/cross_site_iframe_factory.html?a.test(a.test{fenced}(%s))",
+          nested_iframe_url.spec().c_str())));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  // Get fenced frame and nested iframe render frame host.
+  std::vector<content::RenderFrameHost*> child_frames =
+      fenced_frame_test_helper().GetChildFencedFrameHosts(
+          primary_main_frame_host());
+  ASSERT_EQ(child_frames.size(), 1u);
+  content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
+  content::RenderFrameHost* nested_iframe_rfh =
+      content::ChildFrameAt(fenced_frame_rfh, 0);
+  ASSERT_EQ(nested_iframe_rfh->GetLastCommittedURL(), nested_iframe_url);
+
+  // To avoid flakiness and ensure fenced_frame_rfh and nested_iframe_rfh is
+  // ready for hit testing.
+  content::WaitForHitTestData(fenced_frame_rfh);
+  content::WaitForHitTestData(nested_iframe_rfh);
+
+  // Click the video inside the fenced frame.
+  gfx::PointF click_point(15, 15);
+
+  // Because the mouse event is forwarded to the `RenderWidgetHost` of the
+  // fenced frame, the click point needs to be offset by the top left
+  // coordinates of the nested iframe relative to the fenced frame.
+  const gfx::PointF iframe_offset =
+      content::test::GetTopLeftCoordinatesOfElementWithId(fenced_frame_rfh,
+                                                          "child-0");
+  click_point.Offset(iframe_offset.x(), iframe_offset.y());
+
+  // Open a context menu by right clicking on the video element.
+  ContextMenuWaiter menu_observer;
+  content::test::SimulateClickInFencedFrameTree(
+      nested_iframe_rfh, blink::WebMouseEvent::Button::kRight, click_point);
+
+  // Wait for context menu to be visible.
+  menu_observer.WaitForMenuOpenAndClose();
+
+  // "Save Video As..." and "Save Video Frame As..." should be present and
+  // enabled in the context menu.
+  EXPECT_THAT(menu_observer.GetCapturedCommandIds(),
+              testing::IsSupersetOf({IDC_CONTENT_CONTEXT_SAVEAVAS,
+                                     IDC_CONTENT_CONTEXT_SAVEVIDEOFRAMEAS}));
+  EXPECT_THAT(menu_observer.GetCapturedEnabledCommandIds(),
+              testing::IsSupersetOf({IDC_CONTENT_CONTEXT_SAVEAVAS,
+                                     IDC_CONTENT_CONTEXT_SAVEVIDEOFRAMEAS}));
+
+  // Disable fenced frame untrusted network access.
+  ASSERT_TRUE(ExecJs(fenced_frame_rfh, R"(
+    (async () => {
+      return window.fence.disableUntrustedNetwork();
+    })();
+  )"));
+
+  // Open the context menu again.
+  ContextMenuWaiter menu_observer_after_network_cutoff;
+  content::test::SimulateClickInFencedFrameTree(
+      nested_iframe_rfh, blink::WebMouseEvent::Button::kRight, click_point);
+
+  // Wait for context menu to be visible.
+  menu_observer_after_network_cutoff.WaitForMenuOpenAndClose();
+
+  // "Save Video As..." and "Save Video Frame As..." should be disabled in the
+  // context menu after fenced frame has untrusted network access revoked.
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedCommandIds(),
+              testing::IsSupersetOf({IDC_CONTENT_CONTEXT_SAVEAVAS,
+                                     IDC_CONTENT_CONTEXT_SAVEVIDEOFRAMEAS}));
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedEnabledCommandIds(),
+              testing::Not(testing::Contains(IDC_CONTENT_CONTEXT_SAVEAVAS)));
+  EXPECT_THAT(
+      menu_observer_after_network_cutoff.GetCapturedEnabledCommandIds(),
+      testing::Not(testing::Contains(IDC_CONTENT_CONTEXT_SAVEVIDEOFRAMEAS)));
+}
+
+IN_PROC_BROWSER_TEST_F(ContextMenuFencedFrameTest,
+                       SaveImageAsEntryIsDisabledAfterNetworkCutoff) {
+  // Add content/test/data for cross_site_iframe_factory.html.
+  https_server()->ServeFilesFromSourceDirectory("content/test/data");
+  ASSERT_TRUE(https_server()->Start());
+
+  // Navigate fenced frame to an image.
+  GURL fenced_frame_url(https_server()->GetURL("a.test", "/test_visual.html"));
+
+  GURL main_url(https_server()->GetURL(
+      "a.test",
+      base::StringPrintf("/cross_site_iframe_factory.html?a.test(%s{fenced})",
+                         fenced_frame_url.spec().c_str())));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  // Get fenced frame render frame host.
+  std::vector<content::RenderFrameHost*> child_frames =
+      fenced_frame_test_helper().GetChildFencedFrameHosts(
+          primary_main_frame_host());
+  ASSERT_EQ(child_frames.size(), 1u);
+  content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
+  ASSERT_EQ(fenced_frame_rfh->GetLastCommittedURL(), fenced_frame_url);
+
+  // To avoid flakiness and ensure fenced_frame_rfh is ready for hit testing.
+  content::WaitForHitTestData(fenced_frame_rfh);
+
+  // Click inside the fenced frame.
+  const gfx::PointF click_point(15, 15);
+
+  // Open a context menu by right clicking on the image.
+  ContextMenuWaiter menu_observer;
+  content::test::SimulateClickInFencedFrameTree(
+      fenced_frame_rfh, blink::WebMouseEvent::Button::kRight, click_point);
+
+  // Wait for context menu to be visible.
+  menu_observer.WaitForMenuOpenAndClose();
+
+  // "Save Image As..." should be present and enabled in the context menu.
+  EXPECT_THAT(menu_observer.GetCapturedEnabledCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVEIMAGEAS));
+
+  // Disable fenced frame untrusted network access.
+  ASSERT_TRUE(ExecJs(fenced_frame_rfh, R"(
+    (async () => {
+      return window.fence.disableUntrustedNetwork();
+    })();
+  )"));
+
+  // Open the context menu again.
+  ContextMenuWaiter menu_observer_after_network_cutoff;
+  content::test::SimulateClickInFencedFrameTree(
+      fenced_frame_rfh, blink::WebMouseEvent::Button::kRight, click_point);
+
+  // Wait for context menu to be visible.
+  menu_observer_after_network_cutoff.WaitForMenuOpenAndClose();
+
+  // "Save Image As..." should be disabled in the context menu after fenced
+  // frame has untrusted network access revoked.
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVEIMAGEAS));
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedEnabledCommandIds(),
+              testing::Not(testing::Contains(IDC_CONTENT_CONTEXT_SAVEIMAGEAS)));
+}
+
+IN_PROC_BROWSER_TEST_F(
+    ContextMenuFencedFrameTest,
+    SaveImageAsEntryIsDisabledInNestedIframeAfterNetworkCutoff) {
+  // Add content/test/data for cross_site_iframe_factory.html.
+  https_server()->ServeFilesFromSourceDirectory("content/test/data");
+  ASSERT_TRUE(https_server()->Start());
+
+  // Navigate the nested iframe to an image.
+  GURL nested_iframe_url(https_server()->GetURL("a.test", "/test_visual.html"));
+
+  // The page has a fenced frame with a nested iframe inside.
+  GURL main_url(https_server()->GetURL(
+      "a.test",
+      base::StringPrintf(
+          "/cross_site_iframe_factory.html?a.test(a.test{fenced}(%s))",
+          nested_iframe_url.spec().c_str())));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  // Get fenced frame and nested iframe render frame host.
+  std::vector<content::RenderFrameHost*> child_frames =
+      fenced_frame_test_helper().GetChildFencedFrameHosts(
+          primary_main_frame_host());
+  ASSERT_EQ(child_frames.size(), 1u);
+  content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
+  content::RenderFrameHost* nested_iframe_rfh =
+      content::ChildFrameAt(fenced_frame_rfh, 0);
+  ASSERT_EQ(nested_iframe_rfh->GetLastCommittedURL(), nested_iframe_url);
+
+  // To avoid flakiness and ensure fenced_frame_rfh and nested_iframe_rfh are
+  // ready for hit testing.
+  content::WaitForHitTestData(fenced_frame_rfh);
+  content::WaitForHitTestData(nested_iframe_rfh);
+
+  // Click inside the nested iframe.
+  gfx::PointF click_point(15, 15);
+
+  // Because the mouse event is forwarded to the `RenderWidgetHost` of the
+  // fenced frame, the click point needs to be offset by the top left
+  // coordinates of the nested iframe relative to the fenced frame.
+  const gfx::PointF iframe_offset =
+      content::test::GetTopLeftCoordinatesOfElementWithId(fenced_frame_rfh,
+                                                          "child-0");
+  click_point.Offset(iframe_offset.x(), iframe_offset.y());
+
+  // Open a context menu by right clicking on the image.
+  ContextMenuWaiter menu_observer;
+  content::test::SimulateClickInFencedFrameTree(
+      fenced_frame_rfh, blink::WebMouseEvent::Button::kRight, click_point);
+
+  // Wait for context menu to be visible.
+  menu_observer.WaitForMenuOpenAndClose();
+
+  // "Save Image As..." should be present and enabled in the context menu.
+  EXPECT_THAT(menu_observer.GetCapturedCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVEIMAGEAS));
+  EXPECT_THAT(menu_observer.GetCapturedEnabledCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVEIMAGEAS));
+
+  // Disable fenced frame untrusted network access.
+  ASSERT_TRUE(ExecJs(fenced_frame_rfh, R"(
+    (async () => {
+      return window.fence.disableUntrustedNetwork();
+    })();
+  )"));
+
+  // Open the context menu again.
+  ContextMenuWaiter menu_observer_after_network_cutoff;
+  content::test::SimulateClickInFencedFrameTree(
+      fenced_frame_rfh, blink::WebMouseEvent::Button::kRight, click_point);
+
+  // Wait for context menu to be visible.
+  menu_observer_after_network_cutoff.WaitForMenuOpenAndClose();
+
+  // "Save Image As..." should be disabled in the context menu after fenced
+  // frame has untrusted network access revoked.
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedCommandIds(),
+              testing::Contains(IDC_CONTENT_CONTEXT_SAVEIMAGEAS));
+  EXPECT_THAT(menu_observer_after_network_cutoff.GetCapturedEnabledCommandIds(),
+              testing::Not(testing::Contains(IDC_CONTENT_CONTEXT_SAVEIMAGEAS)));
+}
+
+// TODO(crbug.com/40285326): This fails with the field trial testing config.
 class ContextMenuFencedFrameTestNoTestingConfig
     : public ContextMenuFencedFrameTest {
  public:
@@ -2313,17 +2833,23 @@ IN_PROC_BROWSER_TEST_F(ContextMenuFencedFrameTestNoTestingConfig,
                      "var fenced_frame = document.createElement('fencedframe');"
                      "fenced_frame.id = 'fenced_frame';"
                      "document.body.appendChild(fenced_frame);"));
-  auto* fenced_frame_node =
+  content::RenderFrameHost* fenced_frame_rfh =
       fenced_frame_test_helper().GetMostRecentlyAddedFencedFrame(
           primary_main_frame_host());
-  content::TestFrameNavigationObserver observer(fenced_frame_node);
+  content::TestFrameNavigationObserver observer(fenced_frame_rfh);
   fenced_frame_test_helper().NavigateFencedFrameUsingFledge(
       primary_main_frame_host(), fenced_frame_url, "fenced_frame");
   observer.Wait();
 
+  // Embedder-initiated fenced frame navigation uses a new browsing instance.
+  // Fenced frame RenderFrameHost is a new one after navigation, so we need
+  // to retrieve it.
+  fenced_frame_rfh = fenced_frame_test_helper().GetMostRecentlyAddedFencedFrame(
+      primary_main_frame_host());
+
   // Set the automatic beacon
   EXPECT_TRUE(ExecJs(
-      fenced_frame_node,
+      fenced_frame_rfh,
       content::JsReplace(R"(
       window.fence.setReportEventDataForAutomaticBeacons({
         eventType: $1,
@@ -2343,7 +2869,7 @@ IN_PROC_BROWSER_TEST_F(ContextMenuFencedFrameTestNoTestingConfig,
   ui_test_utils::TabAddedWaiter tab_add(browser());
 
   // Open the contextual menu and click "Open Link in New Tab".
-  TestRenderViewContextMenu menu(*fenced_frame_node, params);
+  TestRenderViewContextMenu menu(*fenced_frame_rfh, params);
   menu.Init();
   menu.ExecuteCommand(IDC_CONTENT_CONTEXT_OPENLINKNEWTAB, 0);
 
@@ -2778,6 +3304,167 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(new_tab_content, expected_content);
 }
 
+class LensOverlayBrowserTest : public SearchByRegionBrowserBaseTest {
+ protected:
+  void SetUp() override {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitWithFeatures({lens::features::kLensOverlay}, {});
+
+    // This does not use SearchByRegionBrowserBaseTest::SetUp because that
+    // function does its own conflicting initialization of a FeatureList.
+    InProcessBrowserTest::SetUp();
+  }
+
+  void SetUpOnMainThread() override {
+    InProcessBrowserTest::SetUpOnMainThread();
+
+    // Permits sharing the page screenshot by default.
+    PrefService* prefs = browser()->profile()->GetPrefs();
+    prefs->SetBoolean(lens::prefs::kLensSharingPageScreenshotEnabled, true);
+  }
+
+  void TearDownOnMainThread() override {
+    InProcessBrowserTest::TearDownOnMainThread();
+
+    // Disallow sharing the page screenshot by default.
+    PrefService* prefs = browser()->profile()->GetPrefs();
+    prefs->SetBoolean(lens::prefs::kLensSharingPageScreenshotEnabled, false);
+  }
+
+  void OpenContextMenuAndSelectRegionSearchEntrypoint(
+      int event_flags,
+      ContextMenuNotificationObserver::MenuShownCallback callback) {
+    // |menu_observer_| will cause the search lens for image menu item to be
+    // clicked.
+    menu_observer_ = std::make_unique<ContextMenuNotificationObserver>(
+        IDC_CONTENT_CONTEXT_LENS_REGION_SEARCH, event_flags,
+        std::move(callback));
+    RightClickToOpenContextMenu();
+  }
+
+  void OpenImagePageAndContextMenuForLensImageSearch(
+      std::string image_path,
+      int event_flags,
+      ContextMenuNotificationObserver::MenuShownCallback callback) {
+    ASSERT_TRUE(embedded_test_server()->Start());
+    GURL image_url(embedded_test_server()->GetURL(image_path));
+    GURL page("data:text/html,<img src='" + image_url.spec() + "'>");
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page));
+
+    menu_observer_ = std::make_unique<ContextMenuNotificationObserver>(
+        IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE, event_flags,
+        std::move(callback));
+    content::WebContents* tab =
+        browser()->tab_strip_model()->GetActiveWebContents();
+    content::SimulateMouseClickAt(tab, 0, blink::WebMouseEvent::Button::kRight,
+                                  gfx::Point(15, 15));
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(LensOverlayBrowserTest,
+                       RegionSearchContextMenuOpensLensOverlay) {
+  // State should start in off.
+  auto* controller = browser()
+                         ->tab_strip_model()
+                         ->GetActiveTab()
+                         ->tab_features()
+                         ->lens_overlay_controller();
+  ASSERT_EQ(controller->state(), LensOverlayController::State::kOff);
+
+  OpenContextMenuAndSelectRegionSearchEntrypoint(ui::EF_MOUSE_BUTTON,
+                                                 base::NullCallback());
+
+  // Clicking the region search entrypoint should eventually result in overlay
+  // state.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return controller->state() == LensOverlayController::State::kOverlay;
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(LensOverlayBrowserTest,
+                       RegionSearchContextMenuDoesNotOpenRegionSearch) {
+  bool run = false;
+  OpenContextMenuAndSelectRegionSearchEntrypoint(
+      ui::EF_MOUSE_BUTTON,
+      // Callback that will be called after the context menu item is clicked.
+      base::BindLambdaForTesting([&](RenderViewContextMenu* menu) {
+        // Verify the normal region search flow does not activate
+        lens::LensRegionSearchController* controller =
+            menu->GetLensRegionSearchControllerForTesting();
+        ASSERT_EQ(controller, nullptr);
+        run = true;
+      }));
+
+  // Verify the callback above finished running before finishing the test.
+  ASSERT_TRUE(base::test::RunUntil([&]() { return run == true; }));
+}
+
+IN_PROC_BROWSER_TEST_F(LensOverlayBrowserTest,
+                       RegionSearchContextMenuOpensRegionSearchForKeyboard) {
+  bool run = false;
+  // EF_NONE event_type will be treated as a keyboard press.
+  OpenContextMenuAndSelectRegionSearchEntrypoint(
+      ui::EF_NONE,
+      // Callback that will be called after the context menu item is clicked.
+      base::BindLambdaForTesting([&](RenderViewContextMenu* menu) {
+        // Verify the normal region search flow activates.
+        lens::LensRegionSearchController* controller =
+            menu->GetLensRegionSearchControllerForTesting();
+        ASSERT_NE(controller, nullptr);
+        run = true;
+      }));
+
+  // Verify the callback above finished running before finishing the test.
+  ASSERT_TRUE(base::test::RunUntil([&]() { return run == true; }));
+}
+
+IN_PROC_BROWSER_TEST_F(LensOverlayBrowserTest,
+                       ImageSearchContextMenuDoesNotOpenImageSearch) {
+  bool run = false;
+  int starting_tab_index = browser()->tab_strip_model()->active_index();
+  OpenImagePageAndContextMenuForLensImageSearch(
+      "/google/logo.gif", ui::EF_MOUSE_BUTTON,
+      // Callback that will be called after the context menu item is clicked.
+      base::BindLambdaForTesting([&](RenderViewContextMenu* menu) {
+        // Verify the normal image search flow does not activate.
+        lens::LensRegionSearchController* controller =
+            menu->GetLensRegionSearchControllerForTesting();
+        ASSERT_EQ(controller, nullptr);
+        run = true;
+      }));
+
+  // Verify the callback above finished running before finishing the test.
+  ASSERT_TRUE(base::test::RunUntil([&]() { return run == true; }));
+  // Verify that the tab has not been changed.
+  ASSERT_EQ(browser()->tab_strip_model()->active_index(), starting_tab_index);
+}
+
+// https://crbug.com/1444953
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
+#define MAYBE_ImageSearchContextMenuOpensImageSearchForKeyboard \
+  DISABLED_ImageSearchContextMenuOpensImageSearchForKeyboard
+#else
+#define MAYBE_ImageSearchContextMenuOpensImageSearchForKeyboard \
+  ImageSearchContextMenuOpensImageSearchForKeyboard
+#endif
+IN_PROC_BROWSER_TEST_F(
+    LensOverlayBrowserTest,
+    MAYBE_ImageSearchContextMenuOpensImageSearchForKeyboard) {
+  bool run = false;
+  int starting_tab_index = browser()->tab_strip_model()->active_index();
+  // EF_NONE event_type will be treated as a keyboard press.
+  OpenImagePageAndContextMenuForLensImageSearch(
+      "/google/logo.gif", ui::EF_NONE,
+      // Callback that will be called after the context menu item is clicked.
+      base::BindLambdaForTesting(
+          [&](RenderViewContextMenu* menu) { run = true; }));
+
+  // Verify the callback above finished running before finishing the test.
+  ASSERT_TRUE(base::test::RunUntil([&]() { return run == true; }));
+  // Verify that a new tab opens with Lens results.
+  ASSERT_NE(browser()->tab_strip_model()->active_index(), starting_tab_index);
+}
+
 #endif  // BUILDFLAG(ENABLE_LENS_DESKTOP_GOOGLE_BRANDED_FEATURES)
 
 #if BUILDFLAG(ENABLE_PDF)
@@ -2848,120 +3535,74 @@ IN_PROC_BROWSER_TEST_P(PdfPluginContextMenuBrowserTestWithOopifOverride,
   if (UseOopif()) {
     // Create the manager first, since the following HTML page doesn't wait for
     // the PDF navigation to complete.
-    CreateTestPdfViewerStreamManager();
+    CreateTestPdfViewerStreamManager(
+        browser()->tab_strip_model()->GetActiveWebContents());
   }
 
   TestContextMenuOfPdfInsideWebPage(FILE_PATH_LITERAL("test-iframe-pdf.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(PdfPluginContextMenuBrowserTestWithOopifOverride,
-                       Rotate) {
+                       RotateInFullPagePdf) {
   std::unique_ptr<TestRenderViewContextMenu> menu = SetupAndCreateMenu();
   ASSERT_TRUE(menu);
   content::RenderFrameHost* target_rfh =
       pdf_frame_util::FindPdfChildFrame(extension_frame());
-  auto cb = [](base::OnceClosure quit_loop,
-               content::RenderFrameHost* expected_rfh,
-               blink::mojom::PluginActionType expected_action_type,
-               content::RenderFrameHost* rfh,
-               blink::mojom::PluginActionType action_type) {
-    EXPECT_EQ(expected_rfh, rfh);
-    EXPECT_EQ(expected_action_type, action_type);
-    std::move(quit_loop).Run();
-  };
 
-  {
-    // Rotate clockwise.
-    base::RunLoop run_loop;
-    menu->RegisterExecutePluginActionCallbackForTesting(
-        base::BindOnce(cb, run_loop.QuitClosure(), target_rfh,
-                       blink::mojom::PluginActionType::kRotate90Clockwise));
-    menu->ExecuteCommand(IDC_CONTENT_CONTEXT_ROTATECW, 0);
-    run_loop.Run();
-  }
-
-  {
-    // Rotate counterclockwise.
-    base::RunLoop run_loop;
-    menu->RegisterExecutePluginActionCallbackForTesting(base::BindOnce(
-        cb, run_loop.QuitClosure(), target_rfh,
-        blink::mojom::PluginActionType::kRotate90Counterclockwise));
-    menu->ExecuteCommand(IDC_CONTENT_CONTEXT_ROTATECCW, 0);
-    run_loop.Run();
-  }
+  TestRotate(std::move(menu), target_rfh);
 }
 
-// TODO(crbug.com/1445746): Stop testing both modes after OOPIF PDF viewer
+class OopifPdfPluginContextMenuBrowserTest
+    : public PdfPluginContextMenuBrowserTest {
+ public:
+  OopifPdfPluginContextMenuBrowserTest() = default;
+
+  OopifPdfPluginContextMenuBrowserTest(const PdfPluginContextMenuBrowserTest&) =
+      delete;
+  OopifPdfPluginContextMenuBrowserTest& operator=(
+      const OopifPdfPluginContextMenuBrowserTest&) = delete;
+
+  ~OopifPdfPluginContextMenuBrowserTest() override = default;
+
+  bool UseOopif() const override { return true; }
+};
+
+IN_PROC_BROWSER_TEST_F(OopifPdfPluginContextMenuBrowserTest,
+                       RotateInEmbeddedPdf) {
+  // Load a page with a PDF file inside.
+  const GURL page_url = embedded_test_server()->GetURL("/pdf/test-iframe.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page_url));
+
+  WebContents* web_contents = GetActiveWebContents();
+
+  // Wait for the PDF content frame to be created.
+  ASSERT_TRUE(GetTestPdfViewerStreamManager(web_contents)
+                  ->WaitUntilPdfLoadedInFirstChild());
+
+  // Get the PDF content frame.
+  content::RenderFrameHost* content_frame =
+      pdf_extension_test_util::GetOnlyPdfPluginFrame(web_contents);
+  ASSERT_TRUE(content_frame);
+
+  // Create a context menu in the PDF content frame.
+  content::ContextMenuParams params;
+  params.page_url = page_url;
+  params.frame_url = content_frame->GetLastCommittedURL();
+  params.media_type = blink::mojom::ContextMenuDataMediaType::kPlugin;
+  auto menu =
+      std::make_unique<TestRenderViewContextMenu>(*content_frame, params);
+  menu->Init();
+
+  ASSERT_TRUE(menu);
+  content::RenderFrameHost* target_rfh = menu->GetRenderFrameHost();
+
+  TestRotate(std::move(menu), target_rfh);
+}
+
+// TODO(crbug.com/40268279): Stop testing both modes after OOPIF PDF viewer
 // launches.
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
     PdfPluginContextMenuBrowserTestWithOopifOverride);
-
-#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
-class PdfOcrContextMenuBrowserTest
-    : public PdfPluginContextMenuBrowserTest,
-      public ::testing::WithParamInterface<std::tuple<int, bool>> {
- public:
-  PdfOcrContextMenuBrowserTest() {
-    if (IsPdfOcrEnabled()) {
-      scoped_feature_list_.InitAndEnableFeature(features::kPdfOcr);
-    } else {
-      scoped_feature_list_.InitAndDisableFeature(features::kPdfOcr);
-    }
-    accessibility_state_utils::OverrideIsScreenReaderEnabledForTesting(
-        IsScreenReaderEnabled());
-    if (IsComponentReady()) {
-      screen_ai::PdfOcrControllerFactory::GetForProfile(browser()->profile())
-          ->set_ocr_ready_for_testing();
-    }
-  }
-
-  PdfOcrContextMenuBrowserTest(const PdfOcrContextMenuBrowserTest&) = delete;
-  PdfOcrContextMenuBrowserTest& operator=(const PdfOcrContextMenuBrowserTest&) =
-      delete;
-
-  ~PdfOcrContextMenuBrowserTest() override = default;
-
-  int ocr_params() { return std::get<0>(GetParam()); }
-
-  bool UseOopif() const override { return std::get<1>(GetParam()); }
-
-  bool IsScreenReaderEnabled() { return ocr_params() & 1; }
-
-  bool IsPdfOcrEnabled() { return ocr_params() & 2; }
-
-  bool IsComponentReady() { return ocr_params() & 4; }
-
-  void SetUpOnMainThread() override {
-    PdfPluginContextMenuBrowserTest::SetUpOnMainThread();
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-// TODO(crbug.com/1443346): Re-enable this test.
-IN_PROC_BROWSER_TEST_P(PdfOcrContextMenuBrowserTest, DISABLED_PdfOcr) {
-  std::unique_ptr<TestRenderViewContextMenu> menu = SetupAndCreateMenu();
-  ASSERT_TRUE(menu);
-  ASSERT_EQ(menu->IsItemPresent(IDC_CONTENT_CONTEXT_PDF_OCR),
-            IsPdfOcrEnabled() && IsScreenReaderEnabled() && IsComponentReady());
-}
-
-struct PdfOcrContextMenuBrowserTestPassToString {
-  std::string operator()(
-      const ::testing::TestParamInfo<std::tuple<int, bool>>& i) const {
-    return (std::get<1>(i.param) ? "OOPIF_" : "GUESTVIEW_") +
-           base::NumberToString(std::get<0>(i.param));
-  }
-};
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         PdfOcrContextMenuBrowserTest,
-                         ::testing::Combine(::testing::Range(0, 8),
-                                            ::testing::Bool()),
-                         PdfOcrContextMenuBrowserTestPassToString());
-
-#endif  // BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
 
 #endif  // BUILDFLAG(ENABLE_PDF)
 
@@ -3176,7 +3817,7 @@ IN_PROC_BROWSER_TEST_P(ContextMenuBrowserTest, GifImageDownscaleToJpeg) {
       gfx::Size(276, 110), gfx::Size(100, /* 100 / 480 * 320 =  */ 39), ".jpg");
 }
 
-// TODO(crbug.com/1457589): Enable the test.
+// TODO(crbug.com/40273673): Enable the test.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_RequestPngForGifImage DISABLED_RequestPngForGifImage
 #else
@@ -3189,7 +3830,7 @@ IN_PROC_BROWSER_TEST_P(ContextMenuBrowserTest, MAYBE_RequestPngForGifImage) {
       gfx::Size(276, 110), gfx::Size(276, 110), ".png");
 }
 
-// TODO(crbug.com/1457589): Enable the test.
+// TODO(crbug.com/40273673): Enable the test.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_PngImageDownscaleToPng DISABLED_PngImageDownscaleToPng
 #else
@@ -3209,7 +3850,7 @@ IN_PROC_BROWSER_TEST_P(ContextMenuBrowserTest, PngImageOriginalDownscaleToPng) {
       gfx::Size(200, 100), gfx::Size(100, 50), ".png");
 }
 
-// TODO(crbug.com/1457589): Enable the test.
+// TODO(crbug.com/40273673): Enable the test.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_JpgImageDownscaleToJpg DISABLED_JpgImageDownscaleToJpg
 #else
@@ -3230,7 +3871,7 @@ IN_PROC_BROWSER_TEST_P(ContextMenuBrowserTest, JpgImageDownscaleToWebp) {
       ".webp");
 }
 
-// TODO(crbug.com/1457589): Enable the test.
+// TODO(crbug.com/40273673): Enable the test.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_PngImageDownscaleToWebp DISABLED_PngImageDownscaleToWebp
 #else
@@ -3243,7 +3884,7 @@ IN_PROC_BROWSER_TEST_P(ContextMenuBrowserTest, MAYBE_PngImageDownscaleToWebp) {
       gfx::Size(200, 100), gfx::Size(100, 50), ".webp");
 }
 
-// TODO(crbug.com/1457589): Enable the test.
+// TODO(crbug.com/40273673): Enable the test.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_GifImageDownscaleToWebp DISABLED_GifImageDownscaleToWebp
 #else
@@ -3257,7 +3898,7 @@ IN_PROC_BROWSER_TEST_P(ContextMenuBrowserTest, MAYBE_GifImageDownscaleToWebp) {
       ".webp");
 }
 
-// TODO(crbug.com/1457589): Enable the test.
+// TODO(crbug.com/40273673): Enable the test.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_WebpImageDownscaleToWebp DISABLED_WebpImageDownscaleToWebp
 #else

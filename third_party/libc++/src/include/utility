@@ -246,7 +246,6 @@ template <class T>
 
 */
 
-#include <__assert> // all public C++ headers provide the assertion handler
 #include <__config>
 #include <__utility/as_const.h>
 #include <__utility/as_lvalue.h>
@@ -274,6 +273,10 @@ template <class T>
 // [utility.syn]
 #include <compare>
 #include <initializer_list>
+
+// [tuple.creation]
+
+#include <__tuple/ignore.h>
 
 // [tuple.helper]
 #include <__tuple/tuple_element.h>

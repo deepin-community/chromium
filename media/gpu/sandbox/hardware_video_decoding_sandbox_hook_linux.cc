@@ -27,7 +27,7 @@ using sandbox::syscall_broker::BrokerFilePermission;
 // chrome/browser/ash/arc/video/gpu_arc_video_service_host.cc depends on it and
 // that file is built for ash-chrome regardless of VA-API/V4L2. That means that
 // bots like linux-chromeos-rel end up compiling this presandbox hook (thus the
-// NOTREACHED()s in some places here).
+// NOTREACHED_IN_MIGRATION()s in some places here).
 
 namespace media {
 namespace {
@@ -74,6 +74,13 @@ bool HardwareVideoDecodingPreSandboxHookForVaapiOnIntel(
   // TODO(b/210759684): we probably will need to do this for Linux as well.
   command_set.set(sandbox::syscall_broker::COMMAND_STAT);
 
+  // This is added because libdrm calls access() from drmGetMinorType() that is
+  // called from drmGetNodeTypeFromFd(). libva calls drmGetNodeTypeFromFd()
+  // during initialization.
+  //
+  // TODO(b/210759684): we probably will need to do this for Linux as well.
+  command_set.set(sandbox::syscall_broker::COMMAND_ACCESS);
+
   AllowAccessToRenderNodes(permissions, /*include_sys_dev_char=*/true,
                            /*read_write=*/false);
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
@@ -91,6 +98,15 @@ bool HardwareVideoDecodingPreSandboxHookForVaapiOnAMD(
   command_set.set(sandbox::syscall_broker::COMMAND_OPEN);
   command_set.set(sandbox::syscall_broker::COMMAND_STAT);
   command_set.set(sandbox::syscall_broker::COMMAND_READLINK);
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  // This is added because libdrm calls access() from drmGetMinorType() that is
+  // called from drmGetNodeTypeFromFd(). libva calls drmGetNodeTypeFromFd()
+  // during initialization.
+  //
+  // TODO(b/210759684): we probably will need to do this for Linux as well.
+  command_set.set(sandbox::syscall_broker::COMMAND_ACCESS);
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
   AllowAccessToRenderNodes(permissions, /*include_sys_dev_char=*/true,
                            /*read_write=*/true);
@@ -152,15 +168,9 @@ bool HardwareVideoDecodingPreSandboxHookForV4L2(
   static const char kDevImageProc0Path[] = "/dev/image-proc0";
   permissions.push_back(BrokerFilePermission::ReadWrite(kDevImageProc0Path));
 
-  // Some platforms (RK3399) need libv4l2 to interact with the kernel V4L2
-  // driver, so we need to load that library prior to entering the sandbox.
-#if BUILDFLAG(USE_LIBV4L2)
-#if defined(__aarch64__)
-  dlopen("/usr/lib64/libv4l2.so", RTLD_NOW | RTLD_GLOBAL | RTLD_NODELETE);
-#else
-  dlopen("/usr/lib/libv4l2.so", RTLD_NOW | RTLD_GLOBAL | RTLD_NODELETE);
-#endif  // defined(__aarch64__)
-#endif  // BUILDFLAG(USE_LIBV4L2)
+  // Files needed for protected DMA allocations.
+  static const char kDmaHeapPath[] = "/dev/dma_heap/restricted_mtk_cma";
+  permissions.push_back(BrokerFilePermission::ReadWrite(kDmaHeapPath));
   return true;
 #else
   NOTREACHED_NORETURN();
@@ -225,8 +235,7 @@ bool HardwareVideoDecodingPreSandboxHook(
   // TODO(b/210759684): should this still be called if |command_set| or
   // |permissions| is empty?
   sandbox::policy::SandboxLinux::GetInstance()->StartBrokerProcess(
-      command_set, permissions, sandbox::policy::SandboxLinux::PreSandboxHook(),
-      options);
+      command_set, permissions, options);
   return true;
 }
 

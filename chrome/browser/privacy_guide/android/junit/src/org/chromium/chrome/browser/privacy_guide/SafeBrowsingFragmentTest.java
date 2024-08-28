@@ -7,19 +7,22 @@ package org.chromium.chrome.browser.privacy_guide;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.os.Bundle;
 import android.view.View;
 
+import androidx.annotation.NonNull;
+import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentFactory;
 import androidx.fragment.app.testing.FragmentScenario;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
@@ -28,12 +31,12 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.JniMocker;
 import org.chromium.base.test.util.UserActionTester;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridge;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridgeJni;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingState;
@@ -44,11 +47,11 @@ import org.chromium.components.browser_ui.widget.RadioButtonWithDescriptionAndAu
 /** JUnit tests of the class {@link SafeBrowsingFragment} */
 @RunWith(BaseRobolectricTestRunner.class)
 public class SafeBrowsingFragmentTest {
-    // TODO(crbug.com/1357003): Use Espresso for view interactions.
+    // TODO(crbug.com/40860773): Use Espresso for view interactions.
     @Rule public JniMocker mMocker = new JniMocker();
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
-    @Rule public TestRule mProcessor = new Features.JUnitProcessor();
 
+    @Mock private Profile mProfile;
     @Mock private SafeBrowsingBridge.Natives mNativeMock;
     @Mock private OneshotSupplierImpl<BottomSheetController> mBottomSheetControllerSupplier;
 
@@ -74,10 +77,24 @@ public class SafeBrowsingFragmentTest {
     }
 
     private void initFragmentWithSBState(@SafeBrowsingState int state) {
-        when(mNativeMock.getSafeBrowsingState()).thenReturn(state);
+        when(mNativeMock.getSafeBrowsingState(eq(mProfile))).thenReturn(state);
         mScenario =
                 FragmentScenario.launchInContainer(
-                        SafeBrowsingFragment.class, Bundle.EMPTY, R.style.Theme_MaterialComponents);
+                        SafeBrowsingFragment.class,
+                        Bundle.EMPTY,
+                        R.style.Theme_MaterialComponents,
+                        new FragmentFactory() {
+                            @NonNull
+                            @Override
+                            public Fragment instantiate(
+                                    @NonNull ClassLoader classLoader, @NonNull String className) {
+                                Fragment fragment = super.instantiate(classLoader, className);
+                                if (fragment instanceof SafeBrowsingFragment) {
+                                    ((SafeBrowsingFragment) fragment).setProfile(mProfile);
+                                }
+                                return fragment;
+                            }
+                        });
         mScenario.onFragment(
                 fragment -> {
                     mEnhancedProtectionButton =
@@ -124,14 +141,14 @@ public class SafeBrowsingFragmentTest {
     public void testSelectEnhanced() {
         initFragmentWithSBState(SafeBrowsingState.STANDARD_PROTECTION);
         mEnhancedProtectionButton.performClick();
-        verify(mNativeMock).setSafeBrowsingState(SafeBrowsingState.ENHANCED_PROTECTION);
+        verify(mNativeMock).setSafeBrowsingState(mProfile, SafeBrowsingState.ENHANCED_PROTECTION);
     }
 
     @Test
     public void testSelectStandard() {
         initFragmentWithSBState(SafeBrowsingState.ENHANCED_PROTECTION);
         mStandardProtectionButton.performClick();
-        verify(mNativeMock).setSafeBrowsingState(SafeBrowsingState.STANDARD_PROTECTION);
+        verify(mNativeMock).setSafeBrowsingState(mProfile, SafeBrowsingState.STANDARD_PROTECTION);
     }
 
     @Test
@@ -171,7 +188,7 @@ public class SafeBrowsingFragmentTest {
         assertFalse(mStandardProtectionButtonFriendlier.isChecked());
         mStandardProtectionButtonFriendlier.performClick();
         assertTrue(mStandardProtectionButtonFriendlier.isChecked());
-        verify(mNativeMock).setSafeBrowsingState(SafeBrowsingState.STANDARD_PROTECTION);
+        verify(mNativeMock).setSafeBrowsingState(mProfile, SafeBrowsingState.STANDARD_PROTECTION);
     }
 
     @Test

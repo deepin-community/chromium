@@ -301,7 +301,7 @@ static int cbs_av1_write_increment(CodedBitstreamContext *ctx, PutBitContext *pb
         return AVERROR(ENOSPC);
 
     if (len > 0)
-        put_bits(pbc, len, (1 << len) - 1 - (value != range_max));
+        put_bits(pbc, len, (1U << len) - 1 - (value != range_max));
 
     CBS_TRACE_WRITE_END_NO_SUBSCRIPTS();
 
@@ -1277,6 +1277,7 @@ static const AVOption cbs_av1_options[] = {
 
 static const AVClass cbs_av1_class = {
     .class_name = "cbs_av1",
+    .item_name  = av_default_item_name,
     .option     = cbs_av1_options,
     .version    = LIBAVUTIL_VERSION_INT,
 };

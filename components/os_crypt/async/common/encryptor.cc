@@ -12,11 +12,21 @@
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/ranges/algorithm.h"
+#include "base/strings/utf_string_conversions.h"
 #include "components/os_crypt/async/common/algorithm.mojom.h"
 #include "components/os_crypt/sync/os_crypt.h"
 #include "crypto/aead.h"
 #include "crypto/random.h"
 #include "mojo/public/cpp/bindings/default_construct_tag.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
+#include <dpapi.h>
+
+#include "components/os_crypt/async/common/encryptor_features.h"
+#endif
 
 namespace os_crypt_async {
 
@@ -27,8 +37,22 @@ constexpr size_t kNonceLength = 96 / 8;  // AES_GCM_NONCE_LENGTH
 }  // namespace
 
 Encryptor::Key::Key(base::span<const uint8_t> key,
-                    const mojom::Algorithm& algorithm)
-    : algorithm_(algorithm), key_(key.begin(), key.end()) {
+                    const mojom::Algorithm& algorithm,
+                    bool encrypted)
+    : algorithm_(algorithm),
+      key_(key.begin(), key.end())
+#if BUILDFLAG(IS_WIN)
+      ,
+      encrypted_(encrypted)
+#endif
+{
+#if BUILDFLAG(IS_WIN)
+  if (base::FeatureList::IsEnabled(features::kProtectEncryptionKey) &&
+      !encrypted_) {
+    encrypted_ = ::CryptProtectMemory(std::data(key_), std::size(key_),
+                                      CRYPTPROTECTMEMORY_SAME_PROCESS);
+  }
+#endif
   if (!algorithm_.has_value()) {
     NOTREACHED_NORETURN();
   }
@@ -40,6 +64,10 @@ Encryptor::Key::Key(base::span<const uint8_t> key,
   }
 }
 
+Encryptor::Key::Key(base::span<const uint8_t> key,
+                    const mojom::Algorithm& algorithm)
+    : Key(key, algorithm, /*encrypted=*/false) {}
+
 Encryptor::Key::Key(mojo::DefaultConstruct::Tag) {}
 
 Encryptor::Key::Key(Key&& other) = default;
@@ -48,7 +76,13 @@ Encryptor::Key& Encryptor::Key::operator=(Key&& other) = default;
 Encryptor::Key::~Key() = default;
 
 Encryptor::Key Encryptor::Key::Clone() const {
-  return Key(key_, *algorithm_);
+#if BUILDFLAG(IS_WIN)
+  Encryptor::Key key(key_, *algorithm_, encrypted_);
+#else
+  Encryptor::Key key(key_, *algorithm_, /*encrypted=*/false);
+#endif
+  key.is_os_crypt_sync_compatible_ = is_os_crypt_sync_compatible_;
+  return key;
 }
 
 Encryptor::Encryptor() = default;
@@ -71,7 +105,22 @@ std::vector<uint8_t> Encryptor::Key::Encrypt(
   switch (*algorithm_) {
     case mojom::Algorithm::kAES256GCM: {
       crypto::Aead aead(crypto::Aead::AES_256_GCM);
-      aead.Init(key_);
+      base::span<const uint8_t> key(key_);
+#if BUILDFLAG(IS_WIN)
+      // Copy. This makes it thread safe. Must outlive aead.
+      std::vector<uint8_t> decrypted_key(key_);
+      absl::Cleanup zero_memory = [&decrypted_key] {
+        ::SecureZeroMemory(decrypted_key.data(), decrypted_key.size());
+      };
+
+      if (encrypted_) {
+        ::CryptUnprotectMemory(std::data(decrypted_key),
+                               std::size(decrypted_key),
+                               CRYPTPROTECTMEMORY_SAME_PROCESS);
+        key = base::span<const uint8_t>(decrypted_key);
+      }
+#endif  // BUILDFLAG(IS_WIN)
+      aead.Init(key);
 
       // Note: can only check this once AEAD is initialized.
       DCHECK_EQ(kNonceLength, aead.NonceLength());
@@ -100,7 +149,22 @@ std::optional<std::vector<uint8_t>> Encryptor::Key::Decrypt(
         return std::nullopt;
       }
       crypto::Aead aead(crypto::Aead::AES_256_GCM);
-      aead.Init(key_);
+
+      base::span<const uint8_t> key(key_);
+#if BUILDFLAG(IS_WIN)
+      // Copy. This makes it thread safe. Must outlive aead.
+      std::vector<uint8_t> decrypted_key(key_);
+      absl::Cleanup zero_memory = [&decrypted_key] {
+        ::SecureZeroMemory(decrypted_key.data(), decrypted_key.size());
+      };
+      if (encrypted_) {
+        ::CryptUnprotectMemory(std::data(decrypted_key),
+                               std::size(decrypted_key),
+                               CRYPTPROTECTMEMORY_SAME_PROCESS);
+        key = base::span<const uint8_t>(decrypted_key);
+      }
+#endif  // BUILDFLAG(IS_WIN)
+      aead.Init(key);
 
       // The nonce is at the start of the ciphertext and must be removed.
       auto nonce = ciphertext.first(kNonceLength);
@@ -198,13 +262,48 @@ std::optional<std::string> Encryptor::DecryptData(
   return std::nullopt;
 }
 
-Encryptor Encryptor::Clone() const {
+bool Encryptor::EncryptString16(const std::u16string& plaintext,
+                                std::string* ciphertext) const {
+  return EncryptString(base::UTF16ToUTF8(plaintext), ciphertext);
+}
+
+bool Encryptor::DecryptString16(const std::string& ciphertext,
+                                std::u16string* plaintext) const {
+  std::string utf8;
+  if (!DecryptString(ciphertext, &utf8)) {
+    return false;
+  }
+
+  *plaintext = base::UTF8ToUTF16(utf8);
+  return true;
+}
+
+Encryptor Encryptor::Clone(Option option) const {
   KeyRing keyring;
   for (const auto& [provider, key] : keys_) {
     keyring.emplace(provider, key.Clone());
   }
 
-  return Encryptor(std::move(keyring), provider_for_encryption_);
+  std::string provider_for_encryption;
+
+  switch (option) {
+    case Option::kNone:
+      provider_for_encryption = provider_for_encryption_;
+      break;
+    case Option::kEncryptSyncCompat:
+      for (const auto& [provider, key] : keyring) {
+        if (key.is_os_crypt_sync_compatible_) {
+          // Keys are already sorted by precedence, so if multiple keys are
+          // compatible, the one with the highest precedence (later in the
+          // keyring) is picked.
+          provider_for_encryption = provider;
+        }
+      }
+      break;
+  }
+
+  // Can be empty provider, if no suitable provider is available.
+  return Encryptor(std::move(keyring), provider_for_encryption);
 }
 
 }  // namespace os_crypt_async

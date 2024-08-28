@@ -18,7 +18,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/side_panel/companion/companion_utils.h"
+#include "chrome/browser/ui/views/side_panel/companion/companion_utils.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model_factory.h"
 #include "chrome/browser/ui/toolbar/toolbar_pref_names.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -39,9 +39,6 @@ PinnedToolbarActionsModel::PinnedToolbarActionsModel(Profile* profile)
 
   // Initialize the model with the current state of the kPinnedActions pref.
   UpdatePinnedActionIds();
-
-  // TODO(b/307350981): Remove when migration is complete.
-  MaybeMigrateSearchCompanionPinnedState();
 }
 
 PinnedToolbarActionsModel::~PinnedToolbarActionsModel() = default;
@@ -210,8 +207,10 @@ void PinnedToolbarActionsModel::UpdatePinnedActionIds() {
   }
 }
 
-void PinnedToolbarActionsModel::MaybeMigrateSearchCompanionPinnedState() {
+void PinnedToolbarActionsModel::MaybeUpdateSearchCompanionPinnedState(
+    bool companion_should_be_default_pinned) {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+
   // Checks if the search companion action id is present beceause in tests this
   // model can be created before the browser actions are initialized if testing
   // factories are added to create this model. This prevents failures when the
@@ -233,7 +232,7 @@ void PinnedToolbarActionsModel::MaybeMigrateSearchCompanionPinnedState() {
 
   if (!pref_service_->GetUserPrefValue(
           prefs::kSidePanelCompanionEntryPinnedToToolbar)) {
-    UpdateSearchCompanionDefaultState();
+    UpdateSearchCompanionDefaultState(companion_should_be_default_pinned);
     return;
   }
 
@@ -243,21 +242,13 @@ void PinnedToolbarActionsModel::MaybeMigrateSearchCompanionPinnedState() {
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 }
 
-void PinnedToolbarActionsModel::UpdateSearchCompanionDefaultState() {
-  // TODO(dljames): Move search companion booleans into helper function for
-  // search companion and this class to use.
-  bool observed_exps_nav =
-      base::FeatureList::IsEnabled(
-          companion::features::internal::
-              kCompanionEnabledByObservingExpsNavigations) &&
-      pref_service_->GetBoolean(companion::kHasNavigatedToExpsSuccessPage);
+const std::vector<actions::ActionId>&
+PinnedToolbarActionsModel::PinnedActionIds() const {
+  return pinned_action_ids_;
+}
 
-  bool companion_should_be_default_pinned =
-      base::FeatureList::IsEnabled(
-          features::kSidePanelCompanionDefaultPinned) ||
-      pref_service_->GetBoolean(companion::kExpsOptInStatusGrantedPref) ||
-      observed_exps_nav;
-
+void PinnedToolbarActionsModel::UpdateSearchCompanionDefaultState(
+    bool companion_should_be_default_pinned) {
   bool is_valid_pin = !Contains(kActionSidePanelShowSearchCompanion) &&
                       companion_should_be_default_pinned;
   bool is_valid_unpin = Contains(kActionSidePanelShowSearchCompanion) &&
@@ -277,11 +268,6 @@ void PinnedToolbarActionsModel::UpdateSearchCompanionDefaultState() {
 
   // Updating the pref causes `UpdatePinnedActionIds()` to be called.
   UpdatePref(updated_pinned_action_ids);
-}
-
-void PinnedToolbarActionsModel::
-    MaybeMigrateSearchCompanionPinnedStateForTesting() {
-  MaybeMigrateSearchCompanionPinnedState();
 }
 
 void PinnedToolbarActionsModel::UpdatePref(

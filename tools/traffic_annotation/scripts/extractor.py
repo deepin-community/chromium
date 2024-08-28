@@ -185,14 +185,14 @@ class Annotation:
     tokenizer = Tokenizer(body, self.file_path, self.line_number)
 
     # unique_id
-    self.unique_id = self._parse_string(tokenizer)
+    self.unique_id = tokenizer.advance('string_literal')
     tokenizer.advance('comma')
 
     # extra_id (Partial/BranchedCompleting)
     if self.type_name in [
         AnnotationType.PARTIAL, AnnotationType.BRANCHED_COMPLETING
     ]:
-      self.extra_id = self._parse_string(tokenizer)
+      self.extra_id = tokenizer.advance('string_literal')
       tokenizer.advance('comma')
 
     # partial_annotation (Completing/BranchedCompleting)
@@ -207,25 +207,10 @@ class Annotation:
       tokenizer.advance('comma')
 
     # proto text
-    self.text = self._parse_string(tokenizer)
+    self.text = tokenizer.advance('string_literal')
 
     # The function call should end here without any more arguments.
     assert tokenizer.advance('right_paren')
-
-  def _parse_string(self, tokenizer: Tokenizer) -> str:
-    """Parse a string value.
-
-    It could be a string literal by itself, or multiple string literals
-    concatenated together. Add a newline to the string for each
-    concatenation."""
-    text = tokenizer.advance('string_literal')
-    while True:
-      # Perform concatenations.
-      if tokenizer.maybe_advance('plus') is None:
-        break
-      text += '\n'
-      text += tokenizer.advance('string_literal')
-    return text
 
 
 def get_line_number_at(string, pos):
@@ -250,7 +235,7 @@ def is_inside_comment(string, pos):
   """
   # Look for "//" on the same line in the reversed string.
   return bool(re.match(r'[^\n]*//', string[pos::-1]))
-  # TODO(crbug/966883): Add multi-line comment support.
+  # TODO(crbug.com/40629071): Add multi-line comment support.
 
 
 def may_contain_annotations(file_path: Path) -> bool:
@@ -374,7 +359,7 @@ def main():
   annotation_definitions = []
 
   # Parse all the files.
-  # TODO(crbug/966883): Do this in parallel.
+  # TODO(crbug.com/40629071): Do this in parallel.
   for file_path in args.file_paths:
     if not args.no_filter and file_path.resolve() not in compdb_files:
       continue

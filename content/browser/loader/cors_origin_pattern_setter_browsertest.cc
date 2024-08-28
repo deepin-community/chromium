@@ -262,7 +262,7 @@ class NewContextCorsOriginPatternSetterBrowserTest
     : public CorsOriginPatternSetterBrowserTest {
  protected:
   void SetUpOnMainThread() override {
-    browser_context_ = std::make_unique<TestBrowserContext>();
+    browser_context_ = CreateTestBrowserContext();
     CorsOriginPatternSetterBrowserTest::SetUpOnMainThread();
   }
 
@@ -272,8 +272,8 @@ class NewContextCorsOriginPatternSetterBrowserTest
   }
 
   void TearDown() override {
-    content::GetUIThreadTaskRunner({})->DeleteSoon(FROM_HERE,
-                                                   browser_context_.release());
+    GetUIThreadTaskRunner({})->DeleteSoon(FROM_HERE,
+                                          browser_context_.release());
     CorsOriginPatternSetterBrowserTest::TearDown();
   }
 

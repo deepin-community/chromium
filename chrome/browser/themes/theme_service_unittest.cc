@@ -21,6 +21,7 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/browser/extensions/unpacked_installer.h"
+#include "chrome/browser/search/background/ntp_custom_background_service_factory.h"
 #include "chrome/browser/themes/custom_theme_supplier.h"
 #include "chrome/browser/themes/test/theme_service_changed_waiter.h"
 #include "chrome/browser/themes/theme_properties.h"
@@ -29,7 +30,6 @@
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/color/chrome_color_mixers.h"
 #include "chrome/common/buildflags.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -52,7 +52,6 @@
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/native_theme/test_native_theme.h"
-#include "ui/views/views_features.h"
 
 #if BUILDFLAG(IS_LINUX)
 #include "ui/linux/linux_ui.h"
@@ -166,7 +165,7 @@ class ThemeServiceTest : public extensions::ExtensionServiceTestBase {
 
     // Make sure RegisterClient calls for storage are finished to avoid flaky
     // crashes in QuotaManagerImpl::RegisterClient on test shutdown.
-    // TODO(crbug.com/1182630) : Remove this when 1182630 is fixed.
+    // TODO(crbug.com/40170877) : Remove this when 1182630 is fixed.
     extensions::util::GetStoragePartitionForExtensionId(extenson_id, profile());
     task_environment()->RunUntilIdle();
 
@@ -319,7 +318,7 @@ class ColorProviderTest
   static std::string ColorSchemeToString(ui::NativeTheme::ColorScheme scheme) {
     switch (scheme) {
       case ui::NativeTheme::ColorScheme::kDefault:
-        NOTREACHED()
+        NOTREACHED_IN_MIGRATION()
             << "Cannot unit test kDefault as it depends on machine state.";
         return "InvalidColorScheme";
       case ui::NativeTheme::ColorScheme::kLight:
@@ -461,7 +460,7 @@ TEST_F(ThemeServiceTest, ThemeUpgrade) {
 }
 
 TEST_F(ThemeServiceTest, NTPLogoAlternate) {
-  // TODO(https://crbug.com/1039006): Fix ScopedTempDir deletion errors on Win.
+  // TODO(crbug.com/40666609): Fix ScopedTempDir deletion errors on Win.
 
   const ui::ThemeProvider& theme_provider =
       ThemeService::GetThemeProviderForProfile(profile());
@@ -520,7 +519,6 @@ TEST_F(ThemeServiceTest, UninstallThemeWhenNoReinstallers) {
     test::ThemeServiceChangedWaiter waiter(theme_service_);
     reinstaller->Reinstall();
     waiter.WaitForThemeChanged();
-    base::RunLoop().RunUntilIdle();
     EXPECT_TRUE(IsExtensionDisabled(scoper2.extension_id()));
     EXPECT_EQ(scoper1.extension_id(), theme_service_->GetThemeID());
   }
@@ -582,10 +580,7 @@ TEST_F(ThemeServiceTest, UseDefaultTheme_DisableExtensionTest) {
 
 // Test that setting theme to default resets the NTP theme as well.
 TEST_F(ThemeServiceTest, UseDefaultTheme_DisableNtpThemeTest) {
-  // Turn on Customize Chrome Side Panel.
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kCustomizeChromeSidePanel);
-
+  NtpCustomBackgroundServiceFactory::GetForProfile(profile_.get());
   base::Value::Dict test_background_info;
   test_background_info.Set("test_data", "foo");
   pref_service_->SetDict(prefs::kNtpCustomBackgroundDict,
@@ -604,7 +599,7 @@ TEST_F(ThemeServiceTest, UseDefaultTheme_DisableNtpThemeTest) {
 }
 
 TEST_P(ColorProviderTest, OmniboxContrast) {
-  // TODO(crbug.com/1336315): Windows platform high contrast colors are
+  // TODO(crbug.com/40847629): Windows platform high contrast colors are
   // not sufficiently high-contrast to pass this test.
 #if BUILDFLAG(IS_WIN)
   if (std::get<ContrastMode>(GetParam()) == ContrastMode::kHighContrast) {
@@ -612,7 +607,7 @@ TEST_P(ColorProviderTest, OmniboxContrast) {
   }
 #endif
 #if BUILDFLAG(IS_LINUX)
-  // TODO(crbug/1521414): Linux platform native dark mode colors aren't
+  // TODO(crbug.com/41494383): Linux platform native dark mode colors aren't
   //                      sufficiently high contrast to pass.
   if (std::get<SystemTheme>(GetParam()) == SystemTheme::kCustom &&
       std::get<ui::NativeTheme::ColorScheme>(GetParam()) ==
@@ -689,7 +684,7 @@ TEST_P(ColorProviderTest, OmniboxContrast) {
     check_sufficient_contrast(ids[0], ids[1]);
   }
 #if !BUILDFLAG(USE_GTK) && !BUILDFLAG(IS_CHROMEOS_LACROS)
-  // TODO(crbug.com/1336796): GTK and LaCrOS do not have a sufficiently
+  // TODO(crbug.com/40847971): GTK and LaCrOS do not have a sufficiently
   // high-contrast selected row color to pass this test.
   if (std::get<ContrastMode>(GetParam()) == ContrastMode::kHighContrast) {
     check_sufficient_contrast(kColorOmniboxResultsBackgroundSelected,
@@ -940,17 +935,7 @@ TEST_F(ThemeServiceTest, SetUseDeviceTheme) {
   EXPECT_FALSE(theme_service_->UsingDeviceTheme());
 }
 
-class BrowserColorSchemeTest : public ThemeServiceTest,
-                               public testing::WithParamInterface<bool> {
- protected:
-  BrowserColorSchemeTest() {
-    feature_list_.InitWithFeatureState(features::kChromeRefresh2023,
-                                       GetParam());
-  }
-};
-
-// Sets and gets browser color scheme.
-TEST_P(BrowserColorSchemeTest, SetBrowserColorScheme) {
+TEST_F(ThemeServiceTest, SetBrowserColorScheme) {
   // Default without anything explicitly set should be kSystem.
   ThemeService::BrowserColorScheme color_scheme =
       theme_service_->GetBrowserColorScheme();
@@ -961,15 +946,104 @@ TEST_P(BrowserColorSchemeTest, SetBrowserColorScheme) {
       ThemeService::BrowserColorScheme::kLight);
   color_scheme = theme_service_->GetBrowserColorScheme();
 
-  // If not running ChromeRefresh2023 the pref should always track the system's
-  // color scheme.
-  if (features::IsChromeRefresh2023()) {
-    EXPECT_EQ(color_scheme, ThemeService::BrowserColorScheme::kLight);
-  } else {
-    EXPECT_EQ(color_scheme, ThemeService::BrowserColorScheme::kSystem);
-  }
+  EXPECT_EQ(color_scheme, ThemeService::BrowserColorScheme::kLight);
 }
 
-INSTANTIATE_TEST_SUITE_P(All, BrowserColorSchemeTest, testing::Bool());
+TEST_F(ThemeServiceTest, ReinstallerRecoversExtension) {
+  ThemeScoper scoper1 = LoadUnpackedTheme();
+  ASSERT_EQ(scoper1.extension_id(), theme_service_->GetThemeID());
+
+  std::unique_ptr<ThemeService::ThemeReinstaller> reinstaller =
+      theme_service_->BuildReinstallerForCurrentTheme();
+
+  // Install another theme.
+  ThemeScoper scoper2 = LoadUnpackedTheme();
+
+  EXPECT_TRUE(IsExtensionDisabled(scoper1.extension_id()));
+  EXPECT_EQ(scoper2.extension_id(), theme_service_->GetThemeID());
+
+  test::ThemeServiceChangedWaiter waiter(theme_service_);
+  reinstaller->Reinstall();
+  waiter.WaitForThemeChanged();
+
+  EXPECT_TRUE(IsExtensionDisabled(scoper2.extension_id()));
+  EXPECT_EQ(scoper1.extension_id(), theme_service_->GetThemeID());
+}
+
+TEST_F(ThemeServiceTest, ReinstallerRecoversAutogeneratedColor) {
+  theme_service_->BuildAutogeneratedThemeFromColor(SK_ColorBLUE);
+  ASSERT_EQ(ThemeService::kAutogeneratedThemeID, theme_service_->GetThemeID());
+  ASSERT_EQ(theme_service_->GetAutogeneratedThemeColor(), SK_ColorBLUE);
+
+  std::unique_ptr<ThemeService::ThemeReinstaller> reinstaller =
+      theme_service_->BuildReinstallerForCurrentTheme();
+
+  // Install theme.
+  ThemeScoper scoper = LoadUnpackedTheme();
+  EXPECT_EQ(scoper.extension_id(), theme_service_->GetThemeID());
+
+  test::ThemeServiceChangedWaiter waiter(theme_service_);
+  reinstaller->Reinstall();
+  waiter.WaitForThemeChanged();
+
+  EXPECT_TRUE(IsExtensionDisabled(scoper.extension_id()));
+  EXPECT_EQ(ThemeService::kAutogeneratedThemeID, theme_service_->GetThemeID());
+  EXPECT_EQ(theme_service_->GetAutogeneratedThemeColor(), SK_ColorBLUE);
+}
+
+TEST_F(ThemeServiceTest, ReinstallerRecoversUserColor) {
+  theme_service_->SetUserColorAndBrowserColorVariant(
+      SK_ColorGREEN, ui::mojom::BrowserColorVariant::kTonalSpot);
+  ASSERT_EQ(ThemeService::kUserColorThemeID, theme_service_->GetThemeID());
+  ASSERT_EQ(theme_service_->GetUserColor(), SK_ColorGREEN);
+  ASSERT_EQ(theme_service_->GetBrowserColorVariant(),
+            ui::mojom::BrowserColorVariant::kTonalSpot);
+  ASSERT_EQ(theme_service_->GetAutogeneratedThemeColor(), SK_ColorTRANSPARENT);
+
+  std::unique_ptr<ThemeService::ThemeReinstaller> reinstaller =
+      theme_service_->BuildReinstallerForCurrentTheme();
+
+  // Create autogenerated theme.
+  theme_service_->BuildAutogeneratedThemeFromColor(SK_ColorBLUE);
+  EXPECT_EQ(ThemeService::kAutogeneratedThemeID, theme_service_->GetThemeID());
+  EXPECT_EQ(theme_service_->GetAutogeneratedThemeColor(), SK_ColorBLUE);
+
+  test::ThemeServiceChangedWaiter waiter(theme_service_);
+  reinstaller->Reinstall();
+  waiter.WaitForThemeChanged();
+
+  EXPECT_EQ(ThemeService::kUserColorThemeID, theme_service_->GetThemeID());
+  EXPECT_EQ(theme_service_->GetUserColor(), SK_ColorGREEN);
+  EXPECT_EQ(theme_service_->GetBrowserColorVariant(),
+            ui::mojom::BrowserColorVariant::kTonalSpot);
+  EXPECT_EQ(theme_service_->GetAutogeneratedThemeColor(), SK_ColorTRANSPARENT);
+}
+
+TEST_F(ThemeServiceTest, ReinstallerRecoversDefaultTheme) {
+  // Default should be empty and system.
+  ASSERT_EQ(theme_service_->GetUserColor(), std::nullopt);
+  ASSERT_EQ(theme_service_->GetBrowserColorVariant(),
+            ui::mojom::BrowserColorVariant::kSystem);
+
+  std::unique_ptr<ThemeService::ThemeReinstaller> reinstaller =
+      theme_service_->BuildReinstallerForCurrentTheme();
+
+  // Set user color.
+  theme_service_->SetUserColorAndBrowserColorVariant(
+      SK_ColorGREEN, ui::mojom::BrowserColorVariant::kTonalSpot);
+  EXPECT_EQ(ThemeService::kUserColorThemeID, theme_service_->GetThemeID());
+  EXPECT_EQ(theme_service_->GetUserColor(), SK_ColorGREEN);
+  EXPECT_EQ(theme_service_->GetBrowserColorVariant(),
+            ui::mojom::BrowserColorVariant::kTonalSpot);
+
+  test::ThemeServiceChangedWaiter waiter(theme_service_);
+  reinstaller->Reinstall();
+  waiter.WaitForThemeChanged();
+
+  EXPECT_EQ(ThemeHelper::kDefaultThemeID, theme_service_->GetThemeID());
+  EXPECT_EQ(theme_service_->GetUserColor(), std::nullopt);
+  EXPECT_EQ(theme_service_->GetBrowserColorVariant(),
+            ui::mojom::BrowserColorVariant::kSystem);
+}
 
 }  // namespace theme_service_internal

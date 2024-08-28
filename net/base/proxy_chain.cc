@@ -9,6 +9,7 @@
 
 #include "base/check.h"
 #include "base/no_destructor.h"
+#include "base/pickle.h"
 #include "base/ranges/algorithm.h"
 #include "base/strings/stringprintf.h"
 #include "net/base/proxy_server.h"
@@ -41,6 +42,36 @@ ProxyChain::ProxyChain(std::vector<ProxyServer> proxy_server_list)
   }
 }
 
+bool ProxyChain::InitFromPickle(base::PickleIterator* pickle_iter) {
+  if (!pickle_iter->ReadInt(&ip_protection_chain_id_)) {
+    return false;
+  }
+  size_t chain_length = 0;
+  if (!pickle_iter->ReadLength(&chain_length)) {
+    return false;
+  }
+
+  std::vector<ProxyServer> proxy_server_list;
+  for (size_t i = 0; i < chain_length; ++i) {
+    proxy_server_list.push_back(ProxyServer::CreateFromPickle(pickle_iter));
+  }
+  proxy_server_list_ = std::move(proxy_server_list);
+  return true;
+}
+
+void ProxyChain::Persist(base::Pickle* pickle) const {
+  DCHECK(IsValid());
+  pickle->WriteInt(ip_protection_chain_id_);
+  if (length() > static_cast<size_t>(INT_MAX) - 1) {
+    pickle->WriteInt(0);
+    return;
+  }
+  pickle->WriteInt(static_cast<int>(length()));
+  for (const auto& proxy_server : proxy_server_list_.value()) {
+    proxy_server.Persist(pickle);
+  }
+}
+
 const ProxyServer& ProxyChain::GetProxyServer(size_t chain_index) const {
   DCHECK(IsValid());
   CHECK_LT(chain_index, proxy_server_list_.value().size());
@@ -59,6 +90,14 @@ std::pair<ProxyChain, const ProxyServer&> ProxyChain::SplitLast() const {
       ProxyChain({proxy_server_list_->begin(), proxy_server_list_->end() - 1},
                  ip_protection_chain_id_);
   return std::make_pair(new_chain, std::ref(proxy_server_list_->back()));
+}
+
+ProxyChain ProxyChain::Prefix(size_t len) const {
+  DCHECK(IsValid());
+  DCHECK_LE(len, length());
+  return ProxyChain(
+      {proxy_server_list_->begin(), proxy_server_list_->begin() + len},
+      ip_protection_chain_id_);
 }
 
 const ProxyServer& ProxyChain::First() const {
@@ -106,18 +145,38 @@ bool ProxyChain::IsValidInternal() const {
   if (!proxy_server_list_.has_value()) {
     return false;
   }
-  if (is_single_proxy()) {
-    return proxy_server_list_.value().at(0).is_valid();
+  if (is_direct()) {
+    return true;
   }
-  bool all_https = base::ranges::all_of(
-      proxy_server_list_.value(), [](const auto& proxy_server) {
-        return proxy_server.is_valid() && proxy_server.is_https();
-      });
-  bool all_quic = base::ranges::all_of(
-      proxy_server_list_.value(), [](const auto& proxy_server) {
-        return proxy_server.is_valid() && proxy_server.is_quic();
-      });
-  return all_https || (all_quic && is_for_ip_protection());
+  if (is_single_proxy()) {
+    bool is_valid = proxy_server_list_.value().at(0).is_valid();
+    if (proxy_server_list_.value().at(0).is_quic()) {
+      is_valid = is_valid && is_for_ip_protection();
+    }
+    return is_valid;
+  }
+  DCHECK(is_multi_proxy());
+
+  // Verify that the chain is zero or more SCHEME_QUIC servers followed by zero
+  // or more SCHEME_HTTPS servers.
+  bool seen_quic = false;
+  bool seen_https = false;
+  for (const auto& proxy_server : proxy_server_list_.value()) {
+    if (proxy_server.is_quic()) {
+      if (seen_https) {
+        // SCHEME_QUIC cannot follow SCHEME_HTTPS.
+        return false;
+      }
+      seen_quic = true;
+    } else if (proxy_server.is_https()) {
+      seen_https = true;
+    } else {
+      return false;
+    }
+  }
+
+  // QUIC is only allowed for IP protection.
+  return !seen_quic || is_for_ip_protection();
 }
 
 std::ostream& operator<<(std::ostream& os, const ProxyChain& proxy_chain) {

@@ -42,6 +42,7 @@
 #include "src/tint/lang/core/type/f16.h"
 #include "src/tint/lang/core/type/f32.h"
 #include "src/tint/lang/core/type/i32.h"
+#include "src/tint/lang/core/type/input_attachment.h"
 #include "src/tint/lang/core/type/matrix.h"
 #include "src/tint/lang/core/type/multisampled_texture.h"
 #include "src/tint/lang/core/type/sampled_texture.h"
@@ -49,11 +50,13 @@
 #include "src/tint/lang/core/type/u32.h"
 #include "src/tint/lang/core/type/vector.h"
 #include "src/tint/lang/core/type/void.h"
+#include "src/tint/lang/wgsl/ast/blend_src_attribute.h"
 #include "src/tint/lang/wgsl/ast/bool_literal_expression.h"
 #include "src/tint/lang/wgsl/ast/call_expression.h"
 #include "src/tint/lang/wgsl/ast/float_literal_expression.h"
 #include "src/tint/lang/wgsl/ast/id_attribute.h"
 #include "src/tint/lang/wgsl/ast/identifier.h"
+#include "src/tint/lang/wgsl/ast/input_attachment_index_attribute.h"
 #include "src/tint/lang/wgsl/ast/int_literal_expression.h"
 #include "src/tint/lang/wgsl/ast/interpolate_attribute.h"
 #include "src/tint/lang/wgsl/ast/location_attribute.h"
@@ -119,8 +122,6 @@ std::tuple<ComponentType, CompositionType> CalculateComponentAndComposition(
             }
             default: {
                 TINT_UNREACHABLE() << "unhandled composition type";
-                compositionType = CompositionType::kUnknown;
-                break;
             }
         }
     } else {
@@ -170,17 +171,16 @@ EntryPoint Inspector::GetEntryPoint(const tint::ast::Function* func) {
         default: {
             TINT_UNREACHABLE() << "invalid pipeline stage for entry point '" << entry_point.name
                                << "'";
-            break;
         }
     }
 
     entry_point.push_constant_size = ComputePushConstantSize(func);
 
     for (auto* param : sem->Parameters()) {
-        AddEntryPointInOutVariables(param->Declaration()->name->symbol.Name(),
-                                    param->Declaration()->name->symbol.Name(), param->Type(),
-                                    param->Declaration()->attributes, param->Attributes().location,
-                                    param->Attributes().color, entry_point.input_variables);
+        AddEntryPointInOutVariables(
+            param->Declaration()->name->symbol.Name(), param->Declaration()->name->symbol.Name(),
+            param->Type(), param->Declaration()->attributes, param->Attributes().location,
+            param->Attributes().color, /* @blend_src */ std::nullopt, entry_point.input_variables);
 
         entry_point.input_position_used |= ContainsBuiltin(
             core::BuiltinValue::kPosition, param->Type(), param->Declaration()->attributes);
@@ -201,7 +201,7 @@ EntryPoint Inspector::GetEntryPoint(const tint::ast::Function* func) {
     if (!sem->ReturnType()->Is<core::type::Void>()) {
         AddEntryPointInOutVariables("<retval>", "", sem->ReturnType(), func->return_type_attributes,
                                     sem->ReturnLocation(), /* @color */ std::nullopt,
-                                    entry_point.output_variables);
+                                    /* @blend_src */ std::nullopt, entry_point.output_variables);
 
         entry_point.output_sample_mask_used = ContainsBuiltin(
             core::BuiltinValue::kSampleMask, sem->ReturnType(), func->return_type_attributes);
@@ -341,6 +341,7 @@ std::vector<ResourceBinding> Inspector::GetResourceBindings(const std::string& e
              &Inspector::GetDepthTextureResourceBindings,
              &Inspector::GetDepthMultisampledTextureResourceBindings,
              &Inspector::GetExternalTextureResourceBindings,
+             &Inspector::GetInputAttachmentResourceBindings,
          }) {
         AppendResourceBindings(&result, (this->*fn)(entry_point));
     }
@@ -506,6 +507,45 @@ std::vector<ResourceBinding> Inspector::GetExternalTextureResourceBindings(
                                       ResourceBinding::ResourceType::kExternalTexture);
 }
 
+std::vector<ResourceBinding> Inspector::GetInputAttachmentResourceBindings(
+    const std::string& entry_point) {
+    auto* func = FindEntryPointByName(entry_point);
+    if (!func) {
+        return {};
+    }
+
+    std::vector<ResourceBinding> result;
+    auto* func_sem = program_.Sem().Get(func);
+    for (auto& ref : func_sem->TransitivelyReferencedVariablesOfType(
+             &tint::TypeInfo::Of<core::type::InputAttachment>())) {
+        auto* var = ref.first;
+        auto binding_info = ref.second;
+
+        ResourceBinding entry;
+        entry.resource_type = ResourceBinding::ResourceType::kInputAttachment;
+        entry.bind_group = binding_info.group;
+        entry.binding = binding_info.binding;
+
+        auto* sem_var = var->As<sem::GlobalVariable>();
+        TINT_ASSERT(sem_var);
+        TINT_ASSERT(sem_var->Attributes().input_attachment_index);
+        entry.input_attachmnt_index = sem_var->Attributes().input_attachment_index.value();
+
+        auto* input_attachment_type = var->Type()->UnwrapRef()->As<core::type::InputAttachment>();
+        auto* base_type = input_attachment_type->type();
+        entry.sampled_kind = BaseTypeToSampledKind(base_type);
+
+        entry.variable_name = var->Declaration()->name->symbol.Name();
+
+        entry.dim =
+            TypeTextureDimensionToResourceBindingTextureDimension(input_attachment_type->dim());
+
+        result.push_back(entry);
+    }
+
+    return result;
+}
+
 VectorRef<SamplerTexturePair> Inspector::GetSamplerTextureUses(const std::string& entry_point) {
     auto* func = FindEntryPointByName(entry_point);
     if (!func) {
@@ -571,12 +611,12 @@ std::vector<std::pair<std::string, Source>> Inspector::GetEnableDirectives() {
 const ast::Function* Inspector::FindEntryPointByName(const std::string& name) {
     auto* func = program_.AST().Functions().Find(program_.Symbols().Get(name));
     if (!func) {
-        diagnostics_.AddError(diag::System::Inspector, name + " was not found!");
+        diagnostics_.AddError(Source{}) << name << " was not found!";
         return nullptr;
     }
 
     if (!func->IsEntryPoint()) {
-        diagnostics_.AddError(diag::System::Inspector, name + " is not an entry point!");
+        diagnostics_.AddError(Source{}) << name << " is not an entry point!";
         return nullptr;
     }
 
@@ -589,6 +629,7 @@ void Inspector::AddEntryPointInOutVariables(std::string name,
                                             VectorRef<const ast::Attribute*> attributes,
                                             std::optional<uint32_t> location,
                                             std::optional<uint32_t> color,
+                                            std::optional<uint32_t> blend_src,
                                             std::vector<StageVariable>& variables) const {
     // Skip builtins.
     if (ast::HasAttribute<ast::BuiltinAttribute>(attributes)) {
@@ -603,7 +644,7 @@ void Inspector::AddEntryPointInOutVariables(std::string name,
             AddEntryPointInOutVariables(name + "." + member->Name().Name(), member->Name().Name(),
                                         member->Type(), member->Declaration()->attributes,
                                         member->Attributes().location, member->Attributes().color,
-                                        variables);
+                                        member->Attributes().blend_src, variables);
         }
         return;
     }
@@ -616,11 +657,12 @@ void Inspector::AddEntryPointInOutVariables(std::string name,
     std::tie(stage_variable.component_type, stage_variable.composition_type) =
         CalculateComponentAndComposition(type);
 
+    stage_variable.attributes.blend_src = blend_src;
     stage_variable.attributes.location = location;
     stage_variable.attributes.color = color;
 
     std::tie(stage_variable.interpolation_type, stage_variable.interpolation_sampling) =
-        CalculateInterpolationData(type, attributes);
+        CalculateInterpolationData(attributes);
 
     variables.push_back(stage_variable);
 }
@@ -645,7 +687,7 @@ bool Inspector::ContainsBuiltin(core::BuiltinValue builtin,
     if (!builtin_declaration) {
         return false;
     }
-    return program_.Sem().Get(builtin_declaration)->Value() == builtin;
+    return builtin_declaration->builtin == builtin;
 }
 
 std::vector<ResourceBinding> Inspector::GetStorageBufferResourceBindingsImpl(
@@ -846,33 +888,22 @@ void Inspector::GenerateSamplerTargets() {
 }
 
 std::tuple<InterpolationType, InterpolationSampling> Inspector::CalculateInterpolationData(
-    const core::type::Type* type,
     VectorRef<const ast::Attribute*> attributes) const {
     auto* interpolation_attribute = ast::GetAttribute<ast::InterpolateAttribute>(attributes);
-    if (type->is_integer_scalar_or_vector()) {
-        return {InterpolationType::kFlat, InterpolationSampling::kNone};
-    }
 
     if (!interpolation_attribute) {
         return {InterpolationType::kPerspective, InterpolationSampling::kCenter};
     }
 
-    auto& sem = program_.Sem();
+    auto ast_interpolation_type = interpolation_attribute->interpolation.type;
+    auto ast_sampling_type = interpolation_attribute->interpolation.sampling;
 
-    auto ast_interpolation_type =
-        sem.Get<sem::BuiltinEnumExpression<core::InterpolationType>>(interpolation_attribute->type)
-            ->Value();
-
-    auto ast_sampling_type = core::InterpolationSampling::kUndefined;
-    if (interpolation_attribute->sampling) {
-        ast_sampling_type = sem.Get<sem::BuiltinEnumExpression<core::InterpolationSampling>>(
-                                   interpolation_attribute->sampling)
-                                ->Value();
-    }
-
-    if (ast_interpolation_type != core::InterpolationType::kFlat &&
-        ast_sampling_type == core::InterpolationSampling::kUndefined) {
-        ast_sampling_type = core::InterpolationSampling::kCenter;
+    if (ast_sampling_type == core::InterpolationSampling::kUndefined) {
+        if (ast_interpolation_type == core::InterpolationType::kFlat) {
+            ast_sampling_type = core::InterpolationSampling::kFirst;
+        } else {
+            ast_sampling_type = core::InterpolationSampling::kCenter;
+        }
     }
 
     auto interpolation_type = InterpolationType::kUnknown;
@@ -903,6 +934,12 @@ std::tuple<InterpolationType, InterpolationSampling> Inspector::CalculateInterpo
             break;
         case core::InterpolationSampling::kSample:
             sampling_type = InterpolationSampling::kSample;
+            break;
+        case core::InterpolationSampling::kFirst:
+            sampling_type = InterpolationSampling::kFirst;
+            break;
+        case core::InterpolationSampling::kEither:
+            sampling_type = InterpolationSampling::kEither;
             break;
     }
 
@@ -1028,21 +1065,6 @@ std::vector<Inspector::LevelSampleInfo> Inspector::GetTextureQueries(const std::
 
     std::unordered_set<BindingPoint> seen = {};
 
-    auto sample_type_for_call_and_type = [](wgsl::BuiltinFn builtin, const core::type::Type* ty) {
-        if (builtin == wgsl::BuiltinFn::kTextureNumLevels) {
-            return TextureQueryType::kTextureNumLevels;
-        }
-        if (builtin == wgsl::BuiltinFn::kTextureLoad) {
-            if (!ty->UnwrapRef()
-                     ->IsAnyOf<core::type::MultisampledTexture,
-                               core::type::DepthMultisampledTexture>()) {
-                return TextureQueryType::kTextureNumLevels;
-            }
-        }
-
-        return TextureQueryType::kTextureNumSamples;
-    };
-
     Hashmap<const sem::Function*, Hashmap<const ast::Parameter*, TextureQueryType, 4>, 8>
         fn_to_data;
 
@@ -1093,25 +1115,62 @@ std::vector<Inspector::LevelSampleInfo> Inspector::GetTextureQueries(const std::
             tint::Switch(
                 call->Target(),
                 [&](const sem::BuiltinFn* builtin) {
-                    if (builtin->Fn() != wgsl::BuiltinFn::kTextureNumLevels &&
-                        builtin->Fn() != wgsl::BuiltinFn::kTextureNumSamples &&
-                        builtin->Fn() != wgsl::BuiltinFn::kTextureLoad) {
-                        return;
+                    auto queryTextureBuiltin = [&](TextureQueryType type,
+                                                   const sem::Call* builtin_call,
+                                                   const sem::Variable* texture_sem = nullptr) {
+                        TINT_ASSERT(builtin_call);
+                        if (!texture_sem) {
+                            auto* texture_expr = builtin_call->Declaration()->args[0];
+                            texture_sem = sem.GetVal(texture_expr)->RootIdentifier();
+                        }
+                        tint::Switch(
+                            texture_sem,  //
+                            [&](const sem::GlobalVariable* global) {
+                                save_if_needed(global, type);
+                            },
+                            [&](const sem::Parameter* param) {
+                                record_function_param(fn, param->Declaration(), type);
+                            },
+                            TINT_ICE_ON_NO_MATCH);
+                    };
+
+                    switch (builtin->Fn()) {
+                        case wgsl::BuiltinFn::kTextureNumLevels: {
+                            queryTextureBuiltin(TextureQueryType::kTextureNumLevels, call);
+                            break;
+                        }
+                        case wgsl::BuiltinFn::kTextureDimensions: {
+                            if (call->Declaration()->args.Length() <= 1) {
+                                // When textureDimension only takes a texture as the input,
+                                // it doesn't require calls to textureNumLevels to clamp mip levels.
+                                return;
+                            }
+                            queryTextureBuiltin(TextureQueryType::kTextureNumLevels, call);
+                            break;
+                        }
+                        case wgsl::BuiltinFn::kTextureLoad: {
+                            auto* texture_expr = call->Declaration()->args[0];
+                            auto* texture_sem = sem.GetVal(texture_expr)->RootIdentifier();
+                            TINT_ASSERT(texture_sem);
+                            if (texture_sem->Type()
+                                    ->UnwrapRef()
+                                    ->IsAnyOf<core::type::MultisampledTexture,
+                                              core::type::DepthMultisampledTexture>()) {
+                                // When textureLoad takes a multisampled texture as the input,
+                                // it doesn't require to query the mip level.
+                                return;
+                            }
+                            queryTextureBuiltin(TextureQueryType::kTextureNumLevels, call,
+                                                texture_sem);
+                            break;
+                        }
+                        case wgsl::BuiltinFn::kTextureNumSamples: {
+                            queryTextureBuiltin(TextureQueryType::kTextureNumSamples, call);
+                            break;
+                        }
+                        default:
+                            return;
                     }
-
-                    auto* texture_expr = call->Declaration()->args[0];
-                    auto* texture_sem = sem.GetVal(texture_expr)->RootIdentifier();
-                    TINT_ASSERT(texture_sem);
-
-                    auto type = sample_type_for_call_and_type(builtin->Fn(), texture_sem->Type());
-
-                    tint::Switch(
-                        texture_sem,  //
-                        [&](const sem::GlobalVariable* global) { save_if_needed(global, type); },
-                        [&](const sem::Parameter* param) {
-                            record_function_param(fn, param->Declaration(), type);
-                        },
-                        TINT_ICE_ON_NO_MATCH);
                 },
                 [&](const sem::Function* func) {
                     // A function call, check to see if any params needed to be tracked back to a

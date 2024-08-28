@@ -29,7 +29,6 @@
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_container.h"
 #include "ash/system/tray/tray_event_filter.h"
-#include "ash/user_education/user_education_class_properties.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -604,16 +603,19 @@ void TrayBackgroundView::AboutToRequestFocusFromTabTraversal(bool reverse) {
 
 void TrayBackgroundView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   views::Button::GetAccessibleNodeData(node_data);
-  node_data->SetName(GetAccessibleNameForTray());
+  // Override the name set in `LabelButton::SetText`.
+  // TODO(crbug.com/325137417): Remove this once the accessible name is set in
+  // the cache as soon as the name is updated.
+  GetViewAccessibility().SetName(GetAccessibleNameForTray());
 
   if (LockScreen::HasInstance()) {
-    GetViewAccessibility().OverrideNextFocus(LockScreen::Get()->widget());
+    GetViewAccessibility().SetNextFocus(LockScreen::Get()->widget());
   }
 
   Shelf* shelf = Shelf::ForWindow(GetWidget()->GetNativeWindow());
   ShelfWidget* shelf_widget = shelf->shelf_widget();
-  GetViewAccessibility().OverridePreviousFocus(shelf_widget->hotseat_widget());
-  GetViewAccessibility().OverrideNextFocus(shelf_widget->navigation_widget());
+  GetViewAccessibility().SetPreviousFocus(shelf_widget->hotseat_widget());
+  GetViewAccessibility().SetNextFocus(shelf_widget->navigation_widget());
 }
 
 void TrayBackgroundView::ChildPreferredSizeChanged(views::View* child) {
@@ -686,12 +688,6 @@ void TrayBackgroundView::UpdateBackground() {
     layer()->SetColor(ShelfConfig::Get()->GetShelfControlButtonColor(widget));
   }
   UpdateBackgroundColor(is_active_);
-
-  // Update ping insets when background insets change so that ping animations
-  // emanate from user perceived bounds instead of actual bounds.
-  if (features::IsUserEducationEnabled()) {
-    SetProperty(kPingInsetsKey, GetBackgroundInsets());
-  }
 }
 
 void TrayBackgroundView::OnHideAnimationStarted() {
@@ -752,106 +748,6 @@ void TrayBackgroundView::FadeInAnimation() {
       .SetDuration(kAnimationDurationForVisibilityMs)
       .SetOpacity(this, 1.0f)
       .SetTransform(this, gfx::Transform());
-}
-
-void TrayBackgroundView::BounceInAnimation() {
-  gfx::Vector2dF bounce_up_location;
-  gfx::Vector2dF bounce_down_location;
-
-  switch (shelf_->alignment()) {
-    case ShelfAlignment::kLeft:
-      bounce_up_location = gfx::Vector2dF(kAnimationBounceUpDistance, 0);
-      bounce_down_location = gfx::Vector2dF(-kAnimationBounceDownDistance, 0);
-      break;
-    case ShelfAlignment::kRight:
-      bounce_up_location = gfx::Vector2dF(-kAnimationBounceUpDistance, 0);
-      bounce_down_location = gfx::Vector2dF(kAnimationBounceDownDistance, 0);
-      break;
-    case ShelfAlignment::kBottom:
-    case ShelfAlignment::kBottomLocked:
-    default:
-      bounce_up_location = gfx::Vector2dF(0, -kAnimationBounceUpDistance);
-      bounce_down_location = gfx::Vector2dF(0, kAnimationBounceDownDistance);
-  }
-
-  gfx::Transform initial_scale;
-  initial_scale.Scale3d(kAnimationBounceScaleFactor,
-                        kAnimationBounceScaleFactor, 1);
-
-  const gfx::Transform initial_state = gfx::TransformAboutPivot(
-      gfx::RectF(GetLocalBounds()).CenterPoint(), initial_scale);
-
-  gfx::Transform scale_about_pivot = gfx::TransformAboutPivot(
-      gfx::RectF(GetLocalBounds()).CenterPoint(), gfx::Transform());
-  scale_about_pivot.Translate(bounce_up_location);
-
-  gfx::Transform move_down;
-  move_down.Translate(bounce_down_location);
-
-  ui::AnimationThroughputReporter reporter(
-      layer()->GetAnimator(),
-      metrics_util::ForSmoothnessV3(base::BindRepeating([](int smoothness) {
-        DCHECK(0 <= smoothness && smoothness <= 100);
-        base::UmaHistogramPercentage(kBounceInAnimationSmoothnessHistogramName,
-                                     smoothness);
-      })));
-
-  // Alias to avoid difficult to read line wrapping below.
-  using ConstantTransform = ui::InterpolatedConstantTransform;
-  using MatrixTransform = ui::InterpolatedMatrixTransform;
-
-  // NOTE: It is intentional that `ui::InterpolatedTransform`s be used below
-  // rather than `gfx::Transform`s which could otherwise be used to accomplish
-  // the same animation.
-  //
-  // This is because the latter only informs layer delegates of transform
-  // changes on animation completion whereas the former informs layer delegates
-  // of transform changes at each animation step [1].
-  //
-  // Failure to inform layer delegates of transform changes at each animation
-  // step can result in the ink drop layer going out of sync if the
-  // `TrayBackgroundView`s activation state changes while an animation is in
-  // progress.
-  //
-  // [1] See discussion in https://crrev.com/c/4304899.
-  views::AnimationBuilder()
-      .SetPreemptionStrategy(
-          ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET)
-      .OnAborted(base::BindOnce(
-          [](base::WeakPtr<TrayBackgroundView> view) {
-            if (view) {
-              view->OnAnimationAborted();
-            }
-          },
-          weak_factory_.GetWeakPtr()))
-      .OnEnded(base::BindOnce(
-          [](base::WeakPtr<TrayBackgroundView> view) {
-            if (view) {
-              view->OnAnimationEnded();
-            }
-          },
-          weak_factory_.GetWeakPtr()))
-      .Once()
-      .SetDuration(base::TimeDelta())
-      .SetOpacity(this, 1.0)
-      .SetInterpolatedTransform(
-          this, std::make_unique<ConstantTransform>(initial_state))
-      .Then()
-      .SetDuration(kAnimationDurationForBounceElement)
-      .SetInterpolatedTransform(
-          this,
-          std::make_unique<MatrixTransform>(initial_state, scale_about_pivot),
-          gfx::Tween::FAST_OUT_SLOW_IN_3)
-      .Then()
-      .SetDuration(kAnimationDurationForBounceElement)
-      .SetInterpolatedTransform(
-          this, std::make_unique<MatrixTransform>(scale_about_pivot, move_down),
-          gfx::Tween::EASE_OUT_4)
-      .Then()
-      .SetDuration(kAnimationDurationForBounceElement)
-      .SetInterpolatedTransform(
-          this, std::make_unique<MatrixTransform>(move_down, gfx::Transform()),
-          gfx::Tween::FAST_OUT_SLOW_IN_3);
 }
 
 // Any visibility updates should be called after the hide animation is
@@ -988,6 +884,106 @@ void TrayBackgroundView::StopPulseAnimation() {
       gfx::RectF(GetLocalBounds()).CenterPoint(), kNormalScaleFactor);
   layer()->SetTransform(normal_transform);
   RemoveRippleLayer();
+}
+
+void TrayBackgroundView::BounceInAnimation() {
+  gfx::Vector2dF bounce_up_location;
+  gfx::Vector2dF bounce_down_location;
+
+  switch (shelf_->alignment()) {
+    case ShelfAlignment::kLeft:
+      bounce_up_location = gfx::Vector2dF(kAnimationBounceUpDistance, 0);
+      bounce_down_location = gfx::Vector2dF(-kAnimationBounceDownDistance, 0);
+      break;
+    case ShelfAlignment::kRight:
+      bounce_up_location = gfx::Vector2dF(-kAnimationBounceUpDistance, 0);
+      bounce_down_location = gfx::Vector2dF(kAnimationBounceDownDistance, 0);
+      break;
+    case ShelfAlignment::kBottom:
+    case ShelfAlignment::kBottomLocked:
+    default:
+      bounce_up_location = gfx::Vector2dF(0, -kAnimationBounceUpDistance);
+      bounce_down_location = gfx::Vector2dF(0, kAnimationBounceDownDistance);
+  }
+
+  gfx::Transform initial_scale;
+  initial_scale.Scale3d(kAnimationBounceScaleFactor,
+                        kAnimationBounceScaleFactor, 1);
+
+  const gfx::Transform initial_state = gfx::TransformAboutPivot(
+      gfx::RectF(GetLocalBounds()).CenterPoint(), initial_scale);
+
+  gfx::Transform scale_about_pivot = gfx::TransformAboutPivot(
+      gfx::RectF(GetLocalBounds()).CenterPoint(), gfx::Transform());
+  scale_about_pivot.Translate(bounce_up_location);
+
+  gfx::Transform move_down;
+  move_down.Translate(bounce_down_location);
+
+  ui::AnimationThroughputReporter reporter(
+      layer()->GetAnimator(),
+      metrics_util::ForSmoothnessV3(base::BindRepeating([](int smoothness) {
+        DCHECK(0 <= smoothness && smoothness <= 100);
+        base::UmaHistogramPercentage(kBounceInAnimationSmoothnessHistogramName,
+                                     smoothness);
+      })));
+
+  // Alias to avoid difficult to read line wrapping below.
+  using ConstantTransform = ui::InterpolatedConstantTransform;
+  using MatrixTransform = ui::InterpolatedMatrixTransform;
+
+  // NOTE: It is intentional that `ui::InterpolatedTransform`s be used below
+  // rather than `gfx::Transform`s which could otherwise be used to accomplish
+  // the same animation.
+  //
+  // This is because the latter only informs layer delegates of transform
+  // changes on animation completion whereas the former informs layer delegates
+  // of transform changes at each animation step [1].
+  //
+  // Failure to inform layer delegates of transform changes at each animation
+  // step can result in the ink drop layer going out of sync if the
+  // `TrayBackgroundView`s activation state changes while an animation is in
+  // progress.
+  //
+  // [1] See discussion in https://crrev.com/c/4304899.
+  views::AnimationBuilder()
+      .SetPreemptionStrategy(
+          ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET)
+      .OnAborted(base::BindOnce(
+          [](base::WeakPtr<TrayBackgroundView> view) {
+            if (view) {
+              view->OnAnimationAborted();
+            }
+          },
+          weak_factory_.GetWeakPtr()))
+      .OnEnded(base::BindOnce(
+          [](base::WeakPtr<TrayBackgroundView> view) {
+            if (view) {
+              view->OnAnimationEnded();
+            }
+          },
+          weak_factory_.GetWeakPtr()))
+      .Once()
+      .SetDuration(base::TimeDelta())
+      .SetOpacity(this, 1.0)
+      .SetInterpolatedTransform(
+          this, std::make_unique<ConstantTransform>(initial_state))
+      .Then()
+      .SetDuration(kAnimationDurationForBounceElement)
+      .SetInterpolatedTransform(
+          this,
+          std::make_unique<MatrixTransform>(initial_state, scale_about_pivot),
+          gfx::Tween::FAST_OUT_SLOW_IN_3)
+      .Then()
+      .SetDuration(kAnimationDurationForBounceElement)
+      .SetInterpolatedTransform(
+          this, std::make_unique<MatrixTransform>(scale_about_pivot, move_down),
+          gfx::Tween::EASE_OUT_4)
+      .Then()
+      .SetDuration(kAnimationDurationForBounceElement)
+      .SetInterpolatedTransform(
+          this, std::make_unique<MatrixTransform>(move_down, gfx::Transform()),
+          gfx::Tween::FAST_OUT_SLOW_IN_3);
 }
 
 void TrayBackgroundView::TrackVisibilityUMA(bool visible_preferred) const {

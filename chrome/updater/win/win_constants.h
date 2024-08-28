@@ -49,11 +49,26 @@ extern const wchar_t kRegValueBrandCode[];
 extern const wchar_t kRegValueAP[];
 extern const wchar_t kRegValueDateOfLastActivity[];
 extern const wchar_t kRegValueDateOfLastRollcall[];
+extern const wchar_t kRegValueDayOfInstall[];
 extern const wchar_t kRegValueName[];
 
 // Values created under `UPDATER_KEY`.
 extern const wchar_t kRegValueUninstallCmdLine[];
 extern const wchar_t kRegValueVersion[];
+
+// Timestamp when an OEM install is started, stored as minutes since the Windows
+// Epoch.
+extern const wchar_t kRegValueOemInstallTimeMin[];
+
+// OEM installs are expected to be completed within 72 hours.
+inline constexpr base::TimeDelta kMinOemModeTime = base::Hours(72);
+
+// Windows Audit mode registry constants queried for OEM installs.
+extern const wchar_t kSetupStateKey[];
+extern const wchar_t kImageStateValueName[];
+extern const wchar_t kImageStateUnuseableValue[];
+extern const wchar_t kImageStateGeneralAuditValue[];
+extern const wchar_t kImageStateSpecialAuditValue[];
 
 // Cohort registry constants.
 extern const wchar_t kRegKeyCohort[];
@@ -103,6 +118,7 @@ extern const wchar_t kRegValueEnrollmentMandatory[];
 
 // Registry for DM token.
 extern const wchar_t kRegKeyCompanyEnrollment[];
+extern const wchar_t kRegKeyCompanyLegacyEnrollment[];  // Path is in HKLM64.
 extern const wchar_t kRegValueDmToken[];
 
 extern const wchar_t kWindowsServiceName[];

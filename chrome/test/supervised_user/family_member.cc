@@ -30,7 +30,7 @@ CoreAccountId GetAccountId(Profile* profile) {
   supervised_user::SupervisedUserService* supervised_user_service =
       SupervisedUserServiceFactory::GetForProfile(profile);
   CHECK(supervised_user_service) << "Incognito mode is not supported.";
-  CHECK(supervised_user::IsUrlFilteringEnabled(*profile->GetPrefs()))
+  CHECK(supervised_user::IsSubjectToParentalControls(*profile->GetPrefs()))
       << "Blocklist control page is only available to user who have that "
          "feature enabled. Check if member is a subject to parental controls.";
 
@@ -76,6 +76,13 @@ GURL FamilyMember::GetPermissionsUrlFor(const FamilyMember& member) const {
       base::StrCat({GetFamilyMemberSettingsUrlBase(member), "/permissions"}));
 }
 
+SupervisedUserService* FamilyMember::supervised_user_service() const {
+  supervised_user::SupervisedUserService* supervised_user_service =
+      SupervisedUserServiceFactory::GetForProfile(browser()->profile());
+  CHECK(supervised_user_service) << "Incognito mode is not supported.";
+  return supervised_user_service;
+}
+
 void FamilyMember::TurnOnSync() {
   sign_in_functions_.TurnOnSync(account_, 0);
 }
@@ -84,10 +91,12 @@ CoreAccountId FamilyMember::GetAccountId() const {
   supervised_user::SupervisedUserService* supervised_user_service =
       SupervisedUserServiceFactory::GetForProfile(browser()->profile());
   CHECK(supervised_user_service) << "Incognito mode is not supported.";
-  CHECK(
-      supervised_user::IsUrlFilteringEnabled(*browser()->profile()->GetPrefs()))
+  CHECK(supervised_user::IsSubjectToParentalControls(
+      *browser()->profile()->GetPrefs()))
       << "Blocklist control page is only available to user who have that "
-         "feature enabled. Check if member is a subject to parental controls.";
+         "feature enabled. Check if member is a subject to parental controls. "
+         "Account: "
+      << account_.user;
 
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(browser()->profile());

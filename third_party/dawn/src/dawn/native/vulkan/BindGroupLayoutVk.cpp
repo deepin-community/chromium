@@ -37,6 +37,7 @@
 #include "dawn/native/vulkan/DescriptorSetAllocator.h"
 #include "dawn/native/vulkan/DeviceVk.h"
 #include "dawn/native/vulkan/FencedDeleter.h"
+#include "dawn/native/vulkan/SamplerVk.h"
 #include "dawn/native/vulkan/UtilsVulkan.h"
 #include "dawn/native/vulkan/VulkanError.h"
 
@@ -65,7 +66,7 @@ VkShaderStageFlags VulkanShaderStageFlags(wgpu::ShaderStage stages) {
 VkDescriptorType VulkanDescriptorType(const BindingInfo& bindingInfo) {
     return MatchVariant(
         bindingInfo.bindingLayout,
-        [](const BufferBindingLayout& layout) -> VkDescriptorType {
+        [](const BufferBindingInfo& layout) -> VkDescriptorType {
             switch (layout.type) {
                 case wgpu::BufferBindingType::Uniform:
                     if (layout.hasDynamicOffset) {
@@ -83,10 +84,19 @@ VkDescriptorType VulkanDescriptorType(const BindingInfo& bindingInfo) {
                     DAWN_UNREACHABLE();
                     return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             }
+            DAWN_UNREACHABLE();
         },
-        [](const SamplerBindingLayout&) { return VK_DESCRIPTOR_TYPE_SAMPLER; },
-        [](const TextureBindingLayout&) { return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; },
-        [](const StorageTextureBindingLayout&) { return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; });
+        [](const SamplerBindingInfo&) { return VK_DESCRIPTOR_TYPE_SAMPLER; },
+        [](const StaticSamplerBindingInfo& layout) {
+            // By the Vulkan spec, YCbCr samplers must have descriptor type
+            // COMBINED_IMAGE_SAMPLER:
+            // https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkSamplerYcbcrConversionInfo.html
+            return (layout.sampler->IsYCbCr()) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                                               : VK_DESCRIPTOR_TYPE_SAMPLER;
+        },
+        [](const TextureBindingInfo&) { return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; },
+        [](const StorageTextureBindingInfo&) { return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; },
+        [](const InputAttachmentBindingInfo&) { return VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT; });
 }
 
 // static
@@ -113,7 +123,14 @@ MaybeError BindGroupLayout::Initialize() {
         vkBinding.descriptorType = VulkanDescriptorType(bindingInfo);
         vkBinding.descriptorCount = 1;
         vkBinding.stageFlags = VulkanShaderStageFlags(bindingInfo.visibility);
-        vkBinding.pImmutableSamplers = nullptr;
+
+        if (std::holds_alternative<StaticSamplerBindingInfo>(bindingInfo.bindingLayout)) {
+            auto samplerLayout = std::get<StaticSamplerBindingInfo>(bindingInfo.bindingLayout);
+            auto sampler = ToBackend(samplerLayout.sampler);
+            vkBinding.pImmutableSamplers = &sampler->GetHandle().GetHandle();
+        } else {
+            vkBinding.pImmutableSamplers = nullptr;
+        }
 
         bindings.emplace_back(vkBinding);
     }
@@ -146,7 +163,7 @@ MaybeError BindGroupLayout::Initialize() {
     // TODO(enga): Consider deduping allocators for layouts with the same descriptor type
     // counts.
     mDescriptorSetAllocator =
-        DescriptorSetAllocator::Create(this, std::move(descriptorCountPerType));
+        DescriptorSetAllocator::Create(device, std::move(descriptorCountPerType));
 
     SetLabelImpl();
 
@@ -185,7 +202,7 @@ ResultOrError<Ref<BindGroup>> BindGroupLayout::AllocateBindGroup(
     Device* device,
     const BindGroupDescriptor* descriptor) {
     DescriptorSetAllocation descriptorSetAllocation;
-    DAWN_TRY_ASSIGN(descriptorSetAllocation, mDescriptorSetAllocator->Allocate());
+    DAWN_TRY_ASSIGN(descriptorSetAllocation, mDescriptorSetAllocator->Allocate(this));
 
     return AcquireRef(mBindGroupAllocator->Allocate(device, descriptor, descriptorSetAllocation));
 }

@@ -92,8 +92,12 @@ void SuggestionWindowView::Show(const SuggestionDetails& details) {
   Reorient(Orientation::kVertical);
   completion_view_->SetVisible(true);
   completion_view_->SetView(details);
-  if (details.show_setting_link)
-    completion_view_->SetMinWidth(setting_link_->GetPreferredSize().width());
+  if (details.show_setting_link) {
+    completion_view_->SetMinWidth(
+        setting_link_
+            ->GetPreferredSize(views::SizeBounds(setting_link_->width(), {}))
+            .width());
+  }
 
   setting_link_->SetVisible(details.show_setting_link);
 
@@ -127,9 +131,9 @@ void SuggestionWindowView::SetButtonHighlighted(
     } else {
       const views::View::Views& candidate_buttons =
           multiple_candidate_area_->children();
-      if (button.index < candidate_buttons.size()) {
+      if (button.suggestion_index < candidate_buttons.size()) {
         SetCandidateHighlighted(static_cast<IndexedSuggestionCandidateButton*>(
-                                    candidate_buttons[button.index]),
+                                    candidate_buttons[button.suggestion_index]),
                                 highlighted);
       }
     }
@@ -201,7 +205,7 @@ SuggestionWindowView::SuggestionWindowView(gfx::NativeView parent,
           &AssistiveDelegate::AssistiveWindowButtonClicked,
           base::Unretained(delegate_),
           AssistiveWindowButton{.id = ui::ime::ButtonId::kSuggestion,
-                                .index = 0})));
+                                .suggestion_index = 0})));
   completion_view_->SetVisible(false);
   multiple_candidate_area_ = AddChildView(std::make_unique<views::View>());
   multiple_candidate_area_->SetVisible(false);
@@ -210,7 +214,7 @@ SuggestionWindowView::SuggestionWindowView(gfx::NativeView parent,
   setting_link_ = AddChildView(std::make_unique<views::Link>(
       l10n_util::GetStringUTF16(IDS_SUGGESTION_LEARN_MORE)));
   setting_link_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  // TODO(crbug/1102215): Implement proper UI layout using Insets constant.
+  // TODO(crbug.com/40138695): Implement proper UI layout using Insets constant.
   constexpr auto insets = gfx::Insets::TLBR(0, kPadding, kPadding, kPadding);
   setting_link_->SetBorder(views::CreateEmptyBorder(insets));
   constexpr int kSettingLinkFontSize = 11;
@@ -270,11 +274,13 @@ void SuggestionWindowView::ResizeCandidateArea(
                 &AssistiveDelegate::AssistiveWindowButtonClicked,
                 base::Unretained(delegate_),
                 AssistiveWindowButton{.id = ui::ime::ButtonId::kSuggestion,
-                                      .index = index}),
+                                      .suggestion_index = index}),
             /* candidate_text=*/new_candidates[index],
             // Label indexes start from "1", hence we increment index by one.
             /* index_text=*/base::FormatNumber(index + 1),
             use_legacy_candidate));
+    // TODO(crbug.com/40232718): See View::SetLayoutManagerUseConstrainedSpace.
+    candidate->SetLayoutManagerUseConstrainedSpace(false);
 
     auto subscription = candidate->AddStateChangedCallback(base::BindRepeating(
         [](SuggestionWindowView* window,
@@ -331,8 +337,9 @@ void SuggestionWindowView::SetCandidateHighlighted(
         ->SetHighlight(false);
   }
 
-  if (highlighted)
+  if (highlighted) {
     view->SetHighlight(highlighted);
+  }
 }
 
 BEGIN_METADATA(SuggestionWindowView)

@@ -292,12 +292,13 @@ std::optional<RequestAction> RulesetMatcher::GetAction(
 
 std::vector<RequestAction> RulesetMatcher::GetModifyHeadersActions(
     const RequestParams& params,
+    RulesetMatchingStage stage,
     std::optional<uint64_t> min_priority) const {
   std::vector<RequestAction> modify_header_actions =
-      url_matcher_.GetModifyHeadersActions(params, min_priority);
+      url_matcher_.GetModifyHeadersActions(params, stage, min_priority);
 
   std::vector<RequestAction> regex_modify_header_actions =
-      regex_matcher_.GetModifyHeadersActions(params, min_priority);
+      regex_matcher_.GetModifyHeadersActions(params, stage, min_priority);
 
   modify_header_actions.insert(
       modify_header_actions.end(),
@@ -371,7 +372,7 @@ size_t RulesetMatcher::GetRulesCount(RulesetMatchingStage stage) const {
              regex_matcher_.GetHeadersReceivedRulesCount();
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0u;
 }
 
@@ -383,7 +384,7 @@ size_t RulesetMatcher::GetRegexRulesCount(RulesetMatchingStage stage) const {
       return regex_matcher_.GetHeadersReceivedRulesCount();
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0u;
 }
 

@@ -32,6 +32,7 @@
 #include "spirv/unified1/GLSL.std.450.h"
 #include "spirv/unified1/spirv.h"
 
+#include "src/tint/lang/core/access.h"
 #include "src/tint/lang/core/address_space.h"
 #include "src/tint/lang/core/builtin_value.h"
 #include "src/tint/lang/core/constant/scalar.h"
@@ -81,6 +82,7 @@
 #include "src/tint/lang/core/type/f16.h"
 #include "src/tint/lang/core/type/f32.h"
 #include "src/tint/lang/core/type/i32.h"
+#include "src/tint/lang/core/type/input_attachment.h"
 #include "src/tint/lang/core/type/matrix.h"
 #include "src/tint/lang/core/type/multisampled_texture.h"
 #include "src/tint/lang/core/type/pointer.h"
@@ -155,6 +157,10 @@ const core::type::Type* DedupType(const core::type::Type* ty, core::type::Manage
         },
         [&](const core::type::DepthMultisampledTexture* depth) {
             return types.Get<core::type::MultisampledTexture>(depth->dim(), types.f32());
+        },
+        [&](const core::type::StorageTexture* st) -> const core::type::Type* {
+            return types.Get<core::type::StorageTexture>(st->dim(), st->texel_format(),
+                                                         core::Access::kRead, st->type());
         },
 
         // Both sampler types are the same in SPIR-V.
@@ -301,7 +307,10 @@ class Printer {
 
         // Emit functions.
         for (core::ir::Function* func : ir_.functions) {
-            EmitFunction(func);
+            auto res = EmitFunction(func);
+            if (res != Success) {
+                return res;
+            }
         }
 
         return Success;
@@ -611,7 +620,8 @@ class Printer {
             texture,  //
             [&](const core::type::SampledTexture* t) { return Type(t->type()); },
             [&](const core::type::MultisampledTexture* t) { return Type(t->type()); },
-            [&](const core::type::StorageTexture* t) { return Type(t->type()); },  //
+            [&](const core::type::StorageTexture* t) { return Type(t->type()); },
+            [&](const core::type::InputAttachment* t) { return Type(t->type()); },  //
             TINT_ICE_ON_NO_MATCH);
 
         uint32_t dim = SpvDimMax;
@@ -630,7 +640,12 @@ class Printer {
                 break;
             }
             case core::type::TextureDimension::k2d: {
-                dim = SpvDim2D;
+                if (texture->Is<core::type::InputAttachment>()) {
+                    module_.PushCapability(SpvCapabilityInputAttachment);
+                    dim = SpvDimSubpassData;
+                } else {
+                    dim = SpvDim2D;
+                }
                 break;
             }
             case core::type::TextureDimension::k2dArray: {
@@ -682,7 +697,17 @@ class Printer {
 
     /// Emit a function.
     /// @param func the function to emit
-    void EmitFunction(core::ir::Function* func) {
+    Result<SuccessType> EmitFunction(core::ir::Function* func) {
+        if (func->Params().Length() > 255) {
+            // Tint transforms may add additional function parameters which can cause a valid input
+            // shader to exceed SPIR-V's function parameter limit. There isn't much we can do about
+            // this, so just fail gracefully instead of a generating invalid SPIR-V.
+            StringStream ss;
+            ss << "Function '" << ir_.NameOf(func).Name()
+               << "' has more than 255 parameters after running Tint transforms";
+            return Failure{ss.str()};
+        }
+
         auto id = Value(func);
 
         // Emit the function name.
@@ -736,6 +761,8 @@ class Printer {
 
         // Add the function to the module.
         module_.PushFunction(current_function_);
+
+        return Success;
     }
 
     /// Emit entry point declarations for a function.
@@ -764,7 +791,6 @@ class Printer {
             }
             case core::ir::Function::PipelineStage::kUndefined:
                 TINT_ICE() << "undefined pipeline stage for entry point";
-                return;
         }
 
         OperandList operands = {U32Operand(stage), id, ir_.NameOf(func).Name()};
@@ -870,6 +896,7 @@ class Printer {
     /// Emit all instructions of @p block.
     /// @param block the block's instructions to emit
     void EmitBlockInstructions(core::ir::Block* block) {
+        TINT_ASSERT(!block->IsEmpty());
         for (auto* inst : *block) {
             Switch(
                 inst,                                                                 //
@@ -901,11 +928,6 @@ class Printer {
                     module_.PushDebug(spv::Op::OpName, {Value(inst), Operand(name.Name())});
                 }
             }
-        }
-
-        if (block->IsEmpty()) {
-            // If the last emitted instruction is not a branch, then this should be unreachable.
-            current_function_.push_inst(spv::Op::OpUnreachable, {});
         }
     }
 
@@ -1198,7 +1220,6 @@ class Printer {
             }
             default:
                 TINT_UNIMPLEMENTED() << binary->Op();
-                break;
         }
 
         // Emit the instruction.
@@ -1339,7 +1360,6 @@ class Printer {
                 break;
             case spirv::BuiltinFn::kNone:
                 TINT_ICE() << "undefined spirv ir function";
-                return;
         }
 
         OperandList operands;
@@ -1632,7 +1652,6 @@ class Printer {
                 module_.PushCapability(SpvCapabilityGroupNonUniformBallot);
                 op = spv::Op::OpGroupNonUniformBallot;
                 operands.push_back(Constant(ir_.constant_values.Get(u32(spv::Scope::Subgroup))));
-                operands.push_back(Constant(ir_.constant_values.Get(true)));
                 break;
             case core::BuiltinFn::kSubgroupBroadcast:
                 module_.PushCapability(SpvCapabilityGroupNonUniformBallot);
@@ -1790,12 +1809,12 @@ class Printer {
                     one = b_.Constant(1_u);
                     zero = b_.Constant(0_u);
                 });
-            TINT_ASSERT_OR_RETURN(one && zero);
+            TINT_ASSERT(one && zero);
 
             if (auto* vec = res_ty->As<core::type::Vector>()) {
                 // Splat the scalars into vectors.
-                one = b_.Splat(vec, one, vec->Width());
-                zero = b_.Splat(vec, zero, vec->Width());
+                one = b_.Splat(vec, one);
+                zero = b_.Splat(vec, zero);
             }
 
             op = spv::Op::OpSelect;
@@ -1974,9 +1993,11 @@ class Printer {
                     op = spv::Op::OpSNegate;
                 }
                 break;
+            case core::UnaryOp::kNot:
+                op = spv::Op::OpLogicalNot;
+                break;
             default:
                 TINT_UNIMPLEMENTED() << unary->Op();
-                break;
         }
         current_function_.push_inst(op, {Type(ty), id, Value(unary->Val())});
     }
@@ -1997,7 +2018,7 @@ class Printer {
     /// @param attrs the shader IO attrs
     /// @param addrspace the address of the variable
     void EmitIOAttributes(uint32_t id,
-                          const core::ir::IOAttributes& attrs,
+                          const core::IOAttributes& attrs,
                           core::AddressSpace addrspace) {
         if (attrs.location) {
             module_.PushAnnot(spv::Op::OpDecorate,
@@ -2029,6 +2050,8 @@ class Printer {
                     module_.PushAnnot(spv::Op::OpDecorate, {id, U32Operand(SpvDecorationSample)});
                     break;
                 case core::InterpolationSampling::kCenter:
+                case core::InterpolationSampling::kFirst:
+                case core::InterpolationSampling::kEither:
                 case core::InterpolationSampling::kUndefined:
                     break;
             }
@@ -2122,6 +2145,14 @@ class Printer {
                                           {id, U32Operand(SpvDecorationNonReadable)});
                     }
                 }
+
+                auto iidx = var->InputAttachmentIndex();
+                if (iidx) {
+                    TINT_ASSERT(store_ty->Is<core::type::InputAttachment>());
+                    module_.PushAnnot(
+                        spv::Op::OpDecorate,
+                        {id, U32Operand(SpvDecorationInputAttachmentIndex), iidx.value()});
+                }
                 break;
             }
             case core::AddressSpace::kWorkgroup: {
@@ -2175,11 +2206,13 @@ class Printer {
             branches.Sort();  // Sort the branches by label to ensure deterministic output
 
             // Also add phi nodes from implicit exit blocks.
-            inst->ForeachBlock([&](core::ir::Block* block) {
-                if (block->IsEmpty()) {
-                    branches.Push(Branch{Label(block), nullptr});
-                }
-            });
+            if (inst->Is<core::ir::If>()) {
+                inst->ForeachBlock([&](core::ir::Block* block) {
+                    if (block->IsEmpty()) {
+                        branches.Push(Branch{Label(block), nullptr});
+                    }
+                });
+            }
 
             OperandList ops{Type(ty), Value(result)};
             for (auto& branch : branches) {
@@ -2227,7 +2260,9 @@ class Printer {
         switch (format) {
             case core::TexelFormat::kBgra8Unorm:
                 TINT_ICE() << "bgra8unorm should have been polyfilled to rgba8unorm";
-                return SpvImageFormatUnknown;
+            case core::TexelFormat::kR8Unorm:
+                module_.PushCapability(SpvCapabilityStorageImageExtendedFormats);
+                return SpvImageFormatR8;
             case core::TexelFormat::kR32Uint:
                 return SpvImageFormatR32ui;
             case core::TexelFormat::kR32Sint:

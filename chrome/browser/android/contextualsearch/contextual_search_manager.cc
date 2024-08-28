@@ -14,19 +14,23 @@
 #include "base/memory/weak_ptr.h"
 #include "base/supports_user_data.h"
 #include "base/time/time.h"
-#include "chrome/android/chrome_jni_headers/ContextualSearchManager_jni.h"
 #include "chrome/browser/android/contextualsearch/native_contextual_search_context.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_android.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "components/contextual_search/core/browser/contextual_search_delegate_impl.h"
 #include "components/contextual_search/core/browser/resolved_search_term.h"
 #include "components/navigation_interception/intercept_navigation_delegate.h"
+#include "components/search_engines/search_terms_data.h"
+#include "components/search_engines/template_url_service.h"
 #include "components/variations/variations_associated_data.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/ContextualSearchManager_jni.h"
+#include "chrome/android/chrome_jni_headers/ContextualSearchPolicy_jni.h"
 
 using base::android::JavaParamRef;
 using base::android::JavaRef;
@@ -158,9 +162,32 @@ void ContextualSearchManager::OnTextSurroundingSelectionAvailable(
 
 jlong JNI_ContextualSearchManager_Init(JNIEnv* env,
                                        const JavaParamRef<jobject>& obj,
-                                       const JavaParamRef<jobject>& j_profile) {
-  Profile* profile = ProfileAndroid::FromProfileAndroid(j_profile);
+                                       Profile* profile) {
   ContextualSearchManager* manager =
       new ContextualSearchManager(env, obj, profile);
   return reinterpret_cast<intptr_t>(manager);
+}
+
+jboolean JNI_ContextualSearchPolicy_IsContextualSearchResolutionUrlValid(
+    JNIEnv* env,
+    Profile* profile) {
+  // Attempt to resolve a (empty) query. Return whether resulting URL is
+  // navigable.
+  auto* template_url_service =
+      TemplateURLServiceFactory::GetForProfile(profile);
+  if (!template_url_service) {
+    return false;
+  }
+
+  auto* template_url = template_url_service->GetDefaultSearchProvider();
+  if (!template_url) {
+    return false;
+  }
+
+  auto contextual_search_url_ref = template_url->contextual_search_url_ref();
+
+  GURL url(contextual_search_url_ref.ReplaceSearchTerms(
+      {}, template_url_service->search_terms_data(), NULL));
+
+  return url.is_valid();
 }

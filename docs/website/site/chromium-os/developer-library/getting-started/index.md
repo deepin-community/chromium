@@ -1,16 +1,12 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library
-  - Chromium OS > Developer Library
+  - ChromiumOS
 page_name: getting-started
 title: Getting Started
 ---
 
-> 🚧 The library is currently under construction. See
-> [the CrOS Developer Library Proposal](/chromium-os/developer-library/proposal)
-> for more information.
-
-Welcome to ChromiumOS development! This guide will help you boostrap your
+Welcome to ChromiumOS development! This guide will help you bootstrap your
 workflow by making sure you have the right hardware, development environment,
 and source checkout. The guide will also step you through building, testing,
 uploading and committing code.
@@ -31,8 +27,7 @@ ChromeOS and ChromiumOS are two separate products which share the same code
 base yet the available features and look-and-feel of each product vary. Chromium
 OS is supported by the open source community and ChromeOS is supported by
 Google and its partners. Read more about the differences between ChromiumOS and
-ChromeOS at the <a href="https://chromium.org/chromium-os/chromium-os-faq/"
-target="_blank">ChromiumOS FAQ</a>.
+ChromeOS at the [ChromiumOS FAQ](/chromium-os/developer-library/reference/development/chromium-os-faq/).
 
 ## Repositories
 
@@ -46,10 +41,10 @@ WiFi.
 
 Links to Code Search for these repositories:
 
-* `chromium`: <a href="https://osscs.corp.google.com/chromium" target="_blank">
-https://osscs.corp.google.com/chromium</href>
-* `chromiumos`: <a href="https://osscs.corp.google.com/chromiumos"
-target="_blank">https://osscs.corp.google.com/chromiumos</href>
+* `chromium`: <a href="https://source.chromium.org/chromium" target="_blank">
+https://source.chromium.org/chromium</href>
+* `chromiumos`: <a href="https://source.chromium.org/chromiumos"
+target="_blank">https://source.chromium.org/chromiumos</href>
 
 ## Hardware requirements
 

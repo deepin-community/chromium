@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/base_export.h"
@@ -14,16 +15,15 @@
 #include "base/memory/raw_ptr.h"
 #include "base/native_library.h"
 #include "base/profiler/frame.h"
+#include "base/profiler/module_cache.h"
 #include "base/profiler/sampling_profiler_thread_token.h"
 #include "base/profiler/stack_sampling_profiler.h"
-#include "base/strings/string_piece.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
 
 namespace base {
 
 class Unwinder;
-class ModuleCache;
 
 // A thread to target for profiling that will run the supplied closure.
 class TargetThread : public PlatformThread::Delegate {
@@ -178,7 +178,7 @@ void ExpectStackDoesNotContain(
     const std::vector<FunctionAddressRange>& functions);
 
 // Load test library with given name.
-NativeLibrary LoadTestLibrary(StringPiece library_name);
+NativeLibrary LoadTestLibrary(std::string_view library_name);
 
 // Loads the other library, which defines a function to be called in the
 // WITH_OTHER_LIBRARY configuration.

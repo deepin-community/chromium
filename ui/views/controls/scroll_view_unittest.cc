@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -124,7 +125,7 @@ class FixedView : public View {
   ~FixedView() override = default;
 
   void Layout(PassKey) override {
-    gfx::Size pref = GetPreferredSize();
+    gfx::Size pref = GetPreferredSize({});
     SetBounds(x(), y(), pref.width(), pref.height());
   }
 
@@ -148,7 +149,7 @@ class CustomView : public View {
   const gfx::Point last_location() const { return last_location_; }
 
   void Layout(PassKey) override {
-    gfx::Size pref = GetPreferredSize();
+    gfx::Size pref = GetPreferredSize({});
     int width = pref.width();
     int height = pref.height();
     if (parent()) {
@@ -240,7 +241,10 @@ class TestScrollBarThumb : public BaseScrollBarThumb {
   using BaseScrollBarThumb::BaseScrollBarThumb;
 
   // BaseScrollBarThumb:
-  gfx::Size CalculatePreferredSize() const override { return gfx::Size(1, 1); }
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& /*available_size*/) const override {
+    return gfx::Size(1, 1);
+  }
   void OnPaint(gfx::Canvas* canvas) override {}
 };
 
@@ -408,8 +412,10 @@ class WidgetScrollViewTest : public test::WidgetTest,
   }
 
   void TestClickAt(const gfx::Point& location) {
-    ui::MouseEvent press(TestLeftMouseAt(location, ui::ET_MOUSE_PRESSED));
-    ui::MouseEvent release(TestLeftMouseAt(location, ui::ET_MOUSE_RELEASED));
+    ui::MouseEvent press(
+        TestLeftMouseAt(location, ui::EventType::kMousePressed));
+    ui::MouseEvent release(
+        TestLeftMouseAt(location, ui::EventType::kMouseReleased));
     widget_->OnMouseEvent(&press);
     widget_->OnMouseEvent(&release);
   }
@@ -1132,7 +1138,7 @@ TEST_F(ScrollViewTest, ClipHeightToNormalContentHeight) {
       gfx::Size(kWidth, kNormalContentHeight)));
 
   EXPECT_EQ(gfx::Size(kWidth, kNormalContentHeight),
-            scroll_view_->GetPreferredSize());
+            scroll_view_->GetPreferredSize({}));
 
   scroll_view_->SizeToPreferredSize();
   views::test::RunScheduledLayout(scroll_view_.get());
@@ -1152,7 +1158,7 @@ TEST_F(ScrollViewTest, ClipHeightToShortContentHeight) {
       scroll_view_->SetContents(std::make_unique<views::StaticSizedView>(
           gfx::Size(kWidth, kShortContentHeight)));
 
-  EXPECT_EQ(gfx::Size(kWidth, kMinHeight), scroll_view_->GetPreferredSize());
+  EXPECT_EQ(gfx::Size(kWidth, kMinHeight), scroll_view_->GetPreferredSize({}));
 
   scroll_view_->SizeToPreferredSize();
   views::test::RunScheduledLayout(scroll_view_.get());
@@ -1176,7 +1182,7 @@ TEST_F(ScrollViewTest, ClipHeightToTallContentHeight) {
   scroll_view_->SetContents(std::make_unique<views::StaticSizedView>(
       gfx::Size(kWidth, kTallContentHeight)));
 
-  EXPECT_EQ(gfx::Size(kWidth, kMaxHeight), scroll_view_->GetPreferredSize());
+  EXPECT_EQ(gfx::Size(kWidth, kMaxHeight), scroll_view_->GetPreferredSize({}));
 
   scroll_view_->SizeToPreferredSize();
   views::test::RunScheduledLayout(scroll_view_.get());
@@ -1198,7 +1204,7 @@ TEST_F(ScrollViewTest, ClipHeightToScrollbarUsesWidth) {
 
   // Without any width, it will default to 0,0 but be overridden by min height.
   scroll_view_->SizeToPreferredSize();
-  EXPECT_EQ(gfx::Size(0, kMinHeight), scroll_view_->GetPreferredSize());
+  EXPECT_EQ(gfx::Size(0, kMinHeight), scroll_view_->GetPreferredSize({}));
 
   gfx::Size new_size(kWidth, scroll_view_->GetHeightForWidth(kWidth));
   scroll_view_->SetSize(new_size);
@@ -1221,12 +1227,12 @@ TEST_F(ScrollViewTest, ClipHeightToUpdatesPreferredSize) {
   constexpr int kMaxHeight1 = 80;
   scroll_view_->ClipHeightTo(kMinHeight1, kMaxHeight1);
   EXPECT_TRUE(scroll_view_->is_bounded());
-  EXPECT_EQ(scroll_view_->GetPreferredSize().height(), kMaxHeight1);
+  EXPECT_EQ(scroll_view_->GetPreferredSize({}).height(), kMaxHeight1);
 
   constexpr int kMinHeight2 = 200;
   constexpr int kMaxHeight2 = 300;
   scroll_view_->ClipHeightTo(kMinHeight2, kMaxHeight2);
-  EXPECT_EQ(scroll_view_->GetPreferredSize().height(), kMinHeight2);
+  EXPECT_EQ(scroll_view_->GetPreferredSize({}).height(), kMinHeight2);
 }
 
 TEST_F(ScrollViewTest, CornerViewVisibility) {
@@ -1568,11 +1574,11 @@ TEST_F(WidgetScrollViewTest, ScrollersOnRest) {
   ScrollView* scroll_view = AddScrollViewWithContentSize(
       gfx::Size(kDefaultWidth * 5, kDefaultHeight * 5));
   ScrollViewTestApi test_api(scroll_view);
-  ScrollBar* bar[]{test_api.GetScrollBar(HORIZONTAL),
-                   test_api.GetScrollBar(VERTICAL)};
-  base::RetainingOneShotTimer* hide_timer[] = {
-      test_api.GetScrollBarHideTimer(HORIZONTAL),
-      test_api.GetScrollBarHideTimer(VERTICAL)};
+  const auto bar = std::to_array<ScrollBar*>(
+      {test_api.GetScrollBar(HORIZONTAL), test_api.GetScrollBar(VERTICAL)});
+  const auto hide_timer = std::to_array<base::RetainingOneShotTimer*>(
+      {test_api.GetScrollBarHideTimer(HORIZONTAL),
+       test_api.GetScrollBarHideTimer(VERTICAL)});
 
   EXPECT_EQ(0, bar[HORIZONTAL]->layer()->opacity());
   EXPECT_EQ(0, bar[VERTICAL]->layer()->opacity());
@@ -1718,12 +1724,13 @@ TEST_F(ScrollViewTest, ArrowKeyScrolling) {
   EXPECT_EQ(0, test_api.IntegralViewOffset().y());
 
   // Pressing the down arrow key scrolls down. The amount isn't important.
-  ui::KeyEvent down_arrow(ui::ET_KEY_PRESSED, ui::VKEY_DOWN, ui::EF_NONE);
+  ui::KeyEvent down_arrow(ui::EventType::kKeyPressed, ui::VKEY_DOWN,
+                          ui::EF_NONE);
   EXPECT_TRUE(scroll_view_->OnKeyPressed(down_arrow));
   EXPECT_GT(0, test_api.IntegralViewOffset().y());
 
   // Pressing the up arrow key scrolls back to the origin.
-  ui::KeyEvent up_arrow(ui::ET_KEY_PRESSED, ui::VKEY_UP, ui::EF_NONE);
+  ui::KeyEvent up_arrow(ui::EventType::kKeyPressed, ui::VKEY_UP, ui::EF_NONE);
   EXPECT_TRUE(scroll_view_->OnKeyPressed(up_arrow));
   EXPECT_EQ(0, test_api.IntegralViewOffset().y());
 }
@@ -1745,7 +1752,7 @@ TEST_F(ScrollViewTest, ArrowKeyScrollingDisabled) {
   EXPECT_EQ(0, test_api.IntegralViewOffset().y());
 
   // Pressing the down arrow key does not consume the event, nor scroll.
-  ui::KeyEvent down(ui::ET_KEY_PRESSED, ui::VKEY_DOWN, ui::EF_NONE);
+  ui::KeyEvent down(ui::EventType::kKeyPressed, ui::VKEY_DOWN, ui::EF_NONE);
   EXPECT_FALSE(scroll_view_->OnKeyPressed(down));
   EXPECT_EQ(0, test_api.IntegralViewOffset().y());
 }
@@ -2272,8 +2279,9 @@ TEST_F(WidgetScrollViewTest, ScrollTrackScrolling) {
   // Click in the middle of the track, ensuring it's below the thumb.
   const gfx::Point location = scroll_bar->bounds().CenterPoint();
   EXPECT_GT(location.y(), thumb->bounds().bottom());
-  ui::MouseEvent press(TestLeftMouseAt(location, ui::ET_MOUSE_PRESSED));
-  ui::MouseEvent release(TestLeftMouseAt(location, ui::ET_MOUSE_RELEASED));
+  ui::MouseEvent press(TestLeftMouseAt(location, ui::EventType::kMousePressed));
+  ui::MouseEvent release(
+      TestLeftMouseAt(location, ui::EventType::kMouseReleased));
 
   const base::OneShotTimer& timer = test_api.GetScrollBarTimer(VERTICAL);
   EXPECT_FALSE(timer.IsRunning());
@@ -2545,8 +2553,8 @@ TEST_F(WidgetScrollViewTest, CompositedScrollEvents) {
   ScrollViewTestApi test_api(scroll_view);
 
   // Create a fake scroll event and send it to the scroll view.
-  ui::ScrollEvent scroll(ui::ET_SCROLL, gfx::Point(), base::TimeTicks::Now(), 0,
-                         0, -10, 0, -10, 3);
+  ui::ScrollEvent scroll(ui::EventType::kScroll, gfx::Point(),
+                         base::TimeTicks::Now(), 0, 0, -10, 0, -10, 3);
   ApplyScrollEvent(test_api, scroll_view, scroll);
 
   // Check if the scroll view has been offset.
@@ -2565,8 +2573,8 @@ TEST_F(WidgetScrollViewTest, CompositedTransposedScrollEvents) {
   // Create a fake scroll event and send it to the scroll view.
   // Note that this is still a VERTICAL scroll event, but we'll be looking for
   // HORIZONTAL motion later because we're transposed.
-  ui::ScrollEvent scroll(ui::ET_SCROLL, gfx::Point(), base::TimeTicks::Now(), 0,
-                         0, -10, 0, -10, 3);
+  ui::ScrollEvent scroll(ui::EventType::kScroll, gfx::Point(),
+                         base::TimeTicks::Now(), 0, 0, -10, 0, -10, 3);
   ApplyScrollEvent(test_api, scroll_view, scroll);
 
   // Check if the scroll view has been offset.
@@ -2589,8 +2597,8 @@ TEST_F(WidgetScrollViewTest,
   // This will be a horizontal scroll event but there will be a conflicting
   // vertical element. We should still scroll horizontally, since the horizontal
   // component is greater.
-  ui::ScrollEvent scroll(ui::ET_SCROLL, gfx::Point(), base::TimeTicks::Now(), 0,
-                         -10, 7, -10, 7, 3);
+  ui::ScrollEvent scroll(ui::EventType::kScroll, gfx::Point(),
+                         base::TimeTicks::Now(), 0, -10, 7, -10, 7, 3);
   ApplyScrollEvent(test_api, scroll_view, scroll);
 
   // Check if the scroll view has been offset.
@@ -2613,8 +2621,8 @@ TEST_F(WidgetScrollViewTest,
   // This will be a vertical scroll event but there will be a conflicting
   // horizontal element. We should still scroll horizontally, since the vertical
   // component is greater.
-  ui::ScrollEvent scroll(ui::ET_SCROLL, gfx::Point(), base::TimeTicks::Now(), 0,
-                         7, -10, 7, -10, 3);
+  ui::ScrollEvent scroll(ui::EventType::kScroll, gfx::Point(),
+                         base::TimeTicks::Now(), 0, 7, -10, 7, -10, 3);
   ApplyScrollEvent(test_api, scroll_view, scroll);
 
   // Check if the scroll view has been offset.
@@ -2627,13 +2635,13 @@ TEST_F(WidgetScrollViewTest, UnboundedScrollViewUsesContentPreferredSize) {
   contents->SetPreferredSize(kContentsPreferredSize);
   ScrollView* scroll_view =
       AddScrollViewWithContents(std::move(contents), true);
-  EXPECT_EQ(kContentsPreferredSize, scroll_view->GetPreferredSize());
+  EXPECT_EQ(kContentsPreferredSize, scroll_view->GetPreferredSize({}));
 
   constexpr gfx::Insets kInsets(20);
   scroll_view->SetBorder(CreateEmptyBorder(kInsets));
   gfx::Size preferred_size_with_insets(kContentsPreferredSize);
   preferred_size_with_insets.Enlarge(kInsets.width(), kInsets.height());
-  EXPECT_EQ(preferred_size_with_insets, scroll_view->GetPreferredSize());
+  EXPECT_EQ(preferred_size_with_insets, scroll_view->GetPreferredSize({}));
 }
 
 INSTANTIATE_TEST_SUITE_P(All,

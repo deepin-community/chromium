@@ -32,6 +32,7 @@
 #include "chrome/browser/ui/webui/ash/login/error_screen_handler.h"
 #include "chrome/common/chrome_paths.h"
 #include "chromeos/ash/components/dbus/userdataauth/fake_userdataauth_client.h"
+#include "components/policy/core/common/device_local_account_type.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/app_window/app_window.h"
@@ -80,7 +81,7 @@ class KioskEnterpriseTest : public KioskBaseTest {
   KioskEnterpriseTest& operator=(const KioskEnterpriseTest&) = delete;
 
  protected:
-  KioskEnterpriseTest() { set_use_consumer_kiosk_mode(false); }
+  KioskEnterpriseTest() = default;
 
   // KioskBaseTest:
   void SetUpOnMainThread() override {
@@ -127,7 +128,7 @@ class KioskEnterpriseTest : public KioskBaseTest {
                                  const std::string& app_id,
                                  const std::string& update_url) {
     std::vector<policy::DeviceLocalAccount> accounts;
-    accounts.emplace_back(policy::DeviceLocalAccount::TYPE_KIOSK_APP,
+    accounts.emplace_back(policy::DeviceLocalAccountType::kKioskApp,
                           policy::DeviceLocalAccount::EphemeralMode::kUnset,
                           account_id, app_id, update_url);
     policy::SetDeviceLocalAccounts(owner_settings_service_.get(), accounts);
@@ -237,8 +238,7 @@ IN_PROC_BROWSER_TEST_F(KioskEnterpriseTest,
   BlockAppLaunch(true);
 
   // Start app launch and wait for network connectivity timeout.
-  StartAppLaunchFromLoginScreen(
-      NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_ONLINE);
+  StartAppLaunchFromLoginScreen(NetworkStatus::kOnline);
   WaitForOobeScreen(AppLaunchSplashScreenView::kScreenId);
 
   PressConfigureNetworkAccelerator();
@@ -263,8 +263,7 @@ IN_PROC_BROWSER_TEST_F(
   auto auto_reset = NetworkUiController::SetCanConfigureNetworkForTesting(true);
 
   // Start app launch with network portal state.
-  StartAppLaunchFromLoginScreen(
-      NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_PORTAL);
+  StartAppLaunchFromLoginScreen(NetworkStatus::kPortal);
 
   WaitForNetworkScreen();
 
@@ -273,8 +272,7 @@ IN_PROC_BROWSER_TEST_F(
 }
 
 IN_PROC_BROWSER_TEST_F(KioskEnterpriseTest, LaunchAppUserCancel) {
-  StartAppLaunchFromLoginScreen(
-      NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_ONLINE);
+  StartAppLaunchFromLoginScreen(NetworkStatus::kOnline);
   // Do not let the app be run to avoid race condition.
   BlockAppLaunch(true);
 
@@ -332,7 +330,7 @@ class KioskEnterpriseEphemeralTest
       policy::DeviceLocalAccount::EphemeralMode ephemeral_mode,
       bool ephemeral_users_enabled) {
     std::vector<policy::DeviceLocalAccount> accounts;
-    accounts.emplace_back(policy::DeviceLocalAccount::TYPE_KIOSK_APP,
+    accounts.emplace_back(policy::DeviceLocalAccountType::kKioskApp,
                           ephemeral_mode, account_id, app_id, update_url);
     policy::SetDeviceLocalAccounts(owner_settings_service_.get(), accounts);
     settings_helper_.SetBoolean(kAccountsPrefEphemeralUsersEnabled,

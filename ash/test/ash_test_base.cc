@@ -49,6 +49,8 @@
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/bind.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/user_names.h"
 #include "components/user_manager/user_type.h"
@@ -264,35 +266,46 @@ aura::Window* AshTestBase::GetContext() {
 
 // static
 std::unique_ptr<views::Widget> AshTestBase::CreateTestWidget(
+    views::Widget::InitParams::Ownership ownership,
     views::WidgetDelegate* delegate,
     int container_id,
     const gfx::Rect& bounds,
     bool show) {
-  return TestWidgetBuilder()
-      .SetDelegate(delegate)
+  TestWidgetBuilder builder;
+  builder.SetDelegate(delegate)
       .SetBounds(bounds)
       .SetParent(Shell::GetPrimaryRootWindow()->GetChildById(container_id))
-      .SetShow(show)
-      .BuildOwnsNativeWidget();
+      .SetShow(show);
+  if (ownership == views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET) {
+    return builder.BuildOwnsNativeWidget();
+  } else {
+    DCHECK_EQ(ownership, views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+    return builder.BuildClientOwnsWidget();
+  }
 }
 
 // static
-std::unique_ptr<views::Widget> AshTestBase::CreateFramelessTestWidget() {
-  return TestWidgetBuilder()
-      .SetWidgetType(views::Widget::InitParams::TYPE_WINDOW_FRAMELESS)
-      .BuildOwnsNativeWidget();
+std::unique_ptr<views::Widget> AshTestBase::CreateFramelessTestWidget(
+    views::Widget::InitParams::Ownership ownership) {
+  TestWidgetBuilder builder;
+  builder.SetWidgetType(views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+  if (ownership == views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET) {
+    return builder.BuildOwnsNativeWidget();
+  } else {
+    DCHECK_EQ(ownership, views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+    return builder.BuildClientOwnsWidget();
+  }
 }
 
 std::unique_ptr<aura::Window> AshTestBase::CreateAppWindow(
     const gfx::Rect& bounds_in_screen,
-    AppType app_type,
+    chromeos::AppType app_type,
     int shell_window_id,
     views::WidgetDelegate* delegate) {
   TestWidgetBuilder builder;
   builder.SetWindowTitle(u"Window " + base::NumberToString16(shell_window_id));
-  if (app_type != AppType::NON_APP) {
-    builder.SetWindowProperty(aura::client::kAppType,
-                              static_cast<int>(app_type));
+  if (app_type != chromeos::AppType::NON_APP) {
+    builder.SetWindowProperty(chromeos::kAppTypeKey, app_type);
   }
 
   if (delegate) {
@@ -321,7 +334,8 @@ std::unique_ptr<aura::Window> AshTestBase::CreateTestWindow(
         nullptr, type, shell_window_id, bounds_in_screen));
   }
 
-  return CreateAppWindow(bounds_in_screen, AppType::NON_APP, shell_window_id);
+  return CreateAppWindow(bounds_in_screen, chromeos::AppType::NON_APP,
+                         shell_window_id);
 }
 
 std::unique_ptr<aura::Window> AshTestBase::CreateToplevelTestWindow(
@@ -438,8 +452,7 @@ void AshTestBase::SimulateGuestLogin() {
 }
 
 void AshTestBase::SimulateKioskMode(user_manager::UserType user_type) {
-  DCHECK(user_type == user_manager::UserType::kArcKioskApp ||
-         user_type == user_manager::UserType::kKioskApp ||
+  DCHECK(user_type == user_manager::UserType::kKioskApp ||
          user_type == user_manager::UserType::kWebKioskApp);
 
   GetSessionControllerClient()->SetIsRunningInAppMode(true);
@@ -484,7 +497,7 @@ void AshTestBase::BlockUserSession(UserSessionBlockReason block_reason) {
       SetUserAddingScreenRunning(true);
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 }

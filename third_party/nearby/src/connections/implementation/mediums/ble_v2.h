@@ -20,11 +20,15 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"
 #include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/functional/any_invocable.h"
+#include "absl/strings/string_view.h"
 #include "connections/implementation/mediums/ble_v2/advertisement_read_result.h"
 #include "connections/implementation/mediums/ble_v2/ble_advertisement.h"
+#include "connections/implementation/mediums/ble_v2/discovered_peripheral_callback.h"
 #include "connections/implementation/mediums/ble_v2/discovered_peripheral_tracker.h"
 #include "connections/implementation/mediums/bluetooth_radio.h"
 #include "connections/power_level.h"
@@ -32,9 +36,12 @@
 #include "internal/platform/bluetooth_adapter.h"
 #include "internal/platform/byte_array.h"
 #include "internal/platform/cancelable_alarm.h"
+#include "internal/platform/cancellation_flag.h"
+#include "internal/platform/implementation/ble_v2.h"
 #include "internal/platform/multi_thread_executor.h"
 #include "internal/platform/mutex.h"
 #include "internal/platform/mutex_lock.h"
+#include "internal/platform/runnable.h"
 #include "internal/platform/scheduled_executor.h"
 #include "internal/platform/single_thread_executor.h"
 
@@ -76,6 +83,21 @@ class BleV2 final {
       ABSL_LOCKS_EXCLUDED(mutex_);
 
   bool IsAdvertising(const std::string& service_id) const
+      ABSL_LOCKS_EXCLUDED(mutex_);
+
+  bool IsAdvertisingForLegacyDevice(const std::string& service_id) const
+      ABSL_LOCKS_EXCLUDED(mutex_);
+
+  // Use dummy bytes to do ble advertising, only for legacy devices.
+  // Returns true, if data is successfully set, and false otherwise.
+  bool StartLegacyAdvertising(
+      const std::string& service_id, const std::string& local_endpoint_id,
+      const std::string& fast_advertisement_service_uuid)
+      ABSL_LOCKS_EXCLUDED(mutex_);
+
+  // (TODO:hais) update this after ble_v2 async api refactor.
+  // Stop Ble advertising with dummy bytes for legagy device.
+  bool StopLegacyAdvertising(const std::string& service_id)
       ABSL_LOCKS_EXCLUDED(mutex_);
 
   // Enables BLE scanning for a service ID. Will report any discoverable
@@ -124,6 +146,12 @@ class BleV2 final {
     return medium_.IsValid();
   }
 
+  // Returns true if the BLE device support extended advertisement.
+  bool IsExtendedAdvertisementsAvailable() ABSL_LOCKS_EXCLUDED(mutex_) {
+    MutexLock lock(&mutex_);
+    return medium_.IsExtendedAdvertisementsAvailable();
+  };
+
  private:
   struct AdvertisingInfo {
     mediums::BleAdvertisement medium_advertisement;
@@ -136,6 +164,11 @@ class BleV2 final {
 
   // Same as IsAdvertising(), but must be called with `mutex_` held.
   bool IsAdvertisingLocked(const std::string& service_id) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+
+  // Same as IsAdvertisingForLegacyDevice(), but must be called with `mutex_`
+  // held.
+  bool IsAdvertisingForLegacyDeviceLocked(const std::string& service_id) const
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // Same as IsScanning(), but must be called with `mutex_` held.
@@ -167,6 +200,10 @@ class BleV2 final {
   ByteArray CreateAdvertisementHeader(int psm,
                                       bool extended_advertisement_advertised)
       ABSL_SHARED_LOCKS_REQUIRED(mutex_);
+
+  // For devices that don't have extended nor gatt adverting.
+  api::ble_v2::BleAdvertisementData CreateAdvertisingDataForLegacyDevice();
+
   bool StartAdvertisingLocked(const std::string& service_id)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   bool StartFastAdvertisingLocked(
@@ -181,6 +218,13 @@ class BleV2 final {
                                   PowerLevel power_level, int psm,
                                   const ByteArray& medium_advertisement_bytes,
                                   bool extended_advertisement_advertised)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  // Called by StartScanning when using the async methods.
+  bool StartAsyncScanningLocked(absl::string_view service_id,
+                                PowerLevel power_level)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  // Called by StartScanning when using the async methods.
+  bool StopAsyncScanningLocked(absl::string_view service_id)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   api::ble_v2::TxPowerLevel PowerLevelToTxPowerLevel(PowerLevel power_level);
@@ -204,6 +248,16 @@ class BleV2 final {
   absl::flat_hash_set<api::ble_v2::GattCharacteristic>
       hosted_gatt_characteristics_ ABSL_GUARDED_BY(mutex_);
   absl::flat_hash_set<std::string> scanned_service_ids_ ABSL_GUARDED_BY(mutex_);
+  // This map has the same purpose as the set above, but is used only by
+  // the async StartScanning method.
+  absl::flat_hash_map<std::string,
+                      std::unique_ptr<api::ble_v2::BleMedium::ScanningSession>>
+      service_ids_to_scanning_sessions_ ABSL_GUARDED_BY(mutex_);
+  // Save advertising sessions by service id, used by the async StartAdvertising
+  // method.
+  absl::flat_hash_map<
+      std::string, std::unique_ptr<api::ble_v2::BleMedium::AdvertisingSession>>
+      service_ids_to_advertising_sessions_ ABSL_GUARDED_BY(mutex_);
   std::unique_ptr<CancelableAlarm> lost_alarm_;
   mediums::DiscoveredPeripheralTracker discovered_peripheral_tracker_
       ABSL_GUARDED_BY(mutex_){medium_.IsExtendedAdvertisementsAvailable()};

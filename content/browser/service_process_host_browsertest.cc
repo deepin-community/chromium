@@ -2,11 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/public/browser/service_process_host.h"
 
 #include <string.h>
-
-#include <optional>
 
 #include "base/memory/shared_memory_mapping.h"
 #include "base/memory/unsafe_shared_memory_region.h"
@@ -319,25 +322,6 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessHostBrowserTest, PreloadLibraryBadPath) {
           .Pass());
   observer.WaitForLaunch();
   observer.WaitForCrash();
-}
-
-// This test calls a function that verifies that user32 is loaded.
-IN_PROC_BROWSER_TEST_F(ServiceProcessHostBrowserTest, PinUser32) {
-  EchoServiceProcessObserver observer;
-  auto echo_service = ServiceProcessHost::Launch<echo::mojom::EchoService>(
-      ServiceProcessHost::Options()
-          .WithPinUser32(ServiceProcessHostPinUser32::GetPassKey())
-          .Pass());
-  observer.WaitForLaunch();
-
-  base::RunLoop loop;
-  echo_service->CallUser32(
-      std::string("lowercase"),
-      base::BindLambdaForTesting([&](const std::string& upper) {
-        EXPECT_EQ(upper, std::string("LOWERCASE"));
-        loop.Quit();
-      }));
-  loop.Run();
 }
 #endif  // BUILDFLAG(IS_WIN)
 

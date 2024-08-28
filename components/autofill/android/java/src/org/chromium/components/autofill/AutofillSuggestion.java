@@ -25,11 +25,13 @@ public class AutofillSuggestion extends DropdownItemBase {
     @Nullable private final String mItemTag;
     private final int mIconId;
     private final boolean mIsIconAtStart;
-    private final int mPopupItemId;
+    private final int mSuggestionType;
     private final boolean mIsDeletable;
     private final boolean mIsMultilineLabel;
     private final boolean mIsBoldLabel;
+    private final boolean mApplyDeactivatedStyle;
     @Nullable private final String mFeatureForIPH;
+    private final String mIPHDescriptionText;
     @Nullable private final GURL mCustomIconUrl;
     @Nullable private final Drawable mIconDrawable;
 
@@ -64,11 +66,13 @@ public class AutofillSuggestion extends DropdownItemBase {
             @Nullable String itemTag,
             int iconId,
             boolean isIconAtStart,
-            @PopupItemId int popupItemId,
+            @SuggestionType int popupItemId,
             boolean isDeletable,
             boolean isMultilineLabel,
             boolean isBoldLabel,
+            boolean applyDeactivatedStyle,
             @Nullable String featureForIPH,
+            String iphDescriptionText,
             @Nullable GURL customIconUrl,
             @Nullable Drawable iconDrawable) {
         mLabel = label;
@@ -78,11 +82,13 @@ public class AutofillSuggestion extends DropdownItemBase {
         mItemTag = itemTag;
         mIconId = iconId;
         mIsIconAtStart = isIconAtStart;
-        mPopupItemId = popupItemId;
+        mSuggestionType = popupItemId;
         mIsDeletable = isDeletable;
         mIsMultilineLabel = isMultilineLabel;
         mIsBoldLabel = isBoldLabel;
+        mApplyDeactivatedStyle = applyDeactivatedStyle;
         mFeatureForIPH = featureForIPH;
+        mIPHDescriptionText = iphDescriptionText;
         mCustomIconUrl = customIconUrl;
         mIconDrawable = iconDrawable;
     }
@@ -132,7 +138,7 @@ public class AutofillSuggestion extends DropdownItemBase {
 
     @Override
     public int getLabelFontColorResId() {
-        if (mPopupItemId == PopupItemId.INSECURE_CONTEXT_PAYMENT_DISABLED_MESSAGE) {
+        if (mSuggestionType == SuggestionType.INSECURE_CONTEXT_PAYMENT_DISABLED_MESSAGE) {
             return R.color.insecure_context_payment_disabled_message_text;
         }
         return super.getLabelFontColorResId();
@@ -158,8 +164,8 @@ public class AutofillSuggestion extends DropdownItemBase {
         return mIconDrawable;
     }
 
-    public int getPopupItemId() {
-        return mPopupItemId;
+    public int getSuggestionType() {
+        return mSuggestionType;
     }
 
     public boolean isDeletable() {
@@ -167,13 +173,21 @@ public class AutofillSuggestion extends DropdownItemBase {
     }
 
     public boolean isFillable() {
-        return mPopupItemId == PopupItemId.ADDRESS_ENTRY
-                || mPopupItemId == PopupItemId.CREDIT_CARD_ENTRY;
+        return mSuggestionType == SuggestionType.ADDRESS_ENTRY
+                || mSuggestionType == SuggestionType.CREDIT_CARD_ENTRY;
+    }
+
+    public boolean applyDeactivatedStyle() {
+        return mApplyDeactivatedStyle;
     }
 
     @Nullable
     public String getFeatureForIPH() {
         return mFeatureForIPH;
+    }
+
+    public String getIPHDescriptionText() {
+        return mIPHDescriptionText;
     }
 
     @Override
@@ -192,11 +206,13 @@ public class AutofillSuggestion extends DropdownItemBase {
                 && Objects.equals(this.mItemTag, other.mItemTag)
                 && this.mIconId == other.mIconId
                 && this.mIsIconAtStart == other.mIsIconAtStart
-                && this.mPopupItemId == other.mPopupItemId
+                && this.mSuggestionType == other.mSuggestionType
                 && this.mIsDeletable == other.mIsDeletable
                 && this.mIsMultilineLabel == other.mIsMultilineLabel
                 && this.mIsBoldLabel == other.mIsBoldLabel
+                && this.mApplyDeactivatedStyle == other.mApplyDeactivatedStyle
                 && Objects.equals(this.mFeatureForIPH, other.mFeatureForIPH)
+                && this.mIPHDescriptionText.equals(other.mIPHDescriptionText)
                 && Objects.equals(this.mCustomIconUrl, other.mCustomIconUrl)
                 && areIconsEqual(this.mIconDrawable, other.mIconDrawable);
     }
@@ -210,11 +226,13 @@ public class AutofillSuggestion extends DropdownItemBase {
                 .setItemTag(mItemTag)
                 .setIconId(mIconId)
                 .setIsIconAtStart(mIsIconAtStart)
-                .setPopupItemId(mPopupItemId)
+                .setSuggestionType(mSuggestionType)
                 .setIsDeletable(mIsDeletable)
                 .setIsMultiLineLabel(mIsMultilineLabel)
                 .setIsBoldLabel(mIsBoldLabel)
+                .setApplyDeactivatedStyle(mApplyDeactivatedStyle)
                 .setFeatureForIPH(mFeatureForIPH)
+                .setIPHDescriptionText(mIPHDescriptionText)
                 .setCustomIconUrl(mCustomIconUrl)
                 .setIconDrawable(mIconDrawable);
     }
@@ -228,13 +246,15 @@ public class AutofillSuggestion extends DropdownItemBase {
         private boolean mIsIconAtStart;
         private boolean mIsDeletable;
         private boolean mIsMultiLineLabel;
+        private boolean mApplyDeactivatedStyle;
         private String mFeatureForIPH;
+        private String mIPHDescriptionText;
         private String mItemTag;
         private String mLabel;
         private String mSecondaryLabel;
         private String mSubLabel;
         private String mSecondarySubLabel;
-        private int mPopupItemId;
+        private int mSuggestionType;
 
         public Builder setIconId(int iconId) {
             this.mIconId = iconId;
@@ -271,8 +291,18 @@ public class AutofillSuggestion extends DropdownItemBase {
             return this;
         }
 
+        public Builder setApplyDeactivatedStyle(boolean applyDeactivatedStyle) {
+            this.mApplyDeactivatedStyle = applyDeactivatedStyle;
+            return this;
+        }
+
         public Builder setFeatureForIPH(String featureForIPH) {
             this.mFeatureForIPH = featureForIPH;
+            return this;
+        }
+
+        public Builder setIPHDescriptionText(String iphDescriptionText) {
+            this.mIPHDescriptionText = iphDescriptionText;
             return this;
         }
 
@@ -301,13 +331,13 @@ public class AutofillSuggestion extends DropdownItemBase {
             return this;
         }
 
-        public Builder setPopupItemId(int popupItemId) {
-            this.mPopupItemId = popupItemId;
+        public Builder setSuggestionType(int popupItemId) {
+            this.mSuggestionType = popupItemId;
             return this;
         }
 
         public AutofillSuggestion build() {
-            assert mPopupItemId == PopupItemId.SEPARATOR || !TextUtils.isEmpty(mLabel)
+            assert mSuggestionType == SuggestionType.SEPARATOR || !TextUtils.isEmpty(mLabel)
                     : "Only separators may have an empty label.";
             assert (mSubLabel != null)
                     : "The AutofillSuggestion sublabel can be empty but never null.";
@@ -319,11 +349,13 @@ public class AutofillSuggestion extends DropdownItemBase {
                     mItemTag,
                     mIconId,
                     mIsIconAtStart,
-                    mPopupItemId,
+                    mSuggestionType,
                     mIsDeletable,
                     mIsMultiLineLabel,
                     mIsBoldLabel,
+                    mApplyDeactivatedStyle,
                     mFeatureForIPH,
+                    mIPHDescriptionText,
                     mCustomIconUrl,
                     mIconDrawable);
         }

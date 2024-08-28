@@ -678,13 +678,6 @@ bool PepperGraphics2DHost::PrepareTransferableResource(
                               main_thread_context_->SharedImageInterface()
                                   ->GetCapabilities()
                                   .supports_scanout_shared_images;
-    uint32_t texture_target = GL_TEXTURE_2D;
-    if (overlays_supported) {
-      texture_target = gpu::GetBufferTextureTarget(
-          gfx::BufferUsage::SCANOUT,
-          viz::SinglePlaneSharedImageFormatToBufferFormat(format),
-          main_thread_context_->ContextCapabilities());
-    }
 
     const gfx::Size size(image_data_->width(), image_data_->height());
 
@@ -706,13 +699,12 @@ bool PepperGraphics2DHost::PrepareTransferableResource(
       // We will potentially write to this SharedImage via the raster interface
       // (which might be going over GLES2) and will later send it off to the
       // display compositor.
-      uint32_t usage = gpu::SHARED_IMAGE_USAGE_GLES2_WRITE |
-                       gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
+      gpu::SharedImageUsageSet usage = gpu::SHARED_IMAGE_USAGE_GLES2_WRITE |
+                                       gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
       if (overlays_supported)
         usage |= gpu::SHARED_IMAGE_USAGE_SCANOUT;
       shared_image = sii->CreateSharedImage(
-          format, size, gfx::ColorSpace(), kTopLeft_GrSurfaceOrigin,
-          kPremul_SkAlphaType, usage, "PepperGraphics2DHost",
+          {format, size, gfx::ColorSpace(), usage, "PepperGraphics2DHost"},
           gpu::kNullSurfaceHandle);
       CHECK(shared_image);
       in_sync_token = sii->GenUnverifiedSyncToken();
@@ -735,9 +727,11 @@ bool PepperGraphics2DHost::PrepareTransferableResource(
         size.width(), size.height(), viz::ToClosestSkColorType(true, format),
         kUnknown_SkAlphaType);
     ri->WaitSyncTokenCHROMIUM(in_sync_token.GetConstData());
+
+    uint32_t texture_target = shared_image->GetTextureTarget();
+
     ri->WritePixels(shared_image->mailbox(), /*dst_x_offset=*/0,
-                    /*dst_y_offset=*/0,
-                    /*dst_plane_index=*/0, texture_target,
+                    /*dst_y_offset=*/0, texture_target,
                     SkPixmap(src_info, src, src_info.minRowBytes()));
 
     gpu::SyncToken out_sync_token;
@@ -786,7 +780,7 @@ bool PepperGraphics2DHost::PrepareTransferableResource(
              pixel_image_size, viz::SinglePlaneFormat::kRGBA_8888));
   image_data_->Unmap();
 
-  *transferable_resource = viz::TransferableResource::MakeSoftware(
+  *transferable_resource = viz::TransferableResource::MakeSoftwareSharedBitmap(
       shared_bitmap->id(), gpu::SyncToken(), pixel_image_size,
       viz::SinglePlaneFormat::kRGBA_8888,
       viz::TransferableResource::ResourceSource::kPepperGraphics2D);

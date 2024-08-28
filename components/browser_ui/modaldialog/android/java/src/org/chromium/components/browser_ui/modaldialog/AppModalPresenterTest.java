@@ -18,7 +18,7 @@ import static org.chromium.components.browser_ui.modaldialog.ModalDialogTestUtil
 import static org.chromium.components.browser_ui.modaldialog.ModalDialogTestUtils.checkPendingSize;
 import static org.chromium.components.browser_ui.modaldialog.ModalDialogTestUtils.createDialog;
 import static org.chromium.components.browser_ui.modaldialog.ModalDialogTestUtils.createDialogWithDialogStyle;
-import static org.chromium.components.browser_ui.modaldialog.ModalDialogTestUtils.showDialog;
+import static org.chromium.components.browser_ui.modaldialog.ModalDialogTestUtils.showDialogInRoot;
 
 import android.app.Activity;
 import android.graphics.Color;
@@ -42,6 +42,7 @@ import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
@@ -49,14 +50,12 @@ import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.components.browser_ui.modaldialog.test.R;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.test.util.BlankUiTestActivity;
-import org.chromium.ui.test.util.DisableAnimationsTestRule;
 
 import java.util.concurrent.TimeoutException;
 
@@ -64,9 +63,6 @@ import java.util.concurrent.TimeoutException;
 @RunWith(BaseJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 public class AppModalPresenterTest {
-    @ClassRule
-    public static DisableAnimationsTestRule disableAnimationsRule = new DisableAnimationsTestRule();
-
     @ClassRule
     public static BaseActivityTestRule<BlankUiTestActivity> activityTestRule =
             new BaseActivityTestRule<>(BlankUiTestActivity.class);
@@ -89,7 +85,7 @@ public class AppModalPresenterTest {
     @BeforeClass
     public static void setupSuite() {
         activityTestRule.launchActivity(null);
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     sActivity = activityTestRule.getActivity();
                     sManager =
@@ -106,7 +102,7 @@ public class AppModalPresenterTest {
 
     @After
     public void tearDown() {
-        TestThreadUtils.runOnUiThreadBlocking(sManager::destroy);
+        ThreadUtils.runOnUiThreadBlocking(sManager::destroy);
     }
 
     @Test
@@ -121,8 +117,8 @@ public class AppModalPresenterTest {
         checkCurrentPresenter(sManager, null);
 
         // Add three dialogs available for showing. The app modal dialog should be shown first.
-        showDialog(sManager, dialog1, ModalDialogType.APP);
-        showDialog(sManager, dialog2, ModalDialogType.APP);
+        showDialogInRoot(sManager, dialog1, ModalDialogType.APP);
+        showDialogInRoot(sManager, dialog2, ModalDialogType.APP);
         checkPendingSize(sManager, ModalDialogType.APP, 1);
         onView(withText("1")).check(matches(isDisplayed()));
         checkCurrentPresenter(sManager, ModalDialogType.APP);
@@ -149,7 +145,7 @@ public class AppModalPresenterTest {
         PropertyModel dialog = createDialog(sActivity, sManager, "title", mTestObserver);
         mExpectedDismissalCause = DialogDismissalCause.NAVIGATE_BACK_OR_TOUCH_OUTSIDE;
 
-        showDialog(sManager, dialog, ModalDialogType.APP);
+        showDialogInRoot(sManager, dialog, ModalDialogType.APP);
 
         // Dismiss the tab modal dialog and verify dismissal cause.
         int callCount = mTestObserver.onDialogDismissedCallback.getCallCount();
@@ -173,14 +169,14 @@ public class AppModalPresenterTest {
                     }
                 };
 
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     dialog.set(
                             ModalDialogProperties.APP_MODAL_DIALOG_BACK_PRESS_HANDLER,
                             onBackPressedCallback);
                 });
 
-        showDialog(sManager, dialog, ModalDialogType.APP);
+        showDialogInRoot(sManager, dialog, ModalDialogType.APP);
 
         Espresso.pressBack();
         callbackHelper.waitForCallback(0);
@@ -197,7 +193,7 @@ public class AppModalPresenterTest {
                         "title",
                         mTestObserver,
                         ModalDialogProperties.ButtonStyles.PRIMARY_OUTLINE_NEGATIVE_FILLED);
-        showDialog(sManager, dialog, ModalDialogType.APP);
+        showDialogInRoot(sManager, dialog, ModalDialogType.APP);
         onView(withText(R.string.cancel)).check(matches(hasCurrentTextColor(Color.WHITE)));
         onView(withText(R.string.ok)).check(matches(not(hasCurrentTextColor(Color.WHITE))));
     }
@@ -213,7 +209,7 @@ public class AppModalPresenterTest {
                         "title",
                         mTestObserver,
                         ModalDialogProperties.ButtonStyles.PRIMARY_FILLED_NEGATIVE_OUTLINE);
-        showDialog(sManager, dialog, ModalDialogType.APP);
+        showDialogInRoot(sManager, dialog, ModalDialogType.APP);
         onView(withText(R.string.cancel)).check(matches(not(hasCurrentTextColor(Color.WHITE))));
         onView(withText(R.string.ok)).check(matches(hasCurrentTextColor(Color.WHITE)));
     }
@@ -230,7 +226,7 @@ public class AppModalPresenterTest {
                         "title",
                         mTestObserver,
                         ModalDialogProperties.DialogStyles.FULLSCREEN_DARK_DIALOG);
-        showDialog(sManager, dialog, ModalDialogType.APP);
+        showDialogInRoot(sManager, dialog, ModalDialogType.APP);
         Window window = ((AppModalPresenter) sManager.getCurrentPresenterForTest()).getWindow();
 
         assertEquals(

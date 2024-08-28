@@ -100,7 +100,11 @@ class UI_ANDROID_EXPORT EventForwarder {
                    jfloat screen_x,
                    jfloat screen_y,
                    const base::android::JavaParamRef<jobjectArray>& j_mimeTypes,
-                   const base::android::JavaParamRef<jstring>& j_content);
+                   const base::android::JavaParamRef<jstring>& j_content,
+                   const base::android::JavaParamRef<jobjectArray>& j_filenames,
+                   const base::android::JavaParamRef<jstring>& j_text,
+                   const base::android::JavaParamRef<jstring>& j_html,
+                   const base::android::JavaParamRef<jstring>& j_url);
 
   jboolean OnGestureEvent(JNIEnv* env,
                           const base::android::JavaParamRef<jobject>& jobj,
@@ -173,6 +177,7 @@ class UI_ANDROID_EXPORT EventForwarder {
   base::android::ScopedJavaGlobalRef<jobject> java_obj_;
 
   base::ObserverList<Observer> observers_;
+  bool send_touch_moves_to_observers;
 };
 
 }  // namespace ui

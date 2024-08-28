@@ -94,10 +94,9 @@ class StreamCreator {
   // Reads everything from |data_pipe_consumer_| and returns it in a vector.
   Vector<uint8_t> ReadAllPendingData() {
     Vector<uint8_t> data;
-    const void* buffer = nullptr;
-    uint32_t buffer_num_bytes = 0;
+    base::span<const uint8_t> buffer;
     MojoResult result = data_pipe_consumer_->BeginReadData(
-        &buffer, &buffer_num_bytes, MOJO_BEGIN_READ_DATA_FLAG_NONE);
+        MOJO_BEGIN_READ_DATA_FLAG_NONE, buffer);
 
     switch (result) {
       case MOJO_RESULT_OK:
@@ -111,8 +110,8 @@ class StreamCreator {
         return data;
     }
 
-    data.Append(static_cast<const uint8_t*>(buffer), buffer_num_bytes);
-    data_pipe_consumer_->EndReadData(buffer_num_bytes);
+    data.AppendRange(buffer.begin(), buffer.end());
+    data_pipe_consumer_->EndReadData(buffer.size());
     return data;
   }
 
@@ -139,7 +138,7 @@ TEST(OutgoingStreamTest, WriteArrayBuffer) {
   auto* writer =
       outgoing_stream->Writable()->getWriter(script_state, ASSERT_NO_EXCEPTION);
   auto* chunk = DOMArrayBuffer::Create("A", 1);
-  ScriptPromise result =
+  ScriptPromiseUntyped result =
       writer->write(script_state, ScriptValue::From(script_state, chunk),
                     ASSERT_NO_EXCEPTION);
   ScriptPromiseTester tester(scope.GetScriptState(), result);
@@ -161,7 +160,7 @@ TEST(OutgoingStreamTest, WriteArrayBufferView) {
   auto* buffer = DOMArrayBuffer::Create("*B", 2);
   // Create a view into the buffer with offset 1, ie. "B".
   auto* chunk = DOMUint8Array::Create(buffer, 1, 1);
-  ScriptPromise result =
+  ScriptPromiseUntyped result =
       writer->write(script_state, ScriptValue::From(script_state, chunk),
                     ASSERT_NO_EXCEPTION);
   ScriptPromiseTester tester(scope.GetScriptState(), result);
@@ -192,7 +191,7 @@ TEST(OutgoingStreamTest, AsyncWrite) {
   // Write a chunk that definitely will not fit in the pipe.
   const size_t kChunkSize = kPipeCapacity * 3;
   auto* chunk = DOMArrayBuffer::Create(kChunkSize, 1);
-  ScriptPromise result =
+  ScriptPromiseUntyped result =
       writer->write(script_state, ScriptValue::From(script_state, chunk),
                     ASSERT_NO_EXCEPTION);
   ScriptPromiseTester tester(scope.GetScriptState(), result);
@@ -246,7 +245,7 @@ TEST(OutgoingStreamTest, WriteThenClose) {
   auto* writer =
       outgoing_stream->Writable()->getWriter(script_state, ASSERT_NO_EXCEPTION);
   auto* chunk = DOMArrayBuffer::Create("D", 1);
-  ScriptPromise write_promise =
+  ScriptPromiseUntyped write_promise =
       writer->write(script_state, ScriptValue::From(script_state, chunk),
                     ASSERT_NO_EXCEPTION);
 
@@ -259,7 +258,7 @@ TEST(OutgoingStreamTest, WriteThenClose) {
                                  WrapWeakPersistent(outgoing_stream)));
   });
 
-  ScriptPromise close_promise =
+  ScriptPromiseUntyped close_promise =
       writer->close(script_state, ASSERT_NO_EXCEPTION);
   ScriptPromiseTester write_tester(scope.GetScriptState(), write_promise);
   ScriptPromiseTester close_tester(scope.GetScriptState(), close_promise);
@@ -286,7 +285,7 @@ TEST(OutgoingStreamTest, DataPipeClosed) {
 
   auto* writer =
       outgoing_stream->Writable()->getWriter(script_state, ASSERT_NO_EXCEPTION);
-  ScriptPromise closed = writer->closed(script_state);
+  ScriptPromiseUntyped closed = writer->closed(script_state);
   ScriptPromiseTester closed_tester(script_state, closed);
 
   EXPECT_CALL(stream_creator.GetMockClient(), ForgetStream());
@@ -305,7 +304,7 @@ TEST(OutgoingStreamTest, DataPipeClosed) {
             "The stream was aborted by the remote server");
 
   auto* chunk = DOMArrayBuffer::Create('C', 1);
-  ScriptPromise result =
+  ScriptPromiseUntyped result =
       writer->write(script_state, ScriptValue::From(script_state, chunk),
                     ASSERT_NO_EXCEPTION);
   ScriptPromiseTester write_tester(script_state, result);
@@ -336,12 +335,12 @@ TEST(OutgoingStreamTest, DataPipeClosedDuringAsyncWrite) {
 
   const size_t kChunkSize = kPipeCapacity * 2;
   auto* chunk = DOMArrayBuffer::Create(kChunkSize, 1);
-  ScriptPromise result =
+  ScriptPromiseUntyped result =
       writer->write(script_state, ScriptValue::From(script_state, chunk),
                     ASSERT_NO_EXCEPTION);
   ScriptPromiseTester write_tester(script_state, result);
 
-  ScriptPromise closed = writer->closed(script_state);
+  ScriptPromiseUntyped closed = writer->closed(script_state);
   ScriptPromiseTester closed_tester(script_state, closed);
 
   EXPECT_CALL(stream_creator.GetMockClient(), ForgetStream());

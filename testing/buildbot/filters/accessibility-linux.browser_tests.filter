@@ -7,6 +7,7 @@
 # opposite of the situation when --force-renderer-accessibility is used.
 -AccessibilityLabelsBrowserTest.NotEnabledWithoutScreenReader
 -All/PdfOcrControllerBrowserTest.NotEnabledWithoutScreenReader/0
+-AXMainNodeAnnotatorControllerBrowserTest.NotEnabledWithoutScreenReader
 
 # These tests still need to be triaged and either okayed to skip or fixed.
 -AdsInterventionManagerTestWithEnforcement.AdsInterventionEnforced_PageActivated
@@ -118,6 +119,7 @@
 -LargeStickyAdViolationBrowserTest.LargeStickyAd_AdInterventionTriggered
 -OfferNotificationIconViewBrowserTest.InvokeUi_show_offer_notification_icon_expanded
 -OverlayPopupAdViolationBrowserTest.OverlayPopupAd_AdInterventionTriggered
+-PasswordManagerUITest.App
 -PdfOcrMenuObserverTest.PdfOcrItemNotShownWithoutScreenReader
 -PermissionManagerBrowserTest.ServiceWorkerPermissionAfterRendererCrash
 -PermissionManagerBrowserTest.ServiceWorkerPermissionQueryIncognitoClose
@@ -237,4 +239,3 @@
 -WebAppIntegration.WAI_73_37NotPromotable_17
 -WebAppIntegration.WAI_73_37Standalone_17
 -WebRtcDesktopCaptureBrowserTest.RunP2PScreenshareWhileSharingTab
--WebViewPdfTest.ContextMenuNavigationInMimeHandlerView

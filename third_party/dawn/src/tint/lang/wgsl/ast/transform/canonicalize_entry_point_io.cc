@@ -63,8 +63,8 @@ struct MemberInfo {
     const StructMember* member;
     /// The struct member location if provided
     std::optional<uint32_t> location;
-    /// The struct member index if provided
-    std::optional<uint32_t> index;
+    /// The struct member blend_src if provided
+    std::optional<uint32_t> blend_src;
     /// The struct member color if provided
     std::optional<uint32_t> color;
 };
@@ -103,7 +103,6 @@ uint32_t BuiltinOrder(core::BuiltinValue builtin) {
             break;
     }
     TINT_UNREACHABLE();
-    return 0;
 }
 
 // Returns true if `attr` is a shader IO attribute.
@@ -189,7 +188,7 @@ struct CanonicalizeEntryPointIO::State {
         auto* cloned = ctx.Clone(in);
         out.Push(cloned);
         if (auto* builtin = in->As<BuiltinAttribute>()) {
-            builtin_attrs.Add(cloned->As<BuiltinAttribute>(), ctx.src->Sem().Get(builtin)->Value());
+            builtin_attrs.Add(cloned->As<BuiltinAttribute>(), builtin->builtin);
         }
     }
 
@@ -221,10 +220,9 @@ struct CanonicalizeEntryPointIO::State {
         } else {
             // attr belongs to the source program.
             // Obtain the builtin value from the semantic info.
-            return ctx.src->Sem().Get(attr)->Value();
+            return attr->builtin;
         }
         TINT_ICE() << "could not obtain builtin value from attribute";
-        return core::BuiltinValue::kUndefined;
     }
 
     /// @param attrs the input attribute list
@@ -365,7 +363,7 @@ struct CanonicalizeEntryPointIO::State {
             Symbol symbol = input_names.emplace(name).second ? b.Symbols().Register(name)
                                                              : b.Symbols().New(name);
             wrapper_struct_param_members.Push({b.Member(symbol, ast_type, std::move(attrs)),
-                                               location, /* index */ std::nullopt, color});
+                                               location, /* blend_src */ std::nullopt, color});
             const Expression* expr = b.MemberAccessor(InputStructSymbol(), symbol);
 
             // If this is a fragment position builtin and we're targeting D3D, we need to invert the
@@ -496,7 +494,6 @@ struct CanonicalizeEntryPointIO::State {
         for (auto* member : str->Members()) {
             if (TINT_UNLIKELY(member->Type()->Is<core::type::Struct>())) {
                 TINT_ICE() << "nested IO struct";
-                continue;
             }
 
             if (auto* wave_intrinsic_call = CallWaveIntrinsic(member->Declaration()->attributes)) {
@@ -530,7 +527,6 @@ struct CanonicalizeEntryPointIO::State {
             for (auto* member : str->Members()) {
                 if (TINT_UNLIKELY(member->Type()->Is<core::type::Struct>())) {
                     TINT_ICE() << "nested IO struct";
-                    continue;
                 }
 
                 auto name = member->Name().Name();
@@ -593,8 +589,8 @@ struct CanonicalizeEntryPointIO::State {
 
     /// Comparison function used to reorder struct members such that all members with
     /// color attributes appear first (ordered by color slot), then location attributes (ordered by
-    /// location slot), then index attributes (ordered by index slot), followed by those with
-    /// builtin attributes (ordered by BuiltinOrder).
+    /// location slot), then blend_src attributes (ordered by blend_src slot), followed by those
+    /// with builtin attributes (ordered by BuiltinOrder).
     /// @param x a struct member
     /// @param y another struct member
     /// @returns true if a comes before b
@@ -615,12 +611,12 @@ struct CanonicalizeEntryPointIO::State {
             return x.location.has_value();
         }
 
-        if (x.index.has_value() && y.index.has_value() && x.index != y.index) {
-            // Both have index attributes: smallest goes first.
-            return x.index < y.index;
-        } else if (x.index.has_value() != y.index.has_value()) {
-            // The member with the index goes first
-            return x.index.has_value();
+        if (x.blend_src.has_value() && y.blend_src.has_value() && x.blend_src != y.blend_src) {
+            // Both have blend_src attributes: smallest goes first.
+            return x.blend_src < y.blend_src;
+        } else if (x.blend_src.has_value() != y.blend_src.has_value()) {
+            // The member with the blend_src goes first
+            return x.blend_src.has_value();
         }
 
         {
@@ -979,8 +975,7 @@ Transform::ApplyResult CanonicalizeEntryPointIO::Apply(const Program& src,
 
     auto* cfg = inputs.Get<Config>();
     if (cfg == nullptr) {
-        b.Diagnostics().AddError(diag::System::Transform,
-                                 "missing transform data for " + std::string(TypeInfo().name));
+        b.Diagnostics().AddError(Source{}) << "missing transform data for " << TypeInfo().name;
         return resolver::Resolve(b);
     }
 
@@ -1010,6 +1005,8 @@ Transform::ApplyResult CanonicalizeEntryPointIO::Apply(const Program& src,
     ctx.Clone();
     return resolver::Resolve(b);
 }
+
+CanonicalizeEntryPointIO::Config::Config() = default;
 
 CanonicalizeEntryPointIO::Config::Config(ShaderStyle style,
                                          uint32_t sample_mask,

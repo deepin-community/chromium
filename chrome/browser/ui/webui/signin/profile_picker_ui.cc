@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/webui/signin/profile_picker_ui.h"
 
+#include "base/feature_list.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/buildflag.h"
@@ -16,11 +17,12 @@
 #include "chrome/browser/profiles/profile_shortcut_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
-#include "chrome/browser/signin/signin_features.h"
 #include "chrome/browser/signin/signin_util.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/managed_ui.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/webui/signin/profile_picker_handler.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"
 #include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
@@ -107,7 +109,17 @@ int GetMainViewTitleId() {
 }
 
 void AddStrings(content::WebUIDataSource* html_source) {
-  static constexpr webui::LocalizedString kLocalizedStrings[] = {
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  int profile_type_choice_subtitle =
+      IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_PROFILE_TYPE_CHOICE_SUBTITLE_LACROS;
+#else
+  int profile_type_choice_subtitle =
+      base::FeatureList::IsEnabled(switches::kExplicitBrowserSigninUIOnDesktop)
+          ? IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_PROFILE_TYPE_CHOICE_SUBTITLE_UNO
+          : IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_PROFILE_TYPE_CHOICE_SUBTITLE;
+#endif
+
+  static webui::LocalizedString kLocalizedStrings[] = {
       {"mainViewSubtitle",
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
        IDS_PROFILE_PICKER_MAIN_VIEW_SUBTITLE_LACROS
@@ -148,13 +160,7 @@ void AddStrings(content::WebUIDataSource* html_source) {
       {"backButtonAriaLabel", IDS_PROFILE_PICKER_BACK_BUTTON_ARIA_LABEL},
       {"profileTypeChoiceTitle",
        IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_PROFILE_TYPE_CHOICE_TITLE},
-      {"profileTypeChoiceSubtitle",
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-       IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_PROFILE_TYPE_CHOICE_SUBTITLE_LACROS
-#else
-       IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_PROFILE_TYPE_CHOICE_SUBTITLE
-#endif
-      },
+      {"profileTypeChoiceSubtitle", profile_type_choice_subtitle},
       {"notNowButtonLabel",
        IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_NOT_NOW_BUTTON_LABEL},
       {"profileSwitchTitle", IDS_PROFILE_PICKER_PROFILE_SWITCH_TITLE},
@@ -216,8 +222,6 @@ void AddStrings(content::WebUIDataSource* html_source) {
   html_source->AddString("managedDeviceDisclaimer",
                          GetManagedDeviceDisclaimer());
 
-  webui::SetupChromeRefresh2023(html_source);
-
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
   std::string remove_warning_profile = l10n_util::GetStringFUTF8(
       IDS_PROFILE_PICKER_REMOVE_WARNING_SIGNED_IN_PROFILE_LACROS,
@@ -269,7 +273,7 @@ void AddStrings(content::WebUIDataSource* html_source) {
 }  // namespace
 
 ProfilePickerUI::ProfilePickerUI(content::WebUI* web_ui)
-    : content::WebUIController(web_ui) {
+    : TopChromeWebUIController(web_ui, /*enable_chrome_send=*/true) {
   Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* html_source =
       content::WebUIDataSource::CreateAndAdd(
@@ -301,6 +305,23 @@ ProfilePickerUI::ProfilePickerUI(content::WebUI* web_ui)
 }
 
 ProfilePickerUI::~ProfilePickerUI() = default;
+
+void ProfilePickerUI::CreateHelpBubbleHandler(
+    mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> client,
+    mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler> handler) {
+  help_bubble_handler_ = std::make_unique<user_education::HelpBubbleHandler>(
+      std::move(handler), std::move(client), this,
+      std::vector<ui::ElementIdentifier>{});
+}
+
+void ProfilePickerUI::BindInterface(
+    mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandlerFactory>
+        pending_receiver) {
+  if (help_bubble_handler_factory_receiver_.is_bound()) {
+    help_bubble_handler_factory_receiver_.reset();
+  }
+  help_bubble_handler_factory_receiver_.Bind(std::move(pending_receiver));
+}
 
 // static
 gfx::Size ProfilePickerUI::GetMinimumSize() {

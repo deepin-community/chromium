@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/web_test/renderer/event_sender.h"
 
 #include <stddef.h>
@@ -142,7 +147,7 @@ WebInputEvent::Type PointerEventTypeForTouchPointState(
       return WebInputEvent::Type::kPointerMove;
     case WebTouchPoint::State::kStateStationary:
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return WebInputEvent::Type::kUndefined;
   }
 }
@@ -211,7 +216,7 @@ WebMouseEvent::Button GetButtonTypeFromButtonNumber(int button_code) {
     case 4:
       return WebMouseEvent::Button::kForward;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return WebMouseEvent::Button::kNoButton;
 }
 
@@ -232,7 +237,7 @@ int GetWebMouseEventModifierForButton(WebMouseEvent::Button button) {
     case WebPointerProperties::Button::kEraser:
       return 0;  // Not implemented yet
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0;
 }
 
@@ -568,7 +573,7 @@ class EventSenderBindings : public gin::Wrappable<EventSenderBindings> {
     void OnDestruct() override { bindings_->OnFrameDestroyed(); }
 
    private:
-    const raw_ptr<EventSenderBindings, ExperimentalRenderer> bindings_;
+    const raw_ptr<EventSenderBindings> bindings_;
   };
 
   explicit EventSenderBindings(base::WeakPtr<EventSender> sender,
@@ -669,7 +674,7 @@ class EventSenderBindings : public gin::Wrappable<EventSenderBindings> {
   EventSenderBindingsRenderFrameObserver frame_observer_;
 
   base::WeakPtr<EventSender> sender_;
-  const raw_ptr<blink::WebLocalFrame, ExperimentalRenderer> frame_;
+  const raw_ptr<blink::WebLocalFrame> frame_;
 };
 
 gin::WrapperInfo EventSenderBindings::kWrapperInfo = {gin::kEmbedderNativeGin};
@@ -2391,7 +2396,7 @@ void EventSender::GestureEvent(WebInputEvent::Type type,
     case WebInputEvent::Type::kGestureFlingStart:
     case WebInputEvent::Type::kGestureFlingCancel:
       // Flings are no longer handled on the main thread.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return;
     case WebInputEvent::Type::kGestureTap: {
       float tap_count = 1;
@@ -2517,7 +2522,7 @@ void EventSender::GestureEvent(WebInputEvent::Type type,
       }
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   event.unique_touch_event_id = GetUniqueTouchEventId(args);
@@ -2802,7 +2807,7 @@ void EventSender::ReplaySavedEvents() {
         break;
       }
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
   }
 

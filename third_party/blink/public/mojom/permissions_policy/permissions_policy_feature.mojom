@@ -220,7 +220,7 @@ enum PermissionsPolicyFeature {
   kPrivateStateTokenIssuance = 110,
 
   // Client Hint for form factor
-  kClientHintUAFormFactor = 111,
+  kClientHintUAFormFactors = 111,
 
   // Client hint for prefers-reduced-transparency
   kClientHintPrefersReducedTransparency = 112,
@@ -246,6 +246,13 @@ enum PermissionsPolicyFeature {
   // Allow enumerateDevices to return audio output device and setSinkId to
   // accept given device id.
   kSpeakerSelection = 118,
+
+  // Allow a site to issue fetchLater requests.
+  // https://github.com/WICG/pending-beacon/blob/main/docs/fetch-later-api.md
+  kDeferredFetch = 119,
+
+  // Digital Credentials (https://wicg.github.io/digital-credentials/)
+  kDigitalCredentialsGet = 120,
 
   // Don't change assigned numbers of any item, and don't reuse removed slots.
   // Add new features at the end of the enum.

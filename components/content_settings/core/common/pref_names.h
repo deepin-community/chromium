@@ -17,8 +17,6 @@ namespace prefs {
 // enabled. This will block third-party cookies similar to
 // kBlockThirdPartyCookies but with a new UI.
 inline constexpr char kCookieControlsMode[] = "profile.cookie_controls_mode";
-inline constexpr char kBlockTruncatedCookies[] =
-    "profile.cookie_block_truncated";
 
 // Version of the pattern format used to define content settings.
 inline constexpr char kContentSettingsVersion[] =
@@ -67,6 +65,8 @@ inline constexpr char kManagedDefaultInsecurePrivateNetworkSetting[] =
     "profile.managed_default_content_settings.insecure_private_network";
 inline constexpr char kManagedDefaultJavaScriptJitSetting[] =
     "profile.managed_default_content_settings.javascript_jit";
+inline constexpr char kManagedDefaultJavaScriptOptimizerSetting[] =
+    "profile.managed_default_content_settings.javascript_optimizer";
 inline constexpr char kManagedDefaultWebHidGuardSetting[] =
     "profile.managed_default_content_settings.web_hid_guard";
 inline constexpr char kManagedDefaultWindowManagementSetting[] =
@@ -77,9 +77,15 @@ inline constexpr char kManagedDefaultThirdPartyStoragePartitioningSetting[] =
     "profile.managed_default_content_settings.third_party_storage_partitioning";
 inline constexpr char kManagedDefaultWebPrintingSetting[] =
     "profile.managed_default_content_settings.web_printing";
+inline constexpr char kManagedDefaultDirectSocketsSetting[] =
+    "profile.managed_default_content_settings.direct_sockets";
 
 // Preferences that are exclusively used to store managed content settings
 // patterns.
+inline constexpr char kManagedAutomaticFullscreenAllowedForUrls[] =
+    "profile.managed_automatic_fullscreen_allowed_for_urls";
+inline constexpr char kManagedAutomaticFullscreenBlockedForUrls[] =
+    "profile.managed_automatic_fullscreen_blocked_for_urls";
 inline constexpr char kManagedAutoSelectCertificateForUrls[] =
     "profile.managed_auto_select_certificate_for_urls";
 inline constexpr char kManagedClipboardAllowedForUrls[] =
@@ -146,6 +152,10 @@ inline constexpr char kManagedJavaScriptJitAllowedForSites[] =
     "profile.managed_javascript_jit_allowed_for_sites";
 inline constexpr char kManagedJavaScriptJitBlockedForSites[] =
     "profile.managed_javascript_jit_blocked_for_sites";
+inline constexpr char kManagedJavaScriptOptimizerAllowedForSites[] =
+    "profile.managed_javascript_optimizer_allowed_for_sites";
+inline constexpr char kManagedJavaScriptOptimizerBlockedForSites[] =
+    "profile.managed_javascript_optimizer_blocked_for_sites";
 inline constexpr char kManagedWebHidAskForUrls[] =
     "profile.managed_web_hid_ask_for_urls";
 inline constexpr char kManagedWebHidBlockedForUrls[] =
@@ -164,6 +174,10 @@ inline constexpr char kManagedWebPrintingAllowedForUrls[] =
     "profile.managed_web_printing_allowed_for_urls";
 inline constexpr char kManagedWebPrintingBlockedForUrls[] =
     "profile.managed_web_printing_blocked_for_urls";
+inline constexpr char kManagedDirectSocketsAllowedForUrls[] =
+    "profile.managed_direct_sockets_allowed_for_urls";
+inline constexpr char kManagedDirectSocketsBlockedForUrls[] =
+    "profile.managed_direct_sockets_blocked_for_urls";
 
 // Boolean indicating whether the quiet UI is enabled for notification
 // permission requests. This and kEnableNotificationCPSS can't both be true

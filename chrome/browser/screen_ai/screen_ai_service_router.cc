@@ -17,12 +17,15 @@
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/screen_ai/screen_ai_install_state.h"
-#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/service_process_host.h"
 #include "content/public/browser/service_process_host_passkeys.h"
 #include "mojo/public/mojom/base/file_path.mojom.h"
+#include "services/network/public/mojom/network_change_manager.mojom.h"
+#include "services/screen_ai/public/cpp/utilities.h"
 #include "ui/accessibility/accessibility_features.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -31,8 +34,19 @@
 
 namespace {
 
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// If any value is added, please update `ComponentAvailability` in `enums.xml`.
+enum class ComponentAvailability {
+  kAvailable = 0,
+  kUnavailableWithNetwork = 1,
+  kUnavailableWithoutNetwork = 2,
+
+  kMaxValue = kUnavailableWithoutNetwork,
+};
+
 // Maximum time to wait for service initialization.
-// TODO(crbug.com/1506969): Update based on collected metrics.
+// TODO(crbug.com/40947650): Update based on collected metrics.
 constexpr base::TimeDelta kInitializationTimeout = base::Seconds(10);
 
 // The name of the file that contains the list of files that are downloaded with
@@ -108,6 +122,16 @@ std::unique_ptr<ComponentFiles> ComponentFiles::Load(
       files_list_file_name);
 }
 
+void RecordComponentAvailability(bool available) {
+  bool network = !content::GetNetworkConnectionTracker()->IsOffline();
+  base::UmaHistogramEnumeration(
+      "Accessibility.ScreenAI.Component.Available2",
+      available
+          ? ComponentAvailability::kAvailable
+          : (network ? ComponentAvailability::kUnavailableWithNetwork
+                     : ComponentAvailability::kUnavailableWithoutNetwork));
+}
+
 }  // namespace
 
 namespace screen_ai {
@@ -144,6 +168,7 @@ void ScreenAIServiceRouter::GetServiceStateAsync(
   if (service_state) {
     // Either service is already initialized or disabled.
     std::move(callback).Run(*service_state);
+    RecordComponentAvailability(true);
     return;
   }
 
@@ -188,6 +213,7 @@ void ScreenAIServiceRouter::StateChanged(ScreenAIInstallState::State state) {
       for (Service service : all_services) {
         CallPendingStatusRequests(service, false);
       }
+      RecordComponentAvailability(false);
       break;
     }
 
@@ -196,6 +222,7 @@ void ScreenAIServiceRouter::StateChanged(ScreenAIInstallState::State state) {
       for (Service service : all_services) {
         InitializeServiceIfNeeded(service);
       }
+      RecordComponentAvailability(true);
       break;
     }
   }
@@ -228,15 +255,6 @@ void ScreenAIServiceRouter::BindScreenAIAnnotator(
   }
 }
 
-void ScreenAIServiceRouter::BindScreenAIAnnotatorClient(
-    mojo::PendingRemote<mojom::ScreenAIAnnotatorClient> remote) {
-  InitializeServiceIfNeeded(Service::kOCR);
-
-  if (ocr_service_.is_bound()) {
-    ocr_service_->BindAnnotatorClient(std::move(remote));
-  }
-}
-
 void ScreenAIServiceRouter::BindMainContentExtractor(
     mojo::PendingReceiver<mojom::Screen2xMainContentExtractor> receiver) {
   InitializeServiceIfNeeded(Service::kMainContentExtraction);
@@ -249,30 +267,36 @@ void ScreenAIServiceRouter::BindMainContentExtractor(
 
 void ScreenAIServiceRouter::LaunchIfNotRunning() {
   ScreenAIInstallState::GetInstance()->SetLastUsageTime();
-  auto* state_instance = ScreenAIInstallState::GetInstance();
-  screen_ai::ScreenAIInstallState::State install_state =
-      state_instance->get_state();
-
   if (screen_ai_service_factory_.is_bound()) {
     return;
   }
 
-  // TODO(crbug.com/1520814): Remove after crash root cause is fixed.
-  if (install_state != screen_ai::ScreenAIInstallState::State::kDownloaded) {
+  auto* state_instance = ScreenAIInstallState::GetInstance();
+
+  // Callers of the service should ensure that the component is downloaded
+  // before promising it to the users and triggering its launch.
+  // If it is not done, the calling feature will receive no reply when it tries
+  // to use this service.
+  // If the below check fails, look in to the client feature that is triggering
+  // the service and ensure it checks for service readiness before triggering
+  // it.
+  if (!state_instance->IsComponentAvailable()) {
+    LOG(ERROR) << "ScreenAI service launch triggered when component is not "
+                  "available.";
+    screen_ai::ScreenAIInstallState::State install_state =
+        state_instance->get_state();
     base::debug::Alias(&install_state);
     base::debug::DumpWithoutCrashing();
     return;
   }
 
-  // Callers of the service should ensure that the component is downloaded
-  // before promising it to the users and triggering its launch.
-  CHECK(state_instance->IsComponentAvailable())
-      << "ScreenAI service launch triggered when component is not "
-         "available.";
-
+  base::FilePath binary_path = state_instance->get_component_binary_path();
 #if BUILDFLAG(IS_WIN)
-  base::FilePath library_path = state_instance->get_component_binary_path();
-  std::vector<base::FilePath> preload_libraries = {library_path};
+  std::vector<base::FilePath> preload_libraries = {binary_path};
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  std::vector<std::string> extra_switches = {
+      base::StringPrintf("--%s=%s", screen_ai::GetBinaryPathSwitch(),
+                         binary_path.MaybeAsASCII().c_str())};
 #endif  // BUILDFLAG(IS_WIN)
 
   content::ServiceProcessHost::Launch(
@@ -283,6 +307,8 @@ void ScreenAIServiceRouter::LaunchIfNotRunning() {
           .WithPreloadedLibraries(
               preload_libraries,
               content::ServiceProcessHostPreloadLibraries::GetPassKey())
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+          .WithExtraCommandLineSwitches(extra_switches)
 #endif  // BUILDFLAG(IS_WIN)
           .Pass());
 }

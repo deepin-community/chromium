@@ -5,13 +5,14 @@
 #include "components/signin/internal/identity_manager/account_tracker_service.h"
 
 #include <stddef.h>
+
 #include <sstream>
 #include <string>
+#include <string_view>
 
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/containers/contains.h"
-#include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -23,7 +24,6 @@
 #include "base/notreached.h"
 #include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/task_traits.h"
@@ -37,6 +37,7 @@
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/signin/internal/identity_manager/account_capabilities_constants.h"
 #include "components/signin/internal/identity_manager/account_info_util.h"
+#include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_capabilities.h"
@@ -68,6 +69,7 @@ const char kLastDownloadedImageURLWithSizeKey[] =
 const char kAccountChildAttributeKey[] = "is_supervised_child";
 const char kAdvancedProtectionAccountStatusKey[] =
     "is_under_advanced_protection";
+const char kAccountAccessPoint[] = "access_point";
 
 // This key is deprecated since 2021/07 and should be removed after migration.
 // It was replaced by kAccountChildAttributeKey.
@@ -127,12 +129,12 @@ void RemoveImage(const base::FilePath& image_path) {
 }
 
 // Converts the capability service name into a nested Chrome pref path.
-std::string GetCapabilityPrefPath(base::StringPiece capability_name) {
+std::string GetCapabilityPrefPath(std::string_view capability_name) {
   return base::StrCat({"accountcapabilities.", capability_name});
 }
 
 void SetAccountCapabilityState(base::Value::Dict& value,
-                               base::StringPiece capability_name,
+                               std::string_view capability_name,
                                signin::Tribool state) {
   value.SetByDottedPath(GetCapabilityPrefPath(capability_name),
                         static_cast<int>(state));
@@ -155,14 +157,14 @@ signin::Tribool ParseTribool(std::optional<int> int_value) {
 }
 
 signin::Tribool FindAccountCapabilityState(const base::Value::Dict& dict,
-                                           base::StringPiece name) {
+                                           std::string_view name) {
   std::optional<int> capability =
       dict.FindIntByDottedPath(GetCapabilityPrefPath(name));
   return ParseTribool(capability);
 }
 
 void GetString(const base::Value::Dict& dict,
-               base::StringPiece key,
+               std::string_view key,
                std::string& result) {
   if (const std::string* value = dict.FindString(key)) {
     result = *value;
@@ -298,8 +300,8 @@ void AccountTrackerService::NotifyAccountRemoved(
 
 void AccountTrackerService::StartTrackingAccount(
     const CoreAccountId& account_id) {
-  // TODO(crbug.com/1488401): Change into a CHECK once there are no crash reports for
-  // tracking empty account ids.
+  // TODO(crbug.com/40283610): Change into a CHECK once there are no crash
+  // reports for tracking empty account ids.
   DUMP_WILL_BE_CHECK(!account_id.empty());
   if (!base::Contains(accounts_, account_id)) {
     DVLOG(1) << "StartTracking " << account_id;
@@ -381,14 +383,11 @@ void AccountTrackerService::SetAccountCapabilities(
 
 #if !(BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS))
   // Set the child account status based on the account capabilities.
-  if (supervised_user::IsChildAccountSupervisionEnabled()) {
-    modified =
-        UpdateAccountInfoChildStatus(
-            account_info,
-            account_info.capabilities.is_subject_to_parental_controls() ==
-                signin::Tribool::kTrue) ||
-        modified;
-  }
+  modified = UpdateAccountInfoChildStatus(
+                 account_info,
+                 account_info.capabilities.is_subject_to_parental_controls() ==
+                     signin::Tribool::kTrue) ||
+             modified;
 #endif
 
   if (!modified) {
@@ -691,6 +690,12 @@ void AccountTrackerService::LoadFromPrefs() {
           is_under_advanced_protection.value();
     }
 
+    std::optional<int> access_point = dict->FindInt(kAccountAccessPoint);
+    if (access_point.has_value()) {
+      account_info.access_point =
+          static_cast<signin_metrics::AccessPoint>(access_point.value());
+    }
+
     if (std::optional<int> deprecated_can_offer_extended_chrome_sync_promos =
             dict->FindIntByDottedPath(
                 kDeprecatedCanOfferExtendedChromeSyncPromosPrefPath)) {
@@ -791,6 +796,7 @@ void AccountTrackerService::SaveToPrefs(const AccountInfo& account_info) {
             static_cast<int>(account_info.is_child_account));
   dict->Set(kAdvancedProtectionAccountStatusKey,
             account_info.is_under_advanced_protection);
+  dict->Set(kAccountAccessPoint, static_cast<int>(account_info.access_point));
   // |kLastDownloadedImageURLWithSizeKey| should only be set after the GAIA
   // picture is successufly saved to disk. Otherwise, there is no guarantee that
   // |kLastDownloadedImageURLWithSizeKey| matches the picture on disk.
@@ -829,7 +835,7 @@ CoreAccountId AccountTrackerService::PickAccountIdForAccount(
       DCHECK(!gaia.empty());
       return CoreAccountId::FromGaiaId(gaia);
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return CoreAccountId::FromString(email);
   }
 #else
@@ -935,6 +941,14 @@ bool AccountTrackerService::UpdateAccountInfoChildStatus(
 base::android::ScopedJavaLocalRef<jobject>
 AccountTrackerService::GetJavaObject() {
   return base::android::ScopedJavaLocalRef<jobject>(java_ref_);
+}
+
+// static
+AccountTrackerService* AccountTrackerService::FromAccountTrackerServiceAndroid(
+    const jni_zero::JavaRef<jobject>& j_account_tracker_service) {
+  return reinterpret_cast<AccountTrackerService*>(
+      signin::Java_AccountTrackerService_getNativePointer(
+          jni_zero::AttachCurrentThread(), j_account_tracker_service));
 }
 
 void AccountTrackerService::LegacySeedAccountsInfo(

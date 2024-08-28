@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_PAYMENTS_REQUESTS_UNMASK_CARD_REQUEST_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_PAYMENTS_REQUESTS_UNMASK_CARD_REQUEST_H_
 
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_network_interface.h"
 #include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 
@@ -16,9 +17,9 @@ class UnmaskCardRequest : public PaymentsRequest {
   UnmaskCardRequest(
       const PaymentsNetworkInterface::UnmaskRequestDetails& request_details,
       const bool full_sync_enabled,
-      base::OnceCallback<void(AutofillClient::PaymentsRpcResult,
-                              PaymentsNetworkInterface::UnmaskResponseDetails&)>
-          callback);
+      base::OnceCallback<void(
+          PaymentsAutofillClient::PaymentsRpcResult,
+          const PaymentsNetworkInterface::UnmaskResponseDetails&)> callback);
   UnmaskCardRequest(const UnmaskCardRequest&) = delete;
   UnmaskCardRequest& operator=(const UnmaskCardRequest&) = delete;
   ~UnmaskCardRequest() override;
@@ -34,7 +35,8 @@ class UnmaskCardRequest : public PaymentsRequest {
   std::string GetRequestContent() override;
   void ParseResponse(const base::Value::Dict& response) override;
   bool IsResponseComplete() override;
-  void RespondToDelegate(AutofillClient::PaymentsRpcResult result) override;
+  void RespondToDelegate(
+      PaymentsAutofillClient::PaymentsRpcResult result) override;
   bool IsRetryableFailure(const std::string& error_code) override;
 
  private:
@@ -48,8 +50,9 @@ class UnmaskCardRequest : public PaymentsRequest {
 
   PaymentsNetworkInterface::UnmaskRequestDetails request_details_;
   const bool full_sync_enabled_;
-  base::OnceCallback<void(AutofillClient::PaymentsRpcResult,
-                          PaymentsNetworkInterface::UnmaskResponseDetails&)>
+  base::OnceCallback<void(
+      PaymentsAutofillClient::PaymentsRpcResult,
+      const PaymentsNetworkInterface::UnmaskResponseDetails&)>
       callback_;
   PaymentsNetworkInterface::UnmaskResponseDetails response_details_;
 };

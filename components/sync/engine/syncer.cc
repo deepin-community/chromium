@@ -34,7 +34,7 @@ SyncerErrorValueForUma GetSyncerErrorValueForUma(
     SyncProtocolErrorType protocol_error) {
   switch (protocol_error) {
     case SYNC_SUCCESS:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return SyncerErrorValueForUma::kSyncerOk;
     case NOT_MY_BIRTHDAY:
       return SyncerErrorValueForUma::kServerReturnNotMyBirthday;
@@ -47,7 +47,7 @@ SyncerErrorValueForUma GetSyncerErrorValueForUma(
     case DISABLED_BY_ADMIN:
       return SyncerErrorValueForUma::kServerReturnDisabledByAdmin;
     case PARTIAL_FAILURE:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return SyncerErrorValueForUma::kServerReturnUnknownError;
     case CLIENT_DATA_OBSOLETE:
       return SyncerErrorValueForUma::kServerReturnClientDataObsolete;
@@ -140,7 +140,7 @@ bool Syncer::ConfigureSyncShare(const ModelTypeSet& request_types,
 
   // It is possible during configuration that datatypes get unregistered from
   // ModelTypeRegistry before scheduled configure sync cycle gets executed.
-  // This happens either because DataTypeController::LoadModels fail and type
+  // This happens either because ModelTypeController::LoadModels fail and type
   // need to be stopped or during shutdown when all datatypes are stopped. When
   // it happens we should adjust set of types to download to only include
   // registered types.

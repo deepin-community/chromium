@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/fx_extension.h"
 #include "fxjs/fxv8.h"
 #include "fxjs/xfa/cfxjse_engine.h"
@@ -98,8 +99,7 @@ class CFXJSE_FormCalcContextEmbedderTest : public XFAJSEmbedderTest {
     CFXJSE_ScopeUtil_IsolateHandleContext scope(GetJseContext());
     v8::Local<v8::Value> value = GetValue();
     EXPECT_TRUE(fxv8::IsString(value));
-    EXPECT_STREQ(expected,
-                 fxv8::ReentrantToByteStringHelper(isolate(), value).c_str())
+    EXPECT_EQ(expected, fxv8::ReentrantToByteStringHelper(isolate(), value))
         << "Program: " << input;
   }
 };
@@ -694,8 +694,9 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Decode) {
   ExecuteExpectString(R"(Decode("~%26^&*()_+|`{", "mbogo"))", "~&^&*()_+|`{");
   ExecuteExpectString(R"(Decode("~%26^&*()_+|`{"))", "~&^&*()_+|`{");
   ExecuteExpectString(R"(Decode("~%~~"))", "");
+  ExecuteExpectString(R"(Decode("?%f~"))", "");
   ExecuteExpectString(R"(Decode("?%~"))", "");
-  ExecuteExpectString(R"(Decode("?%"))", "?");
+  ExecuteExpectString(R"(Decode("?%"))", "");
 }
 
 TEST_F(CFXJSE_FormCalcContextEmbedderTest, Encode) {
@@ -755,13 +756,13 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Lower) {
 }
 
 // This is testing for an OOB read, so will likely only fail under ASAN.
-TEST_F(CFXJSE_FormCalcContextEmbedderTest, bug_854623) {
+TEST_F(CFXJSE_FormCalcContextEmbedderTest, Bug854623) {
   ASSERT_TRUE(OpenDocument("simple_xfa.pdf"));
 
   const uint8_t test_string[] = {
       0x4c, 0x6f, 0x77, 0x65, 0x72, 0x28, 0x22, 0xc3,
       0x85, 0xc3, 0x85, 0xc3, 0x85, 0x22, 0x29};  // Lower("ÅÅÅ")
-  Execute(ByteString(test_string, sizeof(test_string)).AsStringView());
+  Execute(ByteStringView(pdfium::make_span(test_string)));
 }
 
 TEST_F(CFXJSE_FormCalcContextEmbedderTest, Ltrim) {
@@ -1174,7 +1175,7 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, ComplexTextChangeEvent) {
 }
 
 // Should not crash.
-TEST_F(CFXJSE_FormCalcContextEmbedderTest, BUG_1223) {
+TEST_F(CFXJSE_FormCalcContextEmbedderTest, Bug1223) {
   ASSERT_TRUE(OpenDocument("simple_xfa.pdf"));
   EXPECT_TRUE(Execute("!.somExpression=0"));
 }

@@ -32,6 +32,14 @@ namespace raster {
 
 namespace {
 
+// This is kill-switch for fixing error handling of ReadbackImagePixels
+// function.
+// TODO(crbug.com/40058879): Disable this work-around, once call-sites are
+// handling failures correctly.
+BASE_FEATURE(kDisableErrorHandlingForReadbackGLES,
+             "kDisableErrorHandlingForReadbackGLES",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 GLenum SkColorTypeToGLDataFormat(SkColorType color_type, bool supports_rg) {
   switch (color_type) {
     case kRGBA_8888_SkColorType:
@@ -53,7 +61,7 @@ GLenum SkColorTypeToGLDataFormat(SkColorType color_type, bool supports_rg) {
     default:
       DLOG(ERROR) << "Unknown SkColorType " << color_type;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0;
 }
 
@@ -73,7 +81,7 @@ GLenum SkColorTypeToGLDataType(SkColorType color_type) {
     default:
       DLOG(ERROR) << "Unknown SkColorType " << color_type;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0;
 }
 
@@ -161,56 +169,25 @@ void RasterImplementationGLES::CopySharedImage(
     GLsizei height,
     GLboolean unpack_flip_y,
     GLboolean unpack_premultiply_alpha) {
-  // CopySharedImage does not support legacy mailboxes so fallback to
-  // CopySubTexture.
-  // We don't know if this would require rgb to yuv or yuv to rgb conversion, so
-  // we check for both flags, but in reality validating command decoder doesn't
-  // support either and passthrough command decoder always supports both.
-  if (capabilities_.supports_yuv_to_rgb_conversion &&
-      capabilities_.supports_rgb_to_yuv_conversion &&
-      source_mailbox.IsSharedImage() && dest_mailbox.IsSharedImage()) {
-    if (width < 0) {
-      LOG(ERROR) << "GL_INVALID_VALUE, glCopySharedImage, width < 0";
-      return;
-    }
-    if (height < 0) {
-      LOG(ERROR) << "GL_INVALID_VALUE, glCopySharedImage, height < 0";
-      return;
-    }
-    GLbyte mailboxes[sizeof(source_mailbox.name) * 2];
-    memcpy(mailboxes, source_mailbox.name, sizeof(source_mailbox.name));
-    memcpy(mailboxes + sizeof(source_mailbox.name), dest_mailbox.name,
-           sizeof(dest_mailbox.name));
-    gl_->CopySharedImageINTERNAL(xoffset, yoffset, x, y, width, height,
-                                 unpack_flip_y, mailboxes);
-  } else {
-    GLuint texture_ids[2] = {
-        CreateAndConsumeForGpuRaster(source_mailbox),
-        CreateAndConsumeForGpuRaster(dest_mailbox),
-    };
-    DCHECK(texture_ids[0]);
-    DCHECK(texture_ids[1]);
-
-    BeginSharedImageAccessDirectCHROMIUM(
-        texture_ids[0], GL_SHARED_IMAGE_ACCESS_MODE_READ_CHROMIUM);
-    BeginSharedImageAccessDirectCHROMIUM(
-        texture_ids[1], GL_SHARED_IMAGE_ACCESS_MODE_READWRITE_CHROMIUM);
-
-    gl_->CopySubTextureCHROMIUM(texture_ids[0], 0, dest_target, texture_ids[1],
-                                0, xoffset, yoffset, x, y, width, height,
-                                unpack_flip_y, unpack_premultiply_alpha,
-                                false /* upack_unmultiply_alpha */);
-
-    EndSharedImageAccessDirectCHROMIUM(texture_ids[0]);
-    EndSharedImageAccessDirectCHROMIUM(texture_ids[1]);
-    gl_->DeleteTextures(2, texture_ids);
+  if (width < 0) {
+    LOG(ERROR) << "GL_INVALID_VALUE, glCopySharedImage, width < 0";
+    return;
   }
+  if (height < 0) {
+    LOG(ERROR) << "GL_INVALID_VALUE, glCopySharedImage, height < 0";
+    return;
+  }
+  GLbyte mailboxes[sizeof(source_mailbox.name) * 2];
+  memcpy(mailboxes, source_mailbox.name, sizeof(source_mailbox.name));
+  memcpy(mailboxes + sizeof(source_mailbox.name), dest_mailbox.name,
+         sizeof(dest_mailbox.name));
+  gl_->CopySharedImageINTERNAL(xoffset, yoffset, x, y, width, height,
+                               unpack_flip_y, mailboxes);
 }
 
 void RasterImplementationGLES::WritePixels(const gpu::Mailbox& dest_mailbox,
                                            int dst_x_offset,
                                            int dst_y_offset,
-                                           int dst_plane_index,
                                            GLenum texture_target,
                                            const SkPixmap& src_sk_pixmap) {
   const auto& src_info = src_sk_pixmap.info();
@@ -335,7 +312,7 @@ void RasterImplementationGLES::BeginRasterCHROMIUM(
     const gfx::ColorSpace& color_space,
     float hdr_headroom,
     const GLbyte* mailbox) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void RasterImplementationGLES::RasterCHROMIUM(
@@ -347,8 +324,9 @@ void RasterImplementationGLES::RasterCHROMIUM(
     const gfx::Vector2dF& post_translate,
     const gfx::Vector2dF& post_scale,
     bool requires_clear,
+    const ScrollOffsetMap* raster_inducing_scroll_offsets,
     size_t* max_op_size_hint) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void RasterImplementationGLES::SetActiveURLCHROMIUM(const char* url) {
@@ -356,7 +334,7 @@ void RasterImplementationGLES::SetActiveURLCHROMIUM(const char* url) {
 }
 
 void RasterImplementationGLES::EndRasterCHROMIUM() {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 SyncToken RasterImplementationGLES::ScheduleImageDecode(
@@ -365,7 +343,7 @@ SyncToken RasterImplementationGLES::ScheduleImageDecode(
     uint32_t transfer_cache_entry_id,
     const gfx::ColorSpace& target_color_space,
     bool needs_mips) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return SyncToken();
 }
 
@@ -519,7 +497,7 @@ void RasterImplementationGLES::OnReleaseMailbox(
   std::move(release_mailbox).Run();
 }
 
-void RasterImplementationGLES::ReadbackImagePixels(
+bool RasterImplementationGLES::ReadbackImagePixels(
     const gpu::Mailbox& source_mailbox,
     const SkImageInfo& dst_info,
     GLuint dst_row_bytes,
@@ -535,20 +513,19 @@ void RasterImplementationGLES::ReadbackImagePixels(
   }
 
   GLuint dst_size = dst_info.computeByteSize(dst_row_bytes);
-  gl_->ReadbackARGBImagePixelsINTERNAL(
-      source_mailbox.name,
-      dst_color_space_data ? dst_color_space_data->data() : nullptr,
-      dst_color_space_data ? dst_color_space_data->size() : 0, dst_size,
-      dst_info.width(), dst_info.height(), dst_info.colorType(),
-      dst_info.alphaType(), dst_row_bytes, src_x, src_y, plane_index,
-      dst_pixels);
+  return gl_->ReadbackARGBImagePixelsINTERNAL(
+             source_mailbox.name,
+             dst_color_space_data ? dst_color_space_data->data() : nullptr,
+             dst_color_space_data ? dst_color_space_data->size() : 0, dst_size,
+             dst_info.width(), dst_info.height(), dst_info.colorType(),
+             dst_info.alphaType(), dst_row_bytes, src_x, src_y, plane_index,
+             dst_pixels) ||
+         base::FeatureList::IsEnabled(kDisableErrorHandlingForReadbackGLES);
 }
 
 GLuint RasterImplementationGLES::CreateAndConsumeForGpuRaster(
     const gpu::Mailbox& mailbox) {
-  return mailbox.IsSharedImage()
-             ? gl_->CreateAndTexStorage2DSharedImageCHROMIUM(mailbox.name)
-             : gl_->CreateAndConsumeTextureCHROMIUM(mailbox.name);
+  return gl_->CreateAndTexStorage2DSharedImageCHROMIUM(mailbox.name);
 }
 
 GLuint RasterImplementationGLES::CreateAndConsumeForGpuRaster(

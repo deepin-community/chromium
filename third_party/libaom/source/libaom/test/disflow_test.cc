@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2023, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -122,6 +122,11 @@ INSTANTIATE_TEST_SUITE_P(AVX2, ComputeFlowTest,
 #if HAVE_NEON
 INSTANTIATE_TEST_SUITE_P(NEON, ComputeFlowTest,
                          ::testing::Values(aom_compute_flow_at_point_neon));
+#endif
+
+#if HAVE_SVE
+INSTANTIATE_TEST_SUITE_P(SVE, ComputeFlowTest,
+                         ::testing::Values(aom_compute_flow_at_point_sve));
 #endif
 
 }  // namespace

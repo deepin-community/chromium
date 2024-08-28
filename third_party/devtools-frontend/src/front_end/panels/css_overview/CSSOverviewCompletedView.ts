@@ -661,7 +661,7 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
       this.#viewMap.set(id, view);
     }
 
-    this.#elementContainer.appendTab(id, tabTitle, view, true);
+    this.#elementContainer.appendTab(id, tabTitle, view, payload.type);
   }
 
   #fontInfoToFragment(fontInfo: Map<string, Map<string, Map<string, number[]>>>): UI.Fragment.Fragment {
@@ -748,7 +748,7 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
     const color = (minContrastIssue.textColor.asString(Common.Color.Format.HEXA) as string);
     const backgroundColor = (minContrastIssue.backgroundColor.asString(Common.Color.Format.HEXA) as string);
 
-    const showAPCA = Root.Runtime.experiments.isEnabled('APCA');
+    const showAPCA = Root.Runtime.experiments.isEnabled('apca');
 
     const title = i18nString(UIStrings.textColorSOverSBackgroundResults, {
       PH1: color,
@@ -845,7 +845,6 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
     void this.#render(data);
   }
 
-  // eslint-disable-next-line @typescript-eslint/naming-convention
   static readonly pushedNodes = new Set<Protocol.DOM.BackendNodeId>();
 }
 export class DetailsView extends Common.ObjectWrapper.eventMixin<EventTypes, typeof UI.Widget.VBox>(UI.Widget.VBox) {
@@ -860,9 +859,10 @@ export class DetailsView extends Common.ObjectWrapper.eventMixin<EventTypes, typ
     });
   }
 
-  appendTab(id: string, tabTitle: string, view: UI.Widget.Widget, isCloseable?: boolean): void {
+  appendTab(id: string, tabTitle: string, view: UI.Widget.Widget, jslogContext?: string): void {
     if (!this.#tabbedPane.hasTab(id)) {
-      this.#tabbedPane.appendTab(id, tabTitle, view, undefined, undefined, isCloseable);
+      this.#tabbedPane.appendTab(
+          id, tabTitle, view, undefined, undefined, /* isCloseable */ true, undefined, undefined, jslogContext);
     }
 
     this.#tabbedPane.selectTab(id);
@@ -1058,7 +1058,7 @@ export class ElementDetailsView extends UI.Widget.Widget {
       this.#elementGrid.insertChild(node);
     }
 
-    this.#elementGrid.setColumnsVisiblity(visibility);
+    this.#elementGrid.setColumnsVisibility(visibility);
     this.#elementGrid.renderInline();
     this.#elementGrid.wasShown();
   }
@@ -1127,7 +1127,7 @@ export class ElementNode extends DataGrid.SortableDataGrid.SortableDataGridNode<
 
     if (columnId === 'contrast-ratio') {
       const cell = this.createTD(columnId);
-      const showAPCA = Root.Runtime.experiments.isEnabled('APCA');
+      const showAPCA = Root.Runtime.experiments.isEnabled('apca');
       const contrastRatio = Platform.NumberUtilities.floor(this.data.contrastRatio, 2);
       const contrastRatioString = showAPCA ? contrastRatio + '%' : contrastRatio;
       const border = getBorderString(this.data.backgroundColor);

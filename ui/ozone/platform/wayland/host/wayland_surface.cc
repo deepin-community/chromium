@@ -19,6 +19,7 @@
 #include "base/check_op.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
+#include "base/not_fatal_until.h"
 #include "base/ranges/algorithm.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/gfx/color_space.h"
@@ -101,7 +102,14 @@ WaylandSurface::WaylandSurface(WaylandConnection* connection,
       surface_submission_in_pixel_coordinates_(
           connection->surface_submission_in_pixel_coordinates()),
       use_viewporter_surface_scaling_(
-          connection->UseViewporterSurfaceScaling()) {}
+          connection->UseViewporterSurfaceScaling()) {
+  // Inherit per-surface preferred scale when owned by non-toplevel windows.
+  // See https://wayland.app/protocols/fractional-scale-v1.
+  if (root_window_ && root_window_->parent_window()) {
+    preferred_scale_factor_ =
+        root_window_->parent_window()->GetPreferredScaleFactor();
+  }
+}
 
 WaylandSurface::~WaylandSurface() {
   for (auto& release : linux_buffer_releases_) {
@@ -141,7 +149,13 @@ bool WaylandSurface::Initialize() {
       .enter = &OnEnter,
       .leave = &OnLeave,
   };
-  wl_surface_add_listener(surface_.get(), &kSurfaceListener, this);
+  // If this surface is not the surface for its root_window, it don't need to
+  // listen to output enter/leave events.
+  // Not having a root_window() means this is an icon_surface from
+  // WaylandDataDragController.
+  if (!root_window() || root_window()->root_surface() == this) {
+    wl_surface_add_listener(surface_.get(), &kSurfaceListener, this);
+  }
 
   if (connection_->fractional_scale_manager_v1()) {
     static constexpr wp_fractional_scale_v1_listener kFractionalScaleListener =
@@ -199,7 +213,9 @@ bool WaylandSurface::Initialize() {
     }
   }
 
-  if (auto* surface_augmenter = connection_->surface_augmenter()) {
+  auto* surface_augmenter = connection_->surface_augmenter();
+  if (surface_augmenter && root_window() &&
+      root_window()->root_surface() != this) {
     augmented_surface_ = surface_augmenter->CreateAugmentedSurface(surface());
     if (!augmented_surface_) {
       LOG(ERROR) << "Failed to create augmented_surface.";
@@ -377,11 +393,9 @@ float WaylandSurface::GetWaylandScale(const State& state) {
   if (surface_submission_in_pixel_coordinates_) {
     return 1;
   }
-  return (state.buffer_scale_float < 1.f)
-             ? 1.f
-             : (use_viewporter_surface_scaling_
-                    ? state.buffer_scale_float
-                    : std::ceil(state.buffer_scale_float));
+  return wl::ClampScale(use_viewporter_surface_scaling_
+                            ? state.buffer_scale_float
+                            : std::ceil(state.buffer_scale_float));
 }
 
 bool WaylandSurface::IsViewportScaled(const State& state) {
@@ -782,7 +796,7 @@ bool WaylandSurface::ApplyPendingState() {
         wl_fixed_from_double(viewport_src_dip.y()) < 0) {
       LOG(ERROR) << "Sending viewport src with width/height zero or negative "
                     "origin will result in wayland disconnection";
-      // TODO(crbug.com/1325344): Resolve why this viewport size ends up being
+      // TODO(crbug.com/40839779): Resolve why this viewport size ends up being
       // zero and remove the fix below.
       LOG(ERROR) << "viewport_src_dip=" << viewport_src_dip.ToString()
                  << " crop=" << crop.ToString()
@@ -904,7 +918,7 @@ void WaylandSurface::ExplicitRelease(
     zwp_linux_buffer_release_v1* linux_buffer_release,
     base::ScopedFD fence) {
   auto iter = linux_buffer_releases_.find(linux_buffer_release);
-  DCHECK(iter != linux_buffer_releases_.end());
+  CHECK(iter != linux_buffer_releases_.end(), base::NotFatalUntil::M130);
   DCHECK(iter->second.buffer);
   std::move(iter->second.explicit_release_callback)
       .Run(iter->second.buffer.get(), std::move(fence));
@@ -990,7 +1004,25 @@ void WaylandSurface::OnLeave(void* data,
 // static
 void WaylandSurface::OnPreferredScale(void* data,
                                       wp_fractional_scale_v1* fractional_scale,
-                                      uint32_t scale) {}
+                                      uint32_t scale) {
+  auto* self = static_cast<WaylandSurface*>(data);
+  DCHECK(self);
+
+  if (!self->connection_->UsePerSurfaceScaling()) {
+    VLOG(1) << "Per-surface scaling is disabled.";
+    return;
+  }
+
+  // Specified in fractional-scale-v1
+  constexpr float kFractionalScaleDenominator = 120.0f;
+  const float scale_factor =
+      scale == 0 ? 1.0f : (scale / kFractionalScaleDenominator);
+
+  self->preferred_scale_factor_ = scale_factor;
+  if (self->root_window_) {
+    self->root_window_->UpdateWindowScale(/*update_bounds=*/true);
+  }
+}
 
 void WaylandSurface::RemoveEnteredOutput(uint32_t output_id) {
   auto it = base::ranges::find(entered_outputs_, output_id);

@@ -14,13 +14,15 @@
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "components/signin/public/android/jni_headers/ProfileOAuth2TokenServiceDelegate_jni.h"
 #include "components/signin/public/base/account_consistency_method.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/oauth2_access_token_fetcher.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/signin/public/android/jni_headers/ProfileOAuth2TokenServiceDelegate_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertJavaStringToUTF8;
@@ -420,7 +422,8 @@ void ProfileOAuth2TokenServiceDelegateAndroid::FireRefreshTokensLoaded() {
   ProfileOAuth2TokenServiceDelegate::FireRefreshTokensLoaded();
 }
 
-void ProfileOAuth2TokenServiceDelegateAndroid::RevokeAllCredentials() {
+void ProfileOAuth2TokenServiceDelegateAndroid::RevokeAllCredentialsInternal(
+    signin_metrics::SourceForRefreshTokenOperation source) {
   DVLOG(1) << "ProfileOAuth2TokenServiceDelegateAndroid::RevokeAllCredentials";
   ScopedBatchChange batch(this);
   std::vector<CoreAccountId> accounts_to_revoke = GetAccounts();
@@ -435,12 +438,12 @@ void ProfileOAuth2TokenServiceDelegateAndroid::RevokeAllCredentials() {
   if (base::FeatureList::IsEnabled(switches::kSeedAccountsRevamp)) {
     // We don't expose the list of accounts if the user is signed out, so it is
     // safe to assume that the account list is empty here.
-    // TODO(crbug.com/1499912): Once we expose the list of accounts all the
+    // TODO(crbug.com/40287987): Once we expose the list of accounts all the
     // time, this assumption should be re-evaluated.
     const std::vector<CoreAccountInfo> empty_accounts_list =
         std::vector<CoreAccountInfo>();
     SeedAccountsThenReloadAllAccountsWithPrimaryAccount(
-        std::vector<CoreAccountInfo>(), std::optional<CoreAccountId>());
+        std::vector<CoreAccountInfo>(), std::nullopt);
   } else {
     JNIEnv* env = AttachCurrentThread();
     signin::
@@ -449,7 +452,7 @@ void ProfileOAuth2TokenServiceDelegateAndroid::RevokeAllCredentials() {
   }
 }
 
-void ProfileOAuth2TokenServiceDelegateAndroid::LoadCredentials(
+void ProfileOAuth2TokenServiceDelegateAndroid::LoadCredentialsInternal(
     const CoreAccountId& primary_account_id,
     bool is_syncing) {
   DCHECK_EQ(signin::LoadCredentialsState::LOAD_CREDENTIALS_NOT_STARTED,

@@ -5,13 +5,18 @@
 #ifndef CHROME_BROWSER_ASH_LOGIN_APP_MODE_NETWORK_UI_CONTROLLER_H_
 #define CHROME_BROWSER_ASH_LOGIN_APP_MODE_NETWORK_UI_CONTROLLER_H_
 
+#include <memory>
 #include <optional>
+#include <string>
 
 #include "base/auto_reset.h"
-#include "base/memory/scoped_refptr.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/app_mode/kiosk_app_launcher.h"
+#include "chrome/browser/ash/login/screens/network_error.h"
 #include "chrome/browser/ui/webui/ash/login/app_launch_splash_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/network_state_informer.h"
 
@@ -95,8 +100,12 @@ class NetworkUiController
     return network_ui_state_;
   }
 
-  static std::unique_ptr<base::AutoReset<std::optional<bool>>>
+  // Scoped overrides used during testing. The original behavior is restored
+  // when the returned objects are destroyed.
+  [[nodiscard]] static base::AutoReset<std::optional<bool>>
   SetCanConfigureNetworkForTesting(bool can_configure_network);
+  [[nodiscard]] static base::AutoReset<base::TimeDelta>
+      SetNetworkWaitTimeoutForTesting(base::TimeDelta);
 
  private:
   void OnNetworkStateChanged(bool online);

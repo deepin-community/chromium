@@ -40,7 +40,6 @@
 #include "ash/wm/desks/desks_test_util.h"
 #include "ash/wm/gestures/wm_gesture_handler.h"
 #include "ash/wm/overview/overview_controller.h"
-#include "ash/wm/overview/overview_focus_cycler.h"
 #include "ash/wm/overview/overview_session.h"
 #include "ash/wm/overview/overview_test_util.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
@@ -917,7 +916,7 @@ TEST_F(WindowCycleControllerTest, FrameThrottling) {
       {1u, 1u}, {2u, 2u}, {3u, 3u}, {4u, 4u}, {5u, 5u}};
   std::unique_ptr<aura::Window> windows[window_count];
   for (int i = 0; i < window_count; ++i) {
-    windows[i] = CreateAppWindow(gfx::Rect(), AppType::BROWSER);
+    windows[i] = CreateAppWindow(gfx::Rect(), chromeos::AppType::BROWSER);
     windows[i]->SetEmbedFrameSinkId(ids[i]);
   }
 
@@ -1054,7 +1053,7 @@ TEST_F(WindowCycleControllerTest, AltTabMultiDisplay) {
   std::unique_ptr<Window> w1 = CreateTestWindow(gfx::Rect(420, 10, 200, 200));
   // |w0| needs to be activated to ensure it is the display for new windows.
   wm::ActivateWindow(w0.get());
-  // TODO(crbug.com/990589): Unit tests should be able to simulate mouse input
+  // TODO(crbug.com/40638870): Unit tests should be able to simulate mouse input
   // without having to call |CursorManager::SetDisplay|.
   Shell::Get()->cursor_manager()->SetDisplay(
       display::Screen::GetScreen()->GetDisplayNearestWindow(w1.get()));
@@ -1657,8 +1656,8 @@ TEST_F(WindowCycleControllerTest, VerticalTouchScroll) {
   ASSERT_EQ(window2.get(), GetTargetWindow());
 
   // Vertical touch scroll from the second item. This will cause a
-  // ui::ET_SCROLL_FLING_START event to be generated. This should not crash and
-  // do nothing to the window cycle list.
+  // ui::EventType::kScrollFlingStart event to be generated. This should not
+  // crash and do nothing to the window cycle list.
   auto preview_items = GetWindowCycleItemViews();
   auto drag_origin = preview_items[0]->GetBoundsInScreen().CenterPoint();
   auto drag_dest = drag_origin + gfx::Vector2d(0, 200);
@@ -1690,10 +1689,12 @@ TEST_F(WindowCycleControllerTest, TapSelect) {
                                  ui::test::EventGenerator* generator,
                                  const gfx::Point& location) {
     // Generates the following events at |location| in the given order:
-    // ET_GESTURE_BEGIN, ET_GESTURE_TAP_DOWN, ET_GESTURE_SHOW_PRESS
-    generate_gesture_event(generator, location, ui::ET_GESTURE_BEGIN);
-    generate_gesture_event(generator, location, ui::ET_GESTURE_TAP_DOWN);
-    generate_gesture_event(generator, location, ui::ET_GESTURE_SHOW_PRESS);
+    // EventType::kGestureBegin, EventType::kGestureTapDown,
+    // EventType::kGestureShowPress
+    generate_gesture_event(generator, location, ui::EventType::kGestureBegin);
+    generate_gesture_event(generator, location, ui::EventType::kGestureTapDown);
+    generate_gesture_event(generator, location,
+                           ui::EventType::kGestureShowPress);
   };
 
   // Start cycle and tap third item without releasing finger. On tap down, the
@@ -2052,13 +2053,14 @@ TEST_F(ModeSelectionWindowCycleControllerTest, ModeChangesOnTap) {
   auto tap = [generate_gesture_event](ui::test::EventGenerator* generator,
                                       const gfx::Point& location) {
     // Generates the following events at |location| in the given order:
-    // ET_GESTURE_BEGIN, ET_GESTURE_TAP_DOWN, ui::ET_GESTURE_SHOW_PRESS,
-    // ET_GESTURE_END
-    generate_gesture_event(generator, location, ui::ET_GESTURE_BEGIN);
-    generate_gesture_event(generator, location, ui::ET_GESTURE_TAP_DOWN);
-    generate_gesture_event(generator, location, ui::ET_GESTURE_SHOW_PRESS);
-    generate_gesture_event(generator, location, ui::ET_GESTURE_TAP);
-    generate_gesture_event(generator, location, ui::ET_GESTURE_END);
+    // EventType::kGestureBegin, EventType::kGestureTapDown,
+    // ui::EventType::kGestureShowPress, EventType::kGestureEnd
+    generate_gesture_event(generator, location, ui::EventType::kGestureBegin);
+    generate_gesture_event(generator, location, ui::EventType::kGestureTapDown);
+    generate_gesture_event(generator, location,
+                           ui::EventType::kGestureShowPress);
+    generate_gesture_event(generator, location, ui::EventType::kGestureTap);
+    generate_gesture_event(generator, location, ui::EventType::kGestureEnd);
   };
 
   // Start cycle. Alt-tab should contain windows from all desks with tab slider.
@@ -2124,22 +2126,27 @@ TEST_F(ModeSelectionWindowCycleControllerTest,
                              ui::test::EventGenerator* generator,
                              const gfx::Point& location) {
     // Generates the following events at |location| in the given order:
-    // ET_GESTURE_BEGIN, ET_GESTURE_TAP_DOWN, T_GESTURE_SCROLL_BEGIN,
-    // ui::ET_GESTURE_SCROLL_UPDATE
-    generate_gesture_event(generator, location, ui::ET_GESTURE_BEGIN);
-    generate_gesture_event(generator, location, ui::ET_GESTURE_TAP_DOWN);
-    generate_gesture_event(generator, location, ui::ET_GESTURE_SCROLL_BEGIN);
-    generate_gesture_event(generator, location, ui::ET_GESTURE_SCROLL_UPDATE);
+    // EventType::kGestureBegin, EventType::kGestureTapDown,
+    // T_GESTURE_SCROLL_BEGIN, ui::EventType::kGestureScrollUpdate
+    generate_gesture_event(generator, location, ui::EventType::kGestureBegin);
+    generate_gesture_event(generator, location, ui::EventType::kGestureTapDown);
+    generate_gesture_event(generator, location,
+                           ui::EventType::kGestureScrollBegin);
+    generate_gesture_event(generator, location,
+                           ui::EventType::kGestureScrollUpdate);
   };
 
   auto scroll_update = [generate_gesture_event](
                            ui::test::EventGenerator* generator,
                            const gfx::Point& location) {
     // Generates the following events at |location| in the given order:
-    // ET_GESTURE_SCROLL_UPDATE, ET_GESTURE_SCROLL_END, ET_GESTURE_END
-    generate_gesture_event(generator, location, ui::ET_GESTURE_SCROLL_UPDATE);
-    generate_gesture_event(generator, location, ui::ET_GESTURE_SCROLL_END);
-    generate_gesture_event(generator, location, ui::ET_GESTURE_END);
+    // EventType::kGestureScrollUpdate, EventType::kGestureScrollEnd,
+    // EventType::kGestureEnd
+    generate_gesture_event(generator, location,
+                           ui::EventType::kGestureScrollUpdate);
+    generate_gesture_event(generator, location,
+                           ui::EventType::kGestureScrollEnd);
+    generate_gesture_event(generator, location, ui::EventType::kGestureEnd);
   };
 
   // Start cycle. Alt-tab should contain windows from all desks with tab slider.
