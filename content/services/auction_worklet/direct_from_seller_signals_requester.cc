@@ -17,6 +17,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/not_fatal_until.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
@@ -49,38 +50,35 @@ namespace {
 // FLEDGE.
 std::optional<std::string> CheckHeader(
     scoped_refptr<net::HttpResponseHeaders> headers) {
-  // TODO(crbug.com/1448564): Remove support for old header names once API users
-  // have switched.
-  std::string old_header_value;
-  std::string new_header_value;
-  // TODO(crbug.com/1448564): Remove old names once API users have migrated to
-  // new names.
-  const bool got_new_header =
-      headers->GetNormalizedHeader("Ad-Auction-Only", &new_header_value);
-  const bool got_old_header =
-      headers->GetNormalizedHeader("X-FLEDGE-Auction-Only", &old_header_value);
-  if (!got_new_header && !got_old_header) {
+  // TODO(crbug.com/40269364): Remove support for old header names once API
+  // users have switched.
+  std::optional<std::string> old_header_value =
+      headers->GetNormalizedHeader("X-FLEDGE-Auction-Only");
+  std::optional<std::string> new_header_value =
+      headers->GetNormalizedHeader("Ad-Auction-Only");
+  if (!new_header_value && !old_header_value) {
     return "Missing Ad-Auction-Only (or deprecated X-FLEDGE-Auction-Only) "
            "header.";
   }
-  if (got_old_header) {
-    if (got_new_header) {
+  if (old_header_value) {
+    if (new_header_value) {
       if (old_header_value != new_header_value) {
         return base::StringPrintf(
             "Ad-Auction-Only: %s does not match deprecated header "
             "X-FLEDGE-Auction-Only: %s.",
-            new_header_value.c_str(), old_header_value.c_str());
+            new_header_value->c_str(), old_header_value->c_str());
       }
     } else {
       new_header_value = std::move(old_header_value);
     }
   }
-  if (!base::EqualsCaseInsensitiveASCII(new_header_value, "true")) {
+  if (!new_header_value ||
+      !base::EqualsCaseInsensitiveASCII(*new_header_value, "true")) {
     return base::StringPrintf(
         "Wrong Ad-Auction-Only (or deprecated X-FLEDGE-Auction-Only) header "
         "value. Expected \"true\", found "
         "\"%s\".",
-        new_header_value.c_str());
+        new_header_value.value_or(std::string()).c_str());
   }
 
   return std::nullopt;
@@ -243,6 +241,10 @@ DirectFromSellerSignalsRequester::LoadSignals(
             &url_loader_factory, signals_url,
             AuctionDownloader::DownloadMode::kActualDownload,
             AuctionDownloader::MimeType::kJson,
+            /*post_body=*/std::nullopt,
+            /*content_type=*/std::nullopt,
+            /*is_trusted_bidding_signals_kvv1_download=*/false,
+            AuctionDownloader::ResponseStartedCallback(),
             base::BindOnce(
                 &DirectFromSellerSignalsRequester::OnSignalsDownloaded,
                 base::Unretained(this), signals_url, base::TimeTicks::Now()),
@@ -305,7 +307,7 @@ void DirectFromSellerSignalsRequester::OnSignalsDownloaded(
   // will also destroy the downloader. The Request won't try to cancel anything
   // after this since running the callback clears the Request's iterator.
   auto it = coalesced_downloads_.find(signals_url);
-  DCHECK(it != coalesced_downloads_.end());
+  CHECK(it != coalesced_downloads_.end(), base::NotFatalUntil::M130);
   DCHECK_EQ(signals_url, it->second.downloader->source_url());
   std::list<raw_ptr<Request>> requests;
   std::swap(requests, it->second.requests);
@@ -331,7 +333,7 @@ void DirectFromSellerSignalsRequester::OnRequestDestroyed(Request& request) {
   // Otherwise, remove the request pointer to `this` from
   // `coalesced_downloads_`.
   auto map_it = coalesced_downloads_.find(request.signals_url_);
-  DCHECK(map_it != coalesced_downloads_.end());
+  CHECK(map_it != coalesced_downloads_.end(), base::NotFatalUntil::M130);
   CoalescedDownload& coalesced_download = map_it->second;
   DCHECK_EQ(coalesced_download.downloader->source_url(), request.signals_url_);
   DCHECK_GT(coalesced_download.requests.size(), 0u);

@@ -4,11 +4,12 @@
 
 #include "ash/app_menu/notification_menu_view.h"
 
+#include <algorithm>
+
 #include "ash/app_menu/notification_item_view.h"
 #include "ash/app_menu/notification_menu_header_view.h"
 #include "ash/app_menu/notification_overflow_view.h"
 #include "ash/public/cpp/app_menu_constants.h"
-#include "base/ranges/algorithm.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/menu_separator_types.h"
 #include "ui/gfx/geometry/point.h"
@@ -41,11 +42,12 @@ NotificationMenuView::NotificationMenuView(
 
 NotificationMenuView::~NotificationMenuView() = default;
 
-gfx::Size NotificationMenuView::CalculatePreferredSize() const {
+gfx::Size NotificationMenuView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(
       views::MenuConfig::instance().touchable_menu_min_width,
       double_separator_->GetPreferredSize().height() +
-          header_view_->GetPreferredSize().height() +
+          header_view_->GetPreferredSize({}).height() +
           kNotificationItemViewHeight +
           (overflow_view_ ? overflow_view_->GetPreferredSize().height() : 0));
 }
@@ -59,8 +61,8 @@ void NotificationMenuView::Layout(PassKey) {
   y += double_separator_->GetPreferredSize().height();
 
   header_view_->SetBoundsRect(
-      gfx::Rect(gfx::Point(0, y), header_view_->GetPreferredSize()));
-  y += header_view_->GetPreferredSize().height();
+      gfx::Rect(gfx::Point(0, y), header_view_->GetPreferredSize({})));
+  y += header_view_->height();
 
   auto* item = GetDisplayedNotificationItemView();
   if (item) {
@@ -176,8 +178,8 @@ const std::string& NotificationMenuView::GetDisplayedNotificationID() const {
 
 NotificationMenuView::NotificationItemViews::iterator
 NotificationMenuView::NotificationIterForId(const std::string& id) {
-  return base::ranges::find(notification_item_views_, id,
-                            &NotificationItemView::notification_id);
+  return std::ranges::find(notification_item_views_, id,
+                           &NotificationItemView::notification_id);
 }
 
 BEGIN_METADATA(NotificationMenuView)

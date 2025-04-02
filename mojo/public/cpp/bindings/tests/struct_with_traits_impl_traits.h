@@ -13,7 +13,7 @@
 
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "mojo/public/cpp/bindings/tests/struct_with_traits_impl.h"
-#include "mojo/public/interfaces/bindings/tests/struct_with_traits.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/struct_with_traits.test-mojom.h"
 
 namespace mojo {
 
@@ -99,13 +99,11 @@ struct StructTraits<test::StructWithUnreachableTraitsDataView,
  public:
   static bool ignore_me(const test::StructWithUnreachableTraitsImpl& input) {
     NOTREACHED();
-    return false;
   }
 
   static bool Read(test::StructWithUnreachableTraitsDataView data,
                    test::StructWithUnreachableTraitsImpl* out) {
     NOTREACHED();
-    return false;
   }
 };
 
@@ -198,7 +196,6 @@ struct UnionTraits<test::UnionWithTraitsDataView,
     }
 
     NOTREACHED();
-    return false;
   }
 };
 

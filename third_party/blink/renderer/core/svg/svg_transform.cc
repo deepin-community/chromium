@@ -48,7 +48,6 @@ SVGTransform* SVGTransform::Clone() const {
 SVGPropertyBase* SVGTransform::CloneForAnimation(const String&) const {
   // SVGTransform is never animated.
   NOTREACHED();
-  return nullptr;
 }
 
 void SVGTransform::SetMatrix(const AffineTransform& matrix) {
@@ -136,7 +135,6 @@ const char* TransformTypePrefixForParsing(SVGTransformType type) {
       return "skewY(";
   }
   NOTREACHED();
-  return "";
 }
 
 gfx::PointF DecomposeRotationCenter(const AffineTransform& matrix,
@@ -163,7 +161,7 @@ gfx::PointF DecomposeRotationCenter(const AffineTransform& matrix,
 }  // namespace
 
 String SVGTransform::ValueAsString() const {
-  double arguments[6];
+  std::array<double, 6> arguments;
   size_t argument_count = 0;
   switch (transform_type_) {
     case SVGTransformType::kUnknown:
@@ -238,8 +236,6 @@ float SVGTransform::CalculateDistance(const SVGPropertyBase*,
                                       const SVGElement*) const {
   // SVGTransform is not animated by itself.
   NOTREACHED();
-
-  return -1;
 }
 
 }  // namespace blink

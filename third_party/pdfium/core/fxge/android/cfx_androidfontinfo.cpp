@@ -16,12 +16,14 @@ CFX_AndroidFontInfo::CFX_AndroidFontInfo() = default;
 
 CFX_AndroidFontInfo::~CFX_AndroidFontInfo() = default;
 
-bool CFX_AndroidFontInfo::Init(CFPF_SkiaFontMgr* pFontMgr) {
-  if (!pFontMgr)
+bool CFX_AndroidFontInfo::Init(CFPF_SkiaFontMgr* pFontMgr,
+                               const char** user_paths) {
+  if (!pFontMgr) {
     return false;
+  }
 
-  pFontMgr->LoadSystemFonts();
   m_pFontMgr = pFontMgr;
+  m_pFontMgr->LoadFonts(user_paths);
   return true;
 }
 
@@ -34,20 +36,26 @@ void* CFX_AndroidFontInfo::MapFont(int weight,
                                    FX_Charset charset,
                                    int pitch_family,
                                    const ByteString& face) {
-  if (!m_pFontMgr)
+  if (!m_pFontMgr) {
     return nullptr;
+  }
 
   uint32_t dwStyle = 0;
-  if (weight >= 700)
-    dwStyle |= FXFONT_FORCE_BOLD;
-  if (bItalic)
-    dwStyle |= FXFONT_ITALIC;
-  if (FontFamilyIsFixedPitch(pitch_family))
-    dwStyle |= FXFONT_FIXED_PITCH;
-  if (FontFamilyIsScript(pitch_family))
-    dwStyle |= FXFONT_SCRIPT;
-  if (FontFamilyIsRoman(pitch_family))
-    dwStyle |= FXFONT_SERIF;
+  if (weight >= 700) {
+    dwStyle |= pdfium::kFontStyleForceBold;
+  }
+  if (bItalic) {
+    dwStyle |= pdfium::kFontStyleItalic;
+  }
+  if (FontFamilyIsFixedPitch(pitch_family)) {
+    dwStyle |= pdfium::kFontStyleFixedPitch;
+  }
+  if (FontFamilyIsScript(pitch_family)) {
+    dwStyle |= pdfium::kFontStyleScript;
+  }
+  if (FontFamilyIsRoman(pitch_family)) {
+    dwStyle |= pdfium::kFontStyleSerif;
+  }
   return m_pFontMgr->CreateFont(face.AsStringView(), charset, dwStyle);
 }
 

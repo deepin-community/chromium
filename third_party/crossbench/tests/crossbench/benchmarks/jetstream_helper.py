@@ -3,16 +3,19 @@
 # found in the LICENSE file.
 
 import abc
+import argparse
 import copy
 import csv
+import json
+from dataclasses import dataclass
 from typing import Optional, Type
 from unittest import mock
 
 from crossbench.benchmarks.jetstream.jetstream_2 import (JetStream2Benchmark,
                                                          JetStream2Probe,
+                                                         JetStream2ProbeContext,
                                                          JetStream2Story)
-from crossbench.env import (HostEnvironment, HostEnvironmentConfig,
-                            ValidationMode)
+from crossbench.env import EnvironmentConfig, HostEnvironment, ValidationMode
 from crossbench.runner.runner import Runner
 from tests.crossbench.benchmarks import helper
 
@@ -33,6 +36,11 @@ class JetStream2BaseTestCase(
   @property
   @abc.abstractmethod
   def probe_cls(self) -> Type[JetStream2Probe]:
+    pass
+
+  @property
+  @abc.abstractmethod
+  def probe_context_cls(self) -> Type[JetStream2ProbeContext]:
     pass
 
   def test_run_throw(self):
@@ -69,18 +77,20 @@ class JetStream2BaseTestCase(
         jetstream_probe_results = {
             story.name: example_story_data for story in stories
         }
-        js_side_effects = [
-            True,  # Page is ready
-            None,  # filter benchmarks
-            True,  # UI is updated and ready,
-            None,  # Start running benchmark
-            True,  # Wait until done
-            jetstream_probe_results,
-        ]
         for browser in self.browsers:
-          browser.js_side_effects += js_side_effects
+          # Page is ready
+          browser.expect_js(result=True)
+          # filter benchmarks
+          browser.expect_js()
+          # UI is updated and ready,
+          browser.expect_js(result=True)
+          # Start running benchmark
+          browser.expect_js()
+          # Wait until done
+          browser.expect_js(result=True)
+          browser.expect_js(result=json.dumps(jetstream_probe_results))
     for browser in self.browsers:
-      browser.js_side_effect = copy.deepcopy(browser.js_side_effects)
+      browser.expected_js = copy.deepcopy(browser.expected_js)
 
     benchmark = self.benchmark_cls(stories, custom_url=custom_url)  # pytype: disable=not-instantiable
     self.assertTrue(len(benchmark.describe()) > 0)
@@ -88,7 +98,7 @@ class JetStream2BaseTestCase(
         self.out_dir,
         self.browsers,
         benchmark,
-        env_config=HostEnvironmentConfig(),
+        env_config=EnvironmentConfig(),
         env_validation_mode=ValidationMode.SKIP,
         platform=self.platform,
         repetitions=repetitions,
@@ -100,29 +110,69 @@ class JetStream2BaseTestCase(
     for browser in self.browsers:
       urls = self.filter_splashscreen_urls(browser.url_list)
       self.assertEqual(len(urls), repetitions)
-      self.assertIn(self.probe_cls.JS, browser.js_list)
+      self.assertTrue(browser.was_js_invoked(self.probe_context_cls.JS))
 
     csv_file = self.out_dir / f"{self.probe_cls.NAME}.csv"
     with csv_file.open(encoding="utf-8") as f:
       csv_data = list(csv.DictReader(f, delimiter="\t"))
-    self.assertListEqual(list(csv_data[0].keys()), ["label", "dev", "stable"])
-    self.assertDictEqual(csv_data[1], {
-        "label": "version",
-        "dev": "102.22.33.44",
-        "stable": "100.22.33.44",
-    })
+    self.assertListEqual(
+        list(csv_data[0].keys()), ["label", "", "dev", "stable"])
+    self.assertDictEqual(
+        csv_data[1],
+        {
+            "label": "version",
+            "dev": "102.22.33.44",
+            "stable": "100.22.33.44",
+            # One padding element
+            "": ""
+        })
 
-    with self.assertLogs(level='INFO') as cm:
+    with self.assertLogs(level="INFO") as cm:
       for probe in runner.probes:
         for run in runner.runs:
           probe.log_run_result(run)
     output = "\n".join(cm.output)
     self.assertIn("JetStream results", output)
 
-    with self.assertLogs(level='INFO') as cm:
+    with self.assertLogs(level="INFO") as cm:
       for probe in runner.probes:
         probe.log_browsers_result(runner.browser_group)
     output = "\n".join(cm.output)
     self.assertIn("JetStream results", output)
     self.assertIn("102.22.33.44", output)
     self.assertIn("100.22.33.44", output)
+
+  @dataclass
+  class Namespace(argparse.Namespace):
+    stories = "default"
+    iterations: Optional[int] = None
+    separate: bool = False
+    custom_benchmark_url: Optional[str] = None
+    detailed_metrics: bool = False
+
+  def test_iterations_kwargs(self):
+    args = self.Namespace()
+    args.stories = "default"
+    benchmark = self.benchmark_cls.from_cli_args(args)
+    (story,) = benchmark.stories
+    assert isinstance(story, self.story_cls)
+    self.assertIsNone(story.iterations)
+    self.assertDictEqual(story.url_params, {})
+
+    args.iterations = 10
+    benchmark = self.benchmark_cls.from_cli_args(args)
+    (story,) = benchmark.stories
+    assert isinstance(story, self.story_cls)
+    self.assertEqual(story.iterations, 10)
+    self.assertDictEqual(story.url_params, {"iterationCount": "10"})
+
+    args.iterations = 123
+    benchmark = self.benchmark_cls.from_cli_args(args)
+    (story,) = benchmark.stories
+    assert isinstance(story, self.story_cls)
+    self.assertEqual(story.iterations, 123)
+    self.assertDictEqual(story.url_params, {"iterationCount": "123"})
+
+# TODO: introduce JetStreamBaseTestCase
+class JetStream3BaseTestCase(JetStream2BaseTestCase, metaclass=abc.ABCMeta):
+  pass

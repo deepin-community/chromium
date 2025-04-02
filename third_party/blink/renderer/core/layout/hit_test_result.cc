@@ -37,13 +37,16 @@
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
 #include "third_party/blink/renderer/core/html/html_area_element.h"
+#include "third_party/blink/renderer/core/html/html_embed_element.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/html/html_map_element.h"
+#include "third_party/blink/renderer/core/html/html_object_element.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
 #include "third_party/blink/renderer/core/html/media/media_source_handle.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/core/layout/layout_block.h"
 #include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
 #include "third_party/blink/renderer/core/layout/layout_image.h"
@@ -114,8 +117,7 @@ HitTestResult::HitTestResult(const HitTestResult& other)
       scrollbar_(other.GetScrollbar()),
       is_over_embedded_content_view_(other.IsOverEmbeddedContentView()),
       is_over_resizer_(other.is_over_resizer_),
-      is_over_scroll_corner_(other.is_over_scroll_corner_),
-      canvas_region_id_(other.CanvasRegionId()) {
+      is_over_scroll_corner_(other.is_over_scroll_corner_) {
   // Only copy the NodeSet in case of list hit test.
   list_based_test_result_ =
       other.list_based_test_result_
@@ -160,7 +162,6 @@ void HitTestResult::PopulateFromCachedResult(const HitTestResult& other) {
 
   is_over_embedded_content_view_ = other.IsOverEmbeddedContentView();
   cacheable_ = other.cacheable_;
-  canvas_region_id_ = other.CanvasRegionId();
   is_over_resizer_ = other.IsOverResizer();
   is_over_scroll_corner_ = other.IsOverScrollCorner();
 
@@ -220,6 +221,11 @@ PositionWithAffinity HitTestResult::GetPosition() const {
     return PositionWithAffinity(Position(*node, 0), TextAffinity::kDefault);
 
   if (node->IsPseudoElement() && node->GetPseudoId() == kPseudoIdBefore) {
+    return PositionWithAffinity(
+        MostForwardCaretPosition(Position::FirstPositionInNode(*inner_node_)));
+  }
+
+  if (node->IsPseudoElement() && node->GetPseudoId() == kPseudoIdCheckMark) {
     return PositionWithAffinity(
         MostForwardCaretPosition(Position::FirstPositionInNode(*inner_node_)));
   }
@@ -292,9 +298,9 @@ CompositorElementId HitTestResult::GetScrollableContainer() const {
   // browser control movement and overscroll glow.
   while (cur_box) {
     if (cur_box->IsGlobalRootScroller() ||
-        cur_box->NeedsScrollNode(CompositingReason::kNone)) {
-      return CompositorElementIdFromUniqueObjectId(
-          cur_box->UniqueId(), CompositorElementIdNamespace::kScroll);
+        (cur_box->IsScrollContainer() &&
+         cur_box->GetScrollableArea()->ScrollsOverflow())) {
+      return cur_box->GetScrollableArea()->GetScrollElementId();
     }
 
     if (IsA<LayoutView>(cur_box))
@@ -430,7 +436,8 @@ Image* HitTestResult::GetImage(const Node* node) {
   }
   const ImageResourceContent* image_content =
       layout_image_resource ? layout_image_resource->CachedImage() : nullptr;
-  if (image_content && !image_content->ErrorOccurred()) {
+  if (image_content && !image_content->ErrorOccurred() &&
+      image_content->HasImage()) {
     return image_content->GetImage();
   }
   return nullptr;
@@ -624,7 +631,6 @@ void HitTestResult::Append(const HitTestResult& other) {
     point_in_inner_node_frame_ = other.point_in_inner_node_frame_;
     inner_url_element_ = other.URLElement();
     is_over_embedded_content_view_ = other.IsOverEmbeddedContentView();
-    canvas_region_id_ = other.CanvasRegionId();
     is_over_resizer_ = other.IsOverResizer();
     is_over_scroll_corner_ = other.is_over_scroll_corner_;
   }

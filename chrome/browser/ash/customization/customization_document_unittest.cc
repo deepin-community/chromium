@@ -175,7 +175,7 @@ class TestURLLoaderFactoryInterceptor {
 class MockExternalProviderVisitor
     : public extensions::ExternalProviderInterface::VisitorInterface {
  public:
-  MockExternalProviderVisitor() {}
+  MockExternalProviderVisitor() = default;
 
   MOCK_METHOD1(OnExternalExtensionFileFound,
                bool(const ExternalInstallInfoFile&));
@@ -210,10 +210,6 @@ class ServicesCustomizationDocumentTest : public testing::Test {
     std::string guid =
         default_network ? default_network->guid() : std::string();
     network_portal_detector_.SetDefaultNetworkForTesting(guid);
-    if (!guid.empty()) {
-      network_portal_detector_.SetDetectionResultsForTesting(
-          guid, NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_ONLINE, 204);
-    }
 
     TestingBrowserProcess::GetGlobal()->SetLocalState(&local_state_);
     RegisterLocalState(local_state_.registry());

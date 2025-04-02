@@ -58,6 +58,7 @@
 
 #include "libavutil/attributes.h"
 #include "libavutil/lfg.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "roqvideo.h"
 #include "bytestream.h"
@@ -1110,6 +1111,7 @@ static const AVOption options[] = {
 
 static const AVClass roq_class = {
     .class_name = "RoQ",
+    .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
@@ -1126,6 +1128,7 @@ const FFCodec ff_roq_encoder = {
     .close                = roq_encode_end,
     .p.pix_fmts           = (const enum AVPixelFormat[]){ AV_PIX_FMT_YUVJ444P,
                                                         AV_PIX_FMT_NONE },
+    .color_ranges         = AVCOL_RANGE_JPEG,
     .p.priv_class   = &roq_class,
     .caps_internal        = FF_CODEC_CAP_INIT_CLEANUP,
 };

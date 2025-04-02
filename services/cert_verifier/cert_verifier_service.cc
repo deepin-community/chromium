@@ -6,9 +6,12 @@
 
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/time/time.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/completion_once_callback.h"
+#include "net/base/ip_address.h"
 #include "net/cert/cert_verify_result.h"
 #include "net/cert/crl_set.h"
 #include "net/cert/x509_util.h"
@@ -87,19 +90,24 @@ CertVerifierServiceImpl::CertVerifierServiceImpl(
     mojo::PendingReceiver<mojom::CertVerifierServiceUpdater> updater_receiver,
     mojo::PendingRemote<mojom::CertVerifierServiceClient> client,
     scoped_refptr<CertNetFetcherURLLoader> cert_net_fetcher,
-    net::CertVerifyProc::InstanceParams instance_params)
+    net::CertVerifyProc::InstanceParams instance_params,
+    bool wait_for_update)
     : instance_params_(std::move(instance_params)),
       verifier_(std::move(verifier)),
       service_receiver_(this, std::move(service_receiver)),
       updater_receiver_(this, std::move(updater_receiver)),
       client_(std::move(client)),
-      cert_net_fetcher_(std::move(cert_net_fetcher)) {
+      cert_net_fetcher_(std::move(cert_net_fetcher)),
+      waiting_for_update_(wait_for_update) {
   // base::Unretained is safe because |this| owns |receiver_|, so deleting
   // |this| will prevent |receiver_| from calling this callback.
   service_receiver_.set_disconnect_handler(
       base::BindRepeating(&CertVerifierServiceImpl::OnDisconnectFromService,
                           base::Unretained(this)));
   verifier_->AddObserver(this);
+  if (waiting_for_update_) {
+    wait_start_time_ = base::TimeTicks::Now();
+  }
 }
 
 // Note: this object owns the underlying CertVerifier, which owns all of the
@@ -133,31 +141,37 @@ void CertVerifierServiceImpl::EnableNetworkAccess(
 
 void CertVerifierServiceImpl::UpdateAdditionalCertificates(
     mojom::AdditionalCertificatesPtr additional_certificates) {
-  instance_params_.additional_trust_anchors =
-      net::x509_util::ParseAllValidCerts(
-          net::x509_util::ConvertToX509CertificatesIgnoreErrors(
-              additional_certificates->trust_anchors));
-
-  instance_params_.additional_untrusted_authorities =
-      net::x509_util::ParseAllValidCerts(
-          net::x509_util::ConvertToX509CertificatesIgnoreErrors(
-              additional_certificates->all_certificates));
-
-  instance_params_.additional_trust_anchors_with_enforced_constraints =
-      net::x509_util::ParseAllValidCerts(
-          net::x509_util::ConvertToX509CertificatesIgnoreErrors(
-              additional_certificates
-                  ->trust_anchors_with_enforced_constraints));
-
-  instance_params_.additional_distrusted_spkis =
-      additional_certificates->distrusted_spkis;
-
-  instance_params_.include_system_trust_store =
-      additional_certificates->include_system_trust_store;
-
+  UpdateCertVerifierInstanceParams(additional_certificates, &instance_params_);
+  // TODO(hchao, mattm): figure out what to do if the CertVerifierServiceFactory
+  // is destroyed before the CertVerifierService (or if this is not possible in
+  // normal circumstances, add a DCHECK or CHECK here).
   verifier_->UpdateVerifyProcData(cert_net_fetcher_,
                                   service_factory_impl_->get_impl_params(),
                                   instance_params_);
+  if (waiting_for_update_) {
+    base::UmaHistogramTimes("Net.CertVerifier.TimeUntilReady",
+                            base::TimeTicks::Now() - wait_start_time_);
+    base::UmaHistogramCounts100("Net.CertVerifier.QueuedRequestsWhenReady",
+                                queued_requests_.size());
+  }
+  waiting_for_update_ = false;
+
+  // Empty queue if necessary
+  for (auto& queued_request : queued_requests_) {
+    VerifyHelper(queued_request.params, queued_request.net_log_source,
+                 std::move(queued_request.cert_verifier_request));
+  }
+
+  queued_requests_.clear();
+
+  if (update_complete_callback_) {
+    std::move(update_complete_callback_).Run();
+  }
+}
+
+void CertVerifierServiceImpl::WaitUntilNextUpdateForTesting(
+    WaitUntilNextUpdateForTestingCallback callback) {
+  update_complete_callback_ = std::move(callback);
 }
 
 void CertVerifierServiceImpl::SetCertVerifierServiceFactory(
@@ -177,6 +191,28 @@ void CertVerifierServiceImpl::Verify(
     const net::NetLogSource& net_log_source,
     mojo::PendingRemote<mojom::CertVerifierRequest> cert_verifier_request) {
   DVLOG(3) << "Received certificate validation request for hostname: "
+           << params.hostname();
+
+  if (waiting_for_update_) {
+    DVLOG(3)
+        << "initial cert update not received, queueing request for hostname: "
+        << params.hostname();
+    QueuedCertVerifyRequest queued_request;
+    queued_request.params = std::move(params);
+    queued_request.net_log_source = std::move(net_log_source);
+    queued_request.cert_verifier_request = std::move(cert_verifier_request);
+
+    queued_requests_.push_back(std::move(queued_request));
+  } else {
+    VerifyHelper(params, net_log_source, std::move(cert_verifier_request));
+  }
+}
+
+void CertVerifierServiceImpl::VerifyHelper(
+    const net::CertVerifier::RequestParams& params,
+    const net::NetLogSource& net_log_source,
+    mojo::PendingRemote<mojom::CertVerifierRequest> cert_verifier_request) {
+  DVLOG(3) << "Running certificate validation request for hostname: "
            << params.hostname();
   auto result = std::make_unique<net::CertVerifyResult>();
 
@@ -225,6 +261,17 @@ void CertVerifierServiceImpl::OnDisconnectFromService() {
   }
   delete this;
 }
+
+CertVerifierServiceImpl::QueuedCertVerifyRequest::QueuedCertVerifyRequest() =
+    default;
+CertVerifierServiceImpl::QueuedCertVerifyRequest::~QueuedCertVerifyRequest() =
+    default;
+
+CertVerifierServiceImpl::QueuedCertVerifyRequest::QueuedCertVerifyRequest(
+    CertVerifierServiceImpl::QueuedCertVerifyRequest&&) = default;
+CertVerifierServiceImpl::QueuedCertVerifyRequest&
+CertVerifierServiceImpl::QueuedCertVerifyRequest::operator=(
+    CertVerifierServiceImpl::QueuedCertVerifyRequest&& other) = default;
 
 }  // namespace internal
 }  // namespace cert_verifier

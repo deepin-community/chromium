@@ -30,19 +30,20 @@ constexpr uint32_t kWeightsFlags =
 
 // Attempts to make sure `file` will be read from disk quickly when needed.
 void PrefetchFile(const base::FilePath& path) {
-  auto pre_read_file = base::BindOnce(
-      [](const base::FilePath& path) {
-        base::PreReadFile(path, /*is_executable=*/false);
-      },
-      path);
+  constexpr bool kIsExecutable = false;
+  constexpr bool kSequential = true;
 #if BUILDFLAG(IS_WIN)
   // On Windows PreReadFile() can take on the order of hundreds of milliseconds,
   // so run on a separate thread.
   base::ThreadPool::PostTask(
       FROM_HERE, {base::TaskPriority::USER_BLOCKING, base::MayBlock()},
-      std::move(pre_read_file));
+      base::BindOnce(
+          [](const base::FilePath& path) {
+            base::PreReadFile(path, kIsExecutable, kSequential);
+          },
+          path));
 #else
-  std::move(pre_read_file).Run();
+  base::PreReadFile(path, kIsExecutable, kSequential);
 #endif
 }
 
@@ -58,27 +59,14 @@ ModelAssets& ModelAssets::operator=(ModelAssets&&) = default;
 ModelAssets::~ModelAssets() = default;
 
 ModelAssets LoadModelAssets(const ModelAssetPaths& paths) {
-  PrefetchFile(paths.weights);
+  if (!paths.weights.empty()) {
+    PrefetchFile(paths.weights);
+  }
 
   ModelAssets assets;
-  assets.sp_model =
-      base::File(paths.sp_model, base::File::FLAG_OPEN | base::File::FLAG_READ);
-  assets.model =
-      base::File(paths.model, base::File::FLAG_OPEN | base::File::FLAG_READ);
-
-  if (paths.HasSafetyFiles()) {
-    assets.ts_data = base::File(paths.ts_data,
-                                base::File::FLAG_OPEN | base::File::FLAG_READ);
-    assets.ts_sp_model = base::File(
-        paths.ts_sp_model, base::File::FLAG_OPEN | base::File::FLAG_READ);
+  if (!paths.weights.empty()) {
+    assets.weights = base::File(paths.weights, kWeightsFlags);
   }
-
-  if (!paths.language_detection_model.empty()) {
-    assets.language_detection_model =
-        base::File(paths.language_detection_model,
-                   base::File::FLAG_OPEN | base::File::FLAG_READ);
-  }
-  assets.weights = base::File(paths.weights, kWeightsFlags);
   return assets;
 }
 
@@ -93,12 +81,11 @@ AdaptationAssets& AdaptationAssets::operator=(AdaptationAssets&&) = default;
 AdaptationAssets::~AdaptationAssets() = default;
 
 AdaptationAssets LoadAdaptationAssets(const AdaptationAssetPaths& paths) {
-  PrefetchFile(paths.weights);
-
   AdaptationAssets assets;
-  assets.model =
-      base::File(paths.model, base::File::FLAG_OPEN | base::File::FLAG_READ);
-  assets.weights = base::File(paths.weights, kWeightsFlags);
+  if (!paths.weights.empty()) {
+    PrefetchFile(paths.weights);
+    assets.weights = base::File(paths.weights, kWeightsFlags);
+  }
   return assets;
 }
 

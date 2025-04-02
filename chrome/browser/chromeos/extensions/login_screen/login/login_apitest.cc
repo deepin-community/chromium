@@ -44,6 +44,7 @@
 #include "extensions/common/extension.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -209,9 +210,10 @@ IN_PROC_BROWSER_TEST_F(LoginApitest, LaunchManagedGuestSession) {
   // We cannot use the email as an identifier as a different email is generated
   // for managed guest sessions.
   user_manager::UserManager* user_manager = user_manager::UserManager::Get();
-  EXPECT_TRUE(user_manager->GetActiveUser()->GetType() ==
-              user_manager::UserType::kPublicAccount);
-  EXPECT_FALSE(user_manager->CanCurrentUserLock());
+  auto* active_user = user_manager->GetActiveUser();
+  ASSERT_TRUE(active_user);
+  EXPECT_EQ(user_manager::UserType::kPublicAccount, active_user->GetType());
+  EXPECT_FALSE(active_user->CanLock());
 }
 
 IN_PROC_BROWSER_TEST_F(LoginApitest, LaunchManagedGuestSessionWithPassword) {
@@ -219,7 +221,7 @@ IN_PROC_BROWSER_TEST_F(LoginApitest, LaunchManagedGuestSessionWithPassword) {
   LogInWithPassword();
 
   user_manager::UserManager* user_manager = user_manager::UserManager::Get();
-  EXPECT_TRUE(user_manager->CanCurrentUserLock());
+  EXPECT_TRUE(user_manager->GetActiveUser()->CanLock());
 }
 
 IN_PROC_BROWSER_TEST_F(LoginApitest, LaunchManagedGuestSessionNoAccounts) {
@@ -449,7 +451,7 @@ class LoginApitestWithEnterpriseUser : public LoginApitest {
         user_policy_builder_->policy_data();
     policy_data.set_policy_type(policy::dm_protocol::kChromeUserPolicyType);
     policy_data.set_username(account_id.GetUserEmail());
-    policy_data.set_gaia_id(account_id.GetGaiaId());
+    policy_data.set_gaia_id(account_id.GetGaiaId().ToString());
     user_policy_builder_->Build();
 
     auto registry_observer =
@@ -470,13 +472,8 @@ class LoginApitestWithEnterpriseUser : public LoginApitest {
   // |embedded_test_server()|.
   net::EmbeddedTestServer test_server_;
   ash::LoggedInUserMixin logged_in_user_mixin_{
-      &mixin_host_,
-      ash::LoggedInUserMixin::LogInType::kRegular,
-      &test_server_,
-      this,
-      /*should_launch_browser=*/true,
-      AccountId::FromUserEmailGaiaId(FakeGaiaMixin::kEnterpriseUser1,
-                                     FakeGaiaMixin::kEnterpriseUser1GaiaId)};
+      &mixin_host_, /*test_base=*/this, embedded_test_server(),
+      ash::LoggedInUserMixin::LogInType::kManaged};
 };
 
 IN_PROC_BROWSER_TEST_F(LoginApitestWithEnterpriseUser,

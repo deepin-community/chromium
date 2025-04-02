@@ -120,11 +120,9 @@ bool GetIsAvailableInArcBySource(
     case AccountManagerFacade::AccountAdditionSource::
         kChromeSettingsReauthAccountButton:
       NOTREACHED();
-      return false;
     // Unused enums that cannot be deleted.
     case AccountManagerFacade::AccountAdditionSource::kPrintPreviewDialogUnused:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -243,8 +241,9 @@ class AccountManagerFacadeImpl::AccessTokenFetcher
       if (!maybe_error.has_value()) {
         LOG(ERROR) << "Unable to parse error result of access token fetch: "
                    << result->get_error()->state;
-        FireOnGetTokenFailure(GoogleServiceAuthError(
-            GoogleServiceAuthError::State::UNEXPECTED_SERVICE_RESPONSE));
+        FireOnGetTokenFailure(
+            GoogleServiceAuthError::FromUnexpectedServiceResponse(
+                "Error parsing Mojo error result of access token fetch"));
       } else {
         FireOnGetTokenFailure(maybe_error.value());
       }
@@ -352,7 +351,7 @@ void AccountManagerFacadeImpl::GetAccounts(
       remote_version_ < RemoteMinVersions::kGetAccountsMinVersion) {
     // Remote side is disconnected or doesn't support GetAccounts. Do not return
     // an empty list as that may cause Lacros to delete user profiles.
-    // TODO(https://crbug.com/1287297): Try to reconnect, or return an error.
+    // TODO(crbug.com/40211181): Try to reconnect, or return an error.
     return;
   }
   RunAfterInitializationSequence(

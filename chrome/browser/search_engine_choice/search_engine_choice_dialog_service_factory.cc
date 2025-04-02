@@ -4,8 +4,10 @@
 
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service_factory.h"
 
+#include "base/auto_reset.h"
 #include "base/check_deref.h"
 #include "base/check_is_test.h"
+#include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "build/branding_buildflags.h"
 #include "chrome/browser/browser_process.h"
@@ -14,9 +16,11 @@
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/common/chrome_switches.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
-#include "components/search_engines/search_engine_choice_utils.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 #include "components/search_engines/search_engines_pref_names.h"
+#include "components/search_engines/search_engines_switches.h"
 #include "components/search_engines/template_url_service.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -35,12 +39,6 @@ bool g_is_chrome_build =
 
 search_engines::SearchEngineChoiceScreenConditions ComputeProfileEligibility(
     Profile& profile) {
-  if (!search_engines::IsChoiceScreenFlagEnabled(
-          search_engines::ChoicePromo::kAny)) {
-    return search_engines::SearchEngineChoiceScreenConditions::
-        kFeatureSuppressed;
-  }
-
   bool is_regular_or_guest_profile =
       profile.IsRegularProfile() || profile.IsGuestSession();
 #if BUILDFLAG(IS_CHROMEOS)
@@ -76,7 +74,6 @@ bool IsProfileEligibleForChoiceScreen(Profile& profile) {
   return eligibility_conditions ==
          search_engines::SearchEngineChoiceScreenConditions::kEligible;
 }
-
 }  // namespace
 
 SearchEngineChoiceDialogServiceFactory::SearchEngineChoiceDialogServiceFactory()
@@ -126,24 +123,30 @@ bool SearchEngineChoiceDialogServiceFactory::
 std::unique_ptr<KeyedService>
 SearchEngineChoiceDialogServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA) || \
-    BUILDFLAG(CHROME_FOR_TESTING)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(CHROME_FOR_TESTING)
   return nullptr;
 #else
-  if (!g_is_chrome_build) {
+
+  base::CommandLine* const command_line =
+      base::CommandLine::ForCurrentProcess();
+  if (!g_is_chrome_build &&
+      !command_line->HasSwitch(switches::kForceSearchEngineChoiceScreen)) {
     return nullptr;
   }
 
-  auto& profile = CHECK_DEREF(Profile::FromBrowserContext(context));
+  if (command_line->HasSwitch(switches::kNoFirstRun) &&
+      !command_line->HasSwitch(
+          switches::kIgnoreNoFirstRunForSearchEngineChoiceScreen)) {
+    return nullptr;
+  }
+
+  Profile& profile = CHECK_DEREF(Profile::FromBrowserContext(context));
   search_engines::SearchEngineChoiceService& search_engine_choice_service =
       CHECK_DEREF(
           search_engines::SearchEngineChoiceServiceFactory::GetForProfile(
               &profile));
 
   if (!IsProfileEligibleForChoiceScreen(profile)) {
-    DVLOG(1) << "Profile not eligible, removing tag for profile "
-             << profile.GetBaseName();
-    profile.GetPrefs()->ClearPref(prefs::kDefaultSearchProviderChoicePending);
     return nullptr;
   }
 

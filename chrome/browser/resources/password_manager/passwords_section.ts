@@ -3,9 +3,8 @@
 // found in the LICENSE file.
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/polymer/v3_0/iron-list/iron-list.js';
-import 'chrome://resources/polymer/v3_0/iron-flex-layout/iron-flex-layout-classes.js';
 import 'chrome://resources/cr_elements/cr_shared_style.css.js';
-import './strings.m.js';
+import '/strings.m.js';
 import './password_list_item.js';
 import './dialogs/add_password_dialog.js';
 import './dialogs/auth_timed_out_dialog.js';
@@ -14,13 +13,12 @@ import './user_utils_mixin.js';
 import './promo_cards/promo_card.js';
 import './promo_cards/promo_cards_browser_proxy.js';
 
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import type {CrButtonElement} from 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {focusWithoutInk} from 'chrome://resources/js/focus_without_ink.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.js';
 import {PluralStringProxyImpl} from 'chrome://resources/js/plural_string_proxy.js';
 import type {IronListElement} from 'chrome://resources/polymer/v3_0/iron-list/iron-list.js';
@@ -105,12 +103,6 @@ export class PasswordsSectionElement extends PasswordsSectionElementBase {
         computed: 'computePasswordsOnDevice_(groups_)',
       },
 
-      showMovePasswords_: {
-        type: Boolean,
-        computed: 'computeShowMovePasswords_(isAccountStoreUser, ' +
-            'passwordsOnDevice_, searchTerm_)',
-      },
-
       showPasswordsDescription_: {
         type: Boolean,
         computed: 'computeShowPasswordsDescription_(groups_, searchTerm_)',
@@ -126,13 +118,6 @@ export class PasswordsSectionElement extends PasswordsSectionElementBase {
         computed: 'computePasswordManagerDisabled_(' +
             'prefs.credentials_enable_service.enforcement, ' +
             'prefs.credentials_enable_service.value)',
-      },
-
-      enableButterOnDesktopFollowup_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean('enableButterOnDesktopFollowup');
-        },
       },
 
       shouldShowPromoCard_: {
@@ -167,7 +152,6 @@ export class PasswordsSectionElement extends PasswordsSectionElementBase {
   private promoCard_: PromoCard|null;
   private passwordManagerDisabled_: boolean;
   private activeListItem_: HTMLElement|null;
-  private enableButterOnDesktopFollowup_: boolean;
 
   private setSavedPasswordsListener_: (
       (entries: chrome.passwordsPrivate.PasswordUiEntry[]) => void)|null = null;
@@ -282,17 +266,6 @@ export class PasswordsSectionElement extends PasswordsSectionElementBase {
         .filter(entry => localStorage.includes(entry.storedIn));
   }
 
-  private computeShowMovePasswords_(): boolean {
-    // Should not show the old entry to move passwords if followup for the
-    // butter on desktop feature is enabled.
-    if (this.enableButterOnDesktopFollowup_) {
-      return false;
-    }
-
-    return this.computePasswordsOnDevice_().length > 0 &&
-        this.isAccountStoreUser && !this.searchTerm_;
-  }
-
   private async onGroupsChanged_() {
     this.movePasswordsText_ =
         await PluralStringProxyImpl.getInstance().getPluralString(
@@ -356,8 +329,18 @@ export class PasswordsSectionElement extends PasswordsSectionElementBase {
 
   private computePasswordManagerDisabled_(): boolean {
     const pref = this.getPref('credentials_enable_service');
-    return pref.enforcement === chrome.settingsPrivate.Enforcement.ENFORCED &&
-        !pref.value;
+
+    const isPolicyEnforced =
+        pref.enforcement === chrome.settingsPrivate.Enforcement.ENFORCED;
+
+    const isPolicyControlledByExtension =
+        pref.controlledBy === chrome.settingsPrivate.ControlledBy.EXTENSION;
+
+    if (isPolicyControlledByExtension) {
+      return false;
+    }
+
+    return !pref.value && isPolicyEnforced;
   }
 
   private computeShowPasswordsDescription_(): boolean {

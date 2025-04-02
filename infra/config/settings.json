@@ -1,37 +1,37 @@
 {
-    "project": "chromium-m123",
-    "project_title": "Chromium M123",
-    "ref": "refs/branch-heads/6312",
-    "chrome_project": "chrome-m123",
+    "project": "chromium-m134",
+    "project_title": "Chromium M134",
+    "ref": "refs/branch-heads/6998",
+    "chrome_project": "chrome-m134",
     "is_main": false,
     "platforms": {
         "android": {
             "description": "beta/stable",
-            "sheriff_rotation": "chrome_browser_release"
+            "gardener_rotation": "chrome_browser_release"
         },
         "cros": {
             "description": "beta/stable",
-            "sheriff_rotation": "chrome_browser_release"
+            "gardener_rotation": "chrome_browser_release"
         },
         "fuchsia": {
             "description": "beta/stable",
-            "sheriff_rotation": "chrome_browser_release"
+            "gardener_rotation": "chrome_browser_release"
         },
         "ios": {
             "description": "beta/stable",
-            "sheriff_rotation": "chrome_browser_release"
+            "gardener_rotation": "chrome_browser_release"
         },
         "linux": {
             "description": "beta/stable",
-            "sheriff_rotation": "chrome_browser_release"
+            "gardener_rotation": "chrome_browser_release"
         },
         "mac": {
             "description": "beta/stable",
-            "sheriff_rotation": "chrome_browser_release"
+            "gardener_rotation": "chrome_browser_release"
         },
         "windows": {
             "description": "beta/stable",
-            "sheriff_rotation": "chrome_browser_release"
+            "gardener_rotation": "chrome_browser_release"
         }
     }
 }

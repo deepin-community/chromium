@@ -34,6 +34,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <tuple>
 #include <utility>
 
@@ -44,6 +45,8 @@
 #include "src/tint/utils/text/unicode.h"
 
 using namespace tint::core::fluent_types;  // NOLINT
+
+TINT_BEGIN_DISABLE_WARNING(UNSAFE_BUFFER_USAGE);
 
 namespace tint::wgsl::reader {
 namespace {
@@ -1012,18 +1015,16 @@ std::optional<Token> Lexer::try_ident() {
 
         // Consume continuing codepoint
         advance(static_cast<uint32_t>(n));
-
-        if (pos() - start == 2 && substr(start, 2) == "__") {
-            // Identifiers prefixed with two or more underscores are not allowed.
-            // We check for these in the loop to bail early and prevent quadratic parse time for
-            // long sequences of ____.
-            set_pos(start);
-            return {};
-        }
     }
 
     auto str = substr(start, pos() - start);
     end_source(source);
+
+    if (str.length() > 1 && substr(start, 2) == "__") {
+        // Identifiers prefixed with two or more underscores are not allowed.
+        return Token{Token::Type::kError, source,
+                     "identifiers must not start with two or more underscores"};
+    }
 
     if (auto t = parse_keyword(str); t.has_value()) {
         return Token{t.value(), source, str};
@@ -1215,9 +1216,6 @@ std::optional<Token::Type> Lexer::parse_keyword(std::string_view str) {
     if (str == "alias") {
         return Token::Type::kAlias;
     }
-    if (str == "bitcast") {
-        return Token::Type::kBitcast;
-    }
     if (str == "break") {
         return Token::Type::kBreak;
     }
@@ -1303,3 +1301,5 @@ std::optional<Token::Type> Lexer::parse_keyword(std::string_view str) {
 }
 
 }  // namespace tint::wgsl::reader
+
+TINT_END_DISABLE_WARNING(UNSAFE_BUFFER_USAGE);

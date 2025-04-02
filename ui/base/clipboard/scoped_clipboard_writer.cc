@@ -2,7 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
+
 #include <memory>
 #include <utility>
 
@@ -15,6 +21,7 @@
 #include "ui/base/clipboard/clipboard_constants.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/clipboard/clipboard_metrics.h"
+#include "ui/base/clipboard/clipboard_util.h"
 #include "ui/gfx/geometry/size.h"
 
 // Documentation on the format of the parameters for each clipboard target can
@@ -55,14 +62,13 @@ ScopedClipboardWriter::~ScopedClipboardWriter() {
     }
   }
 
-  if (!objects_.empty() || !platform_representations_.empty()) {
+  if (!objects_.empty() || !raw_objects_.empty() ||
+      !platform_representations_.empty()) {
     Clipboard::GetForCurrentThread()->WritePortableAndPlatformRepresentations(
-        buffer_, objects_, std::move(platform_representations_),
-        std::move(data_src_));
+        buffer_, objects_, std::move(raw_objects_),
+        std::move(platform_representations_), std::move(data_src_),
+        privacy_types_);
   }
-
-  if (confidential_)
-    Clipboard::GetForCurrentThread()->MarkAsConfidential();
 }
 
 void ScopedClipboardWriter::SetDataSource(
@@ -124,8 +130,9 @@ void ScopedClipboardWriter::WriteFilenames(const std::string& uri_list) {
 
 void ScopedClipboardWriter::WriteBookmark(const std::u16string& bookmark_title,
                                           const std::string& url) {
-  if (bookmark_title.empty() || url.empty())
+  if (ui::clipboard_util::ShouldSkipBookmark(bookmark_title, url)) {
     return;
+  }
   RecordWrite(ClipboardFormatMetric::kBookmark);
 
   Clipboard::Data data = Clipboard::BookmarkData{
@@ -172,7 +179,12 @@ void ScopedClipboardWriter::WriteImage(const SkBitmap& bitmap) {
 }
 
 void ScopedClipboardWriter::MarkAsConfidential() {
-  confidential_ = true;
+  privacy_types_ |= Clipboard::PrivacyTypes::kNoDisplay;
+}
+
+void ScopedClipboardWriter::MarkAsOffTheRecord() {
+  privacy_types_ |= Clipboard::PrivacyTypes::kNoLocalClipboardHistory;
+  privacy_types_ |= Clipboard::PrivacyTypes::kNoCloudClipboard;
 }
 
 void ScopedClipboardWriter::WritePickledData(
@@ -184,9 +196,7 @@ void ScopedClipboardWriter::WritePickledData(
   raw_data.data = std::vector<uint8_t>(
       reinterpret_cast<const uint8_t*>(pickle.data()),
       reinterpret_cast<const uint8_t*>(pickle.data()) + pickle.size());
-  Clipboard::Data data = std::move(raw_data);
-  const size_t index = data.index();
-  objects_[index] = Clipboard::ObjectMapParams(std::move(data));
+  raw_objects_.emplace_back(std::move(raw_data));
 }
 
 void ScopedClipboardWriter::WriteData(const std::u16string& format,
@@ -217,21 +227,12 @@ void ScopedClipboardWriter::WriteData(const std::u16string& format,
   }
 }
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-void ScopedClipboardWriter::WriteEncodedDataTransferEndpointForTesting(
-    const std::string& json) {
-  Clipboard::Data data =
-      Clipboard::EncodedDataTransferEndpointData{.data = json};
-  const size_t index = data.index();
-  objects_[index] = Clipboard::ObjectMapParams(std::move(data));
-}
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
 void ScopedClipboardWriter::Reset() {
   objects_.clear();
+  raw_objects_.clear();
   platform_representations_.clear();
   registered_formats_.clear();
-  confidential_ = false;
+  privacy_types_ = 0;
   counter_ = 0;
 }
 

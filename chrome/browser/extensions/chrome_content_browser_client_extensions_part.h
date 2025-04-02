@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/auto_reset.h"
+#include "base/feature_list.h"
 #include "base/gtest_prod_util.h"
 #include "chrome/browser/chrome_content_browser_client_parts.h"
 #include "components/download/public/common/quarantine_connection.h"
@@ -37,9 +38,9 @@ class BinderRegistryWithArgs;
 using BinderRegistry = BinderRegistryWithArgs<>;
 }  // namespace service_manager
 
-namespace extensions {
+class Profile;
 
-BASE_DECLARE_FEATURE(kStopUsingRenderProcessHostPrivilege);
+namespace extensions {
 
 // Implements the extensions portion of ChromeContentBrowserClient.
 class ChromeContentBrowserClientExtensionsPart
@@ -70,7 +71,8 @@ class ChromeContentBrowserClientExtensionsPart
       const GURL& effective_site_url);
   static bool ShouldAllowCrossProcessSandboxedFrameForPrecursor(
       content::BrowserContext* browser_context,
-      const GURL& precursor);
+      const GURL& precursor,
+      const GURL& url);
   static bool CanCommitURL(content::RenderProcessHost* process_host,
                            const GURL& url);
   static bool IsSuitableHost(Profile* profile,
@@ -131,10 +133,13 @@ class ChromeContentBrowserClientExtensionsPart
   // ChromeContentBrowserClientParts:
   void SiteInstanceGotProcessAndSite(
       content::SiteInstance* site_instance) override;
-  void OverrideWebkitPrefs(content::WebContents* web_contents,
-                           blink::web_pref::WebPreferences* web_prefs) override;
+  void OverrideWebPreferences(
+      content::WebContents* web_contents,
+      content::SiteInstance& main_frame_site,
+      blink::web_pref::WebPreferences* web_prefs) override;
   bool OverrideWebPreferencesAfterNavigation(
       content::WebContents* web_contents,
+      content::SiteInstance& main_frame_site,
       blink::web_pref::WebPreferences* web_prefs) override;
   void BrowserURLHandlerCreated(content::BrowserURLHandler* handler) override;
   void GetAdditionalAllowedSchemesForFileSystem(
@@ -149,8 +154,7 @@ class ChromeContentBrowserClientExtensionsPart
           additional_backends) override;
   void AppendExtraRendererCommandLineSwitches(
       base::CommandLine* command_line,
-      content::RenderProcessHost* process,
-      Profile* profile) override;
+      content::RenderProcessHost& process) override;
   void ExposeInterfacesToRenderer(
       service_manager::BinderRegistry* registry,
       blink::AssociatedInterfaceRegistry* associated_registry,

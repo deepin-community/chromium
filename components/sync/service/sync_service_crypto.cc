@@ -15,6 +15,7 @@
 #include "components/sync/base/passphrase_enums.h"
 #include "components/sync/engine/nigori/nigori.h"
 #include "components/sync/engine/sync_string_conversions.h"
+#include "components/sync/protocol/nigori_specifics.pb.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/trusted_vault_histograms.h"
 
@@ -22,12 +23,17 @@ namespace syncer {
 
 namespace {
 
-// Used for UMA.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused. Keep in sync with
+// TrustedVaultFetchKeysAttempt in
+// tools/metrics/histograms/metadata/sync/enums.xml.
+// LINT.IfChange(TrustedVaultFetchKeysAttempt)
 enum class TrustedVaultFetchKeysAttemptForUMA {
-  kFirstAttempt,
-  kSecondAttempt,
+  kFirstAttempt = 0,
+  kSecondAttempt = 1,
   kMaxValue = kSecondAttempt
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:TrustedVaultFetchKeysAttempt)
 
 // A SyncEncryptionHandler::Observer implementation that simply posts all calls
 // to another task runner.
@@ -70,7 +76,7 @@ class SyncEncryptionObserverProxy : public SyncEncryptionHandler::Observer {
             observer_));
   }
 
-  void OnEncryptedTypesChanged(ModelTypeSet encrypted_types,
+  void OnEncryptedTypesChanged(DataTypeSet encrypted_types,
                                bool encrypt_everything) override {
     task_runner_->PostTask(
         FROM_HERE,
@@ -103,7 +109,7 @@ class SyncEncryptionObserverProxy : public SyncEncryptionHandler::Observer {
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 };
 
-// Checks if |nigori| can be used to decrypt the given pending keys. Returns
+// Checks if `nigori` can be used to decrypt the given pending keys. Returns
 // true if decryption was successful. Returns false otherwise. Must be called
 // with non-empty pending keys cache.
 bool CheckNigoriAgainstPendingKeys(const Nigori& nigori,
@@ -143,7 +149,7 @@ std::unique_ptr<Nigori> ReadNigoriFromBootstrapToken(
                                 key.mac_key());
 }
 
-// Serializes |nigori| as bootstrap token. Returns empty string in case of
+// Serializes `nigori` as bootstrap token. Returns empty string in case of
 // crypto/serialization failures.
 std::string SerializeNigoriAsBootstrapToken(const Nigori& nigori) {
   sync_pb::NigoriKey proto;
@@ -210,7 +216,6 @@ bool SyncServiceCrypto::IsPassphraseRequired() const {
   }
 
   NOTREACHED();
-  return false;
 }
 
 bool SyncServiceCrypto::IsTrustedVaultKeyRequired() const {
@@ -250,10 +255,10 @@ void SyncServiceCrypto::SetEncryptionPassphrase(const std::string& passphrase) {
     case RequiredUserAction::kTrustedVaultKeyRequired:
     case RequiredUserAction::kTrustedVaultKeyRequiredButFetching:
       // Cryptographer has pending keys.
-      // TODO(crbug.com/1434786): this is currently reachable on iOS due to
+      // TODO(crbug.com/40904402): this is currently reachable on iOS due to
       // discrepancy in UI code. Fix iOS implementation and avoid using more
       // strict checks here until this is done.
-      NOTREACHED()
+      DUMP_WILL_BE_NOTREACHED()
           << "Can not set explicit passphrase when decryption is needed.";
       return;
   }
@@ -348,7 +353,6 @@ bool SyncServiceCrypto::IsTrustedVaultKeyRequiredStateKnown() const {
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 std::optional<PassphraseType> SyncServiceCrypto::GetPassphraseType() const {
@@ -358,7 +362,8 @@ std::optional<PassphraseType> SyncServiceCrypto::GetPassphraseType() const {
 
 void SyncServiceCrypto::SetSyncEngine(const CoreAccountInfo& account_info,
                                       SyncEngine* engine) {
-  DCHECK(engine);
+  CHECK(engine);
+  CHECK(!state_.engine);
   state_.account_info = account_info;
   state_.engine = engine;
 
@@ -366,7 +371,7 @@ void SyncServiceCrypto::SetSyncEngine(const CoreAccountInfo& account_info,
     case RequiredUserAction::kNone:
       // It was already established during initialization that there's nothing
       // to do, which is possible for some passphrase types, but not others
-      // (including |kTrustedVaultPassphrase|.
+      // (including `kTrustedVaultPassphrase`.
       DCHECK(GetPassphraseType() != PassphraseType::kTrustedVaultPassphrase);
       break;
     case RequiredUserAction::kUnknownDuringInitialization:
@@ -390,7 +395,6 @@ void SyncServiceCrypto::SetSyncEngine(const CoreAccountInfo& account_info,
       // Neither keys nor the recoverability state are fetched during engine
       // initialization.
       NOTREACHED();
-      break;
   }
 }
 
@@ -402,7 +406,7 @@ SyncServiceCrypto::GetEncryptionObserverProxy() {
       base::SequencedTaskRunner::GetCurrentDefault());
 }
 
-ModelTypeSet SyncServiceCrypto::GetEncryptedDataTypes() const {
+DataTypeSet SyncServiceCrypto::GetAllEncryptedDataTypes() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(state_.encrypted_types.HasAll(AlwaysEncryptedUserTypes()));
   // We may be called during the setup process before we're
@@ -430,7 +434,6 @@ bool SyncServiceCrypto::HasCryptoError() const {
   }
 
   NOTREACHED();
-  return false;
 }
 
 void SyncServiceCrypto::OnPassphraseRequired(
@@ -463,7 +466,7 @@ void SyncServiceCrypto::OnPassphraseAccepted() {
   // Clear our cache of the cryptographer's pending keys.
   state_.cached_pending_keys.clear_blob();
 
-  // Reset |required_user_action| since we know we no longer require the
+  // Reset `required_user_action` since we know we no longer require the
   // passphrase.
   UpdateRequiredUserActionAndNotify(RequiredUserAction::kNone);
 
@@ -476,7 +479,7 @@ void SyncServiceCrypto::OnTrustedVaultKeyRequired() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // To be on the safe since, if a passphrase is required, we avoid overriding
-  // |state_.required_user_action|.
+  // `state_.required_user_action`.
   if (state_.required_user_action != RequiredUserAction::kNone &&
       state_.required_user_action !=
           RequiredUserAction::kUnknownDuringInitialization) {
@@ -522,13 +525,13 @@ void SyncServiceCrypto::OnTrustedVaultKeyAccepted() {
   delegate_->ReconfigureDataTypesDueToCrypto();
 }
 
-void SyncServiceCrypto::OnEncryptedTypesChanged(ModelTypeSet encrypted_types,
+void SyncServiceCrypto::OnEncryptedTypesChanged(DataTypeSet encrypted_types,
                                                 bool encrypt_everything) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   state_.encrypted_types = encrypted_types;
   state_.encrypt_everything = encrypt_everything;
   DVLOG(1) << "Encrypted types changed to "
-           << ModelTypeSetToDebugString(state_.encrypted_types)
+           << DataTypeSetToDebugString(state_.encrypted_types)
            << " (encrypt everything is set to "
            << (state_.encrypt_everything ? "true" : "false") << ")";
   DCHECK(state_.encrypted_types.HasAll(AlwaysEncryptedUserTypes()));
@@ -551,7 +554,7 @@ void SyncServiceCrypto::OnPassphraseTypeChanged(PassphraseType type,
 
   state_.cached_explicit_passphrase_time = passphrase_time;
 
-  // TODO(crbug.com/1466401): Also pass along the passphrase time?
+  // TODO(crbug.com/40923935): Also pass along the passphrase time?
   delegate_->PassphraseTypeChanged(type);
 
   // Clear recoverability degraded state in case a custom passphrase was set.
@@ -689,7 +692,7 @@ void SyncServiceCrypto::TrustedVaultKeysMarkedAsStale(
     return;
   }
 
-  // If nothing has changed (determined by |!result| since false negatives are
+  // If nothing has changed (determined by `!result` since false negatives are
   // disallowed by the API) or this is already a second attempt, the fetching
   // procedure can be considered completed.
   if (!result || is_second_fetch_attempt) {
@@ -763,7 +766,7 @@ void SyncServiceCrypto::RefreshIsRecoverabilityDegraded() {
 
 void SyncServiceCrypto::GetIsRecoverabilityDegradedCompleted(
     bool is_recoverability_degraded) {
-  // |engine| could have been reset.
+  // `engine` could have been reset.
   if (!state_.engine) {
     DCHECK_EQ(state_.required_user_action,
               RequiredUserAction::kUnknownDuringInitialization);

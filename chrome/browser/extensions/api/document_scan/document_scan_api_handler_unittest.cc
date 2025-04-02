@@ -31,6 +31,7 @@
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/unloaded_extension_reason.h"
 #include "extensions/common/extension_builder.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -66,7 +67,6 @@ constexpr char kExtensionName[] = "DocumentScan API extension";
 constexpr char kExtensionPermissionName[] = "documentScan";
 
 // Scanner name used for tests.
-constexpr char kTestScannerName[] = "Test Scanner";
 constexpr char kVirtualUSBPrinterName[] = "DavieV Virtual USB Printer (USB)";
 
 // Fake scan data.
@@ -91,7 +91,7 @@ class DocumentScanAPIHandlerTest : public testing::Test {
 
     extension_ = ExtensionBuilder(kExtensionName)
                      .SetID(kExtensionId)
-                     .AddPermission(kExtensionPermissionName)
+                     .AddAPIPermission(kExtensionPermissionName)
                      .Build();
     ExtensionRegistry::Get(testing_profile_)->AddEnabled(extension_);
 
@@ -111,6 +111,12 @@ class DocumentScanAPIHandlerTest : public testing::Test {
   std::unique_ptr<DocumentScanAPIHandler> document_scan_api_handler_;
   scoped_refptr<const Extension> extension_;
 
+  // Send a notification that `extension` has been unloaded.
+  void UnloadExtension() {
+    document_scan_api_handler_->OnExtensionUnloaded(
+        testing_profile_, extension_.get(), UnloadedExtensionReason::UNINSTALL);
+  }
+
   // Allow an extension to bypass user confirmation dialogs by adding it to the
   // list of trusted document scan extensions.
   void MarkExtensionTrusted(const ExtensionId extension_id) {
@@ -121,10 +127,19 @@ class DocumentScanAPIHandlerTest : public testing::Test {
 
   // "Discover" a scanner and return its unguessable token.  After calling this,
   // a test can use the returned scanner ID to open a scanner for further
-  // operations.
+  // operations.  If `unique_id` is true, a unique scanner ID will be used for
+  // the scanner that gets created.  Otherwise, a constant ID will be used.
   std::string CreateScannerIdForExtension(
-      scoped_refptr<const Extension> extension) {
-    GetDocumentScan().AddScanner(CreateTestScannerInfo());
+      scoped_refptr<const Extension> extension,
+      bool unique_id = true) {
+    auto scanner_info = CreateTestScannerInfo();
+    if (unique_id) {
+      static size_t counter = 0;
+      scanner_info->id =
+          base::StringPrintf("%s-%zu", scanner_info->id.c_str(), counter++);
+    }
+    const std::string the_scanner_id = scanner_info->id;
+    GetDocumentScan().AddScanner(std::move(scanner_info));
     ScannerDiscoveryRunner::SetDiscoveryConfirmationResultForTesting(true);
 
     GetScannerListFuture list_future;
@@ -134,14 +149,19 @@ class DocumentScanAPIHandlerTest : public testing::Test {
     const api::document_scan::GetScannerListResponse& list_response =
         list_future.Get();
 
-    CHECK(!list_response.scanners.empty());
+    for (const auto& scanner : list_response.scanners) {
+      if (scanner.scanner_id == the_scanner_id) {
+        return scanner.scanner_id;
+      }
+    }
 
-    return list_response.scanners[0].scanner_id;
+    return "";
   }
 
   // "Discover" a scanner and open that given scanner, returning the scanner
   // handle.  After calling this, a test can use the returned scanner handle for
-  // further operations.
+  // further operations.  Note that this will always use a unique scanner ID for
+  // the scanner that is created.
   std::string OpenScannerForExtension(
       scoped_refptr<const Extension> extension) {
     return OpenScannerWithId(extension, CreateScannerIdForExtension(extension));
@@ -204,9 +224,9 @@ class DocumentScanAPIHandlerTest : public testing::Test {
 };
 
 TEST_F(DocumentScanAPIHandlerTest, SimpleScan_NoScannersAvailableError) {
-  GetDocumentScan().SetGetScannerNamesResponse({});
   SimpleScanFuture future;
-  document_scan_api_handler_->SimpleScan({"image/png"}, future.GetCallback());
+  document_scan_api_handler_->SimpleScan(extension_, {"image/png"},
+                                         future.GetCallback());
   const auto& [scan_results, error] = future.Get();
   EXPECT_FALSE(scan_results.has_value());
   EXPECT_EQ("No scanners available", error);
@@ -214,7 +234,7 @@ TEST_F(DocumentScanAPIHandlerTest, SimpleScan_NoScannersAvailableError) {
 
 TEST_F(DocumentScanAPIHandlerTest, SimpleScan_MissingMimeTypesError) {
   SimpleScanFuture future;
-  document_scan_api_handler_->SimpleScan({}, future.GetCallback());
+  document_scan_api_handler_->SimpleScan(extension_, {}, future.GetCallback());
   const auto& [scan_results, error] = future.Get();
   EXPECT_FALSE(scan_results.has_value());
   EXPECT_EQ("Unsupported MIME types", error);
@@ -222,28 +242,71 @@ TEST_F(DocumentScanAPIHandlerTest, SimpleScan_MissingMimeTypesError) {
 
 TEST_F(DocumentScanAPIHandlerTest, SimpleScan_UnsupportedMimeTypesError) {
   SimpleScanFuture future;
-  document_scan_api_handler_->SimpleScan({"image/tiff"}, future.GetCallback());
+  document_scan_api_handler_->SimpleScan(extension_, {"image/tiff"},
+                                         future.GetCallback());
   const auto& [scan_results, error] = future.Get();
   EXPECT_FALSE(scan_results.has_value());
   EXPECT_EQ("Unsupported MIME types", error);
 }
 
-TEST_F(DocumentScanAPIHandlerTest, SimpleScan_ScanImageError) {
-  GetDocumentScan().SetGetScannerNamesResponse({kTestScannerName});
-  GetDocumentScan().SetScanResponse(std::nullopt);
+TEST_F(DocumentScanAPIHandlerTest, SimpleScan_OpenFails) {
+  auto scanner_info = CreateTestScannerInfo();
+  auto open_response = crosapi::mojom::OpenScannerResponse::New();
+  open_response->scanner_id = scanner_info->id;
+  open_response->result = crosapi::mojom::ScannerOperationResult::kDeviceBusy;
+
+  // A scanner is returned in the list, but it can't be opened.
+  GetDocumentScan().AddScanner(std::move(scanner_info));
+  GetDocumentScan().SetOpenScannerResponse(open_response->scanner_id,
+                                           std::move(open_response));
+
   SimpleScanFuture future;
-  document_scan_api_handler_->SimpleScan({"image/png"}, future.GetCallback());
+  document_scan_api_handler_->SimpleScan(extension_, {"image/png"},
+                                         future.GetCallback());
+  const auto& [scan_results, error] = future.Get();
+  EXPECT_FALSE(scan_results.has_value());
+  EXPECT_EQ("No scanners available", error);
+}
+
+TEST_F(DocumentScanAPIHandlerTest, SimpleScan_StartScanFails) {
+  auto scanner_info = CreateTestScannerInfo();
+  auto scan_response = crosapi::mojom::StartPreparedScanResponse::New();
+  scan_response->result = crosapi::mojom::ScannerOperationResult::kIoError;
+
+  GetDocumentScan().SetStartPreparedScanResponse(scanner_info->id,
+                                                 std::move(scan_response));
+  GetDocumentScan().AddScanner(std::move(scanner_info));
+
+  SimpleScanFuture future;
+  document_scan_api_handler_->SimpleScan(extension_, {"image/png"},
+                                         future.GetCallback());
+  const auto& [scan_results, error] = future.Get();
+  EXPECT_FALSE(scan_results.has_value());
+  EXPECT_EQ("Failed to scan image", error);
+}
+
+TEST_F(DocumentScanAPIHandlerTest, SimpleScan_ScanImageError) {
+  GetDocumentScan().AddScanner(CreateTestScannerInfo());
+  GetDocumentScan().SetReadScanDataResponses(
+      std::nullopt, crosapi::mojom::ScannerOperationResult::kIoError);
+  SimpleScanFuture future;
+  document_scan_api_handler_->SimpleScan(extension_, {"image/png"},
+                                         future.GetCallback());
   const auto& [scan_results, error] = future.Get();
   EXPECT_FALSE(scan_results.has_value());
   EXPECT_EQ("Failed to scan image", error);
 }
 
 TEST_F(DocumentScanAPIHandlerTest, SimpleScan_Success) {
-  GetDocumentScan().SetGetScannerNamesResponse({kTestScannerName});
-  const std::vector<std::string> scan_data = {kScanDataItem};
-  GetDocumentScan().SetScanResponse(scan_data);
+  GetDocumentScan().AddScanner(CreateTestScannerInfo());
+  const std::string data = kScanDataItem;
+  const std::vector<std::string> scan_data = {"", data.substr(0, 5),
+                                              data.substr(5)};
+  GetDocumentScan().SetReadScanDataResponses(
+      scan_data, crosapi::mojom::ScannerOperationResult::kEndOfData);
   SimpleScanFuture future;
-  document_scan_api_handler_->SimpleScan({"image/png"}, future.GetCallback());
+  document_scan_api_handler_->SimpleScan(extension_, {"image/png"},
+                                         future.GetCallback());
   const auto& [scan_results, error] = future.Get();
   EXPECT_FALSE(error.has_value());
   ASSERT_TRUE(scan_results.has_value());
@@ -256,21 +319,26 @@ TEST_F(DocumentScanAPIHandlerTest, SimpleScan_Success) {
 }
 
 TEST_F(DocumentScanAPIHandlerTest, SimpleScan_TestingMIMETypeError) {
-  GetDocumentScan().SetGetScannerNamesResponse({kTestScannerName});
+  GetDocumentScan().AddScanner(CreateTestScannerInfo());
   SimpleScanFuture future;
-  document_scan_api_handler_->SimpleScan({"testing"}, future.GetCallback());
+  document_scan_api_handler_->SimpleScan(extension_, {"testing"},
+                                         future.GetCallback());
   const auto& [scan_results, error] = future.Get();
   EXPECT_FALSE(scan_results.has_value());
   EXPECT_EQ("Virtual USB printer unavailable", error);
 }
 
 TEST_F(DocumentScanAPIHandlerTest, SimpleScan_TestingMIMETypeSuccess) {
-  GetDocumentScan().SetGetScannerNamesResponse(
-      {kTestScannerName, kVirtualUSBPrinterName});
+  GetDocumentScan().AddScanner(CreateTestScannerInfo());
+  auto test_scanner = CreateTestScannerInfo();
+  test_scanner->id = kVirtualUSBPrinterName;
+  test_scanner->display_name = kVirtualUSBPrinterName;
+  GetDocumentScan().AddScanner(std::move(test_scanner));
   const std::vector<std::string> scan_data = {kScanDataItem};
-  GetDocumentScan().SetScanResponse(scan_data);
+  GetDocumentScan().SetReadScanDataResponses(
+      scan_data, crosapi::mojom::ScannerOperationResult::kEndOfData);
   SimpleScanFuture future;
-  document_scan_api_handler_->SimpleScan({"image/png", "testing"},
+  document_scan_api_handler_->SimpleScan(extension_, {"image/png", "testing"},
                                          future.GetCallback());
   const auto& [scan_results, error] = future.Get();
   EXPECT_FALSE(error.has_value());
@@ -400,7 +468,7 @@ TEST_F(DocumentScanAPIHandlerTest, GetScannerList_ApprovalFollowsExtension) {
 
   auto extension2 = ExtensionBuilder("extension2")
                         .SetID("extension2id")
-                        .AddPermission(kExtensionPermissionName)
+                        .AddAPIPermission(kExtensionPermissionName)
                         .Build();
 
   // First request is approved by the user.
@@ -526,7 +594,8 @@ TEST_F(DocumentScanAPIHandlerTest, OpenScanner_ReopenValidIdSucceeds) {
 }
 
 TEST_F(DocumentScanAPIHandlerTest, OpenScanner_ReopenSameScannerSucceeds) {
-  std::string scanner_id = CreateScannerIdForExtension(extension_);
+  std::string scanner_id = CreateScannerIdForExtension(extension_,
+                                                       /*unique_id=*/false);
   ASSERT_FALSE(scanner_id.empty());
 
   // The first open succeeds because the scanner is not open.
@@ -537,7 +606,8 @@ TEST_F(DocumentScanAPIHandlerTest, OpenScanner_ReopenSameScannerSucceeds) {
 
   // GetScannerList returns a new token that points to the same underlying
   // scanner created by CreateScannerId above.
-  std::string scanner_id2 = CreateScannerIdForExtension(extension_);
+  std::string scanner_id2 = CreateScannerIdForExtension(extension_,
+                                                        /*unique_id=*/false);
   ASSERT_FALSE(scanner_id2.empty());
 
   // Opening the second ID succeeds because this is the same extension.
@@ -562,7 +632,8 @@ TEST_F(DocumentScanAPIHandlerTest, OpenScanner_ReopenSameScannerSucceeds) {
 }
 
 TEST_F(DocumentScanAPIHandlerTest, OpenScanner_SecondExtensionOpenFails) {
-  std::string scanner_id = CreateScannerIdForExtension(extension_);
+  std::string scanner_id = CreateScannerIdForExtension(extension_,
+                                                       /*unique_id=*/false);
   ASSERT_FALSE(scanner_id.empty());
 
   // The first open succeeds because the scanner is not open.
@@ -576,9 +647,10 @@ TEST_F(DocumentScanAPIHandlerTest, OpenScanner_SecondExtensionOpenFails) {
   // scanner created by CreateScannerId above.
   auto extension2 = ExtensionBuilder("extension2")
                         .SetID("extension2id")
-                        .AddPermission(kExtensionPermissionName)
+                        .AddAPIPermission(kExtensionPermissionName)
                         .Build();
-  std::string scanner_id2 = CreateScannerIdForExtension(extension2);
+  std::string scanner_id2 = CreateScannerIdForExtension(extension2,
+                                                        /*unique_id=*/false);
   ASSERT_FALSE(scanner_id2.empty());
 
   // Opening the same scanner from a second extension fails because the scanner
@@ -707,7 +779,7 @@ TEST_F(DocumentScanAPIHandlerTest, CloseScanner_CloseInvalidHandleFails) {
   // valid for the second extension.
   auto extension2 = ExtensionBuilder("extension2")
                         .SetID("extension2id")
-                        .AddPermission(kExtensionPermissionName)
+                        .AddAPIPermission(kExtensionPermissionName)
                         .Build();
 
   CloseScannerFuture close_future1;
@@ -1254,7 +1326,7 @@ TEST_F(DocumentScanAPIHandlerTest, StartScan_HandleNotMine) {
   // not authorized to use the scanner handle opened for the first extension.
   auto extension2 = ExtensionBuilder("extension2")
                         .SetID("extension2id")
-                        .AddPermission(kExtensionPermissionName)
+                        .AddAPIPermission(kExtensionPermissionName)
                         .Build();
 
   api::document_scan::StartScanOptions options;
@@ -1303,7 +1375,7 @@ TEST_F(DocumentScanAPIHandlerTest, CancelScan_HandleNotMine) {
 
   auto extension2 = ExtensionBuilder("extension2")
                         .SetID("extension2id")
-                        .AddPermission(kExtensionPermissionName)
+                        .AddAPIPermission(kExtensionPermissionName)
                         .Build();
 
   // Trying to cancel the scan using extension2 will fail since that extension
@@ -1369,6 +1441,10 @@ TEST_F(DocumentScanAPIHandlerTest, ReadScanData_ReadFromOpenHandleSucceeds) {
       extension_, /*user_gesture=*/false, scanner_handle);
   EXPECT_FALSE(job_handle.empty());
 
+  const std::vector<std::string> scan_data = {kScanDataItem, kScanDataItem, ""};
+  GetDocumentScan().SetReadScanDataResponses(
+      scan_data, crosapi::mojom::ScannerOperationResult::kEndOfData);
+
   // First read succeeds because the job is open.
   ReadScanDataFuture read_future1;
   document_scan_api_handler_->ReadScanData(extension_, job_handle,
@@ -1423,6 +1499,10 @@ TEST_F(DocumentScanAPIHandlerTest, ReadScanData_ReadFromClosedScannerFails) {
       extension_, /*user_gesture=*/false, scanner_handle);
   EXPECT_FALSE(job_handle.empty());
 
+  const std::vector<std::string> scan_data = {kScanDataItem, kScanDataItem, ""};
+  GetDocumentScan().SetReadScanDataResponses(
+      scan_data, crosapi::mojom::ScannerOperationResult::kEndOfData);
+
   // First read succeeds because the job is open.
   ReadScanDataFuture read_future1;
   document_scan_api_handler_->ReadScanData(extension_, job_handle,
@@ -1457,6 +1537,10 @@ TEST_F(DocumentScanAPIHandlerTest, ReadScanData_ReadFromReopenedScannerFails) {
 
   const std::string scanner_id = CreateScannerIdForExtension(extension_);
   ASSERT_FALSE(scanner_id.empty());
+
+  const std::vector<std::string> scan_data = {kScanDataItem, kScanDataItem, ""};
+  GetDocumentScan().SetReadScanDataResponses(
+      scan_data, crosapi::mojom::ScannerOperationResult::kEndOfData);
 
   // The first open succeeds because the scanner is not open.
   OpenScannerFuture open_future1;
@@ -1507,6 +1591,93 @@ TEST_F(DocumentScanAPIHandlerTest, ReadScanData_ReadFromReopenedScannerFails) {
   EXPECT_EQ(read_response2.job, job_handle);
   EXPECT_FALSE(read_response2.data.has_value());
   EXPECT_FALSE(read_response2.estimated_completion.has_value());
+}
+
+TEST_F(DocumentScanAPIHandlerTest, UnloadExtension) {
+  // Test when an extension gets unloaded, handles for that extension are closed
+  // but handles for a second extension are not affected.
+  MarkExtensionTrusted(kExtensionId);
+
+  const std::string scanner_handle = OpenScannerForExtension(extension_);
+  EXPECT_FALSE(scanner_handle.empty());
+
+  auto extension2 = ExtensionBuilder("extension2")
+                        .SetID("extension2id")
+                        .AddAPIPermission(kExtensionPermissionName)
+                        .Build();
+  MarkExtensionTrusted("extension2id");
+
+  const std::string scanner_handle2 = OpenScannerForExtension(extension2);
+  EXPECT_FALSE(scanner_handle2.empty());
+
+  UnloadExtension();
+
+  // Once the extension is unloaded, the state for this extension gets cleared,
+  // so trying to start a scan with the scanner handle should fail.
+  api::document_scan::StartScanOptions options;
+  StartScanFuture future;
+  document_scan_api_handler_->StartScan(
+      /*native_window=*/nullptr, extension_, /*user_gesture=*/true,
+      scanner_handle, std::move(options), future.GetCallback());
+
+  const api::document_scan::StartScanResponse& response = future.Get();
+  EXPECT_EQ(response.result, api::document_scan::OperationResult::kInvalid);
+  EXPECT_EQ(response.scanner_handle, scanner_handle);
+  EXPECT_FALSE(response.job.has_value());
+
+  // However, the second extension should still work as usual.
+  api::document_scan::StartScanOptions options2;
+  StartScanFuture future2;
+  document_scan_api_handler_->StartScan(
+      /*native_window=*/nullptr, extension2, /*user_gesture=*/true,
+      scanner_handle2, std::move(options2), future2.GetCallback());
+
+  const api::document_scan::StartScanResponse& response2 = future2.Get();
+  EXPECT_EQ(response2.result, api::document_scan::OperationResult::kSuccess);
+  EXPECT_EQ(response2.scanner_handle, scanner_handle2);
+  EXPECT_TRUE(response2.job.has_value());
+}
+
+TEST_F(DocumentScanAPIHandlerTest, Shutdown) {
+  // At shutdown, all handles for all extensions get closed.
+  MarkExtensionTrusted(kExtensionId);
+
+  const std::string scanner_handle = OpenScannerForExtension(extension_);
+  EXPECT_FALSE(scanner_handle.empty());
+
+  auto extension2 = ExtensionBuilder("extension2")
+                        .SetID("extension2id")
+                        .AddAPIPermission(kExtensionPermissionName)
+                        .Build();
+  MarkExtensionTrusted("extension2id");
+
+  const std::string scanner_handle2 = OpenScannerForExtension(extension2);
+  EXPECT_FALSE(scanner_handle2.empty());
+
+  document_scan_api_handler_->Shutdown();
+
+  // Trying to start a scan with either closed scanner handle will fail.
+  api::document_scan::StartScanOptions options;
+  StartScanFuture future;
+  document_scan_api_handler_->StartScan(
+      /*native_window=*/nullptr, extension_, /*user_gesture=*/true,
+      scanner_handle, std::move(options), future.GetCallback());
+
+  const api::document_scan::StartScanResponse& response = future.Get();
+  EXPECT_EQ(response.result, api::document_scan::OperationResult::kInvalid);
+  EXPECT_EQ(response.scanner_handle, scanner_handle);
+  EXPECT_FALSE(response.job.has_value());
+
+  api::document_scan::StartScanOptions options2;
+  StartScanFuture future2;
+  document_scan_api_handler_->StartScan(
+      /*native_window=*/nullptr, extension2, /*user_gesture=*/true,
+      scanner_handle2, std::move(options2), future2.GetCallback());
+
+  const api::document_scan::StartScanResponse& response2 = future2.Get();
+  EXPECT_EQ(response2.result, api::document_scan::OperationResult::kInvalid);
+  EXPECT_EQ(response2.scanner_handle, scanner_handle2);
+  EXPECT_FALSE(response2.job.has_value());
 }
 
 }  // namespace

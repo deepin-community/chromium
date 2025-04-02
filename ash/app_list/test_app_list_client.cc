@@ -13,7 +13,8 @@
 #include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "chromeos/ash/services/assistant/public/cpp/features.h"
+#include "ui/menus/simple_menu_model.h"
 
 namespace ash {
 
@@ -78,9 +79,15 @@ void TestAppListClient::InvokeSearchResultAction(
 void TestAppListClient::ActivateItem(int profile_id,
                                      const std::string& id,
                                      int event_flags,
-                                     ash::AppListLaunchedFrom launched_from) {
+                                     ash::AppListLaunchedFrom launched_from,
+                                     bool is_above_the_fold) {
   activate_item_count_++;
   activate_item_last_id_ = id;
+  if (is_above_the_fold) {
+    activate_item_above_the_fold_++;
+  } else {
+    activate_item_below_the_fold_++;
+  }
 }
 
 void TestAppListClient::GetContextMenuModel(
@@ -129,6 +136,33 @@ ash::AppListSortOrder TestAppListClient::GetPermanentSortingOrder() const {
 void TestAppListClient::OnZeroStateSearchDone(base::OnceClosure on_done) {
   zero_state_search_done_count_++;
   std::move(on_done).Run();
+}
+
+std::optional<bool> TestAppListClient::IsNewUser(
+    const AccountId& account_id) const {
+  return is_new_user_;
+}
+
+void TestAppListClient::RecordAppsDefaultVisibility(
+    const std::vector<std::string>& apps_above_the_fold,
+    const std::vector<std::string>& apps_below_the_fold,
+    bool is_apps_collections_page) {
+  items_above_the_fold_count_ = apps_above_the_fold.size();
+  items_below_the_fold_count_ = apps_below_the_fold.size();
+}
+
+bool TestAppListClient::HasReordered() {
+  return false;
+}
+
+void TestAppListClient::GetAssistantNewEntryPointEligibility(
+    GetAssistantNewEntryPointEligibilityCallback callback) {
+  std::move(callback).Run(ash::assistant::features::IsNewEntryPointEnabled());
+}
+
+std::optional<std::string> TestAppListClient::GetAssistantNewEntryPointName() {
+  // TODO(crbug.com/388361414): update the string
+  return "New entry point";
 }
 
 }  // namespace ash

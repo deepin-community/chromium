@@ -6,8 +6,10 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
+#include <string_view>
 
 #include "base/base64.h"
 #include "base/check.h"
@@ -18,8 +20,6 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -32,6 +32,7 @@
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/suggestion_group_util.h"
 #include "components/omnibox/browser/url_prefix.h"
+#include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/url_fixer.h"
@@ -40,6 +41,8 @@
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/omnibox_proto/entity_info.pb.h"
+#include "third_party/omnibox_proto/navigational_intent.pb.h"
+#include "third_party/omnibox_proto/rich_suggest_template.pb.h"
 #include "ui/base/device_form_factor.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/url_constants.h"
@@ -214,6 +217,20 @@ bool DecodeProtoFromBase64(const std::string* encoded_data, T& result_proto) {
   return true;
 }
 
+// Format template image URLs that do not contain a scheme.
+// The call to GetFormattedURL() will return the URL with a scheme added or
+// return the same URL if no formatting is necessary.
+void FormatAnswerTemplateImageURL(
+    omnibox::RichAnswerTemplate* answer_template) {
+  if (!(answer_template->answers_size() > 0)) {
+    return;
+  }
+  std::string* url_string =
+      answer_template->mutable_answers(0)->mutable_image()->mutable_url();
+  answer_template->mutable_answers(0)->mutable_image()->set_url(
+      omnibox::answer_data_parser::GetFormattedURL(url_string).spec());
+}
+
 }  // namespace
 
 omnibox::SuggestSubtype SuggestSubtypeForNumber(int value) {
@@ -227,15 +244,31 @@ omnibox::SuggestSubtype SuggestSubtypeForNumber(int value) {
   return static_cast<omnibox::SuggestSubtype>(value);
 }
 
+omnibox::NavigationalIntent NavigationalIntentForNumber(int value) {
+  if (omnibox::NavigationalIntent_IsValid(value)) {
+    return static_cast<omnibox::NavigationalIntent>(value);
+  }
+  return omnibox::NavigationalIntent::NAV_INTENT_NONE;
+}
+
+omnibox::AnswerType AnswerTypeForNumber(int value) {
+  if (omnibox::AnswerType_IsValid(value)) {
+    return static_cast<omnibox::AnswerType>(value);
+  }
+  return omnibox::ANSWER_TYPE_UNSPECIFIED;
+}
+
 // SearchSuggestionParser::Result ----------------------------------------------
 
-SearchSuggestionParser::Result::Result(bool from_keyword,
-                                       int relevance,
-                                       bool relevance_from_server,
-                                       AutocompleteMatchType::Type type,
-                                       omnibox::SuggestType suggest_type,
-                                       std::vector<int> subtypes,
-                                       const std::string& deletion_url)
+SearchSuggestionParser::Result::Result(
+    bool from_keyword,
+    int relevance,
+    bool relevance_from_server,
+    AutocompleteMatchType::Type type,
+    omnibox::SuggestType suggest_type,
+    std::vector<int> subtypes,
+    const std::string& deletion_url,
+    omnibox::NavigationalIntent navigational_intent)
     : from_keyword_(from_keyword),
       type_(type),
       suggest_type_(suggest_type),
@@ -243,11 +276,12 @@ SearchSuggestionParser::Result::Result(bool from_keyword,
       relevance_(relevance),
       relevance_from_server_(relevance_from_server),
       received_after_last_keystroke_(true),
-      deletion_url_(deletion_url) {}
+      deletion_url_(deletion_url),
+      navigational_intent_(navigational_intent) {}
 
 SearchSuggestionParser::Result::Result(const Result& other) = default;
 
-SearchSuggestionParser::Result::~Result() {}
+SearchSuggestionParser::Result::~Result() = default;
 
 // SearchSuggestionParser::SuggestResult ---------------------------------------
 
@@ -257,6 +291,7 @@ SearchSuggestionParser::SuggestResult::SuggestResult(
     omnibox::SuggestType suggest_type,
     std::vector<int> subtypes,
     bool from_keyword,
+    omnibox::NavigationalIntent navigational_intent,
     int relevance,
     bool relevance_from_server,
     const std::u16string& input_text)
@@ -270,6 +305,7 @@ SearchSuggestionParser::SuggestResult::SuggestResult(
                     /*entity_info=*/omnibox::EntityInfo(),
                     /*deletion_url=*/"",
                     from_keyword,
+                    navigational_intent,
                     relevance,
                     relevance_from_server,
                     /*should_prefetch=*/false,
@@ -287,6 +323,7 @@ SearchSuggestionParser::SuggestResult::SuggestResult(
     omnibox::EntityInfo entity_info,
     const std::string& deletion_url,
     bool from_keyword,
+    omnibox::NavigationalIntent navigational_intent,
     int relevance,
     bool relevance_from_server,
     bool should_prefetch,
@@ -298,7 +335,8 @@ SearchSuggestionParser::SuggestResult::SuggestResult(
              type,
              suggest_type,
              std::move(subtypes),
-             deletion_url),
+             deletion_url,
+             navigational_intent),
       suggestion_(suggestion),
       match_contents_prefix_(match_contents_prefix),
       entity_info_(std::move(entity_info)),
@@ -318,7 +356,7 @@ SearchSuggestionParser::SuggestResult::SuggestResult(
 SearchSuggestionParser::SuggestResult::SuggestResult(
     const SuggestResult& result) = default;
 
-SearchSuggestionParser::SuggestResult::~SuggestResult() {}
+SearchSuggestionParser::SuggestResult::~SuggestResult() = default;
 
 SearchSuggestionParser::SuggestResult&
 SearchSuggestionParser::SuggestResult::operator=(const SuggestResult& rhs) =
@@ -351,9 +389,9 @@ void SearchSuggestionParser::SuggestResult::ClassifyMatchContents(
     }
   }
   // Do a case-insensitive search for |lookup_text|.
-  std::u16string::const_iterator lookup_position = base::ranges::search(
-      match_contents_, lookup_text, SimpleCaseInsensitiveCompareUCS2());
-  if (!allow_bolding_all && (lookup_position == match_contents_.end())) {
+  auto lookup_result = std::ranges::search(match_contents_, lookup_text,
+                                           SimpleCaseInsensitiveCompareUCS2());
+  if (!allow_bolding_all && lookup_result.empty()) {
     // Bail if the code below to update the bolding would bold the whole
     // string.  Note that the string may already be entirely bolded; if
     // so, leave it as is.
@@ -365,9 +403,14 @@ void SearchSuggestionParser::SuggestResult::ClassifyMatchContents(
       ClassifyAllMatchesInString(input_text, match_contents_, true);
 }
 
-void SearchSuggestionParser::SuggestResult::SetAnswer(
-    const SuggestionAnswer& answer) {
-  answer_ = answer;
+void SearchSuggestionParser::SuggestResult::SetRichAnswerTemplate(
+    const omnibox::RichAnswerTemplate& answer_template) {
+  answer_template_ = answer_template;
+}
+
+void SearchSuggestionParser::SuggestResult::SetAnswerType(
+    const omnibox::AnswerType& answer_type) {
+  answer_type_ = answer_type;
 }
 
 void SearchSuggestionParser::SuggestResult::SetEntityInfo(
@@ -394,6 +437,7 @@ SearchSuggestionParser::NavigationResult::NavigationResult(
     const std::u16string& description,
     const std::string& deletion_url,
     bool from_keyword,
+    omnibox::NavigationalIntent navigational_intent,
     int relevance,
     bool relevance_from_server,
     const std::u16string& input_text)
@@ -403,7 +447,8 @@ SearchSuggestionParser::NavigationResult::NavigationResult(
              match_type,
              suggest_type,
              std::move(subtypes),
-             deletion_url),
+             deletion_url,
+             navigational_intent),
       url_(url),
       formatted_url_(AutocompleteInput::FormattedStringWithEquivalentMeaning(
           url,
@@ -425,7 +470,7 @@ SearchSuggestionParser::NavigationResult::NavigationResult(
 SearchSuggestionParser::NavigationResult::NavigationResult(
     const NavigationResult& other) = default;
 
-SearchSuggestionParser::NavigationResult::~NavigationResult() {}
+SearchSuggestionParser::NavigationResult::~NavigationResult() = default;
 
 void SearchSuggestionParser::NavigationResult::
     CalculateAndClassifyMatchContents(const bool allow_bolding_nothing,
@@ -496,7 +541,7 @@ SearchSuggestionParser::Results::Results()
       field_trial_triggered(false),
       relevances_from_server(false) {}
 
-SearchSuggestionParser::Results::~Results() {}
+SearchSuggestionParser::Results::~Results() = default;
 
 void SearchSuggestionParser::Results::Clear() {
   suggest_results.clear();
@@ -560,10 +605,10 @@ std::string SearchSuggestionParser::ExtractJsonData(
 
 // static
 std::optional<base::Value::List> SearchSuggestionParser::DeserializeJsonData(
-    base::StringPiece json_data) {
+    std::string_view json_data) {
   // The JSON response should be an array.
   for (size_t response_start_index = json_data.find("["), i = 0;
-       response_start_index != base::StringPiece::npos && i < 5;
+       response_start_index != std::string_view::npos && i < 5;
        response_start_index = json_data.find("[", 1), i++) {
     // Remove any XSSI guards to allow for JSON parsing.
     json_data.remove_prefix(response_start_index);
@@ -609,6 +654,7 @@ bool SearchSuggestionParser::ParseSuggestResults(
 
   const base::Value::List* suggest_types = nullptr;
   const base::Value::List* suggest_subtypes = nullptr;
+  const base::Value::List* nav_intents = nullptr;
   const base::Value::List* relevances = nullptr;
   const base::Value::List* suggestion_details = nullptr;
   const base::Value::List* subtype_identifiers = nullptr;
@@ -623,6 +669,8 @@ bool SearchSuggestionParser::ParseSuggestResults(
 
     suggest_subtypes = extras.FindList("google:suggestsubtypes");
 
+    nav_intents = extras.FindList("google:suggestnavintents");
+
     relevances = extras.FindList("google:suggestrelevance");
     // Discard this list if its size does not match that of the suggestions.
     if (relevances && relevances->size() != results_list.size()) {
@@ -632,6 +680,14 @@ bool SearchSuggestionParser::ParseSuggestResults(
     if (std::optional<int> relevance =
             extras.FindInt("google:verbatimrelevance")) {
       results->verbatim_relevance = *relevance;
+    }
+
+    if (const std::string* gws_event_id_hash_str =
+            extras.FindString("google:suggesteventid")) {
+      int64_t gws_event_id_hash;
+      if (base::StringToInt64(*gws_event_id_hash_str, &gws_event_id_hash)) {
+        results->gws_event_id_hashes.push_back(gws_event_id_hash);
+      }
     }
 
     // Check if the active suggest field trial (if any) has triggered either
@@ -720,6 +776,12 @@ bool SearchSuggestionParser::ParseSuggestResults(
     if (suggestion.empty())
       continue;
 
+    omnibox::NavigationalIntent nav_intent = omnibox::NAV_INTENT_NONE;
+    if (nav_intents && index < nav_intents->size() &&
+        (*nav_intents)[index].is_int()) {
+      nav_intent = NavigationalIntentForNumber((*nav_intents)[index].GetInt());
+    }
+
     // Apply valid suggested relevance scores; discard invalid lists.
     if (relevances) {
       if (!(*relevances)[index].is_int()) {
@@ -770,7 +832,7 @@ bool SearchSuggestionParser::ParseSuggestResults(
         }
         results->navigation_results.push_back(NavigationResult(
             scheme_classifier, url, match_type, suggest_type, subtypes[index],
-            title, deletion_url, is_keyword_result, relevance,
+            title, deletion_url, is_keyword_result, nav_intent, relevance,
             relevances != nullptr, input_text));
       }
     } else {
@@ -787,30 +849,32 @@ bool SearchSuggestionParser::ParseSuggestResults(
             continue;
         }
         if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_DESKTOP) {
-          if (OmniboxFieldTrial::IsUniformRowHeightEnabled()) {
-            // If calculator results are going to be displayed on 1 line,
-            // keep everything in the match contents
-            match_contents = l10n_util::GetStringFUTF16(
-                IDS_OMNIBOX_ONE_LINE_CALCULATOR_SUGGESTION_TEMPLATE, query,
-                suggestion);
-          } else {
-            annotation = has_equals_prefix ? suggestion : match_contents;
-            match_contents = query;
-          }
+          match_contents = l10n_util::GetStringFUTF16(
+              IDS_OMNIBOX_ONE_LINE_CALCULATOR_SUGGESTION_TEMPLATE, query,
+              suggestion);
         }
       }
 
-      std::u16string match_contents_prefix;
-      SuggestionAnswer answer;
-      bool answer_parsed_successfully = false;
-      std::optional<int> suggestion_group_id;
+      omnibox::RichSuggestTemplate suggest_template;
       omnibox::EntityInfo entity_info;
+      std::u16string match_contents_prefix;
+      std::optional<int> suggestion_group_id;
+      bool answer_parsed_successfully = false;
+      omnibox::RichAnswerTemplate answer_template;
+      omnibox::AnswerType answer_type = omnibox::ANSWER_TYPE_UNSPECIFIED;
 
       if (suggestion_details && (*suggestion_details)[index].is_dict() &&
           !(*suggestion_details)[index].GetDict().empty()) {
         const base::Value::Dict& suggestion_detail =
             (*suggestion_details)[index].GetDict();
 
+        // Rich Suggest Template.
+        const auto* rich_template_str =
+            suggestion_detail.FindString("google:templateinfo");
+        DecodeProtoFromBase64<omnibox::RichSuggestTemplate>(rich_template_str,
+                                                            suggest_template);
+
+        // Entity.
         const auto* entity_info_string =
             suggestion_detail.FindString("google:entityinfo");
         DecodeProtoFromBase64<omnibox::EntityInfo>(entity_info_string,
@@ -828,32 +892,53 @@ bool SearchSuggestionParser::ParseSuggestResults(
         // Suggestion group Id.
         suggestion_group_id = suggestion_detail.FindInt("zl");
 
-        // Extract the Answer, if provided.
-        const base::Value::Dict* answer_json =
-            suggestion_detail.FindDict("ansa");
-        const std::string* answer_type = suggestion_detail.FindString("ansb");
-        if (answer_json && answer_type) {
-          if (SuggestionAnswer::ParseAnswer(
-                  *answer_json, base::UTF8ToUTF16(*answer_type), &answer)) {
-            base::UmaHistogramSparse("Omnibox.AnswerParseType", answer.type());
-            answer_parsed_successfully = true;
+        // Answer.
+        const std::string* answer_type_str =
+            suggestion_detail.FindString("ansb");
+        if (answer_type_str) {
+          // Check that answer type string can be mapped to omnibox::AnswerType.
+          int numeric_answer_type = 0;
+          if (base::StringToInt(base::UTF8ToUTF16(*answer_type_str),
+                                &numeric_answer_type)) {
+            base::UmaHistogramSparse("Omnibox.AnswerParseType",
+                                     numeric_answer_type);
+            answer_type = AnswerTypeForNumber(numeric_answer_type);
           }
-          UMA_HISTOGRAM_BOOLEAN("Omnibox.AnswerParseSuccess",
-                                answer_parsed_successfully);
+        }
+        if (answer_type != omnibox::ANSWER_TYPE_UNSPECIFIED) {
+          // omnibox::RichAnswerTemplate is preferred to "ansa" if available.
+          if (suggest_template.has_rich_answer_template() &&
+              !OmniboxFieldTrial::kAnswerActionsCounterfactual.Get()) {
+            answer_template = suggest_template.rich_answer_template();
+            FormatAnswerTemplateImageURL(&answer_template);
+            // Ensure `answer_template` has an answer.
+            answer_parsed_successfully = answer_template.answers_size() > 0;
+          } else if (const auto* answer_json =
+                         suggestion_detail.FindDict("ansa")) {
+              answer_parsed_successfully =
+                  omnibox::answer_data_parser::ParseJsonToAnswerData(
+                      *answer_json, &answer_template);
+          }
+          base::UmaHistogramBoolean("Omnibox.AnswerParseSuccess",
+                                    answer_parsed_successfully);
         }
       }
 
       int int_index = static_cast<int>(index);
       bool should_prefetch = int_index == prefetch_index;
       bool should_prerender = int_index == prerender_index;
-      results->suggest_results.push_back(SuggestResult(
-          suggestion, match_type, suggest_type, subtypes[index], match_contents,
-          match_contents_prefix, annotation, std::move(entity_info),
-          deletion_url, is_keyword_result, relevance, relevances != nullptr,
-          should_prefetch, should_prerender, trimmed_input));
+      results->suggest_results.push_back(
+          SuggestResult(suggestion, match_type, suggest_type, subtypes[index],
+                        match_contents, match_contents_prefix, annotation,
+                        std::move(entity_info), deletion_url, is_keyword_result,
+                        nav_intent, relevance, relevances != nullptr,
+                        should_prefetch, should_prerender, trimmed_input));
 
       if (answer_parsed_successfully) {
-        results->suggest_results.back().SetAnswer(answer);
+        // Ensure `answer_template` has an answer.
+        DCHECK(answer_template.answers_size() > 0);
+        results->suggest_results.back().SetAnswerType(answer_type);
+        results->suggest_results.back().SetRichAnswerTemplate(answer_template);
       }
 
       if (suggestion_group_id) {

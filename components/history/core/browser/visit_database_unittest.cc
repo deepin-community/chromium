@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/history/core/browser/visit_database.h"
+
 #include <stddef.h>
 
 #include <set>
@@ -10,9 +12,9 @@
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "components/history/core/browser/url_database.h"
-#include "components/history/core/browser/visit_database.h"
 #include "components/history/core/browser/visited_link_database.h"
 #include "sql/database.h"
+#include "sql/test/test_helpers.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
@@ -47,9 +49,6 @@ class VisitDatabaseTest : public PlatformTest,
                           public URLDatabase,
                           public VisitDatabase,
                           public VisitedLinkDatabase {
- public:
-  VisitDatabaseTest() {}
-
  private:
   // Test setup.
   void SetUp() override {
@@ -71,7 +70,7 @@ class VisitDatabaseTest : public PlatformTest,
   // Provided for URL/VisitDatabase.
   sql::Database& GetDB() override { return db_; }
 
-  sql::Database db_;
+  sql::Database db_{sql::test::kTestTag};
 };
 
 TEST_F(VisitDatabaseTest, Add) {
@@ -324,6 +323,26 @@ TEST_F(VisitDatabaseTest, GetVisitsForTimes) {
   }
 }
 
+TEST_F(VisitDatabaseTest, GetAllAppIds) {
+  std::vector<VisitRow> test_visit_rows = GetTestVisitRows();
+
+  test_visit_rows[1].app_id = "org.chromium.dino";
+  test_visit_rows[2].app_id = "org.chromium.cactus";
+  test_visit_rows[3].app_id = "org.chromium.cactus";
+
+  for (VisitRow visit_row : test_visit_rows) {
+    EXPECT_TRUE(AddVisit(&visit_row, SOURCE_BROWSED));
+  }
+
+  // Query all the app IDS in the database after deduplicated,
+  // the latest entries first.
+  GetAllAppIdsResult result;
+  result = GetAllAppIds();
+  ASSERT_EQ(2U, result.app_ids.size());
+  ASSERT_EQ(test_visit_rows[1].app_id, result.app_ids[1]);
+  ASSERT_EQ(test_visit_rows[2].app_id, result.app_ids[0]);
+}
+
 TEST_F(VisitDatabaseTest, GetAllVisitsInRange) {
   std::vector<VisitRow> test_visit_rows = GetTestVisitRows();
 
@@ -375,13 +394,20 @@ TEST_F(VisitDatabaseTest, GetVisibleVisitsInRange) {
     EXPECT_TRUE(AddVisit(&test_visit_rows[i], SOURCE_BROWSED));
   }
 
-  // Query the visits for all time.  We should not get the first or the second
-  // visit (duplicates of the sixth) or the redirect or subframe visits.
+  // Query the visits for all time.
   VisitVector results;
   QueryOptions options;
   GetVisibleVisitsInRange(options, &results);
   ASSERT_EQ(2U, results.size());
+#if !defined(ANDROID)
+  // We should not get the first or the second visit (duplicates of the sixth)
+  // or the redirect or subframe visits.
   EXPECT_TRUE(IsVisitInfoEqual(results[0], test_visit_rows[5]));
+#else
+  // On Android, the one with app_id is chosen among the duplicates.
+  EXPECT_TRUE(IsVisitInfoEqual(results[0], test_visit_rows[1]));
+#endif
+
   EXPECT_TRUE(IsVisitInfoEqual(results[1], test_visit_rows[3]));
 
   // Query the visits with app_id. Only those with the matching app_id will be
@@ -525,15 +551,20 @@ TEST_F(VisitDatabaseTest, GetVisibleVisitsForURL) {
     EXPECT_TRUE(AddVisit(&test_visit_rows[i], SOURCE_BROWSED));
   }
 
-  // Query the visits for the first url id.  We should not get the first, the
-  // second or the sixth (duplicates of the seventh) or any other urls,
-  // redirects or subframe visits.
+  // Query the visits for the first url id.
   VisitVector results;
   QueryOptions options;
   int url_id = test_visit_rows[0].url_id;
   GetVisibleVisitsForURL(url_id, options, &results);
   ASSERT_EQ(1U, results.size());
+#if !defined(ANDROID)
+  // We should not get the first, the second or the sixth (duplicates of the
+  // seventh) or any other urls, redirects or subframe visits.
   EXPECT_TRUE(IsVisitInfoEqual(results[0], test_visit_rows[6]));
+#else
+  // On Android, the one with app_id is chosen among the duplicates.
+  EXPECT_TRUE(IsVisitInfoEqual(results[0], test_visit_rows[5]));
+#endif
 
   // Query the visits with app_id. Only those with the matching both url id
   // (1,2,6,7) and app id(2,3,4,6) will be returned(2, 6) -> 6 (deduped).
@@ -1058,7 +1089,7 @@ TEST_F(VisitDatabaseTest, GetLastVisitToURL) {
   }
 }
 
-// TODO(crbug.com/1499614): Test is failing.
+// TODO(crbug.com/40940281): Test is failing.
 TEST_F(VisitDatabaseTest, DISABLED_GetDailyVisitsToHostWithVisits) {
   base::Time begin_time = base::Time::Now();
   base::Time end_time = begin_time + base::Days(10);

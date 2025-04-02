@@ -65,6 +65,7 @@ class RegexRulesMatcher final : public RulesetMatcherBase {
   ~RegexRulesMatcher() override;
   std::vector<RequestAction> GetModifyHeadersActions(
       const RequestParams& params,
+      RulesetMatchingStage stage,
       std::optional<uint64_t> min_priority) const override;
   bool IsExtraHeadersMatcher() const override;
   size_t GetRulesCount() const override;
@@ -120,7 +121,8 @@ class RegexRulesMatcher final : public RulesetMatcherBase {
 
     // Map from re2 ID (as used by `filtered_re2_`) to the flat::RegexRule in
     // `regex_list_`.
-    std::map<int, const flat::RegexRule*> re2_id_to_rules_map_;
+    std::map<int, raw_ptr<const flat::RegexRule, CtnExperimental>>
+        re2_id_to_rules_map_;
 
     // Structure for fast substring matching. Given a string S and a set of
     // candidate strings, returns the sub-set of candidate strings that are a
@@ -131,7 +133,8 @@ class RegexRulesMatcher final : public RulesetMatcherBase {
 
   // RulesetMatcherBase override:
   std::optional<RequestAction> GetAllowAllRequestsAction(
-      const RequestParams& params) const override;
+      const RequestParams& params,
+      RulesetMatchingStage stage) const override;
   std::optional<RequestAction> GetActionIgnoringAncestors(
       const RequestParams& params,
       RulesetMatchingStage stage) const override;
@@ -158,6 +161,7 @@ class RegexRulesMatcher final : public RulesetMatcherBase {
 
   const raw_ptr<const ExtensionMetadataList> metadata_list_;
 
+  // Whether this matcher contains rules that will match on, or modify headers.
   const bool is_extra_headers_matcher_;
 };
 

@@ -5,14 +5,15 @@
 #ifndef CHROME_UPDATER_DEVICE_MANAGEMENT_DM_POLICY_BUILDER_FOR_TESTING_H_
 #define CHROME_UPDATER_DEVICE_MANAGEMENT_DM_POLICY_BUILDER_FOR_TESTING_H_
 
-#include <stdint.h>
-
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "chrome/updater/device_management/dm_message.h"
+#include "components/policy/proto/device_management_backend.pb.h"
 
 namespace enterprise_management {
 class DeviceManagementResponse;
@@ -30,10 +31,8 @@ class DMSigningKeyForTesting {
  public:
   // `key_data` should be in DER-encoded PKCS8 format.
   // `key_signature` is SHA256 signature of `key_data` for `domain`.
-  DMSigningKeyForTesting(const uint8_t key_data[],
-                         size_t key_data_length,
-                         const uint8_t key_signature[],
-                         size_t key_signature_length,
+  DMSigningKeyForTesting(base::span<const uint8_t> key_data,
+                         base::span<const uint8_t> key_signature,
                          int key_version,
                          const std::string& domain);
   ~DMSigningKeyForTesting();
@@ -103,7 +102,8 @@ class DMPolicyBuilderForTesting {
   void FillPolicyFetchResponseWithPayload(
       enterprise_management::PolicyFetchResponse* policy_response,
       const std::string& policy_type,
-      const std::string& policy_payload) const;
+      const std::string& policy_payload,
+      bool attach_new_public_key) const;
 
   // Returns serialized PolicyFetchResponse which contains the given
   // policy payload.
@@ -116,6 +116,11 @@ class DMPolicyBuilderForTesting {
   std::unique_ptr<::enterprise_management::DeviceManagementResponse>
   BuildDMResponseForPolicies(
       const base::flat_map<std::string, std::string>& policies) const;
+
+  // Builds a DeviceManagementResponse with the given error.
+  std::unique_ptr<::enterprise_management::DeviceManagementResponse>
+  BuildDMResponseWithError(
+      ::enterprise_management::DeviceManagementErrorDetail error) const;
 
  private:
   const std::string dm_token_;

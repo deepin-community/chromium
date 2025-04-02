@@ -7,12 +7,15 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
@@ -96,23 +99,16 @@ const uint16_t kDialRequestPort = 1900;
 const char kDialSearchType[] = "urn:dial-multiscreen-org:service:dial:1";
 
 // SSDP headers parsed from the response.
-const char kSsdpLocationHeader[] = "LOCATION";
-const char kSsdpCacheControlHeader[] = "CACHE-CONTROL";
-const char kSsdpConfigIdHeader[] = "CONFIGID.UPNP.ORG";
-const char kSsdpUsnHeader[] = "USN";
-constexpr char kSsdpMaxAgeDirective[] = "max-age";
+constexpr std::string_view kSsdpLocationHeader = "LOCATION";
+constexpr std::string_view kSsdpCacheControlHeader = "CACHE-CONTROL";
+constexpr std::string_view kSsdpConfigIdHeader = "CONFIGID.UPNP.ORG";
+constexpr std::string_view kSsdpUsnHeader = "USN";
+constexpr std::string_view kSsdpMaxAgeDirective = "max-age";
 constexpr int kSsdpMaxMaxAge = 3600;
 constexpr int kSsdpMaxConfigId = (2 << 24) - 1;
 
 // The receive buffer size, in bytes.
 const int kDialRecvBufferSize = 1500;
-
-// Gets a specific header from |headers| and puts it in |value|.
-bool GetHeader(HttpResponseHeaders* headers,
-               const char* name,
-               std::string* value) {
-  return headers->EnumerateHeader(nullptr, std::string(name), value);
-}
 
 // Returns the request string.
 std::string BuildRequest() {
@@ -143,8 +139,9 @@ void InsertBestBindAddressChromeOS(const ash::NetworkTypePattern& type,
   const ash::NetworkState* state = ash::NetworkHandler::Get()
                                        ->network_state_handler()
                                        ->ConnectedNetworkByType(type);
-  if (!state)
+  if (!state) {
     return;
+  }
   std::string state_ip_address = state->GetIpAddress();
   IPAddress bind_ip_address;
   if (bind_ip_address.AssignFromIPLiteral(state_ip_address) &&
@@ -274,18 +271,21 @@ void DialServiceImpl::DialSocket::OnSocketWrite(int send_buffer_size,
                                                 int result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   is_writing_ = false;
-  if (!CheckResult("OnSocketWrite", result))
+  if (!CheckResult("OnSocketWrite", result)) {
     return;
+  }
   dial_service_->NotifyOnDiscoveryRequest();
 }
 
 bool DialServiceImpl::DialSocket::ReadSocket() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!socket_)
+  if (!socket_) {
     return false;
+  }
 
-  if (is_reading_)
+  if (is_reading_) {
     return false;
+  }
 
   int result = net::OK;
   bool result_ok = true;
@@ -296,8 +296,9 @@ bool DialServiceImpl::DialSocket::ReadSocket() {
         base::BindOnce(&DialServiceImpl::DialSocket::OnSocketRead,
                        base::Unretained(this)));
     result_ok = CheckResult("RecvFrom", result);
-    if (result != net::ERR_IO_PENDING)
+    if (result != net::ERR_IO_PENDING) {
       is_reading_ = false;
+    }
     if (result_ok && result > 0) {
       // Synchronous read.
       HandleResponse(result);
@@ -309,10 +310,12 @@ bool DialServiceImpl::DialSocket::ReadSocket() {
 void DialServiceImpl::DialSocket::OnSocketRead(int result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   is_reading_ = false;
-  if (!CheckResult("OnSocketRead", result))
+  if (!CheckResult("OnSocketRead", result)) {
     return;
-  if (result > 0)
+  }
+  if (result > 0) {
     HandleResponse(result);
+  }
 
   // Await next response.
   ReadSocket();
@@ -330,8 +333,9 @@ void DialServiceImpl::DialSocket::HandleResponse(int bytes_read) {
 
   // Attempt to parse response, notify client if successful.
   DialDeviceData parsed_device;
-  if (ParseResponse(response, response_time, &parsed_device))
+  if (ParseResponse(response, response_time, &parsed_device)) {
     dial_service_->NotifyOnDeviceDiscovered(parsed_device);
+  }
 }
 
 bool DialServiceImpl::DialSocket::ParseResponse(const std::string& response,
@@ -341,40 +345,41 @@ bool DialServiceImpl::DialSocket::ParseResponse(const std::string& response,
   device->set_response_time(response_time);
 
   size_t headers_end =
-      HttpUtil::LocateEndOfHeaders(response.c_str(), response.size());
+      HttpUtil::LocateEndOfHeaders(base::as_byte_span(response));
   if (headers_end == 0 || headers_end == std::string::npos) {
     return false;
   }
   std::string raw_headers = HttpUtil::AssembleRawHeaders(
-      base::StringPiece(response.c_str(), headers_end));
+      std::string_view(response.c_str(), headers_end));
   auto headers = base::MakeRefCounted<HttpResponseHeaders>(raw_headers);
 
-  std::string device_url_str;
-  if (!GetHeader(headers.get(), kSsdpLocationHeader, &device_url_str) ||
-      device_url_str.empty()) {
+  std::optional<std::string_view> device_url_str =
+      headers->EnumerateHeader(/*iter=*/nullptr, kSsdpLocationHeader);
+  if (!device_url_str || device_url_str->empty()) {
     return false;
   }
 
-  GURL device_url(device_url_str);
+  GURL device_url(*device_url_str);
   if (device->IsValidUrl(device_url)) {
     device->set_device_description_url(device_url);
   } else {
     return false;
   }
 
-  std::string device_id;
-  if (!GetHeader(headers.get(), kSsdpUsnHeader, &device_id) ||
-      device_id.empty()) {
+  std::optional<std::string_view> device_id =
+      headers->EnumerateHeader(/*iter=*/nullptr, kSsdpUsnHeader);
+  if (!device_id || device_id->empty()) {
     return false;
   }
-  device->set_device_id(device_id);
+  device->set_device_id(*device_id);
 
-  std::string cache_control;
-  if (GetHeader(headers.get(), kSsdpCacheControlHeader, &cache_control) &&
-      !cache_control.empty()) {
-    std::vector<std::string> cache_control_directives = base::SplitString(
-        cache_control, "=", base::WhitespaceHandling::TRIM_WHITESPACE,
-        base::SplitResult::SPLIT_WANT_NONEMPTY);
+  std::optional<std::string_view> cache_control =
+      headers->EnumerateHeader(/*iter=*/nullptr, kSsdpCacheControlHeader);
+  if (cache_control && !cache_control->empty()) {
+    std::vector<std::string_view> cache_control_directives =
+        base::SplitStringPiece(*cache_control, "=",
+                               base::WhitespaceHandling::TRIM_WHITESPACE,
+                               base::SplitResult::SPLIT_WANT_NONEMPTY);
     if (cache_control_directives.size() == 2 &&
         base::EqualsCaseInsensitiveASCII(cache_control_directives[0],
                                          kSsdpMaxAgeDirective)) {
@@ -386,11 +391,12 @@ bool DialServiceImpl::DialSocket::ParseResponse(const std::string& response,
     }
   }
 
-  std::string config_id;
+  std::optional<std::string_view> config_id =
+      headers->EnumerateHeader(/*iter=*/nullptr, kSsdpConfigIdHeader);
   int config_id_int;
-  if (GetHeader(headers.get(), kSsdpConfigIdHeader, &config_id) &&
-      !config_id.empty() && base::StringToInt(config_id, &config_id_int) &&
-      config_id_int > 0 && config_id_int <= kSsdpMaxConfigId) {
+  if (config_id && !config_id->empty() &&
+      base::StringToInt(*config_id, &config_id_int) && config_id_int > 0 &&
+      config_id_int <= kSsdpMaxConfigId) {
     device->set_config_id(config_id_int);
   }
   return true;
@@ -509,8 +515,9 @@ void DialServiceImpl::DiscoverOnAddresses(
 
 void DialServiceImpl::BindAndAddSocket(const IPAddress& bind_ip_address) {
   std::unique_ptr<DialServiceImpl::DialSocket> dial_socket(CreateDialSocket());
-  if (dial_socket->CreateAndBindSocket(bind_ip_address, net_log_))
+  if (dial_socket->CreateAndBindSocket(bind_ip_address, net_log_)) {
     dial_sockets_.push_back(std::move(dial_socket));
+  }
 }
 
 std::unique_ptr<DialServiceImpl::DialSocket>
@@ -526,8 +533,9 @@ void DialServiceImpl::SendOneRequest() {
   }
   num_requests_sent_++;
   for (const auto& socket : dial_sockets_) {
-    if (!socket->IsClosed())
+    if (!socket->IsClosed()) {
       socket->SendOneRequest(send_address_, send_buffer_);
+    }
   }
 }
 
@@ -577,8 +585,9 @@ void DialServiceImpl::FinishDiscovery() {
 
 bool DialServiceImpl::HasOpenSockets() {
   for (const auto& socket : dial_sockets_) {
-    if (!socket->IsClosed())
+    if (!socket->IsClosed()) {
       return true;
+    }
   }
   return false;
 }

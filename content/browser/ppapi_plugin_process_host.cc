@@ -17,6 +17,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "components/app_launch_prefetch/app_launch_prefetch.h"
 #include "content/browser/browser_child_process_host_impl.h"
 #include "content/browser/child_process_host_impl.h"
 #include "content/browser/plugin_service_impl.h"
@@ -99,7 +100,6 @@ PpapiPluginProcessHost* PpapiPluginProcessHost::CreatePluginHost(
     return plugin_host;
 
   NOTREACHED();  // Init is not expected to fail.
-  return nullptr;
 }
 
 // static
@@ -232,11 +232,10 @@ bool PpapiPluginProcessHost::Init(const ContentPluginInfo& info) {
       std::make_unique<base::CommandLine>(exe_path);
   cmd_line->AppendSwitchASCII(switches::kProcessType,
                               switches::kPpapiPluginProcess);
-  BrowserChildProcessHostImpl::CopyTraceStartupFlags(cmd_line.get());
 
 #if BUILDFLAG(IS_WIN)
-  cmd_line->AppendArg(internal::ChildProcessLauncherHelper::GetPrefetchSwitch(
-      AppLaunchPrefetchType::kPpapi));
+  cmd_line->AppendArgNative(
+      app_launch_prefetch::GetPrefetchSwitch(app_launch_prefetch::SubprocessType::kPpapi));
 #endif  // BUILDFLAG(IS_WIN)
 
   // These switches are forwarded to plugin pocesses.
@@ -252,7 +251,6 @@ bool PpapiPluginProcessHost::Init(const ContentPluginInfo& info) {
     sandbox::policy::switches::kEnableSandboxLogging,
 #endif
     switches::kPpapiStartupDialog,
-    switches::kTimeZoneForTesting,
   };
   cmd_line->CopySwitchesFrom(browser_command_line, kPluginForwardSwitches);
 
@@ -273,6 +271,8 @@ bool PpapiPluginProcessHost::Init(const ContentPluginInfo& info) {
   cmd_line->AppendSwitchASCII(
       switches::kPpapiSubpixelRenderingSetting,
       base::NumberToString(font_params.subpixel_rendering));
+
+  LOG(WARNING) << "Ppapi sandbox on Windows is not supported.";
 #endif
 
   if (!plugin_launcher.empty())

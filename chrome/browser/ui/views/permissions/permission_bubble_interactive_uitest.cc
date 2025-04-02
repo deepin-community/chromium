@@ -6,7 +6,6 @@
 
 #include "base/run_loop.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -26,6 +25,8 @@
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/views/test/button_test_api.h"
+#include "ui/views/test/views_test_utils.h"
+#include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/test/widget_test.h"
 
 enum ChipFeatureConfig {
@@ -35,8 +36,7 @@ enum ChipFeatureConfig {
 
 class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
  public:
-  PermissionBubbleInteractiveUITest() {
-  }
+  PermissionBubbleInteractiveUITest() = default;
 
   PermissionBubbleInteractiveUITest(const PermissionBubbleInteractiveUITest&) =
       delete;
@@ -53,8 +53,7 @@ class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
     SCOPED_TRACE(message);
     EXPECT_TRUE(widget);
 
-    views::test::WidgetActivationWaiter waiter(widget, true);
-    waiter.Wait();
+    views::test::WaitForWidgetActive(widget, true);
   }
 
   // Send Ctrl/Cmd+keycode in the key window to the browser.
@@ -112,6 +111,8 @@ class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
 #else
     SendAcceleratorSync(ui::VKEY_TAB, true, false);
 #endif
+    views::test::RunScheduledLayout(
+        BrowserView::GetBrowserViewForBrowser(browser()));
   }
 
   void OpenBubbleIfRequestChipUiIsShown() {
@@ -123,9 +124,9 @@ class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
     if (lbv->GetChipController()->IsPermissionPromptChipVisible() &&
         !lbv->GetChipController()->IsBubbleShowing()) {
       views::test::ButtonTestApi(lbv->GetChipController()->chip())
-          .NotifyClick(ui::MouseEvent(ui::ET_MOUSE_PRESSED, gfx::Point(),
-                                      gfx::Point(), ui::EventTimeForNow(),
-                                      ui::EF_LEFT_MOUSE_BUTTON, 0));
+          .NotifyClick(ui::MouseEvent(
+              ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+              ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON, 0));
       base::RunLoop().RunUntilIdle();
     }
   }
@@ -154,7 +155,7 @@ class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
   std::unique_ptr<test::PermissionRequestManagerTestApi> test_api_;
 };
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // TODO(crbug.com/1072425): views::test::WidgetTest::GetAllWidgets() crashes
 // on Chrome OS, need to investigate\fix that.
 #define MAYBE_CmdWClosesWindow DISABLED_CmdWClosesWindow
@@ -203,7 +204,7 @@ IN_PROC_BROWSER_TEST_F(PermissionBubbleInteractiveUITest,
 }
 
 #if BUILDFLAG(IS_MAC)
-// TODO(crbug.com/1324444): For Mac builders, the test fails after activating
+// TODO(crbug.com/40839289): For Mac builders, the test fails after activating
 // the browser and cannot spot the widget. Needs investigation and fix.
 #define MAYBE_SwitchTabs DISABLED_SwitchTabs
 #else

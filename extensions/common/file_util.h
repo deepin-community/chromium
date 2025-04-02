@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+
 #include "base/files/file_path.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/values.h"
@@ -175,6 +176,10 @@ base::FilePath GetIndexedRulesetRelativePath(int static_ruleset_id);
 // the kMetadataFolder.
 std::vector<base::FilePath> GetReservedMetadataFilePaths(
     const base::FilePath& extension_path);
+
+// Deletes files reserved for use by the Extension system in the kMetadataFolder
+// and the kMetadataFolder itself if it is empty.
+void MaybeCleanupMetadataFolder(const base::FilePath& extension_path);
 
 }  // namespace file_util
 }  // namespace extensions

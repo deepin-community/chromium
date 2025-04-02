@@ -24,7 +24,6 @@
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/views/vector_icons.h"
 
 using DownloadUIModelPtr = DownloadUIModel::DownloadUIModelPtr;
@@ -82,14 +81,7 @@ class DownloadBubbleSecurityViewInfoTestGM3
     if (IsSkipped()) {
       return;
     }
-    features.InitWithFeatures(
-        {features::kChromeRefresh2023, features::kChromeRefreshSecondary2023,
-         features::kChromeWebuiRefresh2023},
-        {});
   }
-
- private:
-  base::test::ScopedFeatureList features;
 };
 
 TEST_F(DownloadBubbleSecurityViewInfoTest, DangerousWarningInfo) {
@@ -379,7 +371,7 @@ TEST_F(DownloadBubbleSecurityViewInfoTest,
 }
 #endif  // BUILDFLAG(FULL_SAFE_BROWSING)
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
 class DownloadBubbleSecurityViewInfoTailoredWarningTest
     : public DownloadBubbleSecurityViewInfoTest {
  public:
@@ -483,4 +475,4 @@ TEST_F(DownloadBubbleSecurityViewInfoTailoredWarningTest,
   EXPECT_EQ(info().warning_summary(),
             u"This file can harm your personal and social network accounts");
 }
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)

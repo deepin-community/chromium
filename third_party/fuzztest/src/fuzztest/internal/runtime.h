@@ -32,22 +32,19 @@
 #include "absl/functional/function_ref.h"
 #include "absl/random/bit_gen_ref.h"
 #include "absl/random/discrete_distribution.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/time.h"
 #include "absl/types/span.h"
-#include "./fuzztest/domain_core.h"
 #include "./fuzztest/internal/configuration.h"
 #include "./fuzztest/internal/coverage.h"
+#include "./fuzztest/internal/domains/domain.h"
 #include "./fuzztest/internal/fixture_driver.h"
-#include "./fuzztest/internal/io.h"
 #include "./fuzztest/internal/logging.h"
-#include "./fuzztest/internal/meta.h"
 #include "./fuzztest/internal/registration.h"
 #include "./fuzztest/internal/seed_seq.h"
-#include "./fuzztest/internal/serialization.h"
-#include "./fuzztest/internal/type_support.h"
 
 namespace fuzztest {
 
@@ -66,10 +63,11 @@ namespace internal {
 class FuzzTestFuzzer {
  public:
   virtual ~FuzzTestFuzzer() = default;
-  virtual void RunInUnitTestMode(const Configuration& configuration) = 0;
-  // Returns fuzzing mode's exit code. Zero indicates success.
-  virtual int RunInFuzzingMode(int* argc, char*** argv,
-                               const Configuration& configuration) = 0;
+  // Returns ture if no error were detected by the FuzzTest, false otherwise.
+  virtual bool RunInUnitTestMode(const Configuration& configuration) = 0;
+  // Returns ture if no error were detected by the FuzzTest, false otherwise.
+  virtual bool RunInFuzzingMode(int* argc, char*** argv,
+                                const Configuration& configuration) = 0;
 };
 
 class FuzzTest;
@@ -109,6 +107,14 @@ struct RuntimeStats {
 
 void InstallSignalHandlers(FILE* report_out);
 
+// A function that is called when crash metadata is available.
+using CrashMetadataListener =
+    absl::AnyInvocable<void(absl::string_view crash_type,
+                            absl::Span<const std::string> stack_frames) const>;
+using CrashMetadataListenerRef =
+    absl::FunctionRef<void(absl::string_view crash_type,
+                           absl::Span<const std::string> stack_frames) const>;
+
 // This class encapsulates the runtime state that is global by necessity.
 // The state is accessed by calling `Runtime::instance()`, which handles the
 // necessary initialization steps.
@@ -124,6 +130,14 @@ class Runtime {
   }
   bool external_failure_detected() const {
     return external_failure_was_detected_.load(std::memory_order_relaxed);
+  }
+
+  void SetSkippingRequested(bool requested) {
+    skipping_requested_.store(requested, std::memory_order_relaxed);
+  }
+
+  bool skipping_requested() const {
+    return skipping_requested_.load(std::memory_order_relaxed);
   }
 
   void SetShouldTerminateOnNonFatalFailure(bool v) {
@@ -142,13 +156,10 @@ class Runtime {
     return termination_requested_.load(std::memory_order_relaxed);
   }
 
+  void StartWatchdog();
+
   void SetRunMode(RunMode run_mode) { run_mode_ = run_mode; }
   RunMode run_mode() const { return run_mode_; }
-
-  void SetFuzzTimeLimit(absl::Duration fuzz_time_limit) {
-    fuzz_time_limit_ = fuzz_time_limit;
-  }
-  absl::Duration fuzz_time_limit() const { return fuzz_time_limit_; }
 
   void EnableReporter(const RuntimeStats* stats, absl::Time (*clock_fn)()) {
     reporter_enabled_ = true;
@@ -156,15 +167,21 @@ class Runtime {
     clock_fn_ = clock_fn;
     // In case we have not installed them yet, do so now.
     InstallSignalHandlers(GetStderr());
+    ResetCrashType();
   }
   void DisableReporter() { reporter_enabled_ = false; }
 
   struct Args {
     const GenericDomainCorpusType& corpus_value;
-    UntypedDomainInterface& domain;
+    UntypedDomain& domain;
   };
 
-  void SetCurrentTest(const FuzzTest* test) { current_test_ = test; }
+  void SetCurrentTest(const FuzzTest* test, const Configuration* configuration);
+  void OnTestIterationStart(const absl::Time& start_time) {
+    current_iteration_start_time_ = start_time;
+    test_iteration_started_ = true;
+  }
+  void OnTestIterationEnd();
 
   void SetCurrentArgs(Args* args) { current_args_ = args; }
   void UnsetCurrentArgs() { current_args_ = nullptr; }
@@ -174,10 +191,27 @@ class Runtime {
   void PrintReport(absl::FormatRawSink out) const;
   void PrintReportOnDefaultSink() const;
 
- private:
-  Runtime() = default;
+  // Registers a crash metadata listener that will be called when crash metadata
+  // is available.
+  void RegisterCrashMetadataListener(CrashMetadataListener listener) {
+    crash_metadata_listeners_.push_back(std::move(listener));
+  }
+  void SetCrashTypeIfUnset(std::string crash_type) {
+    if (!crash_type_.has_value()) {
+      crash_type_ = std::move(crash_type);
+    }
+  }
+  void ResetCrashType() { crash_type_ = std::nullopt; }
 
-  void DumpReproducer(absl::string_view outdir) const;
+ private:
+  Runtime();
+
+  void CheckWatchdogLimits();
+  void Watchdog();
+
+  // Returns the file path of the reproducer.
+  // Returns empty string if writing the file failed.
+  std::string DumpReproducer(absl::string_view outdir) const;
 
   // Some failures are not necessarily detected by signal handlers or by
   // sanitizers. For example, we could have test framework failures like
@@ -187,24 +221,41 @@ class Runtime {
   // Note: Even though failures should happen within the code under test, they
   // could be set from other threads at any moment. We make it an atomic to
   // avoid a race condition.
-  std::atomic<bool> external_failure_was_detected_{false};
+  std::atomic<bool> external_failure_was_detected_ = false;
 
   // To support in-process minimization for non-fatal failures we signal
   // suppress termination until we believe minimization is complete.
   bool should_terminate_on_non_fatal_failure_ = true;
 
+  // If set to true in fixture setup, skips calling property functions
+  // utill the matching teardown is called; If set to true in a property
+  // function, skip adding the current input to the corpus when fuzzing.
+  std::atomic<bool> skipping_requested_ = false;
+
   // If true, fuzzing should terminate as soon as possible.
   // Atomic because it is set from signal handlers.
-  std::atomic<bool> termination_requested_{false};
+  std::atomic<bool> termination_requested_ = false;
 
   RunMode run_mode_ = RunMode::kUnitTest;
-  absl::Duration fuzz_time_limit_ = absl::InfiniteDuration();
+  std::atomic<bool> watchdog_thread_started = false;
+
+  absl::Time creation_time_ = absl::Now();
+  size_t test_counter_ = 0;
 
   bool reporter_enabled_ = false;
   Args* current_args_ = nullptr;
   const FuzzTest* current_test_ = nullptr;
+  const Configuration* current_configuration_;
+  absl::Time current_iteration_start_time_;
+  std::atomic<bool> test_iteration_started_ = false;
+  std::atomic_flag watchdog_spinlock_ = ATOMIC_FLAG_INIT;
   const RuntimeStats* stats_ = nullptr;
   absl::Time (*clock_fn_)() = nullptr;
+
+  // A registry of crash metadata listeners.
+  std::vector<CrashMetadataListener> crash_metadata_listeners_;
+  // In case of a crash, contains the crash type.
+  std::optional<std::string> crash_type_;
 };
 
 extern void (*crash_handler_hook)();
@@ -229,11 +280,11 @@ class FuzzTestFuzzerImpl : public FuzzTestFuzzer {
 
  private:
   // TODO(fniksic): Refactor to reduce code complexity and improve readability.
-  void RunInUnitTestMode(const Configuration& configuration) override;
+  bool RunInUnitTestMode(const Configuration& configuration) override;
 
   // TODO(fniksic): Refactor to reduce code complexity and improve readability.
-  int RunInFuzzingMode(int* argc, char*** argv,
-                       const Configuration& configuration) override;
+  bool RunInFuzzingMode(int* argc, char*** argv,
+                        const Configuration& configuration) override;
 
   // Use the standard PRNG instead of absl::BitGen because Abseil doesn't
   // guarantee seed stability
@@ -259,9 +310,10 @@ class FuzzTestFuzzerImpl : public FuzzTestFuzzer {
 
   std::optional<corpus_type> ReadReproducerToMinimize();
 
-  std::optional<corpus_type> TryParse(absl::string_view data);
+  absl::StatusOr<corpus_type> TryParse(absl::string_view data);
 
-  void MutateValue(Input& input, absl::BitGenRef prng);
+  void MutateValue(Input& input, absl::BitGenRef prng,
+                   const domain_implementor::MutationMetadata& metadata);
 
   void UpdateCorpusDistribution();
 
@@ -279,8 +331,18 @@ class FuzzTestFuzzerImpl : public FuzzTestFuzzer {
   void TrySampleAndUpdateInMemoryCorpus(Input sample,
                                         bool write_to_file = true);
 
-  void ForEachInputFile(absl::Span<const std::string> files,
-                        absl::FunctionRef<void(Input&&)> consume);
+  // Iterates over inputs in `files` and calls `consume` on each input.
+  // `consume` is a function that takes a file path, an optional blob index in
+  // the file (for blob files with multiple blobs), and an input in the given
+  // file at the given blob index (if applicable). When `timeout` is reached
+  // before calling the `consume` on an input, the iteration stops and the rest
+  // of the inputs won't be consumed.
+  void ForEachInput(
+      absl::Span<const std::string> files,
+      absl::FunctionRef<void(absl::string_view file_path,
+                             std::optional<int> blob_idx, Input input)>
+          consume,
+      absl::Duration timeout = absl::InfiniteDuration());
 
   // Returns true if we're in minimization mode.
   bool MinimizeCorpusIfInMinimizationMode(absl::BitGenRef prng);
@@ -295,13 +357,14 @@ class FuzzTestFuzzerImpl : public FuzzTestFuzzer {
 
   bool ShouldStop();
 
-  std::optional<GenericDomainCorpusType> GetCorpusValueFromFile(
-      const std::string& path);
-  void ReplayInput(const std::string& path);
+  // Prints a message indicating that we're replaying an input from `file_path`
+  // at `blob_idx` (if applicable) and then runs `input`.
+  void ReplayInput(absl::string_view file_path, std::optional<int> blob_idx,
+                   const Input& input);
 
   const FuzzTest& test_;
   std::unique_ptr<UntypedFixtureDriver> fixture_driver_;
-  std::unique_ptr<UntypedDomainInterface> params_domain_;
+  UntypedDomain params_domain_;
   std::seed_seq seed_sequence_ = GetFromEnvOrMakeSeedSeq(std::cerr);
   ExecutionCoverage* execution_coverage_;
   CorpusCoverage corpus_coverage_;
@@ -325,6 +388,14 @@ class FuzzTestFuzzerImpl : public FuzzTestFuzzer {
   friend class CentipedeAdaptorRunnerCallbacks;
   friend class CentipedeAdaptorEngineCallbacks;
 };
+
+size_t GetStackLimitFromEnvOrConfiguration(const Configuration& configuration);
+
+// A reproduction command template will include these placeholders. These
+// placeholders then will be replaced by the proper test filter when creating
+// the final reproduction command from the template.
+static constexpr absl::string_view kTestFilterPlaceholder = "$TEST_FILTER";
+static constexpr absl::string_view kExtraArgsPlaceholder = "$EXTRA_ARGS";
 
 }  // namespace internal
 }  // namespace fuzztest

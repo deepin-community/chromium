@@ -2,9 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/installer/util/advanced_firewall_manager_win.h"
 
 #include <objbase.h>
+
 #include <stddef.h>
 
 #include "base/logging.h"
@@ -16,9 +22,9 @@
 
 namespace installer {
 
-AdvancedFirewallManager::AdvancedFirewallManager() {}
+AdvancedFirewallManager::AdvancedFirewallManager() = default;
 
-AdvancedFirewallManager::~AdvancedFirewallManager() {}
+AdvancedFirewallManager::~AdvancedFirewallManager() = default;
 
 bool AdvancedFirewallManager::Init(const std::wstring& app_name,
                                    const base::FilePath& app_path) {

@@ -65,7 +65,6 @@ power_manager::PowerManagementPolicy_Action GetProtoAction(
       return power_manager::PowerManagementPolicy_Action_DO_NOTHING;
     default:
       NOTREACHED() << "Unhandled action " << action;
-      return power_manager::PowerManagementPolicy_Action_DO_NOTHING;
   }
 }
 
@@ -367,11 +366,6 @@ std::string PowerPolicyController::GetPolicyDebugString(
                   policy.send_feedback_if_undimmed());
   }
 
-  if (policy.has_hibernate_delay_sec()) {
-    StringAppendF(&str, "hibernate_delay_sec=%d ",
-                  policy.hibernate_delay_sec());
-  }
-
   if (policy.has_reason()) {
     StringAppendF(&str, "reason=\"%s\" ", policy.reason().c_str());
   }
@@ -583,8 +577,8 @@ void PowerPolicyController::ApplyPrefs(const PrefValues& values) {
     }
   }
 
-  if (values.hibernate_delay_sec.has_value()) {
-    prefs_policy_.set_hibernate_delay_sec(values.hibernate_delay_sec.value());
+  if (values.charge_limit_enabled.has_value()) {
+    prefs_policy_.set_charge_limit_enabled(values.charge_limit_enabled.value());
   }
 
   prefs_were_set_ = true;
@@ -641,6 +635,14 @@ void PowerPolicyController::NotifyChromeIsExiting() {
   if (chrome_is_exiting_)
     return;
   chrome_is_exiting_ = true;
+  SendCurrentPolicy();
+}
+
+void PowerPolicyController::SetShouldDoNothingWhenIdleInDemoMode() {
+  if (should_do_nothing_when_idle_in_demo_mode_) {
+    return;
+  }
+  should_do_nothing_when_idle_in_demo_mode_ = true;
   SendCurrentPolicy();
 }
 
@@ -755,6 +757,18 @@ void PowerPolicyController::SendCurrentPolicy() {
         power_manager::PowerManagementPolicy_Action_SUSPEND);
     causes +=
         std::string((causes.empty() ? "" : ", ")) + "encryption migration";
+  }
+
+  if (should_do_nothing_when_idle_in_demo_mode_ &&
+      (policy.ac_idle_action() !=
+           power_manager::PowerManagementPolicy_Action_DO_NOTHING ||
+       policy.battery_idle_action() !=
+           power_manager::PowerManagementPolicy_Action_DO_NOTHING)) {
+    LOG(WARNING) << "Idle action is overriden to DO_NOTHING by demo mode.";
+    policy.set_ac_idle_action(
+        power_manager::PowerManagementPolicy_Action_DO_NOTHING);
+    policy.set_battery_idle_action(
+        power_manager::PowerManagementPolicy_Action_DO_NOTHING);
   }
 
   // To avoid a race in the case where the user asks Chrome to sign out

@@ -217,7 +217,6 @@ uint64_t PpapiCommandBufferProxy::GenerateFenceSyncRelease() {
 
 bool PpapiCommandBufferProxy::IsFenceSyncReleased(uint64_t release) {
   NOTREACHED();
-  return false;
 }
 
 void PpapiCommandBufferProxy::SignalSyncToken(const gpu::SyncToken& sync_token,
@@ -233,7 +232,6 @@ void PpapiCommandBufferProxy::WaitSyncToken(const gpu::SyncToken& sync_token) {
 bool PpapiCommandBufferProxy::CanWaitUnverifiedSyncToken(
     const gpu::SyncToken& sync_token) {
   NOTREACHED();
-  return false;
 }
 
 void PpapiCommandBufferProxy::SignalQuery(uint32_t query,
@@ -303,7 +301,7 @@ void PpapiCommandBufferProxy::TryUpdateState() {
     shared_state()->Read(&last_state_);
 }
 
-gpu::CommandBufferSharedState* PpapiCommandBufferProxy::shared_state() const {
+gpu::CommandBufferSharedState* PpapiCommandBufferProxy::shared_state() {
   return reinterpret_cast<gpu::CommandBufferSharedState*>(
       shared_state_mapping_.memory());
 }
@@ -316,7 +314,7 @@ void PpapiCommandBufferProxy::FlushInternal() {
 
   IPC::Message* message = new PpapiHostMsg_PPBGraphics3D_AsyncFlush(
       ppapi::API_ID_PPB_GRAPHICS_3D, flush_info_->resource,
-      flush_info_->put_offset);
+      flush_info_->put_offset, pending_fence_sync_release_);
 
   // Do not let a synchronous flush hold up this message. If this handler is
   // deferred until after the synchronous flush completes, it will overwrite the

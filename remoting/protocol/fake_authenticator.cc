@@ -122,6 +122,14 @@ void FakeAuthenticator::Resume() {
   std::move(resume_closure_).Run();
 }
 
+CredentialsType FakeAuthenticator::credentials_type() const {
+  return config_.credentials_type;
+}
+
+const Authenticator& FakeAuthenticator::implementing_authenticator() const {
+  return *this;
+}
+
 Authenticator::State FakeAuthenticator::state() const {
   EXPECT_LE(messages_, config_.round_trips * 2);
 
@@ -160,6 +168,11 @@ bool FakeAuthenticator::started() const {
 Authenticator::RejectionReason FakeAuthenticator::rejection_reason() const {
   EXPECT_EQ(REJECTED, state());
   return RejectionReason::INVALID_CREDENTIALS;
+}
+
+Authenticator::RejectionDetails FakeAuthenticator::rejection_details() const {
+  EXPECT_EQ(REJECTED, state());
+  return {};
 }
 
 void FakeAuthenticator::ProcessMessage(const jingle_xmpp::XmlElement* message,
@@ -225,6 +238,11 @@ const std::string& FakeAuthenticator::GetAuthKey() const {
   EXPECT_EQ(ACCEPTED, state());
   DCHECK(!auth_key_.empty());
   return auth_key_;
+}
+
+const SessionPolicies* FakeAuthenticator::GetSessionPolicies() const {
+  EXPECT_EQ(ACCEPTED, state());
+  return nullptr;
 }
 
 std::unique_ptr<ChannelAuthenticator>

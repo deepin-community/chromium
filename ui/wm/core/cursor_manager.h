@@ -9,6 +9,7 @@
 
 #include "base/component_export.h"
 #include "base/observer_list.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/cursor_client.h"
 #include "ui/display/display.h"
 #include "ui/gfx/geometry/point.h"
@@ -56,6 +57,8 @@ class COMPONENT_EXPORT(UI_WM) CursorManager
   bool IsCursorVisible() const override;
   void SetCursorSize(ui::CursorSize cursor_size) override;
   ui::CursorSize GetCursorSize() const override;
+  void SetCursorColor(SkColor color) override;
+  SkColor GetCursorColor() const override;
   void EnableMouseEvents() override;
   void DisableMouseEvents() override;
   bool IsMouseEventsEnabled() const override;
@@ -75,6 +78,7 @@ class COMPONENT_EXPORT(UI_WM) CursorManager
   void CommitCursor(gfx::NativeCursor cursor) override;
   void CommitVisibility(bool visible) override;
   void CommitCursorSize(ui::CursorSize cursor_size) override;
+  void CommitCursorColor(SkColor color) override;
   void CommitMouseEventsEnabled(bool enabled) override;
   void CommitSystemCursorSize(const gfx::Size& cursor_size) override;
 
@@ -95,7 +99,8 @@ class COMPONENT_EXPORT(UI_WM) CursorManager
   // The cursor state to restore when the cursor is unlocked.
   std::unique_ptr<internal::CursorState> state_on_unlock_;
 
-  base::ObserverList<aura::client::CursorClientObserver>::Unchecked observers_;
+  base::ObserverList<aura::client::CursorClientObserver>::
+      UncheckedAndDanglingUntriaged observers_;
 
   // This flag holds the cursor visibility state for the duration of the
   // process. Defaults to true. This flag helps ensure that when a

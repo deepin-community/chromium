@@ -17,13 +17,14 @@
 #include "chrome/browser/ash/input_method/input_method_engine.h"
 #include "chrome/browser/ash/input_method/pref_change_recorder.h"
 #include "chrome/browser/ash/input_method/suggestions_collector.h"
+#include "chrome/browser/ash/lobster/lobster_event_sink.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
 #include "chromeos/ash/services/ime/public/cpp/assistive_suggestions.h"
 #include "chromeos/ash/services/ime/public/mojom/connection_factory.mojom.h"
 #include "chromeos/ash/services/ime/public/mojom/input_engine.mojom.h"
 #include "chromeos/ash/services/ime/public/mojom/input_method.mojom.h"
 #include "chromeos/ash/services/ime/public/mojom/input_method_host.mojom.h"
-#include "chromeos/ash/services/ime/public/mojom/japanese_settings.mojom.h"
+#include "chromeos/ash/services/ime/public/mojom/input_method_user_data.mojom.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
@@ -51,6 +52,7 @@ class NativeInputMethodEngineObserver : public InputMethodEngineObserver,
   NativeInputMethodEngineObserver(
       PrefService* prefs,
       EditorEventSink* editor_event_sink,
+      LobsterEventSink* lobster_event_sink,
       std::unique_ptr<InputMethodEngineObserver> ime_base_observer,
       std::unique_ptr<AssistiveSuggester> assistive_suggester,
       std::unique_ptr<AutocorrectManager> autocorrect_manager,
@@ -165,9 +167,10 @@ class NativeInputMethodEngineObserver : public InputMethodEngineObserver,
 
   void OnConnectionFactoryBound(bool bound);
 
-  void OnJapaneseSettingsReceived(ime::mojom::JapaneseConfigPtr config);
-  void OnJapaneseDecoderConnected(bool bound);
   void ConnectToImeService(const std::string& engine_id);
+
+  void SetJapanesePrefsFromLegacyConfig(
+      ime::mojom::JapaneseLegacyConfigResponsePtr response);
 
   void HandleOnFocusAsyncForNativeMojoEngine(
       const std::string& engine_id,
@@ -185,14 +188,13 @@ class NativeInputMethodEngineObserver : public InputMethodEngineObserver,
   // Not owned by this class.
   raw_ptr<PrefService> prefs_ = nullptr;
   raw_ptr<EditorEventSink> editor_event_sink_;
+  raw_ptr<LobsterEventSink> lobster_event_sink_;
 
   std::unique_ptr<InputMethodEngineObserver> ime_base_observer_;
   mojo::Remote<ime::mojom::InputEngineManager> remote_manager_;
   mojo::Remote<ime::mojom::ConnectionFactory> connection_factory_;
+  mojo::Remote<ime::mojom::InputMethodUserDataService> user_data_service_;
   mojo::AssociatedRemote<ime::mojom::InputMethod> input_method_;
-  // TODO(b/232341104): Delete this connection once Japanese settings have been
-  // migrated completely
-  mojo::AssociatedRemote<ime::mojom::JapaneseDecoder> japanese_decoder_;
   mojo::AssociatedReceiver<ime::mojom::InputMethodHost> host_receiver_{this};
 
   std::unique_ptr<AssistiveSuggester> assistive_suggester_;

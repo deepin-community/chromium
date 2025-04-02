@@ -132,7 +132,6 @@ void UpdateRequiredNotification::Show(NotificationType type,
   std::u16string button = GetButtonText(type);
   if (title.empty() || body.empty() || button.empty()) {
     NOTREACHED();
-    return;
   }
 
   DisplayNotification(title, body, button,

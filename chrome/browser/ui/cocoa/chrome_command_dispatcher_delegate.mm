@@ -8,9 +8,9 @@
 #include "base/check.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/global_keyboard_shortcuts_mac.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #include "components/remote_cocoa/common/native_widget_ns_window_host.mojom.h"
-#include "content/public/common/input/native_web_keyboard_event.h"
 #include "ui/base/accelerators/accelerator_manager.h"
 #import "ui/base/cocoa/nsmenu_additions.h"
 #include "ui/content_accelerators/accelerator_util.h"
@@ -23,8 +23,9 @@
                                    (ui::AcceleratorManager::HandlerPriority)
                                        priority {
   NSWindow* window = [event window];
-  if (!window)
+  if (!window) {
     return NO;
+  }
 
   // Logic for handling Views windows.
   //
@@ -44,7 +45,7 @@
   // when the focused view is not a RenderWidgetHostView, which is why this
   // logic is necessary. Duplicating the logic adds a bit of redundant work,
   // but doesn't cause problems.
-  content::NativeWebKeyboardEvent keyboard_event(
+  input::NativeWebKeyboardEvent keyboard_event(
       (base::apple::OwnedNSEvent(event)));
   ui::Accelerator accelerator =
       ui::GetAcceleratorFromNativeWebKeyboardEvent(keyboard_event);
@@ -101,13 +102,15 @@
     return ui::PerformKeyEquivalentResult::kDrop;
   }
 
-  if (!result.found())
+  if (!result.found()) {
     return ui::PerformKeyEquivalentResult::kUnhandled;
+  }
 
   auto* bridge =
       remote_cocoa::NativeWidgetNSWindowBridge::GetFromNativeWindow(window);
-  if (bridge == nullptr)
+  if (bridge == nullptr) {
     return ui::PerformKeyEquivalentResult::kUnhandled;
+  }
 
   bool will_execute = false;
   const bool kIsBeforeFirstResponder = true;
@@ -123,8 +126,9 @@
   // window bridge side. Now that we know the command will be executed by
   // the window bridge we'll manually flash the menu title. This also causes
   // VoiceOver to speak the command, which wasn't happening before this change.
-  if (will_execute)
+  if (will_execute) {
     [NSMenu flashMenuForChromeCommand:result.chrome_command];
+  }
 
   bool was_executed = false;
   bridge->host()->ExecuteCommand(result.chrome_command,

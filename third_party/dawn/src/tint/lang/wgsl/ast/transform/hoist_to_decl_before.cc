@@ -29,16 +29,13 @@
 
 #include <utility>
 
-#include "src/tint/lang/core/type/reference.h"
 #include "src/tint/lang/wgsl/ast/builder.h"
 #include "src/tint/lang/wgsl/program/clone_context.h"
 #include "src/tint/lang/wgsl/sem/block_statement.h"
 #include "src/tint/lang/wgsl/sem/for_loop_statement.h"
 #include "src/tint/lang/wgsl/sem/if_statement.h"
-#include "src/tint/lang/wgsl/sem/variable.h"
 #include "src/tint/lang/wgsl/sem/while_statement.h"
 #include "src/tint/utils/containers/hashmap.h"
-#include "src/tint/utils/containers/reverse.h"
 #include "src/tint/utils/containers/transform.h"
 
 namespace tint::ast::transform {
@@ -59,7 +56,7 @@ struct HoistToDeclBefore::State {
         switch (kind) {
             case VariableKind::kLet: {
                 auto* ty = ctx.src->Sem().GetVal(expr)->Type();
-                TINT_ASSERT(!ty->HoldsAbstract());
+                TINT_ASSERT(!ty->IsAbstract());
                 auto builder = [this, expr, name, ty] {
                     return b.Decl(b.Let(name, Transform::CreateASTTypeFor(ctx, ty),
                                         ctx.CloneWithoutTransform(expr)));
@@ -72,7 +69,7 @@ struct HoistToDeclBefore::State {
 
             case VariableKind::kVar: {
                 auto* ty = ctx.src->Sem().GetVal(expr)->Type();
-                TINT_ASSERT(!ty->HoldsAbstract());
+                TINT_ASSERT(!ty->IsAbstract());
                 auto builder = [this, expr, name, ty] {
                     return b.Decl(b.Var(name, Transform::CreateASTTypeFor(ctx, ty),
                                         ctx.CloneWithoutTransform(expr)));
@@ -382,7 +379,7 @@ struct HoistToDeclBefore::State {
         }
 
         auto* fl = parent->As<sem::ForLoopStatement>();
-        if (TINT_LIKELY(fl)) {
+        if (DAWN_LIKELY(fl)) {
             // Insertion point is a for-loop initializer or continuing statement.
             // These require special care.
             if (fl->Declaration()->initializer == ip) {
@@ -398,7 +395,7 @@ struct HoistToDeclBefore::State {
                 return true;
             }
 
-            if (TINT_LIKELY(fl->Declaration()->continuing == ip)) {
+            if (DAWN_LIKELY(fl->Declaration()->continuing == ip)) {
                 // Insertion point is a for-loop continuing statement.
                 // For-loop needs to be decomposed to a loop.
 

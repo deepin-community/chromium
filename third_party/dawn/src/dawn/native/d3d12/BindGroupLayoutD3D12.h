@@ -73,6 +73,7 @@ class BindGroupLayout final : public BindGroupLayoutInternalBase {
 
     const std::vector<D3D12_DESCRIPTOR_RANGE1>& GetCbvUavSrvDescriptorRanges() const;
     const std::vector<D3D12_DESCRIPTOR_RANGE1>& GetSamplerDescriptorRanges() const;
+    const std::vector<D3D12_STATIC_SAMPLER_DESC>& GetStaticSamplers() const;
 
   private:
     BindGroupLayout(Device* device, const BindGroupLayoutDescriptor* descriptor);
@@ -95,12 +96,9 @@ class BindGroupLayout final : public BindGroupLayoutInternalBase {
     std::vector<D3D12_DESCRIPTOR_RANGE1> mCbvUavSrvDescriptorRanges;
     std::vector<D3D12_DESCRIPTOR_RANGE1> mSamplerDescriptorRanges;
 
-    MutexProtected<SlabAllocator<BindGroup>> mBindGroupAllocator;
+    std::vector<D3D12_STATIC_SAMPLER_DESC> mStaticSamplers;
 
-    // TODO(https://crbug.com/dawn/2361): Rewrite those members with raw_ptr<T>.
-    // This is currently failing with MSVC cl.exe compiler.
-    RAW_PTR_EXCLUSION MutexProtected<StagingDescriptorAllocator>* mSamplerAllocator = nullptr;
-    RAW_PTR_EXCLUSION MutexProtected<StagingDescriptorAllocator>* mViewAllocator = nullptr;
+    MutexProtected<SlabAllocator<BindGroup>> mBindGroupAllocator;
 };
 
 }  // namespace dawn::native::d3d12

@@ -34,6 +34,7 @@
 #include "third_party/blink/public/web/web_ax_enums.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/node.h"
+#include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/html_element_type_helpers.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
@@ -94,6 +95,7 @@ bool HasInteractiveARIAAttribute(const Element& element) {
       // These attributes implicitly indicate the given widget is interactive.
       // From http://www.w3.org/TR/wai-aria/states_and_properties#attrs_widgets
       // clang-format off
+      &html_names::kAriaActionsAttr,
       &html_names::kAriaActivedescendantAttr,
       &html_names::kAriaCheckedAttr,
       &html_names::kAriaControlsAttr,

@@ -2,8 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-# Monkeypatch IMapIterator so that Ctrl-C can kill everything properly.
-# Derived from https://gist.github.com/aljungberg/626518
+from __future__ import annotations
 
 import multiprocessing.pool
 import sys
@@ -21,6 +20,8 @@ def wrapper(func):
     return wrap
 
 
+# Monkeypatch IMapIterator so that Ctrl-C can kill everything properly.
+# Derived from https://gist.github.com/aljungberg/626518
 IMapIterator.next = wrapper(IMapIterator.next)
 IMapIterator.__next__ = IMapIterator.next
 # TODO(iannucci): Monkeypatch all other 'wait' methods too.
@@ -31,13 +32,23 @@ import contextlib
 import functools
 import logging
 import os
+import random
 import re
 import setup_color
 import shutil
 import signal
 import tempfile
 import textwrap
+import time
+import typing
+from typing import Any
+from typing import AnyStr
+from typing import Callable
+from typing import ContextManager
+from typing import Optional
+from typing import Tuple
 
+import gclient_utils
 import scm
 import subprocess2
 
@@ -48,16 +59,54 @@ IS_WIN = sys.platform == 'win32'
 TEST_MODE = False
 
 
-def win_find_git():
+def win_find_git() -> str:
     for elem in os.environ.get('PATH', '').split(os.pathsep):
         for candidate in ('git.exe', 'git.bat'):
             path = os.path.join(elem, candidate)
             if os.path.isfile(path):
+                # shell=True or invoking git.bat causes Windows to invoke
+                # cmd.exe to run git.bat. The extra processes add significant
+                # overhead (most visible in the "update" stage of gclient sync)
+                # so we want to avoid it whenever possible, by extracting the
+                # path to git.exe from git.bat in depot_tools.
+                if candidate == 'git.bat':
+                    path = _extract_git_path_from_git_bat(path)
                 return path
     raise ValueError('Could not find Git on PATH.')
 
 
+def _extract_git_path_from_git_bat(path: str) -> str:
+    """Attempts to extract the path to git.exe from git.bat.
+
+    Args:
+        path: the absolute path to git.bat.
+
+    Returns:
+        The absolute path to git.exe if extraction succeeded,
+        otherwise returns the input path to git.bat.
+    """
+    with open(path, 'r') as f:
+        git_bat = f.readlines()
+        if git_bat[-1].endswith('" %*\n'):
+            if git_bat[-1].startswith('"%~dp0'):
+                # Handle relative path.
+                new_path = os.path.join(os.path.dirname(path),
+                                        git_bat[-1][6:-5])
+            elif git_bat[-1].startswith('"'):
+                # Handle absolute path.
+                new_path = git_bat[-1][1:-5]
+
+            if new_path.endswith('.exe'):
+                return new_path
+    return path
+
+
 GIT_EXE = 'git' if not IS_WIN else win_find_git()
+
+# The recommended minimum version of Git, as (<major>, <minor>, <patch>).
+GIT_MIN_VERSION = (2, 26, 0)
+
+GIT_BLAME_IGNORE_REV_FILE = '.git-blame-ignore-revs'
 
 FREEZE = 'FREEZE'
 FREEZE_SECTIONS = {'indexed': 'soft', 'unindexed': 'mixed'}
@@ -135,7 +184,41 @@ class BadCommitRefException(Exception):
         super(BadCommitRefException, self).__init__(msg)
 
 
-def memoize_one(**kwargs):
+class _MemoizeWrapper(object):
+
+    def __init__(self, f: Callable[[Any], Any], *, threadsafe: bool):
+        self._f: Callable[[Any], Any] = f
+        self._cache: dict[Any, Any] = {}
+        self._lock: ContextManager = contextlib.nullcontext()
+        if threadsafe:
+            self._lock = threading.Lock()
+
+    def __call__(self, arg: Any) -> Any:
+        ret = self.get(arg)
+        if ret is None:
+            ret = self._f(arg)
+            if ret is not None:
+                self.set(arg, ret)
+        return ret
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        with self._lock:
+            return self._cache.get(key, default)
+
+    def set(self, key: Any, value: Any) -> None:
+        with self._lock:
+            self._cache[key] = value
+
+    def clear(self) -> None:
+        with self._lock:
+            self._cache.clear()
+
+    def update(self, other: dict[Any, Any]) -> None:
+        with self._lock:
+            self._cache.update(other)
+
+
+def memoize_one(*, threadsafe: bool):
     """Memoizes a single-argument pure function.
 
     Values of None are not cached.
@@ -153,22 +236,6 @@ def memoize_one(**kwargs):
             unittests.
         * update(other) - Updates the contents of the cache from another dict.
     """
-    assert 'threadsafe' in kwargs, 'Must specify threadsafe={True,False}'
-    threadsafe = kwargs['threadsafe']
-
-    if threadsafe:
-
-        def withlock(lock, f):
-            def inner(*args, **kwargs):
-                with lock:
-                    return f(*args, **kwargs)
-
-            return inner
-    else:
-
-        def withlock(_lock, f):
-            return f
-
     def decorator(f):
         # Instantiate the lock in decorator, in case users of memoize_one do:
         #
@@ -179,26 +246,8 @@ def memoize_one(**kwargs):
         #
         # @memoizer
         # def fn2(val): ...
-
-        lock = threading.Lock() if threadsafe else None
-        cache = {}
-        _get = withlock(lock, cache.get)
-        _set = withlock(lock, cache.__setitem__)
-
-        @functools.wraps(f)
-        def inner(arg):
-            ret = _get(arg)
-            if ret is None:
-                ret = f(arg)
-                if ret is not None:
-                    _set(arg, ret)
-            return ret
-
-        inner.get = _get
-        inner.set = _set
-        inner.clear = withlock(lock, cache.clear)
-        inner.update = withlock(lock, cache.update)
-        return inner
+        wrapped = _MemoizeWrapper(f, threadsafe=threadsafe)
+        return functools.wraps(f)(wrapped)
 
     return decorator
 
@@ -342,7 +391,9 @@ def blame(filename, revision=None, porcelain=False, abbrev=None, *_args):
     return run(*command)
 
 
-def branch_config(branch, option, default=None):
+def branch_config(branch: str,
+                  option: str,
+                  default: Optional[str] = None) -> Optional[str]:
     return get_config('branch.%s.%s' % (branch, option), default=default)
 
 
@@ -351,8 +402,9 @@ def branch_config_map(option):
     try:
         reg = re.compile(r'^branch\.(.*)\.%s$' % option)
         return {
-            reg.match(k).group(1): v
+            m.group(1): v
             for k, v in get_config_regexp(reg.pattern)
+            if (m := reg.match(k)) is not None
         }
     except subprocess2.CalledProcessError:
         return {}
@@ -364,7 +416,9 @@ def branches(use_limit=True, *args):
     key = 'depot-tools.branch-limit'
     limit = get_config_int(key, 20)
 
-    raw_branches = run('branch', *args).splitlines()
+    output = run('branch', *args)
+    assert isinstance(output, str)
+    raw_branches = output.splitlines()
 
     num = len(raw_branches)
 
@@ -386,13 +440,17 @@ def branches(use_limit=True, *args):
         yield line.split()[-1]
 
 
-def get_config(option, default=None):
+def get_config(option: str, default: Optional[str] = None) -> Optional[str]:
     return scm.GIT.GetConfig(os.getcwd(), option, default)
 
-def get_config_int(option, default=0):
+
+def get_config_int(option: str, default: int = 0) -> int:
     assert isinstance(default, int)
+    val = get_config(option)
+    if val is None:
+        return default
     try:
-        return int(get_config(option, default))
+        return int(val)
     except ValueError:
         return default
 
@@ -408,6 +466,7 @@ def get_config_regexp(pattern):
 def is_fsmonitor_enabled():
     """Returns true if core.fsmonitor is enabled in git config."""
     fsmonitor = get_config('core.fsmonitor', 'False')
+    assert isinstance(fsmonitor, str)
     return fsmonitor.strip().lower() == 'true'
 
 
@@ -417,6 +476,7 @@ def warn_submodule():
     # they have fsmonitor enabled.
     if sys.platform.startswith('darwin') and is_fsmonitor_enabled():
         version_string = run('--version')
+        assert isinstance(version_string, str)
         if version_string.endswith('goog'):
             return
         version_tuple = _extract_git_tuple(version_string)
@@ -440,11 +500,11 @@ def current_branch():
         return None
 
 
-def del_branch_config(branch, option, scope='local'):
+def del_branch_config(branch, option, scope: scm.GitConfigScope = 'local'):
     del_config('branch.%s.%s' % (branch, option), scope=scope)
 
 
-def del_config(option, scope='local'):
+def del_config(option, scope: scm.GitConfigScope = 'local'):
     try:
         scm.GIT.SetConfig(os.getcwd(), option, scope=scope)
     except subprocess2.CalledProcessError:
@@ -565,17 +625,18 @@ def get_branch_tree(use_limit=False):
     return skipped, branch_tree
 
 
-def get_or_create_merge_base(branch, parent=None):
+def get_or_create_merge_base(branch, parent=None) -> Optional[str]:
     """Finds the configured merge base for branch.
 
     If parent is supplied, it's used instead of calling upstream(branch).
     """
-    base = branch_config(branch, 'base')
+    base: Optional[str] = branch_config(branch, 'base')
     base_upstream = branch_config(branch, 'base-upstream')
     parent = parent or upstream(branch)
     if parent is None or branch is None:
         return None
     actual_merge_base = run('merge-base', parent, branch)
+    assert isinstance(actual_merge_base, str)
 
     if base_upstream != parent:
         base = None
@@ -600,6 +661,7 @@ def get_or_create_merge_base(branch, parent=None):
         base = actual_merge_base
         manual_merge_base(branch, base, parent)
 
+    assert isinstance(base, str)
     return base
 
 
@@ -616,6 +678,7 @@ def hash_one(reflike, short=False):
 
 def in_rebase():
     git_dir = run('rev-parse', '--git-dir')
+    assert isinstance(git_dir, str)
     return (os.path.exists(os.path.join(git_dir, 'rebase-merge'))
             or os.path.exists(os.path.join(git_dir, 'rebase-apply')))
 
@@ -742,7 +805,7 @@ def repo_root():
     return run('rev-parse', '--show-toplevel')
 
 
-def upstream_default():
+def upstream_default() -> str:
     """Returns the default branch name of the origin repository."""
     try:
         ret = run('rev-parse', '--abbrev-ref', 'origin/HEAD')
@@ -754,6 +817,7 @@ def upstream_default():
                 ret = run('rev-parse', '--abbrev-ref', 'origin/HEAD')
             except subprocess2.CalledProcessError:
                 pass
+        assert isinstance(ret, str)
         return ret
     except subprocess2.CalledProcessError:
         return 'origin/main'
@@ -783,10 +847,11 @@ def less():  # pragma: no cover
     # -R: Don't escape ANSI color codes.
     # -X: Don't clear the screen before starting.
     cmd = ('less', '-FRX')
+    proc = subprocess2.Popen(cmd, stdin=subprocess2.PIPE)
     try:
-        proc = subprocess2.Popen(cmd, stdin=subprocess2.PIPE)
         yield proc.stdin
     finally:
+        assert proc.stdin is not None
         try:
             proc.stdin.close()
         except BrokenPipeError:
@@ -795,7 +860,7 @@ def less():  # pragma: no cover
         proc.wait()
 
 
-def run(*cmd, **kwargs):
+def run(*cmd, **kwargs) -> str | bytes:
     """The same as run_with_stderr, except it only returns stdout."""
     return run_with_stderr(*cmd, **kwargs)[0]
 
@@ -809,7 +874,7 @@ def run_with_retcode(*cmd, **kwargs):
         return cpe.returncode
 
 
-def run_stream(*cmd, **kwargs):
+def run_stream(*cmd, **kwargs) -> typing.IO[AnyStr]:
     """Runs a git command. Returns stdout as a PIPE (file-like object).
 
     stderr is dropped to avoid races if the process outputs to both stdout and
@@ -820,6 +885,7 @@ def run_stream(*cmd, **kwargs):
     kwargs.setdefault('shell', False)
     cmd = (GIT_EXE, '-c', 'color.ui=never') + cmd
     proc = subprocess2.Popen(cmd, **kwargs)
+    assert proc.stdout is not None
     return proc.stdout
 
 
@@ -836,8 +902,8 @@ def run_stream_with_retcode(*cmd, **kwargs):
     kwargs.setdefault('stdout', subprocess2.PIPE)
     kwargs.setdefault('shell', False)
     cmd = (GIT_EXE, '-c', 'color.ui=never') + cmd
+    proc = subprocess2.Popen(cmd, **kwargs)
     try:
-        proc = subprocess2.Popen(cmd, **kwargs)
         yield proc.stdout
     finally:
         retcode = proc.wait()
@@ -846,13 +912,46 @@ def run_stream_with_retcode(*cmd, **kwargs):
                                                  b'')
 
 
-def run_with_stderr(*cmd, **kwargs):
+def run_with_stderr(*cmd, **kwargs) -> Tuple[str, str] | Tuple[bytes, bytes]:
     """Runs a git command.
 
     Returns (stdout, stderr) as a pair of strings.
+    If the command is `config` and the execution fails due to a lock failure,
+    retry the execution at most 5 times with 0.2 interval.
 
     kwargs
         autostrip (bool) - Strip the output. Defaults to True.
+        indata (str) - Specifies stdin data for the process.
+        retry_lock (bool) - If true and the command is `config`,
+            retry on lock failures. Defaults to True.
+    """
+    retry_cnt = 0
+    if kwargs.pop('retry_lock', True) and len(cmd) > 0 and cmd[0] == 'config':
+        retry_cnt = 5
+
+    while True:
+        try:
+            return _run_with_stderr(*cmd, **kwargs)
+        except subprocess2.CalledProcessError as ex:
+            lock_err = 'could not lock config file .git/config: File exists'
+            if retry_cnt > 0 and lock_err in str(ex):
+                logging.error(ex)
+                jitter = random.uniform(0, 0.2)
+                time.sleep(0.1 + jitter)
+                retry_cnt -= 1
+                continue
+
+            raise ex
+
+
+def _run_with_stderr(*cmd, **kwargs) -> Tuple[str, str] | Tuple[bytes, bytes]:
+    """Runs a git command.
+
+    Returns (stdout, stderr) as a pair of bytes or strings.
+
+    kwargs
+        autostrip (bool) - Strip the output. Defaults to True.
+        decode (bool) - Whether to return strings. Defaults to True.
         indata (str) - Specifies stdin data for the process.
     """
     kwargs.setdefault('stdin', subprocess2.PIPE)
@@ -866,28 +965,31 @@ def run_with_stderr(*cmd, **kwargs):
 
     cmd = (GIT_EXE, '-c', 'color.ui=never') + cmd
     proc = subprocess2.Popen(cmd, **kwargs)
-    ret, err = proc.communicate(indata)
+    stdout, stderr = proc.communicate(indata)
     retcode = proc.wait()
     if retcode not in accepted_retcodes:
-        raise subprocess2.CalledProcessError(retcode, cmd, os.getcwd(), ret,
-                                             err)
+        raise subprocess2.CalledProcessError(retcode, cmd, os.getcwd(), stdout,
+                                             stderr)
 
     if autostrip:
-        ret = (ret or b'').strip()
-        err = (err or b'').strip()
+        stdout = (stdout or b'').strip()
+        stderr = (stderr or b'').strip()
 
     if decode:
-        ret = ret.decode('utf-8', 'replace')
-        err = err.decode('utf-8', 'replace')
+        return stdout.decode('utf-8',
+                             'replace'), stderr.decode('utf-8', 'replace')
 
-    return ret, err
+    return stdout, stderr
 
 
-def set_branch_config(branch, option, value, scope='local'):
+def set_branch_config(branch,
+                      option,
+                      value,
+                      scope: scm.GitConfigScope = 'local'):
     set_config('branch.%s.%s' % (branch, option), value, scope=scope)
 
 
-def set_config(option, value, scope='local'):
+def set_config(option, value, scope: scm.GitConfigScope = 'local'):
     scm.GIT.SetConfig(os.getcwd(), option, value, scope=scope)
 
 
@@ -976,8 +1078,9 @@ def squash_current_branch(header=None, merge_base=None):
     log_msg = header + '\n'
     if log_msg:
         log_msg += '\n'
-    log_msg += run('log', '--reverse', '--format=%H%n%B',
-                   '%s..HEAD' % merge_base)
+    output = run('log', '--reverse', '--format=%H%n%B', '%s..HEAD' % merge_base)
+    assert isinstance(output, str)
+    log_msg += output
     run('reset', '--soft', merge_base)
 
     if not get_dirty_files():
@@ -1008,6 +1111,7 @@ def thaw():
         for sha in stream:
             sha = sha.strip().decode('utf-8')
             msg = run('show', '--format=%f%b', '-s', 'HEAD', '--')
+            assert isinstance(msg, str)
             match = FREEZE_MATCHER.match(msg)
             if not match:
                 if not took_action:
@@ -1118,6 +1222,44 @@ def upstream(branch):
         return None
 
 
+@functools.lru_cache
+def check_git_version(
+        min_version: Tuple[int] = GIT_MIN_VERSION) -> Optional[str]:
+    """Checks whether git is installed, and its version meets the recommended
+    minimum version, which defaults to GIT_MIN_VERSION if not specified.
+
+    Returns:
+        - the remediation action to take.
+    """
+    if gclient_utils.IsEnvCog():
+        # No remediation action required in a non-git environment.
+        return None
+
+    min_tag = '.'.join(str(x) for x in min_version)
+    if shutil.which(GIT_EXE) is None:
+        # git command was not found.
+        return ('git command not found.\n'
+                f'Please install version >={min_tag} of git.\n'
+                'See instructions at\n'
+                'https://git-scm.com/book/en/v2/Getting-Started-Installing-Git')
+
+    if meets_git_version(min_version):
+        # git version is sufficient; no remediation action necessary.
+        return None
+
+    # git is installed but older than the recommended version.
+    tag = '.'.join(str(x) for x in get_git_version()) or 'unknown'
+    return ('git update is recommended.\n'
+            f'Installed git version is {tag};\n'
+            f'depot_tools recommends version {min_tag} or later.')
+
+
+def meets_git_version(min_version: Tuple[int]) -> bool:
+    """Returns whether the current git version meets the minimum specified."""
+    return get_git_version() >= min_version
+
+
+@functools.lru_cache(maxsize=1)
 def get_git_version():
     """Returns a tuple that contains the numeric components of the current git
     version."""
@@ -1127,9 +1269,10 @@ def get_git_version():
 
 def _extract_git_tuple(version_string):
     version_match = re.search(r'(\d+.)+(\d+)', version_string)
-    version = version_match.group() if version_match else ''
-
-    return tuple(int(x) for x in version.split('.'))
+    if version_match:
+        version = version_match.group()
+        return tuple(int(x) for x in version.split('.'))
+    return tuple()
 
 
 def get_num_commits(branch):
@@ -1151,6 +1294,7 @@ def get_branches_info(include_tracking_status):
 
     info_map = {}
     data = run('for-each-ref', format_string, 'refs/heads')
+    assert isinstance(data, str)
     BranchesInfo = collections.namedtuple('BranchesInfo',
                                           'hash upstream commits behind')
     for line in data.splitlines():

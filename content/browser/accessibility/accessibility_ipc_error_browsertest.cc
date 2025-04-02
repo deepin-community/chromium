@@ -7,16 +7,17 @@
 #include "build/build_config.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
-#include "content/public/browser/ax_event_notification_details.h"
 #include "content/public/test/accessibility_notification_waiter.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/scoped_accessibility_mode_override.h"
 #include "content/shell/browser/shell.h"
 #include "ui/accessibility/ax_common.h"
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_tree.h"
+#include "ui/accessibility/ax_updates_and_events.h"
 
 namespace content {
 
@@ -35,8 +36,9 @@ class AccessibilityIpcErrorBrowserTest : public ContentBrowserTest {
   std::string GetAttr(const ui::AXNode* node,
                       const ax::mojom::StringAttribute attr) {
     for (const auto& attribute_pair : node->GetStringAttributes()) {
-      if (attribute_pair.first == attr)
+      if (attribute_pair.first == attr) {
         return attribute_pair.second;
+      }
     }
     return std::string();
   }
@@ -44,16 +46,16 @@ class AccessibilityIpcErrorBrowserTest : public ContentBrowserTest {
 
 // Failed on Android x86 in crbug.com/1123641.
 // Do not test on AX_FAIL_FAST_BUILDS, where the BAD IPC will simply assert.
-#if (BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_X86)) || \
-    defined(AX_FAIL_FAST_BUILD)
-#define MAYBE_AccessibilityFatalErrorDisallowReenabling \
-  DISABLED_AccessibilityFatalErrorDisallowReenabling
+#if (BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_X86)) || AX_FAIL_FAST_BUILD()
+#define MAYBE_UnrecoverableAccessibilityErrorDisallowReenabling \
+  DISABLED_UnrecoverableAccessibilityErrorDisallowReenabling
 #else
-#define MAYBE_AccessibilityFatalErrorDisallowReenabling \
-  AccessibilityFatalErrorDisallowReenabling
+#define MAYBE_UnrecoverableAccessibilityErrorDisallowReenabling \
+  UnrecoverableAccessibilityErrorDisallowReenabling
 #endif
-IN_PROC_BROWSER_TEST_F(AccessibilityIpcErrorBrowserTest,
-                       MAYBE_AccessibilityFatalErrorDisallowReenabling) {
+IN_PROC_BROWSER_TEST_F(
+    AccessibilityIpcErrorBrowserTest,
+    MAYBE_UnrecoverableAccessibilityErrorDisallowReenabling) {
   // Create a data url and load it.
   const char url_str[] =
       "data:text/html,"
@@ -101,9 +103,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityIpcErrorBrowserTest,
   {
     // Hide one of the elements on the page, and wait for an accessibility
     // notification triggered by the hide.
-    AccessibilityNotificationWaiter waiter(shell()->web_contents(),
-                                           ui::kAXModeComplete,
-                                           ax::mojom::Event::kLayoutComplete);
+    AccessibilityNotificationWaiter waiter(shell()->web_contents());
     ASSERT_TRUE(ExecJs(
         shell(), "document.getElementById('p1').style.display = 'none';"));
     ASSERT_TRUE(waiter.WaitForNotification());
@@ -118,7 +118,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityIpcErrorBrowserTest,
   content::WebContentsImpl* impl =
       static_cast<content::WebContentsImpl*>(shell()->web_contents());
   EXPECT_TRUE(impl->GetAccessibilityMode().is_mode_off());
-  impl->SetAccessibilityMode(ui::kAXModeComplete);
+  ScopedAccessibilityModeOverride override(impl, ui::kAXModeComplete);
   EXPECT_TRUE(impl->GetAccessibilityMode().is_mode_off());
 }
 

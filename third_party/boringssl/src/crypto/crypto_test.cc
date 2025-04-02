@@ -1,16 +1,16 @@
-/* Copyright (c) 2020, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2020 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <stdio.h>
 #include <string.h>
@@ -24,6 +24,9 @@
 #include <openssl/mem.h>
 
 #include <gtest/gtest.h>
+
+#include "internal.h"
+
 
 // Test that OPENSSL_VERSION_NUMBER and OPENSSL_VERSION_TEXT are consistent.
 // Node.js parses the version out of OPENSSL_VERSION_TEXT instead of using
@@ -43,22 +46,24 @@ TEST(CryptoTest, Strndup) {
   EXPECT_STREQ("", str.get());
 }
 
+TEST(CryptoTest, ByteSwap) {
+  EXPECT_EQ(0x04030201u, CRYPTO_bswap4(0x01020304u));
+  EXPECT_EQ(UINT64_C(0x0807060504030201),
+            CRYPTO_bswap8(UINT64_C(0x0102030405060708)));
+}
+
 #if defined(BORINGSSL_FIPS_COUNTERS)
 using CounterArray = size_t[fips_counter_max + 1];
 
 static void read_all_counters(CounterArray counters) {
-  for (fips_counter_t counter = static_cast<fips_counter_t>(0);
-       counter <= fips_counter_max;
-       counter = static_cast<fips_counter_t>(counter + 1)) {
-    counters[counter] = FIPS_read_counter(counter);
+  for (int counter = 0; counter <= fips_counter_max; counter++) {
+    counters[counter] = FIPS_read_counter(static_cast<fips_counter_t>(counter));
   }
 }
 
 static void expect_counter_delta_is_zero_except_for_a_one_at(
     CounterArray before, CounterArray after, fips_counter_t position) {
-  for (fips_counter_t counter = static_cast<fips_counter_t>(0);
-       counter <= fips_counter_max;
-       counter = static_cast<fips_counter_t>(counter + 1)) {
+  for (int counter = 0; counter <= fips_counter_max; counter++) {
     const size_t expected_delta = counter == position ? 1 : 0;
     EXPECT_EQ(after[counter], before[counter] + expected_delta) << counter;
   }

@@ -99,7 +99,6 @@ class DiskSpaceCalculator {
     base::FilePath path;
     if (!base::PathService::Get(base::DIR_HOME, &path)) {
       NOTREACHED();
-      return;
     }
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
@@ -183,7 +182,6 @@ void PeriodicMetricsService::RecordChromeProcessCount() const {
   base::FilePath chrome_path;
   if (!base::PathService::Get(base::FILE_EXE, &chrome_path)) {
     NOTREACHED();
-    return;
   }
   base::FilePath::StringType exe_name = chrome_path.BaseName().value();
   int process_count = base::GetProcessCount(exe_name, nullptr);

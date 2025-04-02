@@ -31,6 +31,7 @@
 #include <utility>
 #include <vector>
 
+#include "dawn/native/IntegerTypes.h"
 #include "dawn/native/Pipeline.h"
 
 #include "include/tint/tint.h"
@@ -74,8 +75,10 @@ class PipelineGL {
     MaybeError InitializeBase(const OpenGLFunctions& gl,
                               const PipelineLayout* layout,
                               const PerStage<ProgrammableStage>& stages,
+                              bool usesVertexIndex,
                               bool usesInstanceIndex,
-                              bool usesFragDepth);
+                              bool usesFragDepth,
+                              VertexAttributeMask bgraSwizzleAttributes);
     void DeleteProgram(const OpenGLFunctions& gl);
 
   private:

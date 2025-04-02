@@ -30,8 +30,8 @@
 
 #include <vector>
 
+#include "absl/container/inlined_vector.h"
 #include "dawn/common/Constants.h"
-#include "dawn/common/StackContainer.h"
 #include "dawn/native/CommandAllocator.h"
 #include "dawn/native/Error.h"
 #include "dawn/native/Features.h"
@@ -54,9 +54,7 @@ MaybeError ValidateTimestampQuery(const DeviceBase* device,
                                   Feature requiredFeature = Feature::TimestampQuery);
 
 MaybeError ValidatePassTimestampWrites(const DeviceBase* device,
-                                       const QuerySetBase* querySet,
-                                       uint32_t beginningOfPassWriteIndex,
-                                       uint32_t endOfPassWriteIndex);
+                                       const PassTimestampWrites* timestampWrites);
 
 MaybeError ValidateWriteBuffer(const DeviceBase* device,
                                const BufferBase* buffer,
@@ -110,12 +108,16 @@ MaybeError ValidateTextureToTextureCopyRestrictions(DeviceBase const* device,
                                                     const ImageCopyTexture& dst,
                                                     const Extent3D& copySize);
 
-MaybeError ValidateCanUseAs(const TextureBase* texture,
+MaybeError ValidateCanUseAs(const TextureBase* textureView,
+                            wgpu::TextureUsage usage,
+                            UsageValidationMode mode);
+MaybeError ValidateCanUseAs(const TextureViewBase* textureView,
                             wgpu::TextureUsage usage,
                             UsageValidationMode mode);
 MaybeError ValidateCanUseAs(const BufferBase* buffer, wgpu::BufferUsage usage);
+MaybeError ValidateCanUseAsInternal(const BufferBase* buffer, wgpu::BufferUsage usage);
 
-using ColorAttachmentFormats = StackVector<const Format*, kMaxColorAttachments>;
+using ColorAttachmentFormats = absl::InlinedVector<const Format*, kMaxColorAttachments>;
 MaybeError ValidateColorAttachmentBytesPerSample(DeviceBase* device,
                                                  const ColorAttachmentFormats& formats);
 

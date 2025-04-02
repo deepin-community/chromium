@@ -478,7 +478,6 @@ class BluetoothAdapterClientImpl : public BluetoothAdapterClient,
           break;
         default:
           NOTREACHED();
-          break;
       };
       dict.Set(bluetooth_device::kAddressTypeProperty, address_type_value);
     }

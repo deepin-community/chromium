@@ -4,11 +4,11 @@
 
 #include "chrome/updater/find_unregistered_apps_task.h"
 
-#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
@@ -32,18 +32,13 @@ void FindUnregisteredAppsTask::Run(base::OnceClosure callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   MigrateLegacyUpdaters(
       scope_, base::BindRepeating(
-                  [](const std::vector<std::string>& known_apps,
-                     scoped_refptr<PersistedData> persisted_data,
+                  [](scoped_refptr<PersistedData> persisted_data,
                      const RegistrationRequest& req) {
-                    if (std::find_if(known_apps.begin(), known_apps.end(),
-                                     [&](const std::string& known_id) {
-                                       return base::EqualsCaseInsensitiveASCII(
-                                           known_id, req.app_id);
-                                     }) == known_apps.end()) {
+                    if (!base::Contains(persisted_data->GetAppIds(),
+                                        base::ToLowerASCII(req.app_id))) {
                       persisted_data->RegisterApp(req);
                     }
                   },
-                  config_->GetUpdaterPersistedData()->GetAppIds(),
                   config_->GetUpdaterPersistedData()));
   std::move(callback).Run();
 }

@@ -12,6 +12,7 @@
 #include "ash/public/cpp/personalization_app/time_of_day_test_utils.h"
 #include "ash/public/cpp/wallpaper/wallpaper_info.h"
 #include "ash/public/cpp/wallpaper/wallpaper_types.h"
+#include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/style/color_util.h"
 #include "ash/style/dark_light_mode_controller_impl.h"
@@ -29,6 +30,7 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/user_manager/known_user.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/image/image_skia.h"
@@ -38,7 +40,8 @@ namespace ash {
 namespace {
 
 const char kUser[] = "user@gmail.com";
-const AccountId kAccountId = AccountId::FromUserEmailGaiaId(kUser, kUser);
+const AccountId kAccountId =
+    AccountId::FromUserEmailGaiaId(kUser, GaiaId("1111"));
 const style::mojom::ColorScheme kLocalColorScheme =
     style::mojom::ColorScheme::kVibrant;
 const style::mojom::ColorScheme kDefaultColorScheme =
@@ -163,8 +166,8 @@ TEST_F(ColorPaletteControllerTest, ExpectedEmptyValues) {
 TEST_F(ColorPaletteControllerTest,
        ExpectedColorScheme_TimeOfDay_UsesDefaultScheme) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      personalization_app::GetTimeOfDayEnabledFeatures(), {});
+  feature_list.InitWithFeatures(personalization_app::GetTimeOfDayFeatures(),
+                                {});
   EXPECT_EQ(kDefaultColorScheme,
             color_palette_controller()->GetColorScheme(kAccountId));
 }
@@ -613,6 +616,17 @@ TEST_F(ColorPaletteControllerTest, GetSampleColorSchemes_WithKMeans) {
                                   SkColorSetRGB(0xc8, 0xbf, 0xff))));
 }
 
+TEST_F(ColorPaletteControllerTest, OneNotificationOnActiveUserChange) {
+  TestObserver observer;
+  base::ScopedObservation<ui::NativeTheme, ui::NativeThemeObserver> observation(
+      &observer);
+  observation.Observe(ui::NativeTheme::GetInstanceForNativeUi());
+
+  SimulateUserLogin(kAccountId);
+
+  EXPECT_EQ(1, observer.call_count());
+}
+
 class ColorPaletteControllerLocalPrefTest : public ColorPaletteControllerTest {
  public:
   void SetUp() override {
@@ -757,8 +771,8 @@ TEST_F(ColorPaletteControllerLocalPrefTest,
 // color scheme is Neutral instead of TonalSpot in local_state.
 TEST_F(ColorPaletteControllerLocalPrefTest, NoLocalAccount_TimeOfDayScheme) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      personalization_app::GetTimeOfDayEnabledFeatures(), {});
+  feature_list.InitWithFeatures(personalization_app::GetTimeOfDayFeatures(),
+                                {});
   // Sets the current wallpaper to be ToD.
   WallpaperControllerTestApi wallpaper(wallpaper_controller());
   wallpaper.ShowWallpaperImage(CreateTimeOfDayWallpaperInfo(),

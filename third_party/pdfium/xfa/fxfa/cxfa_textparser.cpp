@@ -9,17 +9,17 @@
 #include <algorithm>
 #include <utility>
 
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/css/cfx_css.h"
 #include "core/fxcrt/css/cfx_csscomputedstyle.h"
 #include "core/fxcrt/css/cfx_cssdeclaration.h"
 #include "core/fxcrt/css/cfx_cssstyleselector.h"
 #include "core/fxcrt/css/cfx_cssstylesheet.h"
 #include "core/fxcrt/fx_codepage.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxcrt/xml/cfx_xmlelement.h"
 #include "core/fxcrt/xml/cfx_xmlnode.h"
 #include "core/fxge/fx_font.h"
-#include "third_party/base/check.h"
-#include "third_party/base/notreached.h"
 #include "xfa/fgas/font/cfgas_fontmgr.h"
 #include "xfa/fgas/font/cfgas_gefont.h"
 #include "xfa/fxfa/cxfa_ffapp.h"
@@ -135,7 +135,7 @@ RetainPtr<CFX_CSSComputedStyle> CXFA_TextParser::CreateRootStyle(
       case XFA_AttributeValue::Radix:
         break;
       default:
-        NOTREACHED_NORETURN();
+        NOTREACHED();
     }
     pStyle->SetTextAlign(hAlign);
     CFX_CSSRect rtMarginWidth;
@@ -151,7 +151,8 @@ RetainPtr<CFX_CSSComputedStyle> CXFA_TextParser::CreateRootStyle(
     pStyle->SetColor(font->GetColor());
     pStyle->SetFontStyle(font->IsItalic() ? CFX_CSSFontStyle::Italic
                                           : CFX_CSSFontStyle::Normal);
-    pStyle->SetFontWeight(font->IsBold() ? FXFONT_FW_BOLD : FXFONT_FW_NORMAL);
+    pStyle->SetFontWeight(font->IsBold() ? pdfium::kFontWeightBold
+                                         : pdfium::kFontWeightNormal);
     pStyle->SetNumberVerticalAlign(-font->GetBaselineShift());
     fFontSize = font->GetFontSize();
     CFX_CSSLength letterSpacing;
@@ -343,26 +344,31 @@ RetainPtr<CFGAS_GEFont> CXFA_TextParser::GetFont(
   CXFA_Font* font = pTextProvider->GetFontIfExists();
   if (font) {
     wsFamily = font->GetTypeface();
-    if (font->IsBold())
-      dwStyle |= FXFONT_FORCE_BOLD;
-    if (font->IsItalic())
-      dwStyle |= FXFONT_FORCE_BOLD;
+    if (font->IsBold()) {
+      dwStyle |= pdfium::kFontStyleForceBold;
+    }
+    if (font->IsItalic()) {
+      dwStyle |= pdfium::kFontStyleItalic;
+    }
   }
 
   if (pStyle) {
     std::optional<WideString> last_family = pStyle->GetLastFontFamily();
-    if (last_family.has_value())
+    if (last_family.has_value()) {
       wsFamily = last_family.value();
+    }
 
     dwStyle = 0;
-    if (pStyle->GetFontWeight() > FXFONT_FW_NORMAL)
-      dwStyle |= FXFONT_FORCE_BOLD;
-    if (pStyle->GetFontStyle() == CFX_CSSFontStyle::Italic)
-      dwStyle |= FXFONT_ITALIC;
+    if (pStyle->GetFontWeight() > pdfium::kFontWeightNormal) {
+      dwStyle |= pdfium::kFontStyleForceBold;
+    }
+    if (pStyle->GetFontStyle() == CFX_CSSFontStyle::Italic) {
+      dwStyle |= pdfium::kFontStyleItalic;
+    }
   }
 
   CXFA_FontMgr* pFontMgr = doc->GetApp()->GetXFAFontMgr();
-  return pFontMgr->GetFont(doc, std::move(wsFamily), dwStyle);
+  return pFontMgr->GetFont(doc, wsFamily, dwStyle);
 }
 
 float CXFA_TextParser::GetFontSize(CXFA_TextProvider* pTextProvider,

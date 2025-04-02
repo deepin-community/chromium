@@ -29,7 +29,6 @@
 #include "chrome/browser/ash/accessibility/automation_test_utils.h"
 #include "chrome/browser/ash/accessibility/fullscreen_magnifier_test_helper.h"
 #include "chrome/browser/ash/accessibility/magnification_manager.h"
-#include "chrome/browser/ash/accessibility/magnifier_animation_waiter.h"
 #include "chrome/browser/ash/accessibility/select_to_speak_test_utils.h"
 #include "chrome/browser/ash/accessibility/speech_monitor.h"
 #include "chrome/browser/profiles/profile.h"
@@ -55,6 +54,10 @@
 #include "url/url_constants.h"
 
 namespace ash {
+namespace {
+constexpr char kSpeechDurationMetric[] =
+    "Accessibility.CrosSelectToSpeak.SpeechDuration";
+}  // namespace
 
 class SelectToSpeakTest : public AccessibilityFeatureBrowserTest {
  public:
@@ -79,9 +82,13 @@ class SelectToSpeakTest : public AccessibilityFeatureBrowserTest {
     }
   }
 
+  void ExpectTotalSpeechDurationSamples(int expected_count) {
+    histogram_tester_.ExpectTotalCount(kSpeechDurationMetric, expected_count);
+  }
+
  protected:
-  SelectToSpeakTest() {}
-  ~SelectToSpeakTest() override {}
+  SelectToSpeakTest() = default;
+  ~SelectToSpeakTest() override = default;
 
   // Note that we do not enable Select to Speak in the SetUp method because
   // tests are less flaky if we load the page URL before loading up the
@@ -110,6 +117,7 @@ class SelectToSpeakTest : public AccessibilityFeatureBrowserTest {
   }
 
   test::SpeechMonitor sm_;
+  base::HistogramTester histogram_tester_;
   std::unique_ptr<ui::test::EventGenerator> generator_;
   std::unique_ptr<SystemTrayTestApi> tray_test_api_;
   std::unique_ptr<ExtensionConsoleErrorObserver> console_observer_;
@@ -235,17 +243,6 @@ class SelectToSpeakTestWithVoiceSwitching : public SelectToSpeakTest {
     prefs->SetBoolean(prefs::kAccessibilitySelectToSpeakVoiceSwitching, true);
     SelectToSpeakTest::SetUpOnMainThread();
   }
-};
-
-class SelectToSpeakTestWithMagnifierFollowing : public SelectToSpeakTest {
- public:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    scoped_feature_list_.InitAndEnableFeature(
-        ::features::kAccessibilityMagnifierFollowsSts);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, SpeakStatusTray) {
@@ -642,8 +639,8 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest,
   EXPECT_GT(final_window_position.y(), initial_window_position.y());
 }
 
-IN_PROC_BROWSER_TEST_F(SelectToSpeakTestWithMagnifierFollowing,
-                       FullscreenMagnifierFollowsTextBounds) {
+IN_PROC_BROWSER_TEST_F(SelectToSpeakTest,
+                       FullscreenMagnifierFollowsTextBoundsWhenPrefOn) {
   sm_.send_word_events_and_wait_to_finish(true);
   Profile* profile = AccessibilityManager::Get()->profile();
   // Turn off navigation controls as focus on these buttons changes magnifier
@@ -654,6 +651,10 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTestWithMagnifierFollowing,
   profile->GetPrefs()->SetBoolean(
       prefs::kAccessibilitySelectToSpeakNavigationControls, false);
 
+  // Set magnifier following STS Pref on
+  profile->GetPrefs()->SetBoolean(prefs::kAccessibilityMagnifierFollowsSts,
+                                  true);
+
   std::string text = "Read me first!";
   std::string second_text = "Read me last!";
   LoadURLAndSelectToSpeak(
@@ -662,8 +663,8 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTestWithMagnifierFollowing,
                          text.c_str(), second_text.c_str()));
   SelectNodeWithText(text);
 
-  // Set magnifier scale to something quite so that the initial bounds of the
-  // text are not within the magnifier bounds.
+  // Set magnifier scale to something quite big so that the initial bounds of
+  // the text are not within the magnifier bounds.
   profile->GetPrefs()->SetDouble(prefs::kAccessibilityScreenMagnifierScale,
                                  8.0);
 
@@ -831,6 +832,7 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest,
   ASSERT_TRUE(tray_test_api_->IsTrayBubbleOpen());
 }
 
+// TODO(anastasi): Test that metrics record duration here.
 IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, ReadsSelectedTextWithSearchS) {
   std::string text = "This is some selected text";
   LoadURLAndSelectToSpeak(base::StringPrintf(
@@ -844,6 +846,10 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, ReadsSelectedTextWithSearchS) {
   generator_->ReleaseKey(ui::VKEY_S, /*flags=*/0);
 
   sm_.ExpectSpeechPattern(text);
+  sm_.Call([this]() {
+    generator_->PressKey(ui::VKEY_CONTROL, /*flags=*/0);
+    generator_->ReleaseKey(ui::VKEY_CONTROL, /*flags=*/0);
+  });
   sm_.Replay();
 }
 
@@ -863,25 +869,14 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest,
 
   const std::string name = "Listen to selected text";
 
-  // If the EmbeddedA11yHelper in Lacros hasn't completed loading the helper
-  // extension, the context menu option won't be present. Keep trying until it
-  // is present. For users, it gets installed so quickly in Lacros that they
-  // won't see this type of behavior.
-  while (true) {
-    // Right-click the selected region.
-    generator_->PressRightButton();
-    generator_->ReleaseRightButton();
+  // Right-click the selected region.
+  generator_->PressRightButton();
+  generator_->ReleaseRightButton();
 
-    // Wait for the copy context menu item to be shown,
-    // this means the menu is displayed.
-    automation_test_utils_->GetNodeBoundsInRoot("Copy Ctrl+C", "menuItem");
-    if (automation_test_utils_->NodeExistsNoWait(name, "menuItem")) {
-      break;
-    }
-    // Close the menu and wait for the close to propagate.
-    generator_->PressAndReleaseKey(ui::VKEY_ESCAPE, /*flags=*/0);
-    automation_test_utils_->WaitForChildrenChangedEvent();
-  }
+  // Wait for the copy context menu item to be shown,
+  // this means the menu is displayed.
+  automation_test_utils_->GetNodeBoundsInRoot("Copy Ctrl+C", "menuItem");
+  ASSERT_TRUE(automation_test_utils_->NodeExistsNoWait(name, "menuItem"));
 
   // Click the Select to Speak menu item.
   gfx::Rect menu_item_bounds =

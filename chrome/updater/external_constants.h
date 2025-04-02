@@ -42,6 +42,9 @@ class ExternalConstants : public base::RefCountedThreadSafe<ExternalConstants> {
   // The URL to fetch device management policies.
   virtual GURL DeviceManagementURL() const = 0;
 
+  // The URL for the app logos.
+  virtual GURL AppLogoURL() const = 0;
+
   // True if client update protocol signing of update checks is enabled.
   virtual bool UseCUP() const = 0;
 
@@ -55,8 +58,8 @@ class ExternalConstants : public base::RefCountedThreadSafe<ExternalConstants> {
   // CRX format verification requirements.
   virtual crx_file::VerifierFormat CrxVerifierFormat() const = 0;
 
-  // Overrides for the `GroupPolicyManager`.
-  virtual base::Value::Dict GroupPolicies() const = 0;
+  // Policies for the `PolicyManager` surfaced by external constants.
+  virtual base::Value::Dict DictPolicies() const = 0;
 
   // Overrides the overinstall timeout.
   virtual base::TimeDelta OverinstallTimeout() const = 0;
@@ -67,8 +70,8 @@ class ExternalConstants : public base::RefCountedThreadSafe<ExternalConstants> {
   // Overrides machine management state.
   virtual std::optional<bool> IsMachineManaged() const = 0;
 
-  // True if the updater should request and apply diff updates.
-  virtual bool EnableDiffUpdates() const = 0;
+  // The maximum time allowed to establish a connection to CECA.
+  virtual base::TimeDelta CecaConnectionTimeout() const = 0;
 
  protected:
   friend class base::RefCountedThreadSafe<ExternalConstants>;

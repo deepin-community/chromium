@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/views/chrome_browser_main_extra_parts_views_linux.h"
 
-#include "base/metrics/histogram_macros.h"
 #include "chrome/browser/themes/theme_service_aura_linux.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/views/theme_profile_key.h"
@@ -18,7 +17,7 @@
 #include "ui/native_theme/native_theme.h"
 #include "ui/ozone/public/ozone_platform.h"
 
-#if defined(USE_DBUS)
+#if BUILDFLAG(USE_DBUS)
 #include "chrome/browser/ui/views/dark_mode_manager_linux.h"
 #endif
 
@@ -56,11 +55,7 @@ void ChromeBrowserMainExtraPartsViewsLinux::ToolkitInitialized() {
     // implementation). Start observing them once it's initialized.
     ui::CursorFactory::GetInstance()->ObserveThemeChanges();
   }
-  if (auto* linux_ui_theme = ui::GetDefaultLinuxUiTheme()) {
-    UMA_HISTOGRAM_ENUMERATION("Linux.SystemTheme.Default",
-                              linux_ui_theme->GetNativeTheme()->system_theme());
-  }
-#if defined(USE_DBUS)
+#if BUILDFLAG(USE_DBUS)
   dark_mode_manager_ = std::make_unique<ui::DarkModeManagerLinux>();
 #endif
 }

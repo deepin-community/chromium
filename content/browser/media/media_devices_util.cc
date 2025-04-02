@@ -91,8 +91,6 @@ MediaDeviceType ConvertToMediaDeviceType(MediaStreamType stream_type) {
     default:
       NOTREACHED();
   }
-
-  return MediaDeviceType::kNumMediaDeviceTypes;
 }
 
 }  // namespace

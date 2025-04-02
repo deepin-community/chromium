@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "extensions/common/extension_features.h"
+
 #include "base/feature_list.h"
 
 namespace extensions_features {
@@ -10,6 +11,10 @@ namespace extensions_features {
 ///////////////////////////////////////////////////////////////////////////////
 // API Features
 ///////////////////////////////////////////////////////////////////////////////
+
+BASE_FEATURE(kApiActionOpenPopup,
+             "ApiActionOpenPopup",
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kApiContentSettingsClipboard,
              "ApiContentSettingsClipboard",
@@ -19,20 +24,28 @@ BASE_FEATURE(kApiEnterpriseKioskInput,
              "ApiEnterpriseKioskInput",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kApiReadingList,
-             "ApiReadingList",
+BASE_FEATURE(kApiRuntimeActionData,
+             "ApiRuntimeActionData",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kApiPermissionsHostAccessRequests,
+             "ApiPermissionsHostAccessRequests",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kApiUserScripts,
-             "ApiUserScripts",
+BASE_FEATURE(kApiUserScriptsExecute,
+             "ApiUserScriptsExecute",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kApiUserScriptsMultipleWorlds,
+             "ApiUserScriptsMultipleWorlds",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kApiOdfsConfigPrivate,
              "ApiOdfsConfigPrivate",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kRestrictFileURLNavigation,
-             "RestrictFileURLNavigation",
+BASE_FEATURE(kApiEnterpriseReportingPrivateReportDataMaskingEvent,
+             "ApiEnterpriseReportingPrivateReportDataMaskingEvent",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -41,17 +54,9 @@ BASE_FEATURE(kRestrictFileURLNavigation,
 
 // For historical reasons, this includes some APIs. Please don't add more.
 
-BASE_FEATURE(kAllowSharedArrayBuffersUnconditionally,
-             "AllowSharedArrayBuffersUnconditionally",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kAllowWithholdingExtensionPermissionsOnInstall,
              "AllowWithholdingExtensionPermissionsOnInstall",
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kAvoidEarlyExtensionScriptContextCreation,
-             "AvoidEarlyExtensionScriptContextCreation",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kCheckingNoExtensionIdInExtensionIpcs,
              "EMF_NO_EXTENSION_ID_FOR_EXTENSION_SOURCE",
@@ -59,15 +64,44 @@ BASE_FEATURE(kCheckingNoExtensionIdInExtensionIpcs,
 
 BASE_FEATURE(kEnableWebHidInWebView,
              "EnableWebHidInWebView",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionDisableUnsupportedDeveloper,
+             "ExtensionDisableUnsupportedDeveloper",
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kExtensionDynamicURLRedirection,
              "ExtensionDynamicURLRedirection",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionIconVariants,
+             "ExtensionIconVariants",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kExtensionSidePanelIntegration,
-             "ExtensionSidePanelIntegration",
+BASE_FEATURE(kExtensionManifestV2DeprecationWarning,
+             "ExtensionManifestV2DeprecationWarning",
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionManifestV2Unsupported,
+             "ExtensionManifestV2Unsupported",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionManifestV2ExceptionList,
+             "ExtensionManifestV2ExceptionList",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionManifestV2Disabled,
+             "ExtensionManifestV2Disabled",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+const base::FeatureParam<std::string> kExtensionManifestV2ExceptionListParam(
+    &kExtensionManifestV2ExceptionList,
+    /*name=*/"mv2_exception_list",
+    /*default_value=*/"");
+
+BASE_FEATURE(kAllowLegacyMV2Extensions,
+             "AllowLegacyMV2Extensions",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kExtensionSourceUrlEnforcement,
              "ExtensionSourceUrlEnforcement",
@@ -89,6 +123,10 @@ BASE_FEATURE(kExtensionsMenuAccessControlWithPermittedSites,
              "ExtensionsMenuAccessControlWithPermittedSitesName",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kExtensionsToolbarZeroState,
+             "ExtensionsToolbarZeroState",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kForceWebRequestProxyForTest,
              "ForceWebRequestProxyForTest",
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -97,21 +135,9 @@ BASE_FEATURE(kLaunchWindowsNativeHostsDirectly,
              "LaunchWindowsNativeHostsDirectly",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kNewExtensionFaviconHandling,
-             "ExtensionsNewFaviconHandling",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kNewWebstoreDomain,
-             "NewWebstoreDomain",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 // To investigate signal beacon loss in crrev.com/c/2262402.
 BASE_FEATURE(kReportKeepaliveUkm,
              "ReportKeepaliveUkm",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kRestrictDeveloperModeAPIs,
-             "RestrictDeveloperModeAPIs",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSafeBrowsingCrxAllowlistAutoDisable,
@@ -130,22 +156,6 @@ BASE_FEATURE(kTelemetryExtensionPendingApprovalApi,
              "TelemetryExtensionPendingApprovalApi",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kUsePerBrowserContextWebRequestEventRouter,
-             "kUsePerBrowserContextWebRequestEventRouter",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kWebviewTagMPArchBehavior,
-             "WebviewTagMPArchBehavior",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kExtensionsZipFileInstalledInProfileDir,
-             "ExtensionsZipFileInstalledInProfileDir",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kExtensionsServiceWorkerOptimizedEventDispatch,
-             "ExtensionsServiceWorkerOptimizedEventDispatch",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 BASE_FEATURE(kNewWebstoreURL,
              "NewWebstoreURL",
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -154,8 +164,40 @@ BASE_FEATURE(kDeclarativeNetRequestSafeRuleLimits,
              "DeclarativeNetRequestSafeDynamicRules",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kExperimentalOmniboxLabs,
+             "ExperimentalOmniboxLabs",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kDeclarativeNetRequestResponseHeaderMatching,
              "DeclarativeNetRequestResponseHeaderMatching",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kIncludeJSCallStackInExtensionApiRequest,
+             "IncludeJSCallStackInExtensionApiRequest",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kUseItemSnippetsAPI,
+             "UseItemSnippetsAPI",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kUseNewServiceWorkerTaskQueue,
+             "UseNewServiceWorkerTaskQueue",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kDeclarativeNetRequestHeaderSubstitution,
+             "DeclarativeNetRequestHeaderSubstitution",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSilentDebuggerExtensionAPI,
+             "SilentDebuggerExtensionAPI",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kRemoveCoreSiteInstance,
+             "RemoveCoreSiteInstance",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kUserScriptUserExtensionToggle,
+             "UserScriptUserExtensionToggle",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace extensions_features

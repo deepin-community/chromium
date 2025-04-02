@@ -4,6 +4,7 @@
 
 #include "media/filters/memory_data_source.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "base/containers/span.h"
@@ -11,7 +12,6 @@
 #include "base/functional/callback.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
-#include "base/ranges/algorithm.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -26,10 +26,10 @@ class MemoryDataSourceTest : public ::testing::Test {
 
  protected:
   void Initialize(size_t size) {
-    data_.assign(size, 0);
-    base::RandBytes(data_.data(), size);
+    data_.assign(size, 0u);
+    base::RandBytes(data_);
     memory_data_source_ =
-        std::make_unique<MemoryDataSource>(data_.data(), size);
+        std::make_unique<MemoryDataSource>(data_.data(), data_.size());
     EXPECT_EQ(size, GetSize());
   }
 
@@ -45,10 +45,11 @@ class MemoryDataSourceTest : public ::testing::Test {
         base::BindOnce(&MemoryDataSourceTest::ReadCB, base::Unretained(this)));
 
     if (expected_read_size != DataSource::kReadError) {
-      size_t positive_expected_size =
+      const size_t positive_expected_size =
           base::checked_cast<size_t>(expected_read_size);
-      EXPECT_TRUE(base::ranges::equal(
-          base::span(data_).subspan(position, positive_expected_size),
+      EXPECT_TRUE(std::ranges::equal(
+          base::span(data_).subspan(base::checked_cast<size_t>(position),
+                                    positive_expected_size),
           base::span(data).first(positive_expected_size)));
     }
   }

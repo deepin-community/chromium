@@ -4,8 +4,8 @@
 
 #include "components/device_signals/core/system_signals/win/wmi_client_impl.h"
 
-#include <wbemidl.h>
 #include <windows.h>
+
 #include <wrl/client.h>
 
 #include <algorithm>
@@ -20,6 +20,7 @@
 #include "base/win/com_init_util.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_variant.h"
+#include "base/win/wbemidl_shim.h"
 #include "base/win/windows_version.h"
 #include "base/win/wmi.h"
 

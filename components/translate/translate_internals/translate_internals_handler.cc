@@ -6,6 +6,7 @@
 
 #include <map>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -32,7 +33,6 @@ TranslateInternalsHandler::TranslateInternalsHandler() {
       translate::TranslateDownloadManager::GetInstance()->language_list();
   if (!language_list) {
     NOTREACHED();
-    return;
   }
 
   error_subscription_ =
@@ -184,8 +184,7 @@ void TranslateInternalsHandler::OnRemovePrefItem(
     if (!args[2].is_string())
       return;
     const std::string& from = args[1].GetString();
-    const std::string& to = args[2].GetString();
-    translate_prefs->RemoveLanguagePairFromAlwaysTranslateList(from, to);
+    translate_prefs->RemoveLanguagePairFromAlwaysTranslateList(from);
   } else {
     return;
   }
@@ -225,7 +224,7 @@ void TranslateInternalsHandler::OnRequestInfo(
 }
 
 void TranslateInternalsHandler::SendMessageToJs(
-    base::StringPiece message,
+    std::string_view message,
     const base::Value::Dict& value) {
   const char func[] = "cr.webUIListenerCallback";
   base::Value message_data(message);

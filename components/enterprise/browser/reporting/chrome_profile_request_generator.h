@@ -25,7 +25,6 @@ class ChromeProfileRequestGenerator {
   using ReportCallback = base::OnceCallback<void(ReportRequestQueue)>;
 
   ChromeProfileRequestGenerator(const base::FilePath& profile_path,
-                                const std::string& profile_name,
                                 ReportingDelegateFactory* delegate_factory);
   ChromeProfileRequestGenerator(const ChromeProfileRequestGenerator&) = delete;
   ChromeProfileRequestGenerator& operator=(
@@ -35,6 +34,9 @@ class ChromeProfileRequestGenerator {
 
   virtual void Generate(ReportCallback callback);
 
+  void ToggleExtensionReport(
+      ProfileReportGenerator::ExtensionsEnabledCallback callback);
+
  private:
   void OnBrowserReportReady(
       std::unique_ptr<ReportRequest> request,
@@ -42,7 +44,6 @@ class ChromeProfileRequestGenerator {
       std::unique_ptr<enterprise_management::BrowserReport> browser_report);
 
   const base::FilePath profile_path_;
-  const std::string profile_name_;
 
   BrowserReportGenerator browser_report_generator_;
   ProfileReportGenerator profile_report_generator_;

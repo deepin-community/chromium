@@ -45,14 +45,17 @@
 
 namespace blink {
 
+class AnchorPositionScrollData;
 class BlockBreakToken;
 class ColumnSpannerPath;
 class ConstraintSpace;
 class CustomLayoutChild;
 class EarlyBreak;
+class Element;
 class LayoutMultiColumnSpannerPlaceholder;
 class LayoutResult;
 class MeasureCache;
+class PhysicalBoxFragment;
 class ShapeOutsideInfo;
 class WritingModeConverter;
 enum class LayoutCacheStatus;
@@ -208,13 +211,6 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
     NOT_DESTROYED();
     return false;
   }
-
-  // Returns whether this object needs a scroll paint property tree node.
-  bool NeedsScrollNode(CompositingReasons direct_compositing_reasons) const;
-
-  // Returns true if this LayoutBox has a scroll paint property node and the
-  // node is currently composited in cc.
-  bool UsesCompositedScrolling() const;
 
   // Use this with caution! No type checking is done!
   LayoutBox* FirstChildBox() const;
@@ -395,7 +391,6 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
 
   PhysicalBoxStrut ComputeVisualEffectOverflowOutsets();
 
-  void ClearScrollableOverflow();
   void ClearVisualOverflow();
 
   bool CanUseFragmentsForVisualOverflow() const;
@@ -448,39 +443,10 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
                                                 : ContentWidth();
   }
 
-  bool ShouldUseAutoIntrinsicSize() const;
   // CSS intrinsic sizing getters.
   // https://drafts.csswg.org/css-sizing-4/#intrinsic-size-override
-  // Physical:
-  bool HasOverrideIntrinsicContentWidth() const;
-  bool HasOverrideIntrinsicContentHeight() const;
-  LayoutUnit OverrideIntrinsicContentWidth() const;
-  LayoutUnit OverrideIntrinsicContentHeight() const;
-  // Logical:
-  bool HasOverrideIntrinsicContentLogicalWidth() const {
-    NOT_DESTROYED();
-    return StyleRef().IsHorizontalWritingMode()
-               ? HasOverrideIntrinsicContentWidth()
-               : HasOverrideIntrinsicContentHeight();
-  }
-  bool HasOverrideIntrinsicContentLogicalHeight() const {
-    NOT_DESTROYED();
-    return StyleRef().IsHorizontalWritingMode()
-               ? HasOverrideIntrinsicContentHeight()
-               : HasOverrideIntrinsicContentWidth();
-  }
-  LayoutUnit OverrideIntrinsicContentLogicalWidth() const {
-    NOT_DESTROYED();
-    return StyleRef().IsHorizontalWritingMode()
-               ? OverrideIntrinsicContentWidth()
-               : OverrideIntrinsicContentHeight();
-  }
-  LayoutUnit OverrideIntrinsicContentLogicalHeight() const {
-    NOT_DESTROYED();
-    return StyleRef().IsHorizontalWritingMode()
-               ? OverrideIntrinsicContentHeight()
-               : OverrideIntrinsicContentWidth();
-  }
+  LayoutUnit OverrideIntrinsicContentInlineSize() const;
+  LayoutUnit OverrideIntrinsicContentBlockSize() const;
 
   // Returns element-native intrinsic size. Returns kIndefiniteSize if no such
   // size.
@@ -569,8 +535,9 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
     return MarginBoxOutsets().right;
   }
 
-  void AbsoluteQuads(Vector<gfx::QuadF>&,
-                     MapCoordinatesFlags mode = 0) const override;
+  void QuadsInAncestorInternal(Vector<gfx::QuadF>&,
+                               const LayoutBoxModelObject* ancestor,
+                               MapCoordinatesFlags) const override;
   gfx::RectF LocalBoundingBoxRectForAccessibility() const override;
 
   void LayoutSubtreeRoot();
@@ -709,13 +676,15 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
       using pointer = PhysicalBoxFragment*;
       using reference = PhysicalBoxFragment&;
 
+      constexpr Iterator() = default;
       explicit Iterator(const LayoutResultList::const_iterator& iterator)
           : iterator_(iterator) {}
 
       const PhysicalBoxFragment& operator*() const;
 
       Iterator& operator++() {
-        ++iterator_;
+        // TODO(crbug.com/351564777): Resolve a buffer safety issue.
+        UNSAFE_TODO(++iterator_);
         return *this;
       }
       Iterator operator++(int) {
@@ -782,8 +751,6 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
   LayoutUnit ContainingBlockLogicalHeightForRelPositioned() const;
 
   LayoutUnit ContainingBlockLogicalWidthForContent() const override;
-
-  bool AutoWidthShouldFitContent() const;
 
   // Block flows subclass availableWidth/Height to handle multi column layout
   // (shrinking the width/height available to children when laying out.)
@@ -861,23 +828,13 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
     return HasNonVisibleOverflow() && StyleRef().ScrollsOverflowY();
   }
 
-  // Elements such as the <input> field override this to specify that they are
-  // scrollable outside the context of the CSS overflow style
-  virtual bool IsIntrinsicallyScrollable(
-      ScrollbarOrientation orientation) const {
-    NOT_DESTROYED();
-    return false;
-  }
-
   // Return true if this box is monolithic, i.e. unbreakable in a fragmentation
   // context.
   virtual bool IsMonolithic() const;
 
   bool HasUnsplittableScrollingOverflow() const;
 
-  PhysicalRect LocalCaretRect(
-      int caret_offset,
-      LayoutUnit* extra_width_to_end_of_line = nullptr) const override;
+  PhysicalRect LocalCaretRect(int caret_offset) const override;
 
   // Returns the intersection of all overflow clips which apply.
   virtual PhysicalRect OverflowClipRect(
@@ -915,15 +872,13 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
 
   bool IsCustomItem() const;
 
-  // TODO(1229581): Rename this function.
-  bool IsFlexItemIncludingNG() const {
+  bool IsFlexItem() const {
     NOT_DESTROYED();
     return !IsInline() && !IsOutOfFlowPositioned() && Parent() &&
            Parent()->IsFlexibleBox();
   }
 
-  // TODO(1229581): Rename this function.
-  bool IsGridItemIncludingNG() const {
+  bool IsGridItem() const {
     NOT_DESTROYED();
     return Parent() && Parent()->IsLayoutGrid();
   }
@@ -949,8 +904,9 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
     NOT_DESTROYED();
     // The offset is in the block direction (y for horizontal writing modes, x
     // for vertical writing modes).
-    if (LIKELY(!HasFlippedBlocksWritingMode()))
+    if (!HasFlippedBlocksWritingMode()) [[likely]] {
       return position;
+    }
     DCHECK(!IsHorizontalWritingMode());
     return Size().width - (position + width);
   }
@@ -982,6 +938,13 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
     NOT_DESTROYED();
     return ScrollableOverflowIsSet();
   }
+
+  // Returns true if reading flow should be used on this LayoutBox's content.
+  // https://drafts.csswg.org/css-display-4/#reading-flow
+  bool IsReadingFlowContainer() const;
+  // Returns the nodes corresponding to this LayoutBox's layout children,
+  // sorted in reading flow if IsReadingFlowContainer().
+  const HeapVector<Member<Node>>& ReadingFlowNodes() const;
 
   // See README.md for an explanation of scroll origin.
   gfx::Vector2d OriginAdjustmentForScrollbars() const;
@@ -1038,7 +1001,6 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
       const LayoutObject*) const {
     NOT_DESTROYED();
     NOTREACHED();
-    return nullptr;
   }
 
   ShapeOutsideInfo* GetShapeOutsideInfo() const;
@@ -1150,7 +1112,6 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
   MinMaxSizesResult CachedIndefiniteIntrinsicLogicalWidths() const {
     NOT_DESTROYED();
     DCHECK(!IntrinsicLogicalWidthsDirty());
-    DCHECK(!IntrinsicLogicalWidthsChildDependsOnBlockConstraints());
     return {intrinsic_logical_widths_,
             IntrinsicLogicalWidthsDependsOnBlockConstraints()};
   }
@@ -1180,21 +1141,17 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
 
   // Sets the min/max sizes for this box.
   void SetIntrinsicLogicalWidths(LayoutUnit initial_block_size,
-                                 bool depends_on_block_constraints,
-                                 bool child_depends_on_block_constraints,
-                                 const MinMaxSizes& sizes) {
+                                 const MinMaxSizesResult& result) {
     NOT_DESTROYED();
     // Write to the "indefinite" cache slot if:
     //  - If the initial block-size is indefinite.
     //  - If we don't have any children which depend on the initial block-size
     //    (it can change and we wouldn't give a different answer).
     if (initial_block_size == kIndefiniteSize ||
-        !child_depends_on_block_constraints) {
-      intrinsic_logical_widths_ = sizes;
+        !result.depends_on_block_constraints) {
+      intrinsic_logical_widths_ = result.sizes;
       SetIntrinsicLogicalWidthsDependsOnBlockConstraints(
-          depends_on_block_constraints);
-      SetIntrinsicLogicalWidthsChildDependsOnBlockConstraints(
-          child_depends_on_block_constraints);
+          result.depends_on_block_constraints);
       SetIndefiniteIntrinsicLogicalWidthsDirty(false);
     } else {
       if (!min_max_sizes_cache_) {
@@ -1202,8 +1159,8 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
       } else if (DefiniteIntrinsicLogicalWidthsDirty()) {
         min_max_sizes_cache_->Clear();
       }
-      min_max_sizes_cache_->Add(sizes, initial_block_size,
-                                depends_on_block_constraints);
+      min_max_sizes_cache_->Add(result.sizes, initial_block_size,
+                                result.depends_on_block_constraints);
       SetDefiniteIntrinsicLogicalWidthsDirty(false);
     }
     ClearIntrinsicLogicalWidthsDirty();
@@ -1245,6 +1202,7 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
   // See StickyPositionScrollingConstraints::constraining_rect.
   PhysicalRect ComputeStickyConstrainingRect() const;
 
+  AnchorPositionScrollData* GetAnchorPositionScrollData() const;
   bool NeedsAnchorPositionScrollAdjustment() const;
   PhysicalOffset AnchorPositionScrollTranslationOffset() const;
 
@@ -1264,13 +1222,18 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
   // https://drafts.csswg.org/css-anchor-position-1/#ref-for-valdef-anchor-implicit
   const LayoutObject* AcceptableImplicitAnchor() const;
 
-  // Returns position fallback results for anchor positioned element.
-  std::optional<wtf_size_t> PositionFallbackIndex() const;
-  const Vector<NonOverflowingScrollRange>*
-  PositionFallbackNonOverflowingRanges() const;
+  const HeapVector<NonOverflowingScrollRange>* NonOverflowingScrollRanges()
+      const;
 
   const BoxStrut& OutOfFlowInsetsForGetComputedStyle() const;
 
+  Element* AccessibilityAnchor() const;
+  const HeapHashSet<Member<Element>>* DisplayLocksAffectedByAnchors() const;
+  void NotifyContainingDisplayLocksForAnchorPositioning(
+      const HeapHashSet<Member<Element>>*
+          past_display_locks_affected_by_anchors,
+      const HeapHashSet<Member<Element>>* display_locks_affected_by_anchors)
+      const;
   bool NeedsAnchorPositionScrollAdjustmentInX() const;
   bool NeedsAnchorPositionScrollAdjustmentInY() const;
 
@@ -1324,8 +1287,6 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
 
   static bool SkipContainingBlockForPercentHeightCalculation(
       const LayoutBox* containing_block);
-
-  PhysicalRect LocalVisualRectIgnoringVisibility() const override;
 
   virtual LayoutPoint LocationInternal() const {
     NOT_DESTROYED();
@@ -1430,8 +1391,10 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
     NOT_DESTROYED();
     DCHECK_EQ(container_box, LocationContainer());
     LayoutPoint location = LocationInternal();
-    if (LIKELY(!container_box || !container_box->HasFlippedBlocksWritingMode()))
+    if (!container_box || !container_box->HasFlippedBlocksWritingMode())
+        [[likely]] {
       return PhysicalOffset(location);
+    }
 
     return PhysicalOffset(
         container_box->Size().width - Size().width - location.X(),

@@ -4,22 +4,24 @@
 
 #include "src/heap/index-generator.h"
 
+#include <optional>
+
 namespace v8 {
 namespace internal {
 
 IndexGenerator::IndexGenerator(size_t size) : first_use_(size > 0) {
   if (size == 0) return;
-  base::MutexGuard guard(&lock_);
+  base::SpinningMutexGuard guard(&lock_);
   ranges_to_split_.emplace(0, size);
 }
 
-base::Optional<size_t> IndexGenerator::GetNext() {
-  base::MutexGuard guard(&lock_);
+std::optional<size_t> IndexGenerator::GetNext() {
+  base::SpinningMutexGuard guard(&lock_);
   if (first_use_) {
     first_use_ = false;
     return 0;
   }
-  if (ranges_to_split_.empty()) return base::nullopt;
+  if (ranges_to_split_.empty()) return std::nullopt;
 
   // Split the oldest running range in 2 and return the middle index as
   // starting point.

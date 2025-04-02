@@ -4,7 +4,9 @@
 
 #include "media/gpu/chromeos/video_frame_resource.h"
 
+#include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/types/pass_key.h"
 #include "media/gpu/chromeos/platform_video_frame_utils.h"
 
 namespace media {
@@ -14,10 +16,9 @@ scoped_refptr<VideoFrameResource> VideoFrameResource::Create(
   if (!frame) {
     return nullptr;
   }
-  // Uses WrapRefCounted since MakeRefCounted cannot access a private
-  // constructor.
-  return base::WrapRefCounted<VideoFrameResource>(
-      new VideoFrameResource(std::move(frame)));
+
+  return base::MakeRefCounted<VideoFrameResource>(
+      base::PassKey<VideoFrameResource>(), std::move(frame));
 }
 
 scoped_refptr<const VideoFrameResource> VideoFrameResource::CreateConst(
@@ -27,12 +28,13 @@ scoped_refptr<const VideoFrameResource> VideoFrameResource::CreateConst(
   }
   // Uses WrapRefCounted since MakeRefCounted cannot access a private
   // constructor.
-  return base::WrapRefCounted<const VideoFrameResource>(
-      new VideoFrameResource(std::move(frame)));
+  return base::MakeRefCounted<const VideoFrameResource>(
+      base::PassKey<VideoFrameResource>(), std::move(frame));
 }
 
-VideoFrameResource::VideoFrameResource(scoped_refptr<const VideoFrame> frame)
-    : FrameResource(), frame_(std::move(frame)) {
+VideoFrameResource::VideoFrameResource(base::PassKey<VideoFrameResource>,
+                                       scoped_refptr<const VideoFrame> frame)
+    : frame_(std::move(frame)) {
   CHECK(frame_);
 }
 
@@ -70,8 +72,8 @@ int VideoFrameResource::GetDmabufFd(size_t i) const {
   return frame_->GetDmabufFd(i);
 }
 
-scoped_refptr<gfx::NativePixmapDmaBuf>
-VideoFrameResource::CreateNativePixmapDmaBuf() const {
+scoped_refptr<const gfx::NativePixmapDmaBuf>
+VideoFrameResource::GetNativePixmapDmaBuf() const {
   return media::CreateNativePixmapDmaBuf(frame_.get());
 }
 
@@ -80,12 +82,9 @@ gfx::GpuMemoryBufferHandle VideoFrameResource::CreateGpuMemoryBufferHandle()
   return media::CreateGpuMemoryBufferHandle(frame_.get());
 }
 
-gfx::GpuMemoryBuffer* VideoFrameResource::GetGpuMemoryBuffer() const {
-  return frame_->GetGpuMemoryBuffer();
-}
-
-gfx::GenericSharedMemoryId VideoFrameResource::GetSharedMemoryId() const {
-  return media::GetSharedMemoryId(*frame_);
+std::unique_ptr<VideoFrame::ScopedMapping>
+VideoFrameResource::MapGMBOrSharedImage() const {
+  return frame_->MapGMBOrSharedImage();
 }
 
 const VideoFrameLayout& VideoFrameResource::layout() const {
@@ -138,16 +137,6 @@ void VideoFrameResource::set_hdr_metadata(
   GetMutableVideoFrame()->set_hdr_metadata(hdr_metadata);
 }
 
-const std::optional<gpu::VulkanYCbCrInfo>& VideoFrameResource::ycbcr_info()
-    const {
-  return frame_->ycbcr_info();
-}
-
-void VideoFrameResource::set_ycbcr_info(
-    const std::optional<gpu::VulkanYCbCrInfo>& ycbcr_info) {
-  GetMutableVideoFrame()->set_ycbcr_info(ycbcr_info);
-}
-
 const VideoFrameMetadata& VideoFrameResource::metadata() const {
   return frame_->metadata();
 }
@@ -158,6 +147,12 @@ VideoFrameMetadata& VideoFrameResource::metadata() {
 
 void VideoFrameResource::set_metadata(const VideoFrameMetadata& metadata) {
   GetMutableVideoFrame()->set_metadata(metadata);
+}
+
+const base::UnguessableToken& VideoFrameResource::tracking_token() const {
+  CHECK(metadata().tracking_token.has_value());
+  CHECK(!metadata().tracking_token->is_empty());
+  return *metadata().tracking_token;
 }
 
 base::TimeDelta VideoFrameResource::timestamp() const {
@@ -175,12 +170,28 @@ void VideoFrameResource::AddDestructionObserver(base::OnceClosure callback) {
 scoped_refptr<FrameResource> VideoFrameResource::CreateWrappingFrame(
     const gfx::Rect& visible_rect,
     const gfx::Size& natural_size) {
-  return Create(VideoFrame::WrapVideoFrame(GetMutableVideoFrame(), format(),
-                                           visible_rect, natural_size));
+  auto wrapping_frame = Create(VideoFrame::WrapVideoFrame(
+      GetMutableVideoFrame(), format(), visible_rect, natural_size));
+  if (!wrapping_frame) {
+    return nullptr;
+  }
+
+  // Adds a reference to |this| from the wrapping frame via a destruction
+  // observer. This avoids destroying the original frame before the wrapping
+  // frame has been destroyed.
+  wrapping_frame->AddDestructionObserver(base::DoNothingWithBoundArgs(
+      base::WrapRefCounted<VideoFrameResource>(this)));
+
+  return wrapping_frame;
 }
 
 std::string VideoFrameResource::AsHumanReadableString() const {
   return frame_->AsHumanReadableString();
+}
+
+gfx::GpuMemoryBufferHandle
+VideoFrameResource::GetGpuMemoryBufferHandleForTesting() const {
+  return frame_->GetGpuMemoryBufferHandle();
 }
 
 scoped_refptr<VideoFrame> VideoFrameResource::GetMutableVideoFrame() {

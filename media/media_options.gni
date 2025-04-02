@@ -50,6 +50,11 @@ declare_args() {
   # decoding of VP9 and VP8A type content.
   media_use_libvpx = true
 
+  # Enables the use of OpenSLES on Android.
+  # Should not be disabled for versions of Android before Q, since we only
+  # support AAudio on level 29 and above.
+  media_use_opensles = true
+
   # non-blink builds doesn't use ffmpeg, libvpx.
   if (!use_blink) {
     media_use_ffmpeg = false
@@ -112,7 +117,7 @@ declare_args() {
   enable_media_drm_storage = is_android || is_castos
 
   # Enable HLS manifest parser and demuxer.
-  enable_hls_demuxer = proprietary_codecs && is_android
+  enable_hls_demuxer = proprietary_codecs
 
   # Enable inclusion of the HEVC/H265 parser and also enable HEVC/H265 decoding
   # with hardware acceleration assist. Enabled by default for fuzzer builds,
@@ -124,6 +129,11 @@ declare_args() {
   # Enable inclusion of VVC/H.266 parser/demuxer, and also enable VVC/H.266 decoding
   # with hardware acceleration provided by platform. Disabled by default for all builds.
   enable_platform_vvc = false
+
+  # Determines if a GpuChannel is needed between media capture utility process
+  # and gpu process for a given platform.
+  enable_gpu_channel_media_capture = is_linux || is_win || is_chromeos_ash ||
+                                     is_apple || is_android || is_fuchsia
 }
 
 # Use another declare_args() to allow dependence on args defined above.
@@ -146,9 +156,11 @@ declare_args() {
 }
 
 declare_args() {
-  platform_has_optional_hevc_support =
+  platform_has_optional_hevc_decode_support =
       enable_platform_hevc &&
       (is_win || is_chromeos || is_linux || is_apple || is_android)
+  platform_has_optional_hevc_encode_support =
+      enable_platform_hevc && (is_win || is_apple || is_android)
 }
 
 assert(!enable_hls_demuxer || enable_mse_mpeg2ts_stream_parser,
@@ -205,7 +217,7 @@ declare_args() {
     # ASAN and TSAN will occasionally hang during pa_context_connect(), so we
     # disable PulseAudio when these configurations are enabled.
     #
-    # TODO(crbug.com/986021): We shouldn't have to do this, but it's unclear why
+    # TODO(crbug.com/40636948): We shouldn't have to do this, but it's unclear why
     # our test bots are hanging and all of the ones that don't hang just fall
     # back to ALSA after a connection error anyways.
     if (!use_cras && !is_castos && !is_asan && !is_tsan) {
@@ -221,7 +233,8 @@ declare_args() {
   # This flag gives the option to override that decision in case there are no
   # hardware decoders. To do so, you will also need to update ffmpeg build files
   # in order to define which decoders to build in.
-  enable_ffmpeg_video_decoders = media_use_ffmpeg && !is_android
+  enable_ffmpeg_video_decoders =
+      media_use_ffmpeg && (!is_android || current_cpu != "arm")
 }
 
 declare_args() {
@@ -279,12 +292,6 @@ if (is_cast_media_device) {
 } else if (is_apple || is_win) {
   _default_mojo_media_services = [
     "audio_decoder",
-    "audio_encoder",
-    "video_decoder",
-  ]
-  _default_mojo_media_host = "gpu"
-} else if (is_win) {
-  _default_mojo_media_services = [
     "audio_encoder",
     "video_decoder",
   ]
@@ -352,7 +359,7 @@ media_subcomponent_deps = [
   "//media/audio",
   "//media/base",
 
-  # TODO(crbug.com/583067): These files should not be in //media/base.
+  # TODO(crbug.com/41237623): These files should not be in //media/base.
   "//media/base/android",
   "//media/capabilities",
   "//media/cdm",
@@ -360,6 +367,7 @@ media_subcomponent_deps = [
   "//media/filters",
   "//media/formats",
   "//media/muxers",
+  "//media/parsers",
   "//media/renderers",
   "//media/video",
 ]

@@ -26,6 +26,7 @@
 #include "third_party/blink/renderer/core/dom/attr.h"
 #include "third_party/blink/renderer/core/dom/attribute.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/events/keyboard_event.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
@@ -77,8 +78,6 @@ void SVGAElement::SvgAttributeChanged(const SvgAttributeChangedParams& params) {
   // SVGURIReference changes as none of the other properties changes the linking
   // behaviour for our <a> element.
   if (SVGURIReference::IsKnownAttribute(params.name)) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
-
     bool was_link = IsLink();
     SetIsLink(!HrefString().IsNull());
 
@@ -144,7 +143,7 @@ void SVGAElement::DefaultEventHandler(Event& event) {
         return;
       }
       frame_request.SetNavigationPolicy(navigation_policy);
-      frame_request.SetClientRedirectReason(
+      frame_request.SetClientNavigationReason(
           ClientNavigationReason::kAnchorClick);
       frame_request.SetSourceElement(this);
       frame_request.SetTriggeringEventInfo(
@@ -169,6 +168,20 @@ void SVGAElement::DefaultEventHandler(Event& event) {
   SVGGraphicsElement::DefaultEventHandler(event);
 }
 
+Element* SVGAElement::interestTargetElement() {
+  if (!RuntimeEnabledFeatures::HTMLInterestTargetAttributeEnabled()) {
+    return nullptr;
+  }
+  // Anchor elements that don't have the `href` attribute are not interactive,
+  // so they can't support `interesttarget`.
+  if (!IsInTreeScope() || !IsLink()) {
+    return nullptr;
+  }
+
+  return GetElementAttributeResolvingReferenceTarget(
+      svg_names::kInteresttargetAttr);
+}
+
 bool SVGAElement::HasActivationBehavior() const {
   return true;
 }
@@ -177,18 +190,24 @@ int SVGAElement::DefaultTabIndex() const {
   return 0;
 }
 
-bool SVGAElement::SupportsFocus(UpdateBehavior update_behavior) const {
+FocusableState SVGAElement::SupportsFocus(
+    UpdateBehavior update_behavior) const {
   if (IsEditable(*this)) {
     return SVGGraphicsElement::SupportsFocus(update_behavior);
   }
+  if (IsLink()) {
+    return FocusableState::kFocusable;
+  }
   // If not a link we should still be able to focus the element if it has
   // tabIndex.
-  return IsLink() || SVGGraphicsElement::SupportsFocus(update_behavior);
+  return SVGGraphicsElement::SupportsFocus(update_behavior);
 }
 
 bool SVGAElement::ShouldHaveFocusAppearance() const {
   return (GetDocument().LastFocusType() != mojom::blink::FocusType::kMouse) ||
-         SVGGraphicsElement::SupportsFocus(UpdateBehavior::kNoneForIsFocused);
+         SVGGraphicsElement::SupportsFocus(
+             UpdateBehavior::kNoneForFocusManagement) !=
+             FocusableState::kNotFocusable;
 }
 
 bool SVGAElement::IsURLAttribute(const Attribute& attribute) const {
@@ -196,11 +215,12 @@ bool SVGAElement::IsURLAttribute(const Attribute& attribute) const {
          SVGGraphicsElement::IsURLAttribute(attribute);
 }
 
-bool SVGAElement::IsKeyboardFocusable(UpdateBehavior update_behavior) const {
+bool SVGAElement::IsKeyboardFocusableSlow(
+    UpdateBehavior update_behavior) const {
   if (IsLink() && !GetDocument().GetPage()->GetChromeClient().TabsToLinks()) {
     return false;
   }
-  return SVGElement::IsKeyboardFocusable(update_behavior);
+  return SVGElement::IsKeyboardFocusableSlow(update_behavior);
 }
 
 bool SVGAElement::CanStartSelection() const {

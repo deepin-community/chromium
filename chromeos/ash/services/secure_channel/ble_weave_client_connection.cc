@@ -951,7 +951,6 @@ std::string BluetoothLowEnergyWeaveClientConnection::GetReasonForClose() {
       return "APPLICATION_ERROR";
     default:
       NOTREACHED();
-      return "";
   }
 }
 

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_container_view_controller.h"
 
+#include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -11,6 +12,7 @@
 #include "chrome/browser/ui/views/extensions/extensions_request_access_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_container.h"
+#include "components/user_education/common/feature_promo/feature_promo_controller.h"
 #include "extensions/common/extension_features.h"
 
 ExtensionsToolbarContainerViewController::
@@ -79,6 +81,22 @@ void ExtensionsToolbarContainerViewController::MaybeShowIPH() {
   }
 }
 
+void ExtensionsToolbarContainerViewController::UpdateRequestAccessButton() {
+  CHECK(extensions_container_);
+
+  if (!base::FeatureList::IsEnabled(
+          extensions_features::kExtensionsMenuAccessControl)) {
+    return;
+  }
+
+  auto* web_contents = extensions_container_->GetCurrentWebContents();
+  extensions::PermissionsManager::UserSiteSetting site_setting =
+      extensions::PermissionsManager::Get(browser_->profile())
+          ->GetUserSiteSetting(
+              web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
+  extensions_container_->UpdateRequestAccessButton(site_setting, web_contents);
+}
+
 void ExtensionsToolbarContainerViewController::OnTabStripModelChanged(
     TabStripModel* tab_strip_model,
     const TabStripModelChange& change,
@@ -88,8 +106,9 @@ void ExtensionsToolbarContainerViewController::OnTabStripModelChanged(
   }
 
   // Close Extensions menu IPH if it is open.
-  browser_->window()->CloseFeaturePromo(
-      feature_engagement::kIPHExtensionsMenuFeature);
+  browser_->window()->NotifyFeaturePromoFeatureUsed(
+      feature_engagement::kIPHExtensionsMenuFeature,
+      FeaturePromoFeatureUsedAction::kClosePromoIfPresent);
 
   extensions::MaybeShowExtensionControlledNewTabPage(browser_,
                                                      selection.new_contents);
@@ -114,7 +133,7 @@ void ExtensionsToolbarContainerViewController::TabChangedAt(
   }
 
   // Close Extensions menu IPH if it is open.
-  browser_->window()->CloseFeaturePromo(
+  browser_->window()->AbortFeaturePromo(
       feature_engagement::kIPHExtensionsMenuFeature);
 
   // Request access button confirmation is tab-specific for a specific origin.
@@ -165,7 +184,7 @@ void ExtensionsToolbarContainerViewController::OnUserPermissionsSettingsChanged(
     const extensions::PermissionsManager::UserPermissionsSettings& settings) {
   CHECK(extensions_container_);
   extensions_container_->UpdateControlsVisibility();
-  // TODO(crbug.com/1351778): Update request access button hover card. This
+  // TODO(crbug.com/40857356): Update request access button hover card. This
   // will be slightly different than 'OnToolbarActionUpdated' since site
   // settings update are not tied to a specific action.
 }
@@ -176,20 +195,56 @@ void ExtensionsToolbarContainerViewController::
         bool can_show_requests) {
   CHECK(extensions_container_);
   extensions_container_->UpdateControlsVisibility();
-  // TODO(crbug.com/1351778): Update requests access button hover card. This is
+  // TODO(crbug.com/40857356): Update requests access button hover card. This is
   // tricky because it would need to change the items in the dialog. Another
   // option is to close the hover card if its shown whenever request access
   // button is updated.
 }
 
-void ExtensionsToolbarContainerViewController::OnExtensionDismissedRequests(
+void ExtensionsToolbarContainerViewController::
+    OnHostAccessRequestDismissedByUser(
+        const extensions::ExtensionId& extension_id,
+        const url::Origin& origin) {
+  UpdateRequestAccessButton();
+}
+
+void ExtensionsToolbarContainerViewController::OnHostAccessRequestAdded(
     const extensions::ExtensionId& extension_id,
-    const url::Origin& origin) {
-  CHECK(extensions_container_);
-  auto* web_contents = extensions_container_->GetCurrentWebContents();
-  extensions::PermissionsManager::UserSiteSetting site_setting =
-      extensions::PermissionsManager::Get(browser_->profile())
-          ->GetUserSiteSetting(
-              web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
-  extensions_container_->UpdateRequestAccessButton(site_setting, web_contents);
+    int tab_id) {
+  int current_tab_id = extensions::ExtensionTabUtil::GetTabId(
+      extensions_container_->GetCurrentWebContents());
+  if (tab_id != current_tab_id) {
+    return;
+  }
+
+  UpdateRequestAccessButton();
+}
+
+void ExtensionsToolbarContainerViewController::OnHostAccessRequestUpdated(
+    const extensions::ExtensionId& extension_id,
+    int tab_id) {
+  UpdateRequestAccessButton();
+}
+
+void ExtensionsToolbarContainerViewController::OnHostAccessRequestRemoved(
+    const extensions::ExtensionId& extension_id,
+    int tab_id) {
+  int current_tab_id = extensions::ExtensionTabUtil::GetTabId(
+      extensions_container_->GetCurrentWebContents());
+  if (tab_id != current_tab_id) {
+    return;
+  }
+
+  UpdateRequestAccessButton();
+}
+
+void ExtensionsToolbarContainerViewController::OnHostAccessRequestsCleared(
+    int tab_id) {
+  int current_tab_id = extensions::ExtensionTabUtil::GetTabId(
+      extensions_container_->GetCurrentWebContents());
+  if (tab_id != current_tab_id) {
+    return;
+  }
+
+  UpdateRequestAccessButton();
 }

@@ -6,7 +6,6 @@ import {assert} from 'chai';
 
 import {getBrowserAndPages} from '../../conductor/puppeteer-state.js';
 import {waitFor} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   getDisplayedEventListenerNames,
   getEventListenerProperties,
@@ -15,7 +14,7 @@ import {
   openEventListenersPaneAndWaitForListeners,
 } from '../helpers/event-listeners-helpers.js';
 
-describe('Event listeners in the elements sidebar', async () => {
+describe('Event listeners in the elements sidebar', () => {
   beforeEach(async () => {
     await loadEventListenersAndSelectButtonNode();
   });

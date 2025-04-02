@@ -17,7 +17,9 @@
 #include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/command_buffer/client/client_shared_image.h"
 #include "gpu/command_buffer/client/shared_image_interface.h"
+#include "gpu/command_buffer/common/shared_image_capabilities.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
+#include "gpu/config/gpu_finch_features.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/compositor/compositor.h"
@@ -78,14 +80,24 @@ ViewTreeHostRootViewFrameFactory::CreateUiResource(
   gpu::SharedImageInterface* sii =
       resource->context_provider->SharedImageInterface();
 
-  uint32_t usage = gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
-  if (is_overlay_candidate) {
+  gpu::SharedImageUsageSet usage = gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
+
+  bool add_scanout_usage = is_overlay_candidate;
+
+  // Scanout usage should be added only if scanout of SharedImages is supported.
+  // However, historically this was not checked.
+  // TODO(crbug.com/330865436): Remove killswitch post-safe rollout.
+  if (base::FeatureList::IsEnabled(
+          features::kViewTreeHostAddScanoutUsageOnlyIfSupportedBySharedImage)) {
+    add_scanout_usage &= sii->GetCapabilities().supports_scanout_shared_images;
+  }
+
+  if (add_scanout_usage) {
     usage |= gpu::SHARED_IMAGE_USAGE_SCANOUT;
   }
 
   auto client_shared_image = sii->CreateSharedImage(
-      format, size, gfx::ColorSpace(), kTopLeft_GrSurfaceOrigin,
-      kPremul_SkAlphaType, usage, "FastInkRootViewFrame",
+      {format, size, gfx::ColorSpace(), usage, "FastInkRootViewFrame"},
       gpu::kNullSurfaceHandle, gfx::BufferUsage::SCANOUT_CPU_READ_WRITE);
   if (!client_shared_image) {
     LOG(ERROR) << "Failed to create MappableSharedImage";
@@ -178,7 +190,7 @@ ViewTreeHostRootViewFrameFactory::CreateCompositorFrame(
   frame->metadata.begin_frame_ack.has_damage = true;
   frame->metadata.device_scale_factor = device_scale_factor;
 
-  // TODO(crbug.com/1131623): Should this be ceil? Why do we choose floor?
+  // TODO(crbug.com/40150287): Should this be ceil? Why do we choose floor?
   gfx::Size size_in_pixel = gfx::ToFlooredSize(
       gfx::ConvertSizeToPixels(content_rect.size(), device_scale_factor));
 
@@ -236,10 +248,8 @@ void ViewTreeHostRootViewFrameFactory::Paint(
 
   SkImageInfo info = SkImageInfo::MakeN32Premul(mapping->Size().width(),
                                                 mapping->Size().height());
-  uint8_t* data = static_cast<uint8_t*>(mapping->Memory(0));
-  int stride = mapping->Stride(0);
-
-  auto canvas = SkCanvas::MakeRasterDirect(info, data, stride);
+  std::unique_ptr<SkCanvas> canvas = SkCanvas::MakeRasterDirect(
+      info, mapping->GetMemoryForPlane(0).data(), mapping->Stride(0));
   canvas->setMatrix(gfx::TransformToFlattenedSkMatrix(rotate_transform));
 
   display_item_list->Raster(canvas.get());
@@ -278,7 +288,6 @@ void ViewTreeHostRootViewFrameFactory::AppendQuad(
                        /*needs_blending=*/true, resource.id,
                        /*premultiplied=*/true, uv_crop.origin(),
                        uv_crop.bottom_right(), SkColors::kTransparent,
-                       /*flipped=*/false,
                        /*nearest=*/false,
                        /*secure_output=*/false,
                        gfx::ProtectedVideoType::kClear);

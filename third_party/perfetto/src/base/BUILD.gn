@@ -46,10 +46,12 @@ perfetto_component("base") {
     "paged_memory.cc",
     "periodic_task.cc",
     "pipe.cc",
+    "scoped_mmap.cc",
     "status.cc",
     "string_splitter.cc",
     "string_utils.cc",
     "string_view.cc",
+    "string_view_splitter.cc",
     "temp_file.cc",
     "thread_checker.cc",
     "thread_utils.cc",
@@ -59,6 +61,7 @@ perfetto_component("base") {
     "virtual_destructors.cc",
     "waitable_event.cc",
     "watchdog_posix.cc",
+    "weak_runner.cc",
   ]
 
   if (!is_nacl) {
@@ -79,6 +82,15 @@ perfetto_component("base") {
   if (enable_perfetto_stderr_crash_dump) {
     deps += [ ":debug_crash_stack_trace" ]
   }
+}
+
+perfetto_component("clock_snapshots") {
+  deps = [ "../../gn:default_deps" ]
+  public_deps = [
+    "../../include/perfetto/ext/base",
+    "../../protos/perfetto/common:zero",
+  ]
+  sources = [ "clock_snapshots.cc" ]
 }
 
 # This target needs to be named as such because it's exposed directly in Bazel
@@ -201,11 +213,13 @@ perfetto_unittest_source_set("unittests") {
     "paged_memory_unittest.cc",
     "periodic_task_unittest.cc",
     "scoped_file_unittest.cc",
+    "scoped_mmap_unittest.cc",
     "small_vector_unittest.cc",
     "status_or_unittest.cc",
     "status_unittest.cc",
     "string_splitter_unittest.cc",
     "string_utils_unittest.cc",
+    "string_view_splitter_unittest.cc",
     "string_view_unittest.cc",
     "string_writer_unittest.cc",
     "task_runner_unittest.cc",

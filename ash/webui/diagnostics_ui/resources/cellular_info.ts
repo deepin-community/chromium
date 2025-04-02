@@ -23,8 +23,8 @@ import {LockType, Network, RoamingState} from './network_health_provider.mojom-w
 const CellularInfoElementBase = I18nMixin(PolymerElement);
 
 export class CellularInfoElement extends CellularInfoElementBase {
-  static get is(): string {
-    return 'cellular-info';
+  static get is(): 'cellular-info' {
+    return 'cellular-info' as const;
   }
 
   static get template(): HTMLTemplateElement {
@@ -94,7 +94,6 @@ export class CellularInfoElement extends CellularInfoElementBase {
       case RoamingState.kHome:
         return this.i18n('networkRoamingStateHome');
     }
-    assertNotReached();
   }
 
   protected computeSimLockedText(): string {
@@ -121,7 +120,7 @@ export class CellularInfoElement extends CellularInfoElementBase {
 
 declare global {
   interface HTMLElementTagNameMap {
-    'cellular-info': CellularInfoElement;
+    [CellularInfoElement.is]: CellularInfoElement;
   }
 }
 

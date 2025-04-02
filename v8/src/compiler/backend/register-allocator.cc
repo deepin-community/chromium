@@ -5,6 +5,7 @@
 #include "src/compiler/backend/register-allocator.h"
 
 #include <iomanip>
+#include <optional>
 
 #include "src/base/iterator.h"
 #include "src/base/small-vector.h"
@@ -505,7 +506,7 @@ void LiveRange::ConvertUsesToOperand(const InstructionOperand& op,
         break;
       case UsePositionType::kRequiresRegister:
         DCHECK(op.IsRegister() || op.IsFPRegister());
-        V8_FALLTHROUGH;
+        [[fallthrough]];
       case UsePositionType::kRegisterOrSlot:
       case UsePositionType::kRegisterOrSlotOrConstant:
         InstructionOperand::ReplaceWith(pos->operand(), &op);
@@ -1057,7 +1058,7 @@ SpillRange::SpillRange(TopLevelLiveRange* parent, Zone* zone)
 
 // Checks if the `UseInterval`s in `a` intersect with those in `b`.
 // Returns the two intervals that intersected, or `std::nullopt` if none did.
-static base::Optional<std::pair<UseInterval, UseInterval>>
+static std::optional<std::pair<UseInterval, UseInterval>>
 AreUseIntervalsIntersectingVector(base::Vector<const UseInterval> a,
                                   base::Vector<const UseInterval> b) {
   SLOW_DCHECK(std::is_sorted(a.begin(), a.end()) &&
@@ -1096,7 +1097,7 @@ AreUseIntervalsIntersectingVector(base::Vector<const UseInterval> a,
 // containers of `UseInterval`s, as long as they can be converted to a
 // `base::Vector` (which is essentially just a memory span).
 template <typename ContainerA, typename ContainerB>
-base::Optional<std::pair<UseInterval, UseInterval>> AreUseIntervalsIntersecting(
+std::optional<std::pair<UseInterval, UseInterval>> AreUseIntervalsIntersecting(
     const ContainerA& a, const ContainerB& b) {
   return AreUseIntervalsIntersectingVector(base::VectorOf(a),
                                            base::VectorOf(b));
@@ -1361,13 +1362,15 @@ SpillRange* RegisterAllocationData::AssignSpillRangeToLiveRange(
 void RegisterAllocationData::MarkFixedUse(MachineRepresentation rep,
                                           int index) {
   switch (rep) {
+    case MachineRepresentation::kFloat16:
     case MachineRepresentation::kFloat32:
     case MachineRepresentation::kSimd128:
     case MachineRepresentation::kSimd256:
       if (kFPAliasing == AliasingKind::kOverlap) {
         fixed_fp_register_use_->Add(index);
       } else if (kFPAliasing == AliasingKind::kIndependent) {
-        if (rep == MachineRepresentation::kFloat32) {
+        if (rep == MachineRepresentation::kFloat16 ||
+            rep == MachineRepresentation::kFloat32) {
           fixed_fp_register_use_->Add(index);
         } else {
           fixed_simd128_register_use_->Add(index);
@@ -1395,13 +1398,15 @@ void RegisterAllocationData::MarkFixedUse(MachineRepresentation rep,
 
 bool RegisterAllocationData::HasFixedUse(MachineRepresentation rep, int index) {
   switch (rep) {
+    case MachineRepresentation::kFloat16:
     case MachineRepresentation::kFloat32:
     case MachineRepresentation::kSimd128:
     case MachineRepresentation::kSimd256: {
       if (kFPAliasing == AliasingKind::kOverlap) {
         return fixed_fp_register_use_->Contains(index);
       } else if (kFPAliasing == AliasingKind::kIndependent) {
-        if (rep == MachineRepresentation::kFloat32) {
+        if (rep == MachineRepresentation::kFloat16 ||
+            rep == MachineRepresentation::kFloat32) {
           return fixed_fp_register_use_->Contains(index);
         } else {
           return fixed_simd128_register_use_->Contains(index);
@@ -1430,13 +1435,15 @@ bool RegisterAllocationData::HasFixedUse(MachineRepresentation rep, int index) {
 void RegisterAllocationData::MarkAllocated(MachineRepresentation rep,
                                            int index) {
   switch (rep) {
+    case MachineRepresentation::kFloat16:
     case MachineRepresentation::kFloat32:
     case MachineRepresentation::kSimd128:
     case MachineRepresentation::kSimd256:
       if (kFPAliasing == AliasingKind::kOverlap) {
         assigned_double_registers_->Add(index);
       } else if (kFPAliasing == AliasingKind::kIndependent) {
-        if (rep == MachineRepresentation::kFloat32) {
+        if (rep == MachineRepresentation::kFloat16 ||
+            rep == MachineRepresentation::kFloat32) {
           assigned_double_registers_->Add(index);
         } else {
           assigned_simd128_registers_->Add(index);
@@ -1810,15 +1817,15 @@ int LiveRangeBuilder::FixedFPLiveRangeID(int index, MachineRepresentation rep) {
     case MachineRepresentation::kSimd256:
       result -=
           kNumberOfFixedRangesPerRegister * config()->num_simd128_registers();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case MachineRepresentation::kSimd128:
       result -=
           kNumberOfFixedRangesPerRegister * config()->num_float_registers();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case MachineRepresentation::kFloat32:
       result -=
           kNumberOfFixedRangesPerRegister * config()->num_double_registers();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case MachineRepresentation::kFloat64:
       result -=
           kNumberOfFixedRangesPerRegister * config()->num_general_registers();
@@ -1857,6 +1864,7 @@ TopLevelLiveRange* LiveRangeBuilder::FixedFPLiveRangeFor(
       &data()->fixed_double_live_ranges();
   if (kFPAliasing == AliasingKind::kCombine) {
     switch (rep) {
+      case MachineRepresentation::kFloat16:
       case MachineRepresentation::kFloat32:
         num_regs = config()->num_float_registers();
         live_ranges = &data()->fixed_float_live_ranges();
@@ -2607,24 +2615,25 @@ bool LiveRangeBundle::TryAddRange(TopLevelLiveRange* range) {
 }
 
 void LiveRangeBundle::AddRange(TopLevelLiveRange* range) {
-  TopLevelLiveRange** insert_it = std::lower_bound(
+  TopLevelLiveRange** range_insert_it = std::lower_bound(
       ranges_.begin(), ranges_.end(), range, LiveRangeOrdering());
-  DCHECK_IMPLIES(insert_it != ranges_.end(), *insert_it != range);
+  DCHECK_IMPLIES(range_insert_it != ranges_.end(), *range_insert_it != range);
   // TODO(dlehmann): We might save some memory by using
   // `DoubleEndedSplitVector::insert<kFront>()` here: Since we add ranges
   // mostly backwards, ranges with an earlier `Start()` are inserted mostly
   // at the front.
-  ranges_.insert(insert_it, 1, range);
+  ranges_.insert(range_insert_it, 1, range);
   range->set_bundle(this);
 
   // We also tried `std::merge`ing the sorted vectors of `intervals_` directly,
   // but it turns out the (always happening) copies are more expensive
   // than the (apparently seldom) copies due to insertion in the middle.
   for (UseInterval interval : range->intervals()) {
-    UseInterval* insert_it =
+    UseInterval* interval_insert_it =
         std::lower_bound(intervals_.begin(), intervals_.end(), interval);
-    DCHECK_IMPLIES(insert_it != intervals_.end(), *insert_it != interval);
-    intervals_.insert(insert_it, 1, interval);
+    DCHECK_IMPLIES(interval_insert_it != intervals_.end(),
+                   *interval_insert_it != interval);
+    intervals_.insert(interval_insert_it, 1, interval);
   }
 }
 
@@ -3263,12 +3272,19 @@ void LinearScanAllocator::ComputeStateFromManyPredecessors(
       used_registers[reg] = 1;
     }
   };
+  struct TopLevelLiveRangeComparator {
+    bool operator()(const TopLevelLiveRange* lhs,
+                    const TopLevelLiveRange* rhs) const {
+      return lhs->vreg() < rhs->vreg();
+    }
+  };
   // Typically this map is very small, e.g., on JetStream2 it has at most 3
   // elements ~80% of the time and at most 8 elements ~94% of the time.
   // Thus use a `SmallZoneMap` to avoid allocations and because linear search
   // in an array is faster than map lookup for such small sizes.
   // We don't want too many inline elements though since `Vote` is pretty large.
-  using RangeVoteMap = SmallZoneMap<TopLevelLiveRange*, Vote, 16>;
+  using RangeVoteMap =
+      SmallZoneMap<TopLevelLiveRange*, Vote, 16, TopLevelLiveRangeComparator>;
   static_assert(sizeof(RangeVoteMap) < 4096, "too large stack allocation");
   RangeVoteMap counts(data()->allocation_zone());
 

@@ -8,22 +8,24 @@
 
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include "base/json/values_util.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
-#include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/account_id/account_id.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/user_manager/account_id_util.h"
 #include "components/user_manager/common_types.h"
 #include "components/user_manager/user_manager.h"
 #include "components/user_manager/user_names.h"
 #include "google_apis/gaia/gaia_auth_util.h"
+#include "google_apis/gaia/gaia_id.h"
 
 namespace user_manager {
 namespace {
@@ -34,18 +36,6 @@ const char kKnownUsers[] = "KnownUsers";
 
 // Known user preferences keys (stored in Local State). All keys should be
 // listed in kReservedKeys or kObsoleteKeys below.
-
-// Key of canonical e-mail value.
-const char kCanonicalEmail[] = "email";
-
-// Key of obfuscated GAIA id value.
-const char kGAIAIdKey[] = "gaia_id";
-
-// Key of obfuscated object guid value for Active Directory accounts.
-const char kObjGuidKey[] = "obj_guid";
-
-// Key of account type.
-const char kAccountTypeKey[] = "account_type";
 
 // Key of whether this user ID refers to a SAML user.
 const char kUsingSAMLKey[] = "using_saml";
@@ -116,9 +106,6 @@ const char kTokenHandleRotatedObsolete[] = "TokenHandleRotated";
 // Cache of the auth factors configured for the user.
 const char kAuthFactorPresenceCache[] = "AuthFactorsPresenceCache";
 
-// Records for each user whether Lacros is enabled.
-const char kLacrosEnabled[] = "lacros_enabled";
-
 // List containing all the known user preferences keys.
 const char* kReservedKeys[] = {kCanonicalEmail,
                                kGAIAIdKey,
@@ -142,8 +129,7 @@ const char* kReservedKeys[] = {kCanonicalEmail,
                                kPasswordSyncToken,
                                kOnboardingCompletedVersion,
                                kPendingOnboardingScreen,
-                               kAuthFactorPresenceCache,
-                               kLacrosEnabled};
+                               kAuthFactorPresenceCache};
 
 // List containing all known user preference keys that used to be reserved and
 // are now obsolete.
@@ -154,67 +140,10 @@ const char* kObsoleteKeys[] = {
     kTokenHandleRotatedObsolete,
 };
 
-// Checks if values in |dict| correspond with |account_id| identity.
-bool UserMatches(const AccountId& account_id, const base::Value::Dict& dict) {
-  const std::string* account_type = dict.FindString(kAccountTypeKey);
-  if (account_id.GetAccountType() != AccountType::UNKNOWN && account_type &&
-      account_id.GetAccountType() !=
-          AccountId::StringToAccountType(*account_type)) {
-    return false;
-  }
-
-  // TODO(alemate): update code once user id is really a struct.
-  // TODO(https://crbug.com/1190902): If the gaia id or GUID doesn't match,
-  // this function should likely be returning false even if the e-mail matches.
-  switch (account_id.GetAccountType()) {
-    case AccountType::GOOGLE: {
-      const std::string* gaia_id = dict.FindString(kGAIAIdKey);
-      if (gaia_id && account_id.GetGaiaId() == *gaia_id)
-        return true;
-      break;
-    }
-    case AccountType::ACTIVE_DIRECTORY: {
-      const std::string* obj_guid = dict.FindString(kObjGuidKey);
-      if (obj_guid && account_id.GetObjGuid() == *obj_guid)
-        return true;
-      break;
-    }
-    case AccountType::UNKNOWN: {
-    }
-  }
-
-  const std::string* email = dict.FindString(kCanonicalEmail);
-  if (email && account_id.GetUserEmail() == *email)
-    return true;
-
-  return false;
-}
-
-// Fills relevant |dict| values based on |account_id|.
-void UpdateIdentity(const AccountId& account_id, base::Value::Dict& dict) {
-  if (!account_id.GetUserEmail().empty())
-    dict.Set(kCanonicalEmail, account_id.GetUserEmail());
-
-  switch (account_id.GetAccountType()) {
-    case AccountType::GOOGLE:
-      if (!account_id.GetGaiaId().empty())
-        dict.Set(kGAIAIdKey, account_id.GetGaiaId());
-      break;
-    case AccountType::ACTIVE_DIRECTORY:
-      if (!account_id.GetObjGuid().empty())
-        dict.Set(kObjGuidKey, account_id.GetObjGuid());
-      break;
-    case AccountType::UNKNOWN:
-      return;
-  }
-  dict.Set(kAccountTypeKey,
-           AccountId::AccountTypeToString(account_id.GetAccountType()));
-}
 
 // Checks for platform-specific known users matching given |user_email|. If
 // data matches a known account, returns it.
-std::optional<AccountId> GetPlatformKnownUserId(
-    const base::StringPiece user_email) {
+std::optional<AccountId> GetPlatformKnownUserId(std::string_view user_email) {
   if (user_email == kStubUserEmail) {
     return StubAccountId();
   }
@@ -249,8 +178,9 @@ const base::Value::Dict* KnownUser::FindPrefs(
     if (!element_value.is_dict())
       continue;
     const base::Value::Dict& dict = element_value.GetDict();
-    if (!UserMatches(account_id, dict))
+    if (!AccountIdMatches(account_id, dict)) {
       continue;
+    }
     return &dict;
   }
   return nullptr;
@@ -274,15 +204,16 @@ void KnownUser::SetPath(const AccountId& account_id,
     if (!element_value.is_dict())
       continue;
     base::Value::Dict& dict = element_value.GetDict();
-    if (!UserMatches(account_id, dict))
+    if (!AccountIdMatches(account_id, dict)) {
       continue;
+    }
     if (opt_value.has_value()) {
       dict.SetByDottedPath(path, std::move(opt_value).value());
     } else {
       dict.RemoveByDottedPath(path);
     }
 
-    UpdateIdentity(account_id, dict);
+    StoreAccountId(account_id, dict);
     return;
   }
   if (!opt_value.has_value())
@@ -290,12 +221,12 @@ void KnownUser::SetPath(const AccountId& account_id,
 
   base::Value::Dict new_dict;
   new_dict.SetByDottedPath(path, std::move(opt_value).value());
-  UpdateIdentity(account_id, new_dict);
+  StoreAccountId(account_id, new_dict);
   update->Append(std::move(new_dict));
 }
 
 const std::string* KnownUser::FindStringPath(const AccountId& account_id,
-                                             base::StringPiece path) const {
+                                             std::string_view path) const {
   const base::Value::Dict* user_pref_dict = FindPrefs(account_id);
   if (!user_pref_dict)
     return nullptr;
@@ -319,7 +250,7 @@ void KnownUser::SetStringPref(const AccountId& account_id,
 }
 
 std::optional<bool> KnownUser::FindBoolPath(const AccountId& account_id,
-                                            base::StringPiece path) const {
+                                            std::string_view path) const {
   const base::Value::Dict* user_pref_dict = FindPrefs(account_id);
   if (!user_pref_dict)
     return std::nullopt;
@@ -344,7 +275,7 @@ void KnownUser::SetBooleanPref(const AccountId& account_id,
 }
 
 std::optional<int> KnownUser::FindIntPath(const AccountId& account_id,
-                                          base::StringPiece path) const {
+                                          std::string_view path) const {
   const base::Value::Dict* user_pref_dict = FindPrefs(account_id);
   if (!user_pref_dict)
     return std::nullopt;
@@ -365,6 +296,33 @@ bool KnownUser::GetIntegerPrefForTest(const AccountId& account_id,
 void KnownUser::SetIntegerPref(const AccountId& account_id,
                                const std::string& path,
                                const int in_value) {
+  SetPath(account_id, path, base::Value(in_value));
+}
+
+std::optional<double> KnownUser::FindDoublePath(const AccountId& account_id,
+                                                std::string_view path) const {
+  const base::Value::Dict* user_pref_dict = FindPrefs(account_id);
+  if (!user_pref_dict) {
+    return std::nullopt;
+  }
+
+  return user_pref_dict->FindDoubleByDottedPath(path);
+}
+
+bool KnownUser::GetDoublePrefForTest(const AccountId& account_id,
+                                     const std::string& path,
+                                     double* out_value) {
+  auto opt_val = FindDoublePath(account_id, path);
+  if (out_value && opt_val.has_value()) {
+    *out_value = opt_val.value();
+  }
+
+  return opt_val.has_value();
+}
+
+void KnownUser::SetDoublePref(const AccountId& account_id,
+                              const std::string& path,
+                              const double in_value) {
   SetPath(account_id, path, base::Value(in_value));
 }
 
@@ -428,7 +386,8 @@ AccountId KnownUser::GetAccountId(const std::string& user_email,
       }
 
       // gaia_id is associated with cryptohome.
-      return AccountId::FromUserEmailGaiaId(sanitized_email, *stored_gaia_id);
+      return AccountId::FromUserEmailGaiaId(sanitized_email,
+                                            GaiaId(*stored_gaia_id));
     }
 
     if (const std::string* stored_obj_guid =
@@ -447,14 +406,13 @@ AccountId KnownUser::GetAccountId(const std::string& user_email,
 
   switch (account_type) {
     case AccountType::GOOGLE:
-      return AccountId::FromUserEmailGaiaId(sanitized_email, id);
+      return AccountId::FromUserEmailGaiaId(sanitized_email, GaiaId(id));
     case AccountType::ACTIVE_DIRECTORY:
       return AccountId::AdFromUserEmailObjGuid(sanitized_email, id);
     case AccountType::UNKNOWN:
       return AccountId::FromUserEmail(sanitized_email);
   }
   NOTREACHED();
-  return EmptyAccountId();
 }
 
 AccountId KnownUser::GetAccountIdByCryptohomeId(
@@ -484,7 +442,7 @@ AccountId KnownUser::GetAccountIdByCryptohomeId(
       result.has_value()) {
     return result.value();
   }
-  return AccountId::FromNonCanonicalEmail(cryptohome_id.value(), std::string(),
+  return AccountId::FromNonCanonicalEmail(cryptohome_id.value(), GaiaId(),
                                           AccountType::UNKNOWN);
 }
 
@@ -496,30 +454,8 @@ std::vector<AccountId> KnownUser::GetKnownAccountIds() {
     if (!element_value.is_dict())
       continue;
     const base::Value::Dict& dict = element_value.GetDict();
-    const std::string* email = dict.FindString(kCanonicalEmail);
-    const std::string* gaia_id = dict.FindString(kGAIAIdKey);
-    const std::string* obj_guid = dict.FindString(kObjGuidKey);
-    AccountType account_type = AccountType::GOOGLE;
-    if (const std::string* account_type_string =
-            dict.FindString(kAccountTypeKey)) {
-      account_type = AccountId::StringToAccountType(*account_type_string);
-    }
-    switch (account_type) {
-      case AccountType::GOOGLE:
-        if (email || gaia_id) {
-          result.push_back(AccountId::FromUserEmailGaiaId(
-              email ? *email : std::string(),
-              gaia_id ? *gaia_id : std::string()));
-        }
-        break;
-      case AccountType::ACTIVE_DIRECTORY:
-        if (email && obj_guid) {
-          result.push_back(
-              AccountId::AdFromUserEmailObjGuid(*email, *obj_guid));
-        }
-        break;
-      default:
-        NOTREACHED() << "Unknown account type";
+    if (std::optional<AccountId> account_id = LoadAccountId(dict)) {
+      result.push_back(*account_id);
     }
   }
   return result;
@@ -547,7 +483,7 @@ void KnownUser::SetIsEphemeralUser(const AccountId& account_id,
 void KnownUser::UpdateId(const AccountId& account_id) {
   switch (account_id.GetAccountType()) {
     case AccountType::GOOGLE:
-      SetStringPref(account_id, kGAIAIdKey, account_id.GetGaiaId());
+      SetStringPref(account_id, kGAIAIdKey, account_id.GetGaiaId().ToString());
       break;
     case AccountType::ACTIVE_DIRECTORY:
       SetStringPref(account_id, kObjGuidKey, account_id.GetObjGuid());
@@ -813,17 +749,6 @@ std::string KnownUser::GetPendingOnboardingScreen(const AccountId& account_id) {
   return std::string();
 }
 
-void KnownUser::SetLacrosEnabled(const AccountId& account_id, bool enabled) {
-  SetBooleanPref(account_id, kLacrosEnabled, enabled);
-}
-
-bool KnownUser::GetLacrosEnabledForAnyUser() {
-  const std::vector<AccountId> account_ids = GetKnownAccountIds();
-  return base::ranges::any_of(account_ids, [this](const AccountId& account_id) {
-    return FindBoolPath(account_id, kLacrosEnabled).value_or(false);
-  });
-}
-
 bool KnownUser::UserExists(const AccountId& account_id) {
   return FindPrefs(account_id);
 }
@@ -835,7 +760,7 @@ void KnownUser::RemovePrefs(const AccountId& account_id) {
   ScopedListPrefUpdate update(local_state_, kKnownUsers);
   base::Value::List& update_list = update.Get();
   for (auto it = update_list.begin(); it != update_list.end(); ++it) {
-    if (UserMatches(account_id, it->GetDict())) {
+    if (AccountIdMatches(account_id, it->GetDict())) {
       update_list.erase(it);
       break;
     }

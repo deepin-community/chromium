@@ -273,154 +273,128 @@ _DEFAULT_KERNEL_SUPPRESSED_CATEGORIES = [
 
 # C++ headers
 _CPP_HEADERS = frozenset([
-    # Legacy
-    'algobase.h',
-    'algo.h',
-    'alloc.h',
-    'builtinbuf.h',
-    'bvector.h',
-    'complex.h',
-    'defalloc.h',
-    'deque.h',
-    'editbuf.h',
-    'fstream.h',
-    'function.h',
-    'hash_map',
-    'hash_map.h',
-    'hash_set',
-    'hash_set.h',
-    'hashtable.h',
-    'heap.h',
-    'indstream.h',
-    'iomanip.h',
-    'iostream.h',
-    'istream.h',
-    'iterator.h',
-    'list.h',
-    'map.h',
-    'multimap.h',
-    'multiset.h',
-    'ostream.h',
-    'pair.h',
-    'parsestream.h',
-    'pfstream.h',
-    'procbuf.h',
-    'pthread_alloc',
-    'pthread_alloc.h',
-    'rope',
-    'rope.h',
-    'ropeimpl.h',
-    'set.h',
-    'slist',
-    'slist.h',
-    'stack.h',
-    'stdiostream.h',
-    'stl_alloc.h',
-    'stl_relops.h',
-    'streambuf.h',
-    'stream.h',
-    'strfile.h',
-    'strstream.h',
-    'tempbuf.h',
-    'tree.h',
-    'type_traits.h',
-    'vector.h',
-    # 17.6.1.2 C++ library headers
+    # C++ library headers [tab:headers.cpp]
     'algorithm',
     'any',
     'array',
     'atomic',
+    'barrier',
+    'bit',
     'bitset',
     'charconv',
     'chrono',
-    'codecvt',
+    'codecvt',  # Note: removed in C++26
+    'compare',
     'complex',
+    'concepts',
     'condition_variable',
+    'coroutine',
+    'debugging',
     'deque',
-    'execution',
     'exception',
+    'execution',
+    'expected',
     'filesystem',
+    'flat_map',
+    'flat_set',
+    'format',
     'forward_list',
     'fstream',
     'functional',
     'future',
+    'generator',
+    'hazard_pointer',
     'initializer_list',
+    'inplace_vector',
     'iomanip',
     'ios',
     'iosfwd',
     'iostream',
     'istream',
     'iterator',
+    'latch',
     'limits',
+    'linalg',
     'list',
     'locale',
     'map',
+    'mdspan',
     'memory',
     'memory_resource',
     'mutex',
     'new',
+    'numbers',
     'numeric',
     'optional',
     'ostream',
+    'print',
     'queue',
     'random',
+    'ranges',
     'ratio',
+    'rcu',
     'regex',
     'scoped_allocator',
+    'semaphore',
     'set',
+    'shared_mutex',
+    'source_location',
+    'span',
+    'spanstream',
     'sstream',
     'stack',
+    'stacktrace',
     'stdexcept',
+    'stdfloat',
+    'stop_token',
     'streambuf',
     'string',
     'string_view',
-    'strstream',
+    'strstream',  # Note: removed in C++26
+    'syncstream',
     'system_error',
+    'text_encoding',
     'thread',
     'tuple',
+    'type_traits',
     'typeindex',
     'typeinfo',
-    'type_traits',
     'unordered_map',
     'unordered_set',
     'utility',
     'valarray',
     'variant',
     'vector',
-    # 17.6.1.2 C++ headers for C library facilities
+    'version',
+    # C++ headers for C library facilities [tab:headers.cpp.c]
     'cassert',
-    'ccomplex',
     'cctype',
     'cerrno',
     'cfenv',
     'cfloat',
     'cinttypes',
-    'ciso646',
     'climits',
     'clocale',
     'cmath',
     'csetjmp',
     'csignal',
-    'cstdalign',
     'cstdarg',
-    'cstdbool',
     'cstddef',
     'cstdint',
     'cstdio',
     'cstdlib',
     'cstring',
-    'ctgmath',
     'ctime',
     'cuchar',
     'cwchar',
     'cwctype',
 ])
 
-# List of functions from <type_traits>.  See [meta.type.synop]
+# <type_traits> [meta.type.synop]
 _TYPE_TRAITS = [
-    # 23.15.3, helper class
+    # Helper class [meta.help]
     'integral_constant',
-    # 23.15.4.1, primary type categories
+    # Primary type categories [meta.unary.cat]
     'is_void',
     'is_null_pointer',
     'is_integral',
@@ -435,7 +409,7 @@ _TYPE_TRAITS = [
     'is_union',
     'is_class',
     'is_function',
-    # 23.15.4.2, composite type categories
+    # Composite type categories [meta.unary.comp]
     'is_reference',
     'is_arithmetic',
     'is_fundamental',
@@ -443,13 +417,13 @@ _TYPE_TRAITS = [
     'is_scalar',
     'is_compound',
     'is_member_pointer',
-    # 23.15.4.3, type properties
+    # Type properties [meta.unary.prop]
     'is_const',
     'is_volatile',
     'is_trivial',
     'is_trivially_copyable',
     'is_standard_layout',
-    'is_pod',
+    'is_pod',  # Note: deprecated in C++20
     'is_empty',
     'is_polymorphic',
     'is_abstract',
@@ -457,6 +431,9 @@ _TYPE_TRAITS = [
     'is_aggregate',
     'is_signed',
     'is_unsigned',
+    'is_bounded_array',
+    'is_unbounded_array',
+    'is_scoped_enum',
     'is_constructible',
     'is_default_constructible',
     'is_copy_constructible',
@@ -485,21 +462,28 @@ _TYPE_TRAITS = [
     'is_nothrow_swappable_with',
     'is_nothrow_swappable',
     'is_nothrow_destructible',
+    'is_implicit_lifetime',
     'has_virtual_destructor',
     'has_unique_object_representations',
-    # 23.15.5, type property queries
+    'reference_constructs_from_temporary',
+    'reference_converts_from_temporary',
+    # Type property queries [meta.unary.prop.query]
     'alignment_of',
     'rank',
     'extent',
-    # 23.15.6, type relations
+    # Relationship between types [meta.rel]
     'is_same',
     'is_base_of',
+    'is_virtual_base_of',
     'is_convertible',
+    'is_nothrow_convertible',
+    'is_layout_compatible',
+    'is_pointer_interconvertible_base_of',
     'is_invocable',
     'is_invocable_r',
     'is_nothrow_invocable',
     'is_nothrow_invocable_r',
-    # 23.15.7.1, const-volatile modifications
+    # Const-volatile modifications [meta.trans.cv]
     'remove_const',
     'remove_volatile',
     'remove_cv',
@@ -512,51 +496,62 @@ _TYPE_TRAITS = [
     'add_const_t',
     'add_volatile_t',
     'add_cv_t',
-    # 23.15.7.2, reference modifications
+    # Reference modifications [meta.trans.ref]
     'remove_reference',
     'add_lvalue_reference',
     'add_rvalue_reference',
     'remove_reference_t',
     'add_lvalue_reference_t',
     'add_rvalue_reference_t',
-    # 23.15.7.3, sign modifications
+    # Sign modifications [meta.trans.sign]
     'make_signed',
     'make_unsigned',
     'make_signed_t',
     'make_unsigned_t',
-    # 23.15.7.4, array modifications
+    # Array modifications [meta.trans.arr]
     'remove_extent',
     'remove_all_extents',
     'remove_extent_t',
     'remove_all_extents_t',
-    # 23.15.7.5, pointer modifications
+    # Pointer modifications [meta.trans.ptr]
     'remove_pointer',
     'add_pointer',
     'remove_pointer_t',
     'add_pointer_t',
-    # 23.15.7.6, other transformations
-    'aligned_storage',
-    'aligned_union',
+    # Other transformations [meta.trans.other]
+    'type_identity',
+    'aligned_storage',  # Note: deprecated in C++23
+    'aligned_union',  # Note: deprecated in C++23
+    'remove_cvref',
     'decay',
     'enable_if',
     'conditional',
     'common_type',
+    'basic_common_reference',
+    'common_reference',
     'underlying_type',
     'invoke_result',
-    'aligned_storage_t',
-    'aligned_union_t',
+    'unwrap_reference',
+    'unwrap_ref_decay',
+    'type_identity_t',
+    'aligned_storage_t',  # Note: deprecated in C++23
+    'aligned_union_t',  # Note: deprecated in C++23
+    'remove_cvref_t',
     'decay_t',
     'enable_if_t',
     'conditional_t',
     'common_type_t',
+    'common_reference_t',
     'underlying_type_t',
     'invoke_result_t',
+    'unwrap_reference_t',
+    'unwrap_ref_decay_t',
     'void_t',
-    # 23.15.8, logical operator traits
+    # Logical operator traits [meta.logical]
     'conjunction',
     'disjunction',
     'negation',
-    # 23.15.4.1, primary type categories
+    # Primary type categories _v [meta.unary.cat]
     'is_void_v',
     'is_null_pointer_v',
     'is_integral_v',
@@ -571,7 +566,7 @@ _TYPE_TRAITS = [
     'is_union_v',
     'is_class_v',
     'is_function_v',
-    # 23.15.4.2, composite type categories
+    # Composite type categories _v [meta.unary.comp]
     'is_reference_v',
     'is_arithmetic_v',
     'is_fundamental_v',
@@ -579,13 +574,13 @@ _TYPE_TRAITS = [
     'is_scalar_v',
     'is_compound_v',
     'is_member_pointer_v',
-    # 23.15.4.3, type properties
+    # Type properties _v [meta.unary.prop]
     'is_const_v',
     'is_volatile_v',
     'is_trivial_v',
     'is_trivially_copyable_v',
     'is_standard_layout_v',
-    'is_pod_v',
+    'is_pod_v',  # Note: deprecated in C++20
     'is_empty_v',
     'is_polymorphic_v',
     'is_abstract_v',
@@ -593,6 +588,9 @@ _TYPE_TRAITS = [
     'is_aggregate_v',
     'is_signed_v',
     'is_unsigned_v',
+    'is_bounded_array_v',
+    'is_unbounded_array_v',
+    'is_scoped_enum_v',
     'is_constructible_v',
     'is_default_constructible_v',
     'is_copy_constructible_v',
@@ -621,33 +619,46 @@ _TYPE_TRAITS = [
     'is_nothrow_swappable_with_v',
     'is_nothrow_swappable_v',
     'is_nothrow_destructible_v',
+    'is_implicit_lifetime_v',
     'has_virtual_destructor_v',
     'has_unique_object_representations_v',
-    # 23.15.5, type property queries
+    'reference_constructs_from_temporary_v',
+    'reference_converts_from_temporary_v',
+    # Type property queries _v [meta.unary.prop.query]
     'alignment_of_v',
     'rank_v',
     'extent_v',
     'is_same_v',
     'is_base_of_v',
+    'is_virtual_base_of_v',
     'is_convertible_v',
+    'is_nothrow_convertible_v',
+    'is_layout_compatible_v',
+    'is_pointer_interconvertible_base_of_v',
     'is_invocable_v',
     'is_invocable_r_v',
     'is_nothrow_invocable_v',
     'is_nothrow_invocable_r_v',
-    # 23.15.8, logical operator traits
+    # Logical operator traits _v [meta.logical]
     'conjunction_v',
     'disjunction_v',
     'negation_v',
+    # Member relationships [meta.member]
+    'is_pointer_interconvertible_with_class',
+    'is_corresponding_member',
+    # Constant evaluation context [meta.const.eval]
+    'is_constant_evaluated',
+    'is_within_lifetime',
 ]
 _TYPE_TRAITS_RE = re.compile(r'\b::(?:' + ('|'.join(_TYPE_TRAITS)) + ')<')
 
 # Type names
 _TYPES = re.compile(r'^(?:'
                     # [dcl.type.simple]
-                    r'(char(16_t|32_t)?)|wchar_t|'
-                    r'bool|short|int|long|signed|unsigned|float|double|'
+                    r'(char(8_t|16_t|32_t)?)|wchar_t|'
+                    r'bool|short|int|long|signed|unsigned|float|double|void|'
                     # [support.types]
-                    r'(ptrdiff_t|size_t|max_align_t|nullptr_t)|'
+                    r'ptrdiff_t|size_t|max_align_t|nullptr_t|byte|'
                     # [cstdint.syn]
                     r'(u?int(_fast|_least)?(8|16|32|64)_t)|'
                     r'(u?int(max|ptr)_t)|'
@@ -3003,7 +3014,7 @@ class NestingState(object):
 
 def CheckForNonStandardConstructs(filename, clean_lines, linenum, nesting_state,
                                   error):
-    """Logs an error if we see certain non-ANSI constructs ignored by gcc-2.
+    r"""Logs an error if we see certain non-ANSI constructs ignored by gcc-2.
 
     Complain about several constructs which gcc-2 accepts, but which are
     not standard C++.  Warning about these in lint is one way to ease the
@@ -3568,8 +3579,9 @@ def CheckOperatorSpacing(filename, clean_lines, linenum, error):
     if ((Search(r'[\w.]=', line) or Search(r'=[\w.]', line))
             and not Search(r'\b(if|while|for) ', line)
             # Operators taken from [lex.operators] in C++11 standard.
-            and not Search(r'(>=|<=|==|!=|&=|\^=|\|=|\+=|\*=|\/=|\%=)', line)
-            and not Search(r'operator=', line)):
+            and not Search(
+                r'(\+=|\-=|\*=|\/=|\%=|\^=|&=|\|=|==|!=|<=|>=|<=>|<<=|>>=)',
+                line) and not Search(r'operator=', line)):
         error(filename, linenum, 'whitespace/operators', 4,
               'Missing spaces around =')
 
@@ -3582,13 +3594,15 @@ def CheckOperatorSpacing(filename, clean_lines, linenum, error):
     # Check <= and >= first to avoid false positives with < and >, then
     # check non-include lines for spacing around < and >.
     #
-    # If the operator is followed by a comma, assume it's be used in a
+    # If the operator is followed by a comma, assume it's being used in a
     # macro context and don't do any checks.  This avoids false
     # positives.
     #
     # Note that && is not included here.  This is because there are too
     # many false positives due to RValue references.
-    match = Search(r'[^<>=!\s](==|!=|<=|>=|\|\|)[^<>=!\s,;\)]', line)
+    match = Search(
+        r'[^<>=!\s](\+=|\-=|\*=|\/=|\%=|\^=|&=|\|=|'
+        r'==|!=|<=|>=|<=>|<<=|>>=|\|\|)[^<>=!\s,;\)]', line)
     if match:
         error(filename, linenum, 'whitespace/operators', 3,
               'Missing spaces around %s' % match.group(1))
@@ -4066,10 +4080,12 @@ def CheckBraces(filename, clean_lines, linenum, error):
              endpos) = CloseExpression(clean_lines, linenum, pos)
         # Check for an opening brace, either directly after the if or on the
         # next line. If found, this isn't a single-statement conditional.
-        if (not Match(r'\s*{', endline[endpos:])
-                and not (Match(r'\s*$', endline[endpos:]) and endlinenum <
-                         (len(clean_lines.elided) - 1) and Match(
-                             r'\s*{', clean_lines.elided[endlinenum + 1]))):
+        if (not Match(r'\s*(?:\[\[(?:un)?likely\]\]\s*)?{', endline[endpos:])
+                and not (Match(r'\s*(?:\[\[(?:un)?likely\]\]\s*)?$',
+                               endline[endpos:])
+                         and endlinenum < (len(clean_lines.elided) - 1)
+                         and Match(r'\s*(?:\[\[(?:un)?likely\]\]\s*)?{',
+                                   clean_lines.elided[endlinenum + 1]))):
             while (endlinenum < len(clean_lines.elided)
                    and ';' not in clean_lines.elided[endlinenum][endpos:]):
                 endlinenum += 1
@@ -4839,7 +4855,7 @@ def CheckIncludeLine(filename, clean_lines, linenum, include_state, error):
 
 
 def _GetTextInside(text, start_pattern):
-    """Retrieves all the text between matching open and close parentheses.
+    r"""Retrieves all the text between matching open and close parentheses.
 
     Given a string of lines and a regular expression string, retrieve all the text
     following the expression and between opening punctuation symbols like
@@ -6383,10 +6399,9 @@ def ProcessFile(filename, vlevel, extra_check_functions=[]):
         # If after the split a trailing '\r' is present, it is removed
         # below.
         if filename == '-':
-            lines = codecs.StreamReaderWriter(sys.stdin,
-                                              codecs.getreader('utf8'),
-                                              codecs.getwriter('utf8'),
-                                              'replace').read().split('\n')
+            lines = codecs.StreamReaderWriter(
+                sys.stdin.read().encode('utf8'), codecs.getreader('utf8'),
+                codecs.getwriter('utf8'), 'replace').decode('utf8').split('\n')
         else:
             with codecs.open(filename, 'r', 'utf8', 'replace') as stream:
                 lines = stream.read().split('\n')

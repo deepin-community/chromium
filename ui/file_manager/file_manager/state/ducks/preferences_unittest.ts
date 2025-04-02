@@ -26,6 +26,9 @@ const INITIAL_PREFERENCES: Preferences = {
   driveFsBulkPinningAvailable: false,
   driveFsBulkPinningEnabled: false,
   localUserFilesAllowed: true,
+  defaultLocation: chrome.fileManagerPrivate.DefaultLocation.MY_FILES,
+  skyVaultMigrationDestination:
+      chrome.fileManagerPrivate.CloudProvider.NOT_SPECIFIED,
 };
 
 /**

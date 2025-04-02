@@ -22,7 +22,6 @@
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/leveldb_proto/testing/fake_db.h"
 #include "components/optimization_guide/core/model_util.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
@@ -391,7 +390,7 @@ class PredictionManagerTestBase : public ProtoDatabaseProviderTestBase {
         base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
             &test_url_loader_factory_);
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kDisableCheckingUserPermissionsForTesting);
+        switches::kGoogleApiKeyConfigurationCheckOverride);
 
     CreateAndInitializePredictionModelStore();
     RunUntilIdle();
@@ -683,7 +682,7 @@ TEST_F(PredictionManagerTest, AddObserverForOptimizationTargetModel) {
   proto::Any model_metadata;
   model_metadata.set_type_url(
       "type.googleapis.com/"
-      "google.internal.chrome.optimizationguide.v1.PageEntitiesModelMetadata");
+      "google.internal.chrome.optimizationguide.v1.PageTopicsModelMetadata");
   prediction_model_fetcher()->SetExpectedModelMetadataForOptimizationTarget(
       proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD, model_metadata);
   histogram_tester.ExpectTotalCount(
@@ -853,7 +852,7 @@ TEST_F(PredictionManagerTest,
   optimization_guide::proto::Any metadata;
   metadata.set_type_url(
       "type.googleapis.com/"
-      "google.internal.chrome.optimizationguide.v1.PageEntitiesModelMetadata");
+      "google.internal.chrome.optimizationguide.v1.PageTopicsModelMetadata");
   std::string encoded_metadata;
   metadata.SerializeToString(&encoded_metadata);
   encoded_metadata = base::Base64Encode(encoded_metadata);
@@ -870,7 +869,7 @@ TEST_F(PredictionManagerTest,
   proto::Any model_metadata;
   model_metadata.set_type_url(
       "type.googleapis.com/"
-      "google.internal.chrome.optimizationguide.v1.PageEntitiesModelMetadata");
+      "google.internal.chrome.optimizationguide.v1.PageTopicsModelMetadata");
   prediction_model_fetcher()->SetExpectedModelMetadataForOptimizationTarget(
       proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD, model_metadata);
 
@@ -897,7 +896,7 @@ TEST_F(PredictionManagerTest,
           ->GetModelMetadata()
           ->type_url(),
       "type.googleapis.com/"
-      "google.internal.chrome.optimizationguide.v1.PageEntitiesModelMetadata");
+      "google.internal.chrome.optimizationguide.v1.PageTopicsModelMetadata");
   EXPECT_EQ(observer
                 .last_received_model_for_target(
                     proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD)

@@ -15,7 +15,7 @@
 
 from python.generators.diff_tests.testing import Path, DataPath, Metric
 from python.generators.diff_tests.testing import Csv, Json, TextProto
-from python.generators.diff_tests.testing import DiffTestBlueprint
+from python.generators.diff_tests.testing import DiffTestBlueprint, TraceInjector
 from python.generators.diff_tests.testing import TestSuite
 
 
@@ -35,6 +35,8 @@ class Tables(TestSuite):
         "ts","dur","quantum_ts"
         0,9223372036854775807,0
         """))
+
+
 
   # Null printing
   def test_nulls(self):
@@ -287,34 +289,46 @@ class Tables(TestSuite):
         }
         """),
         query="""
-        SELECT
-          type,
-          cpu
+        SELECT cpu
         FROM cpu_track
-        ORDER BY type, cpu;
+        ORDER BY cpu;
         """,
         out=Csv("""
-        "type","cpu"
-        "cpu_track",0
-        "cpu_track",1
+        "cpu"
+        0
+        1
         """))
 
   def test_thread_state_flattened_aggregated(self):
     return DiffTestBlueprint(
         trace=DataPath('android_monitor_contention_trace.atr'),
         query="""
-      INCLUDE PERFETTO MODULE sched.thread_state_flattened;
-      select * from _get_flattened_thread_state_aggregated(11155, NULL);
-      """,
+          INCLUDE PERFETTO MODULE sched.thread_state_flattened;
+          select *
+          from _get_flattened_thread_state_aggregated(11155, NULL);
+        """,
         out=Path('thread_state_flattened_aggregated_csv.out'))
 
   def test_thread_state_flattened(self):
     return DiffTestBlueprint(
         trace=DataPath('android_monitor_contention_trace.atr'),
         query="""
-      INCLUDE PERFETTO MODULE sched.thread_state_flattened;
-      select * from _get_flattened_thread_state(11155, NULL);
-      """,
+          INCLUDE PERFETTO MODULE sched.thread_state_flattened;
+          SELECT
+            ts,
+            dur,
+            utid,
+            depth,
+            name,
+            slice_id,
+            cpu,
+            state,
+            io_wait,
+            blocked_function,
+            waker_utid,
+            irq_context
+          FROM _get_flattened_thread_state(11155, NULL);
+        """,
         out=Path('thread_state_flattened_csv.out'))
 
   def test_metadata(self):
@@ -385,12 +399,12 @@ class Tables(TestSuite):
             trusted_packet_sequence_id: 123
           }
         """),
-        query="SELECT * FROM flow;",
+        query="SELECT id, slice_out, slice_in, trace_id, arg_set_id FROM flow;",
         out=Csv("""
-          "id","type","slice_out","slice_in","trace_id","arg_set_id"
-          0,"flow",0,1,57,0
-          1,"flow",1,2,57,0
-                """))
+          "id","slice_out","slice_in","trace_id","arg_set_id"
+          0,0,1,57,"[NULL]"
+          1,1,2,57,"[NULL]"
+        """))
 
   def test_clock_snapshot_table_multiplier(self):
     return DiffTestBlueprint(
@@ -413,4 +427,73 @@ class Tables(TestSuite):
         out=Csv("""
           "TO_REALTIME(0)"
           420
+        """))
+
+  # Test cpu_track with machine_id ID.
+  def test_cpu_track_table_machine_id(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          ftrace_events {
+            cpu: 1
+            event {
+              timestamp: 100001000000
+              pid: 10
+              irq_handler_entry {
+                irq: 100
+                name : "resource1"
+              }
+            }
+            event {
+              timestamp: 100002000000
+              pid: 10
+              irq_handler_exit {
+                irq: 100
+                ret: 1
+              }
+            }
+          }
+          machine_id: 1001
+        }
+        packet {
+          ftrace_events {
+            cpu: 0
+            event {
+              timestamp: 100003000000
+              pid: 15
+              irq_handler_entry {
+                irq: 100
+                name : "resource1"
+              }
+            }
+          }
+          machine_id: 1001
+        }
+        """),
+        query="""
+        SELECT
+          c.ucpu,
+          ct.cpu,
+          c.machine_id
+        FROM cpu_track AS ct
+        JOIN cpu AS c ON ct.machine_id IS c.machine_id AND ct.cpu = c.cpu
+        ORDER BY ct.cpu
+        """,
+        out=Csv("""
+        "ucpu","cpu","machine_id"
+        4096,0,1
+        4097,1,1
+        """))
+
+  def test_async_slice_utid_arg_set_id(self):
+    return DiffTestBlueprint(
+        trace=DataPath('android_monitor_contention_trace.atr'),
+        query="""
+        SELECT COUNT(DISTINCT extract_arg(arg_set_id, 'utid')) AS utid_count,
+        COUNT(DISTINCT extract_arg(arg_set_id, 'end_utid')) AS end_utid_count
+        FROM counter
+        """,
+        out=Csv("""
+        "utid_count","end_utid_count"
+        89,0
         """))

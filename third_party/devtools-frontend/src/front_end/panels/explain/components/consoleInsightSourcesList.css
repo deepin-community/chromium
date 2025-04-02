@@ -21,6 +21,7 @@ ul {
   font-weight: 400;
   line-height: 18px;
   margin-top: 8px;
+  padding-left: var(--sys-size-6);
 }
 
 li {
@@ -35,8 +36,16 @@ ul .link {
   text-decoration-line: underline;
 }
 
-devtools-icon[name="open-externally"] {
-  color: var(--icon-link);
+devtools-icon {
   height: 16px;
   width: 16px;
+  margin-right: var(--sys-size-1);
+}
+
+devtools-icon[name="open-externally"] {
+  color: var(--icon-link);
+}
+
+.source-disclaimer {
+  color: var(--sys-color-on-surface-subtle);
 }

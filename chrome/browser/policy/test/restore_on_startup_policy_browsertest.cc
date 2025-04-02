@@ -2,11 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
+#include <algorithm>
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/cxx20_erase.h"
-#include "base/ranges/algorithm.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "build/chromeos_buildflags.h"
@@ -40,8 +44,8 @@ namespace policy {
 namespace {
 
 constexpr const char* kRestoredURLs[] = {
-    "http://aaa.com/empty.html",
-    "http://bbb.com/empty.html",
+    "https://aaa.com/empty.html",
+    "https://bbb.com/empty.html",
 };
 
 bool IsNonSwitchArgument(const base::CommandLine::StringType& s) {
@@ -57,12 +61,7 @@ class RestoreOnStartupPolicyTest : public UrlBlockingPolicyTest,
                                    public testing::WithParamInterface<void (
                                        RestoreOnStartupPolicyTest::*)(void)> {
  public:
-  RestoreOnStartupPolicyTest() {
-    // TODO(crbug.com/1394910): Use HTTPS URLs in tests to avoid having to
-    // disable this feature.
-    feature_list_.InitAndDisableFeature(features::kHttpsUpgrades);
-  }
-
+  RestoreOnStartupPolicyTest() = default;
   ~RestoreOnStartupPolicyTest() override = default;
 
   void SetUpInProcessBrowserTestFixture() override {
@@ -74,9 +73,9 @@ class RestoreOnStartupPolicyTest : public UrlBlockingPolicyTest,
     // these tests.
     base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
     base::CommandLine::StringVector argv = command_line->argv();
-    base::EraseIf(argv, IsNonSwitchArgument);
+    std::erase_if(argv, IsNonSwitchArgument);
     command_line->InitFromArgv(argv);
-    ASSERT_TRUE(base::ranges::equal(argv, command_line->argv()));
+    ASSERT_TRUE(std::ranges::equal(argv, command_line->argv()));
   }
 
   void ListOfURLs() {

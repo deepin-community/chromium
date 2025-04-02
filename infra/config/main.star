@@ -6,12 +6,14 @@
 # See https://chromium.googlesource.com/infra/luci/luci-go/+/HEAD/lucicfg/doc/README.md
 # for information on starlark/lucicfg
 
+"""Entrypoint for `lucicfg generate infra/config/main.star`."""
+
 load("//lib/branches.star", "branches")
 load("//lib/chrome_settings.star", "chrome_settings")
 load("//project.star", "settings")
 
 lucicfg.check_version(
-    min = "1.40.0",
+    min = "1.43.13",
     message = "Update depot_tools",
 )
 
@@ -25,6 +27,7 @@ lucicfg.config(
         "builders/*/*/*",
         "builders/*/*/*/*",
         "builders/gn_args_locations.json",
+        "builder-owners/*.txt",
         "cq-builders.md",
         "cq-usage/default.cfg",
         "cq-usage/full.cfg",
@@ -41,7 +44,7 @@ lucicfg.config(
         "luci/luci-scheduler.cfg",
         "luci/project.cfg",
         "luci/realms.cfg",
-        "luci/tricium-prod.cfg",
+        "luci/testhaus.cfg",
         "outages.pyl",
         "sheriff-rotations/*.txt",
         "project.pyl",
@@ -59,10 +62,10 @@ lucicfg.config(
     ],
 )
 
-# Just copy tricium-prod.cfg to the generated outputs
+# Just copy Testhaus config to generated outputs.
 lucicfg.emit(
-    dest = "luci/tricium-prod.cfg",
-    data = io.read_file("tricium-prod.cfg"),
+    dest = "luci/testhaus.cfg",
+    data = io.read_file("testhaus.cfg"),
 )
 
 # Just copy LUCI Analysis config to generated outputs.
@@ -137,6 +140,7 @@ luci.cq(
     submit_max_burst = 2,
     submit_burst_delay = time.minute,
     status_host = "chromium-cq-status.appspot.com",
+    honor_gerrit_linked_accounts = True,
 )
 
 luci.logdog(
@@ -153,6 +157,10 @@ luci.notify(
 
 chrome_settings.per_builder_outputs(
     root_dir = "builders",
+)
+
+chrome_settings.targets(
+    autoshard_exceptions_file = "//targets/autoshard_exceptions.json",
 )
 
 # An all-purpose public realm.
@@ -204,7 +212,7 @@ luci.realm(
 )
 
 # Allows builders to write baselines and query ResultDB for new tests.
-# TODO(crbug/1465953) @project is not available, and @root should inherit into
+# TODO(crbug.com/40276195) @project is not available, and @root should inherit into
 # project so we'll do this for now until @project is supported.
 luci.realm(
     name = "@root",
@@ -226,6 +234,40 @@ luci.realm(
             ],
             users = [
                 "chromium-orchestrator@chops-service-accounts.iam.gserviceaccount.com",
+            ],
+        ),
+    ],
+)
+
+luci.realm(
+    name = "@project",
+    bindings = [
+        # Allow everyone (including non-logged-in users) to see chromium tree status.
+        luci.binding(
+            roles = "role/treestatus.limitedReader",
+            groups = [
+                "all",
+            ],
+        ),
+        # Only allow Googlers to see PII.
+        luci.binding(
+            roles = "role/treestatus.reader",
+            groups = [
+                "googlers",
+            ],
+            users = [
+                "chromium-status-hr@appspot.gserviceaccount.com",
+                "luci-notify@appspot.gserviceaccount.com",
+            ],
+        ),
+        # Only allow Googlers and service accounts.
+        luci.binding(
+            roles = "role/treestatus.writer",
+            groups = [
+                "googlers",
+            ],
+            users = [
+                "luci-notify@appspot.gserviceaccount.com",
             ],
         ),
     ],
@@ -267,7 +309,6 @@ exec("//subprojects/infra.star")
 branches.exec("//subprojects/codesearch/subproject.star")
 branches.exec("//subprojects/findit/subproject.star")
 branches.exec("//subprojects/flakiness/subproject.star")
-branches.exec("//subprojects/goma/subproject.star")
 branches.exec("//subprojects/reclient/subproject.star")
 branches.exec("//subprojects/reviver/subproject.star")
 branches.exec("//subprojects/webrtc/subproject.star")
@@ -275,12 +316,18 @@ branches.exec("//subprojects/webrtc/subproject.star")
 exec("//generators/cq-usage.star")
 branches.exec("//generators/cq-builders-md.star")
 
+exec("//generators/builder-owners.star")
 exec("//generators/sort-consoles.star")
 
 # Execute validators after eveything except the outage file so that we're
 # validating the final non-outages configuration
 exec("//validators/builder-group-triggers.star")
 exec("//validators/builders-in-consoles.star")
+
+# Notify findit about completed builds for code coverage purposes
+luci.buildbucket_notification_topic(
+    name = "projects/findit-for-me/topics/buildbucket_notification",
+)
 
 # Execute this file last so that any configuration changes needed for handling
 # outages gets final say

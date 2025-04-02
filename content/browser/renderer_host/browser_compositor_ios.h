@@ -107,7 +107,7 @@ class CONTENT_EXPORT BrowserCompositorIOS : public DelegatedFrameHostClient,
                            base::TimeTicks activation_time) override;
   float GetDeviceScaleFactor() const override;
   void InvalidateLocalSurfaceIdOnEviction() override;
-  std::vector<viz::SurfaceId> CollectSurfaceIdsForEviction() override;
+  viz::FrameEvictorClient::EvictIds CollectSurfaceIdsForEviction() override;
   bool ShouldShowStaleContentOnEviction() override;
 
   base::WeakPtr<BrowserCompositorIOS> GetWeakPtr() {
@@ -121,6 +121,9 @@ class CONTENT_EXPORT BrowserCompositorIOS : public DelegatedFrameHostClient,
   // Dispatched after the old page has been unloaded and has entered the
   // `BackForwardCache`.
   void DidEnterBackForwardCache();
+
+  // Dispatched after the page is activated from BFCache.
+  void ActivatedOrEvictedFromBackForwardCache();
 
   void DidNavigate();
 

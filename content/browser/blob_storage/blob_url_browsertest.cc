@@ -2,27 +2,46 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+
 #include "base/strings/pattern.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/with_feature_override.h"
 #include "build/build_config.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
+#include "content/public/test/content_browser_test_content_browser_client.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "content/test/content_browser_test_utils_internal.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
 namespace content {
+
+namespace {
+class MockContentBrowserClient : public ContentBrowserTestContentBrowserClient {
+ public:
+  MockContentBrowserClient() = default;
+  ~MockContentBrowserClient() override = default;
+
+  MOCK_METHOD(void,
+              LogWebFeatureForCurrentPage,
+              (content::RenderFrameHost*, blink::mojom::WebFeature),
+              (override));
+};
+}  // namespace
 
 // Tests of the blob: URL scheme.
 class BlobUrlBrowserTest : public ContentBrowserTest {
@@ -36,7 +55,15 @@ class BlobUrlBrowserTest : public ContentBrowserTest {
     host_resolver()->AddRule("*", "127.0.0.1");
     SetupCrossSiteRedirector(embedded_test_server());
     ASSERT_TRUE(embedded_test_server()->Start());
+    client_ = std::make_unique<MockContentBrowserClient>();
   }
+
+  MockContentBrowserClient& GetMockClient() { return *client_; }
+
+  void TearDownOnMainThread() override { client_.reset(); }
+
+ private:
+  std::unique_ptr<MockContentBrowserClient> client_;
 };
 
 IN_PROC_BROWSER_TEST_F(BlobUrlBrowserTest, LinkToUniqueOriginBlob) {
@@ -175,91 +202,71 @@ IN_PROC_BROWSER_TEST_F(BlobUrlBrowserTest, ReplaceStateToAddAuthorityToBlob) {
   EXPECT_FALSE(base::MatchPattern(window_location, "*spoof*"));
 }
 
-enum class PartitionedBlobUrlBrowserTestTestCase {
-  kSupportPartitionedBlobUrlDisabled,
-  kSupportPartitionedBlobUrlEnabled,
-};
+IN_PROC_BROWSER_TEST_F(BlobUrlBrowserTest,
+                       TestUseCounterForCrossPartitionBlobURLFetch) {
+  GURL main_url = embedded_test_server()->GetURL(
+      "c.com", "/cross_site_iframe_factory.html?c(b(c))");
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
 
-class PartitionedBlobUrlBrowserTestP
-    : public BlobUrlBrowserTest,
-      public testing::WithParamInterface<
-          PartitionedBlobUrlBrowserTestTestCase> {
+  RenderFrameHost* rfh_c = shell()->web_contents()->GetPrimaryMainFrame();
+
+  std::string blob_url_string =
+      EvalJs(
+          rfh_c,
+          "const blob_url = URL.createObjectURL(new "
+          "Blob(['<!doctype html><body>potato</body>'], {type: 'text/html'}));"
+          "blob_url;")
+          .ExtractString();
+  GURL blob_url(blob_url_string);
+
+  RenderFrameHost* rfh_b = ChildFrameAt(rfh_c, 0);
+  RenderFrameHost* rfh_c_2 = ChildFrameAt(rfh_b, 0);
+
+  EXPECT_CALL(
+      GetMockClient(),
+      LogWebFeatureForCurrentPage(
+          testing::_, blink::mojom::WebFeature::kCrossPartitionBlobURLFetch))
+      .Times(1);
+
+  EXPECT_TRUE(ExecJs(
+      rfh_c_2,
+      JsReplace(
+          "async function test() {"
+          "const blob = await fetch($1).then(response => response.blob());"
+          "await blob.text();}"
+          "test();",
+          blob_url)));
+}
+
+class BlobURLBrowserTestP : public base::test::WithFeatureOverride,
+                            public BlobUrlBrowserTest {
  public:
-  PartitionedBlobUrlBrowserTestP() {
-    scoped_feature_list_.InitWithFeatureState(
-        net::features::kSupportPartitionedBlobUrl,
-        GetParam() == PartitionedBlobUrlBrowserTestTestCase::
-                          kSupportPartitionedBlobUrlEnabled);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
+  BlobURLBrowserTestP()
+      : base::test::WithFeatureOverride(
+            blink::features::kEnforceNoopenerOnBlobURLNavigation) {}
 };
 
-IN_PROC_BROWSER_TEST_P(PartitionedBlobUrlBrowserTestP,
-                       BlobUrlStoreRegisterMetrics) {
-  GURL main_url(embedded_test_server()->GetURL("chromium.org", "/title1.html"));
-  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(BlobURLBrowserTestP);
 
-  base::HistogramTester histogram_tester;
+// Tests that an opaque origin document is able to window.open a Blob URL it
+// created.
+IN_PROC_BROWSER_TEST_P(BlobURLBrowserTestP,
+                       NavigationWithOpaqueTopLevelOrigin) {
+  EXPECT_TRUE(NavigateToURL(shell(), GURL("data:text/html,<script></script>")));
 
-  EXPECT_TRUE(ExecJs(shell(), "URL.createObjectURL(new Blob(['foo']))"));
+  ShellAddedObserver new_shell_observer;
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      "const blob_url = URL.createObjectURL(new "
+      "Blob(['<!doctype html><body>potato</body>'], {type: 'text/html'}));"
+      "var handle = window.open(blob_url);"));
 
-  FetchHistogramsFromChildProcesses();
+  Shell* new_shell = new_shell_observer.GetShell();
+  WebContents* new_contents = new_shell->web_contents();
+  EXPECT_TRUE(WaitForLoadStop(new_contents));
 
-  if (base::FeatureList::IsEnabled(net::features::kSupportPartitionedBlobUrl)) {
-    histogram_tester.ExpectTotalCount(
-        "Storage.Blob.RegisterURLTimeWithPartitioningSupport.Frame", 1);
-  } else {
-    histogram_tester.ExpectTotalCount(
-        "Storage.Blob.RegisterURLTimeWithoutPartitioningSupport", 1);
-  }
+  bool handle_null = EvalJs(shell(), "handle === null;").ExtractBool();
+  EXPECT_FALSE(handle_null);
 }
-
-IN_PROC_BROWSER_TEST_P(PartitionedBlobUrlBrowserTestP,
-                       BlobUrlStoreRegisterMetricsWorker) {
-  GURL main_url(embedded_test_server()->GetURL("chromium.org", "/title1.html"));
-  EXPECT_TRUE(NavigateToURL(shell(), main_url));
-
-  base::HistogramTester histogram_tester;
-
-  EXPECT_TRUE(ExecJs(shell(), R"(
-  function workerCode() {
-    URL.createObjectURL(new Blob(['foo']));
-    postMessage(true);
-  }
-  var workerBlob = new Blob(
-    [workerCode.toString() + ';workerCode();'],
-    {type: 'application/javascript'});
-  new Promise((resolve) => {
-    var w = new Worker(URL.createObjectURL(workerBlob));
-    w.onmessage = (e) => {
-      w.terminate();
-      resolve();
-    };
-  });)"));
-
-  FetchHistogramsFromChildProcesses();
-
-  // We expect two PublicURLManager::RegisterURL calls, one from the frame when
-  // it creates the worker and another when the worker creates a blob URL.
-  if (base::FeatureList::IsEnabled(net::features::kSupportPartitionedBlobUrl)) {
-    histogram_tester.ExpectTotalCount(
-        "Storage.Blob.RegisterURLTimeWithPartitioningSupport.Frame", 1);
-    histogram_tester.ExpectTotalCount(
-        "Storage.Blob.RegisterURLTimeWithPartitioningSupport.Worker", 1);
-  } else {
-    histogram_tester.ExpectTotalCount(
-        "Storage.Blob.RegisterURLTimeWithoutPartitioningSupport", 2);
-  }
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    PartitionedBlobUrlBrowserTest,
-    PartitionedBlobUrlBrowserTestP,
-    ::testing::Values(PartitionedBlobUrlBrowserTestTestCase::
-                          kSupportPartitionedBlobUrlDisabled,
-                      PartitionedBlobUrlBrowserTestTestCase::
-                          kSupportPartitionedBlobUrlEnabled));
 
 }  // namespace content

@@ -53,7 +53,7 @@ class ExtensionManagement : public KeyedService {
   // Observer class for extension management settings changes.
   class Observer {
    public:
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
 
     // Called when the extension management settings change.
     virtual void OnExtensionManagementSettingsChanged() = 0;
@@ -82,7 +82,7 @@ class ExtensionManagement : public KeyedService {
   //                     it afterwards.
   // * kForcePinned: Extension starts pinned to the toolbar, and the user
   //                 cannot unpin it.
-  // TODO(crbug.com/1071314): Add kDefaultPinned state.
+  // TODO(crbug.com/40126725): Add kDefaultPinned state.
   enum class ToolbarPinMode {
     kDefaultUnpinned = 0,
     kForcePinned,
@@ -164,7 +164,27 @@ class ExtensionManagement : public KeyedService {
                                 Manifest::Type manifest_type);
   bool IsAllowedManifestVersion(const Extension* extension);
 
+  // Returns true if the extension associated with the given `extension_id` is
+  // exempt from the MV2 deprecation because of an active admin policy.
+  bool IsExemptFromMV2DeprecationByPolicy(int manifest_version,
+                                          const std::string& extension_id,
+                                          Manifest::Type manifest_type);
+
   bool IsAllowedByUnpublishedAvailabilityPolicy(const Extension* extension);
+
+  // Returns false if the extension is loaded as unpacked and the developer mode
+  // is OFF.
+  bool IsAllowedByUnpackedDeveloperModePolicy(const Extension& extension);
+
+  // Returns true if a force-installed extension is in a low-trust environment.
+  bool IsForceInstalledInLowTrustEnvironment(const Extension& extension);
+
+  // Returns true if an off-store extension is force-installed in low trust
+  // environments. Only trusted environments like domain-joined devices or
+  // cloud-managed user profiles are allowed to force-install off-store
+  // extensions. All other devices and users may still install policy extensions
+  // but they must be hosted within the web store. See https://b/283274398.
+  bool ShouldBlockForceInstalledOffstoreExtension(const Extension& extension);
 
   // Returns the list of blocked API permissions for |extension|.
   APIPermissionSet GetBlockedAPIPermissions(const Extension* extension);
@@ -197,10 +217,6 @@ class ExtensionManagement : public KeyedService {
   // ExtensionSettings policy.
   // Returns false if an individual scoped setting isn't defined.
   bool UsesDefaultPolicyHostRestrictions(const Extension* extension);
-
-  // Checks if a URL is on the blocked host permissions list for a specific
-  // extension.
-  bool IsPolicyBlockedHost(const Extension* extension, const GURL& url);
 
   // Returns blocked permission set for |extension|.
   std::unique_ptr<const PermissionSet> GetBlockedPermissions(

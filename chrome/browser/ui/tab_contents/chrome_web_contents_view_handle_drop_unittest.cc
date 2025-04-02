@@ -2,11 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
+#include "chrome/browser/ui/tab_contents/chrome_web_contents_view_handle_drop.h"
+
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
 
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -21,7 +29,6 @@
 #include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"
 #include "chrome/browser/enterprise/connectors/test/fake_content_analysis_delegate.h"
 #include "chrome/browser/policy/dm_token_utils.h"
-#include "chrome/browser/ui/tab_contents/chrome_web_contents_view_handle_drop.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -387,8 +394,8 @@ TEST_F(ChromeWebContentsViewDelegateHandleOnPerformingDrop, Files) {
   ASSERT_TRUE(file_1.IsValid());
   ASSERT_TRUE(file_2.IsValid());
 
-  file_1.WriteAtCurrentPos("foo content", 11);
-  file_2.WriteAtCurrentPos("bar content", 11);
+  file_1.WriteAtCurrentPos(base::byte_span_from_cstring("foo content"));
+  file_2.WriteAtCurrentPos(base::byte_span_from_cstring("bar content"));
 
   content::DropData data;
   data.document_is_handling_drag = true;
@@ -435,7 +442,7 @@ TEST_F(ChromeWebContentsViewDelegateHandleOnPerformingDrop, Directories) {
   for (const auto& path : {path_1, path_2, path_3, path_4, path_5}) {
     base::File file(path, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
     ASSERT_TRUE(file.IsValid());
-    file.WriteAtCurrentPos("foo content", 11);
+    file.WriteAtCurrentPos(base::byte_span_from_cstring("foo content"));
   }
 
   content::DropData data;

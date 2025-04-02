@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/browser/ukm_internals_ui.h"
 
 #include <stddef.h>
@@ -32,7 +37,7 @@ void CreateAndAddUkmHTMLSource(BrowserContext* browser_context) {
   WebUIDataSource* source =
       WebUIDataSource::CreateAndAdd(browser_context, kChromeUIUkmHost);
 
-  source->AddResourcePaths(base::make_span(kUkmResources, kUkmResourcesSize));
+  source->AddResourcePaths(kUkmResources);
   source->SetDefaultResource(IDR_UKM_UKM_INTERNALS_HTML);
 }
 

@@ -14,6 +14,7 @@
 #include "content/shell/app/resource.h"
 #include "content/shell/browser/color_chooser/shell_color_chooser_ios.h"
 #include "content/shell/browser/shell.h"
+#include "content/shell/browser/shell_content_browser_client.h"
 #include "content/shell/browser/shell_file_select_helper.h"
 #include "services/tracing/public/cpp/perfetto/perfetto_config.h"
 #include "services/tracing/public/mojom/constants.mojom.h"
@@ -148,6 +149,9 @@ static const char kAllTracingCategories[] = "*";
   [_headerContentView addSubview:_reloadOrStopButton];
   [_headerContentView addSubview:_menuButton];
   [_headerContentView addSubview:_field];
+
+  self.view.accessibilityElements = @[ _headerBackgroundView, _contentView ];
+  self.view.isAccessibilityElement = NO;
 
   _headerBackgroundView.backgroundColor =
       [ContentShellWindowDelegate backgroundColorDefault];
@@ -298,10 +302,17 @@ static const char kAllTracingCategories[] = "*";
 
   UIView* web_contents_view = _shell->web_contents()->GetNativeView().Get();
   [_contentView addSubview:web_contents_view];
+
+  if (@available(ios 17.0, *)) {
+    NSArray<UITrait>* traits = @[ UITraitUserInterfaceStyle.self ];
+    [self registerForTraitChanges:traits
+                       withTarget:self
+                           action:@selector(darkModeDidChange)];
+  }
+  [self darkModeDidChange];
 }
 
-- (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
-  [super traitCollectionDidChange:previousTraitCollection];
+- (void)darkModeDidChange {
   BOOL darkModeEnabled =
       (self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark);
   _field.backgroundColor =
@@ -345,6 +356,17 @@ static const char kAllTracingCategories[] = "*";
                                        handler:nil]];
 
   __weak ContentShellWindowDelegate* weakSelf = self;
+
+  bool jit_enabled = content::ShellContentBrowserClient::Get()->IsJITEnabled();
+  NSString* jit_label = jit_enabled ? @"Disable JIT" : @"Enable JIT";
+  [alertController
+      addAction:[UIAlertAction
+                    actionWithTitle:jit_label
+                              style:UIAlertActionStyleDefault
+                            handler:^(UIAlertAction* action) {
+                              content::ShellContentBrowserClient::Get()
+                                  ->SetJITEnabled(!jit_enabled);
+                            }]];
 
   if ([_tracingHandler isTracing]) {
     [alertController
@@ -625,7 +647,6 @@ void ShellPlatformDelegate::EnableUIControl(Shell* shell,
     }
     default:
       NOTREACHED() << "Unknown UI control";
-      return;
   }
   [button setEnabled:is_enabled];
 }

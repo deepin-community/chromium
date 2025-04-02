@@ -12,8 +12,8 @@
 #include "core/fpdfapi/parser/cpdf_simple_parser.h"
 #include "core/fpdfapi/parser/fpdf_parser_utility.h"
 #include "core/fxcrt/fx_string.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxge/cfx_color.h"
-#include "third_party/base/notreached.h"
 
 namespace {
 
@@ -28,9 +28,9 @@ bool FindTagParamFromStart(CPDF_SimpleParser* parser,
   int buf_index = 0;
   int buf_count = 0;
 
-  parser->SetCurPos(0);
+  parser->SetCurrentPosition(0);
   while (true) {
-    pBuf[buf_index++] = parser->GetCurPos();
+    pBuf[buf_index++] = parser->GetCurrentPosition();
     if (buf_index == nParams)
       buf_index = 0;
 
@@ -46,15 +46,13 @@ bool FindTagParamFromStart(CPDF_SimpleParser* parser,
       if (buf_count < nParams)
         continue;
 
-      parser->SetCurPos(pBuf[buf_index]);
+      parser->SetCurrentPosition(pBuf[buf_index]);
       return true;
     }
   }
 }
 
 }  // namespace
-
-CPDF_DefaultAppearance::CPDF_DefaultAppearance() = default;
 
 CPDF_DefaultAppearance::CPDF_DefaultAppearance(const ByteString& csDA)
     : m_csDA(csDA) {}
@@ -71,7 +69,7 @@ std::optional<ByteString> CPDF_DefaultAppearance::GetFont(
     return std::nullopt;
 
   ByteString csFontNameTag;
-  CPDF_SimpleParser syntax(m_csDA.AsStringView().raw_span());
+  CPDF_SimpleParser syntax(m_csDA.AsStringView().unsigned_span());
   if (FindTagParamFromStart(&syntax, "Tf", 2)) {
     csFontNameTag = ByteString(syntax.GetWord());
     csFontNameTag.Delete(0, 1);
@@ -84,7 +82,7 @@ std::optional<CFX_Color> CPDF_DefaultAppearance::GetColor() const {
   if (m_csDA.IsEmpty())
     return std::nullopt;
 
-  CPDF_SimpleParser syntax(m_csDA.AsStringView().raw_span());
+  CPDF_SimpleParser syntax(m_csDA.AsStringView().unsigned_span());
   if (FindTagParamFromStart(&syntax, "g", 1)) {
     float gray = StringToFloat(syntax.GetWord());
     return CFX_Color(CFX_Color::Type::kGray, gray);
@@ -134,7 +132,7 @@ std::optional<CFX_Color::TypeAndARGB> CPDF_DefaultAppearance::GetColorARGB()
                    static_cast<int>(g * 255 + 0.5f),
                    static_cast<int>(b * 255 + 0.5f)));
   }
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 // static

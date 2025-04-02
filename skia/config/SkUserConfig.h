@@ -138,6 +138,12 @@
  */
 #define SK_PDF_USE_HARFBUZZ_SUBSET
 
+/*  This controls how much space should be pre-allocated in an SkCanvas object
+    to store the SkMatrix and clip via calls to SkCanvas::save() (and balanced
+    with SkCanvas::restore()).
+*/
+#define SK_CANVAS_SAVE_RESTORE_PREALLOC_COUNT 16
+
 // Handle exporting using base/component_export.h
 #define SK_API COMPONENT_EXPORT(SKIA)
 
@@ -223,27 +229,15 @@ SK_API void SkDebugf_FileLine(const char* file,
 // Max. verb count for paths rendered by the edge-AA tessellating path renderer.
 #define GR_AA_TESSELLATOR_MAX_VERB_COUNT 100
 
-#define SK_FORCE_AAA
-
-#define SK_SUPPORT_LEGACY_DRAWLOOPER
-
 #define SK_USE_LEGACY_MIPMAP_BUILDER
 
 #define SK_SUPPORT_LEGACY_CONIC_CHOP
-
-#define SK_ENABLE_SKSL_IN_RASTER_PIPELINE
 
 #define SK_USE_PADDED_BLUR_UPSCALE
 
 #define SK_LEGACY_INITWITHPREV_LAYER_SIZING
 
-#define SK_LEGACY_BLEND_FOR_DROP_SHADOWS
-
-/* When --disable-skia-runtime-opts is set in Chrome (or when SkGraphics::Init
-   is not called), Skia will prefer precision over performance when computing
-   reciprocals and inverse-square roots.
-*/
-#define SK_IMPROVE_RASTER_PIPELINE_PRECISION
+#define SK_AVOID_SLOW_RASTER_PIPELINE_BLURS
 
 ///////////////////////// Imported from BUILD.gn and skia_common.gypi
 
@@ -262,6 +256,8 @@ SK_API void SkDebugf_FileLine(const char* file,
 #define SK_USE_DISCARDABLE_SCALEDIMAGECACHE
 
 #define SK_ATTR_DEPRECATED          SK_NOTHING_ARG1
-#define GR_GL_CUSTOM_SETUP_HEADER   "GrGLConfig_chrome.h"
+
+// glGetError() forces a sync with gpu process on chrome
+#define GR_GL_CHECK_ERROR_START 0
 
 #endif  // SKIA_CONFIG_SKUSERCONFIG_H_

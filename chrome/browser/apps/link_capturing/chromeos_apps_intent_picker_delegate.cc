@@ -33,17 +33,13 @@ PickerEntryType GetPickerEntryType(AppType app_type) {
   PickerEntryType picker_entry_type = PickerEntryType::kUnknown;
   switch (app_type) {
     case AppType::kUnknown:
-    case AppType::kBuiltIn:
     case AppType::kCrostini:
     case AppType::kPluginVm:
     case AppType::kChromeApp:
     case AppType::kExtension:
-    case AppType::kStandaloneBrowser:
-    case AppType::kStandaloneBrowserChromeApp:
     case AppType::kRemote:
     case AppType::kBorealis:
     case AppType::kBruschetta:
-    case AppType::kStandaloneBrowserExtension:
       break;
     case AppType::kArc:
       picker_entry_type = PickerEntryType::kArc;
@@ -88,6 +84,7 @@ bool ChromeOsAppsIntentPickerDelegate::ShouldShowIntentPickerWithApps() {
 
 void ChromeOsAppsIntentPickerDelegate::FindAllAppsForUrl(
     const GURL& url,
+    int icon_size_in_dep,
     IntentPickerAppsCallback apps_callback) {
   CHECK(&profile_.get());
   std::vector<apps::IntentPickerAppInfo> apps;
@@ -149,7 +146,8 @@ void ChromeOsAppsIntentPickerDelegate::RecordIntentPickerIconEvent(
 
 bool ChromeOsAppsIntentPickerDelegate::ShouldLaunchAppDirectly(
     const GURL& url,
-    const std::string& app_name) {
+    const std::string& app_name,
+    PickerEntryType) {
   // If there is only a single available app, immediately launch it if
   // ShouldShowLinkCapturingUX() is enabled and the app is preferred for this
   // link.
@@ -197,7 +195,7 @@ void ChromeOsAppsIntentPickerDelegate::LaunchApp(
     web_app::WebAppProvider* provider =
         web_app::WebAppProvider::GetForWebApps(&profile_.get());
     provider->ui_manager().ReparentAppTabToWindow(web_contents, launch_name,
-                                                  /*shortcut_created=*/true);
+                                                  base::DoNothing());
   } else {
     CHECK(proxy_);
     proxy_->LaunchAppWithUrl(

@@ -33,7 +33,6 @@ class IsolatedWebAppInstallerCoordinator {
 
   ~IsolatedWebAppInstallerCoordinator();
 
-
   void FocusWindow();
 
   IsolatedWebAppInstallerModel* GetModelForTesting();
@@ -52,6 +51,7 @@ class IsolatedWebAppInstallerCoordinator {
   void OnDialogClosed(
       base::OnceCallback<void(std::optional<webapps::AppId>)> callback);
 
+  raw_ptr<Profile> profile_;
   base::OnceClosure on_closed_callback_;
 
   std::unique_ptr<IsolatedWebAppInstallerModel> model_;

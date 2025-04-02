@@ -2,31 +2,44 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "components/signin/internal/identity_manager/mutable_profile_oauth2_token_service_delegate.h"
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <map>
+#include <optional>
 #include <string>
 
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
+#include "base/strings/strcat.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "components/signin/internal/identity_manager/profile_oauth2_token_service.h"
 #include "components/signin/public/base/signin_client.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_info.h"
+#include "components/signin/public/webdata/token_service_table.h"
 #include "components/signin/public/webdata/token_web_data.h"
 #include "components/webdata/common/web_data_service_base.h"
+#include "crypto/process_bound_string.h"
+#include "google_apis/gaia/core_account_id.h"
 #include "google_apis/gaia/gaia_access_token_fetcher.h"
 #include "google_apis/gaia/gaia_auth_fetcher.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/gaia_constants.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/oauth2_access_token_fetcher.h"
 #include "google_apis/gaia/oauth2_access_token_fetcher_immediate_error.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -35,6 +48,7 @@
 #include "components/signin/internal/identity_manager/token_binding_helper.h"
 #include "components/signin/internal/identity_manager/token_binding_oauth2_access_token_fetcher.h"
 #include "components/signin/public/base/device_id_helper.h"
+#include "components/signin/public/base/hybrid_encryption_key.h"
 #include "components/version_info/version_info.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/oauth2_mint_access_token_fetcher_adapter.h"
@@ -73,8 +87,9 @@ std::string ApplyAccountIdPrefix(const std::string& account_id) {
 // (|prefixed_account_id|) and returns the non-prefixed account id or an empty
 // account id if |prefixed_account_id| is not correctly prefixed.
 CoreAccountId RemoveAccountIdPrefix(const std::string& prefixed_account_id) {
-  if (!base::StartsWith(prefixed_account_id, kAccountIdPrefix))
+  if (!base::StartsWith(prefixed_account_id, kAccountIdPrefix)) {
     return CoreAccountId();
+  }
 
   return CoreAccountId::FromString(
       prefixed_account_id.substr(/*pos=*/strlen(kAccountIdPrefix)));
@@ -95,9 +110,79 @@ signin::LoadCredentialsState LoadCredentialsStateFromTokenResult(
           LOAD_CREDENTIALS_FINISHED_WITH_SUCCESS;
   }
   NOTREACHED();
-  return signin::LoadCredentialsState::
-      LOAD_CREDENTIALS_FINISHED_WITH_UNKNOWN_ERRORS;
 }
+
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+constexpr std::string_view kTokenBindingAssertionDestinationUrl =
+    "https://accounts.google.com/accountmanager";
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(BoundTokenPrevalence)
+enum class BoundTokenPrevalence {
+  kEmpty = 0,
+  kZeroTokensBound = 1,
+  kSomeTokensBoundSomeUnbound = 2,
+  kAllTokensBound = 3,
+  kMaxValue = kAllTokensBound
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:TokenBindingBoundTokenPrevalence)
+
+void RecordTokenBindingHistogramsOnCredentialsLoaded(
+    TokenBindingHelper* token_binding_helper,
+    size_t token_count) {
+  size_t bound_token_count =
+      token_binding_helper ? token_binding_helper->GetBoundTokenCount() : 0;
+  CHECK_LE(bound_token_count, token_count);
+
+  BoundTokenPrevalence prevalence = [token_count, bound_token_count] {
+    if (token_count == 0) {
+      return BoundTokenPrevalence::kEmpty;
+    } else if (bound_token_count == 0) {
+      return BoundTokenPrevalence::kZeroTokensBound;
+    } else if (token_count == bound_token_count) {
+      return BoundTokenPrevalence::kAllTokensBound;
+    } else {
+      return BoundTokenPrevalence::kSomeTokensBoundSomeUnbound;
+    }
+  }();
+
+  base::UmaHistogramEnumeration("Signin.TokenBinding.BoundTokenPrevalence",
+                                prevalence);
+  if (bound_token_count > 1) {
+    CHECK(token_binding_helper);
+    base::UmaHistogramBoolean("Signin.TokenBinding.BoundToTheSameKey",
+                              token_binding_helper->AreAllBindingKeysSame());
+  }
+}
+
+// Determines whether `account_id` can be moved to `destination_service`.
+// An account cannot be moved if `destination_service` has accounts bound to a
+// different binding key.
+bool CanMoveAccountToService(
+    const ProfileOAuth2TokenService& destination_service,
+    const CoreAccountId& account_id,
+    const std::vector<uint8_t>& wrapped_binding_key) {
+  if (wrapped_binding_key.empty()) {
+    // Unbound refresh tokens can always be moved.
+    return true;
+  }
+
+  for (const auto& account : destination_service.GetAccounts()) {
+    if (account == account_id) {
+      // Ignore `account_id` as it will get a new refresh token after the move.
+      continue;
+    }
+    std::vector<uint8_t> other_wrapped_binding_key =
+        destination_service.GetWrappedBindingKey(account);
+    if (!other_wrapped_binding_key.empty() &&
+        other_wrapped_binding_key != wrapped_binding_key) {
+      return false;
+    }
+  }
+  return true;
+}
+#endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
 
 }  // namespace
 
@@ -158,13 +243,14 @@ void MutableProfileOAuth2TokenServiceDelegate::RevokeServerRefreshToken::
 }
 
 MutableProfileOAuth2TokenServiceDelegate::RevokeServerRefreshToken::
-    ~RevokeServerRefreshToken() {}
+    ~RevokeServerRefreshToken() = default;
 
 bool MutableProfileOAuth2TokenServiceDelegate::RevokeServerRefreshToken::
     ShouldRetry(GaiaAuthConsumer::TokenRevocationStatus status) {
   // Token revocation can be retried up to 3 times.
-  if (attempt_ >= 2)
+  if (attempt_ >= 2) {
     return false;
+  }
 
   switch (status) {
     case GaiaAuthConsumer::TokenRevocationStatus::kServerError:
@@ -191,7 +277,7 @@ void MutableProfileOAuth2TokenServiceDelegate::RevokeServerRefreshToken::
   }
   // |this| pointer will be deleted when removed from the vector, so don't
   // access any members after call to erase().
-  token_service_delegate_->server_revokes_.erase(base::ranges::find(
+  token_service_delegate_->server_revokes_.erase(std::ranges::find(
       token_service_delegate_->server_revokes_, this,
       &std::unique_ptr<MutableProfileOAuth2TokenServiceDelegate::
                            RevokeServerRefreshToken>::get));
@@ -262,9 +348,11 @@ MutableProfileOAuth2TokenServiceDelegate::CreateAccessTokenFetcher(
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
   if (token_binding_helper_ &&
       token_binding_helper_->HasBindingKey(account_id)) {
-    const std::string gaia_id =
-        account_tracker_service_->GetAccountInfo(account_id).gaia;
-    CHECK(!gaia_id.empty());
+    // `CoreAccountId` is always equal to Gaia ID on DICE platforms.
+    // We cannot get Gaia ID from `account_tracker_service_` as it's sometimes
+    // unknown and the only way of getting it requires an access token, which
+    // requires a known Gaia ID (see https://crbug.com/386841916).
+    const GaiaId gaia_id(account_id.ToString());
     // `GaiaAccessTokenFetcher` doesn't support bound refresh tokens.
     auto fetcher = std::make_unique<OAuth2MintAccessTokenFetcherAdapter>(
         consumer, url_loader_factory, gaia_id, refresh_token,
@@ -280,12 +368,14 @@ MutableProfileOAuth2TokenServiceDelegate::CreateAccessTokenFetcher(
     auto fetcher_wrapper =
         std::make_unique<TokenBindingOAuth2AccessTokenFetcher>(
             std::move(fetcher));
+    HybridEncryptionKey ephemeral_key;
+    std::string ephemeral_public_key = ephemeral_key.ExportPublicKey();
     token_binding_helper_->GenerateBindingKeyAssertion(
-        account_id, token_binding_challenge,
-        GaiaUrls::GetInstance()->oauth2_issue_token_url(),
+        account_id, token_binding_challenge, ephemeral_public_key,
+        GURL(kTokenBindingAssertionDestinationUrl),
         base::BindOnce(
             &TokenBindingOAuth2AccessTokenFetcher::SetBindingKeyAssertion,
-            fetcher_wrapper->GetWeakPtr()));
+            fetcher_wrapper->GetWeakPtr(), std::move(ephemeral_key)));
     return fetcher_wrapper;
   }
 #endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
@@ -301,7 +391,7 @@ std::string MutableProfileOAuth2TokenServiceDelegate::GetTokenForMultilogin(
       GetAuthError(account_id) != GoogleServiceAuthError::AuthErrorNone()) {
     return std::string();
   }
-  const std::string& refresh_token = iter->second;
+  const auto refresh_token = iter->second.value();
   DCHECK(!refresh_token.empty());
   return refresh_token;
 }
@@ -316,7 +406,7 @@ std::string MutableProfileOAuth2TokenServiceDelegate::GetRefreshToken(
     const CoreAccountId& account_id) const {
   auto iter = refresh_tokens_.find(account_id);
   if (iter != refresh_tokens_.end()) {
-    const std::string refresh_token = iter->second;
+    const std::string refresh_token = iter->second.value();
     DCHECK(!refresh_token.empty());
     return refresh_token;
   }
@@ -324,6 +414,12 @@ std::string MutableProfileOAuth2TokenServiceDelegate::GetRefreshToken(
 }
 
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+bool MutableProfileOAuth2TokenServiceDelegate::IsRefreshTokenBound(
+    const CoreAccountId& account_id) const {
+  return token_binding_helper_ &&
+         token_binding_helper_->HasBindingKey(account_id);
+}
+
 std::vector<uint8_t>
 MutableProfileOAuth2TokenServiceDelegate::GetWrappedBindingKey(
     const CoreAccountId& account_id) const {
@@ -332,6 +428,21 @@ MutableProfileOAuth2TokenServiceDelegate::GetWrappedBindingKey(
   }
 
   return token_binding_helper_->GetWrappedBindingKey(account_id);
+}
+
+void MutableProfileOAuth2TokenServiceDelegate::
+    GenerateRefreshTokenBindingKeyAssertionForMultilogin(
+        const CoreAccountId& account_id,
+        std::string_view challenge,
+        std::string_view ephemeral_public_key,
+        TokenBindingHelper::GenerateAssertionCallback callback) {
+  if (!token_binding_helper_ || GetTokenForMultilogin(account_id).empty()) {
+    std::move(callback).Run(std::string());
+  }
+
+  token_binding_helper_->GenerateBindingKeyAssertion(
+      account_id, challenge, ephemeral_public_key,
+      GURL(kTokenBindingAssertionDestinationUrl), std::move(callback));
 }
 #endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
 
@@ -362,7 +473,7 @@ void MutableProfileOAuth2TokenServiceDelegate::InvalidateTokenForMultilogin(
                           CREDENTIALS_REJECTED_BY_SERVER));
 }
 
-void MutableProfileOAuth2TokenServiceDelegate::LoadCredentials(
+void MutableProfileOAuth2TokenServiceDelegate::LoadCredentialsInternal(
     const CoreAccountId& primary_account_id,
     bool is_syncing) {
   if (load_credentials_state() ==
@@ -374,8 +485,9 @@ void MutableProfileOAuth2TokenServiceDelegate::LoadCredentials(
   set_load_credentials_state(
       signin::LoadCredentialsState::LOAD_CREDENTIALS_IN_PROGRESS);
 
-  if (!primary_account_id.empty())
+  if (!primary_account_id.empty()) {
     ValidateAccountId(primary_account_id);
+  }
   DCHECK(loading_primary_account_id_.empty());
   DCHECK_EQ(0, web_data_service_request_);
 
@@ -417,7 +529,8 @@ void MutableProfileOAuth2TokenServiceDelegate::OnWebDataServiceRequestDone(
     DCHECK(result->GetType() == TOKEN_RESULT);
     const WDResult<TokenResult>* token_result =
         static_cast<const WDResult<TokenResult>*>(result.get());
-    LoadAllCredentialsIntoMemory(token_result->GetValue().tokens);
+    LoadAllCredentialsIntoMemory(token_result->GetValue().tokens,
+                                 token_result->GetValue().should_reencrypt);
     set_load_credentials_state(LoadCredentialsStateFromTokenResult(
         token_result->GetValue().db_result));
   } else {
@@ -461,14 +574,17 @@ void MutableProfileOAuth2TokenServiceDelegate::OnWebDataServiceRequestDone(
 }
 
 void MutableProfileOAuth2TokenServiceDelegate::LoadAllCredentialsIntoMemory(
-    const std::map<std::string, std::string>& db_tokens) {
+    const std::map<std::string, TokenServiceTable::TokenWithBindingKey>&
+        db_tokens,
+    bool should_reencrypt) {
   VLOG(1) << "MutablePO2TS::LoadAllCredentialsIntoMemory; " << db_tokens.size()
-          << " redential(s).";
-
+          << " credential(s).";
+  bool did_reencrypt = false;
   ScopedBatchChange batch(this);
-  for (const auto& db_token : db_tokens) {
-    std::string prefixed_account_id = db_token.first;
-    std::string refresh_token = db_token.second;
+  for (const auto& [prefixed_account_id, token_with_key] : db_tokens) {
+    std::string refresh_token = token_with_key.token;
+    std::vector<uint8_t> wrapped_binding_key =
+        token_with_key.wrapped_binding_key;
 
     CoreAccountId account_id = RemoveAccountIdPrefix(prefixed_account_id);
     if (account_id.empty()) {
@@ -497,8 +613,7 @@ void MutableProfileOAuth2TokenServiceDelegate::LoadAllCredentialsIntoMemory(
       case RevokeAllTokensOnLoad::kNo:
         break;
       case RevokeAllTokensOnLoad::kDeleteSiteDataOnExit:
-        if (switches::IsExplicitBrowserSigninUIOnDesktopEnabled(
-                switches::ExplicitBrowserSigninPhase::kExperimental)) {
+        if (switches::IsExplicitBrowserSigninUIOnDesktopEnabled()) {
           // With Uno, tokens are not revoked when clearing cookies if the user
           // is signed in non-syncing.
           revoke_token =
@@ -516,10 +631,11 @@ void MutableProfileOAuth2TokenServiceDelegate::LoadAllCredentialsIntoMemory(
       if (account_id == loading_primary_account_id_) {
         RevokeCredentialsOnServer(refresh_token);
         refresh_token = GaiaConstants::kInvalidRefreshToken;
+        wrapped_binding_key = std::vector<uint8_t>();
         PersistCredentials(account_id, refresh_token
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
                            ,
-                           /*wrapped_binding_key=*/std::vector<uint8_t>()
+                           wrapped_binding_key
 #endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
         );
       } else {
@@ -533,8 +649,17 @@ void MutableProfileOAuth2TokenServiceDelegate::LoadAllCredentialsIntoMemory(
         LoadTokenFromDBStatus::NUM_LOAD_TOKEN_FROM_DB_STATUS);
 
     if (load_account) {
-      // TODO(b/274463812): load wrapped binding keys from disk.
-      std::vector<uint8_t> wrapped_binding_key;
+      if (!revoke_token && should_reencrypt) {
+          did_reencrypt = true;
+          PersistCredentials(account_id, refresh_token
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+                             ,
+                             wrapped_binding_key
+#endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+          );
+      }
+      RecordAccountAvailabilityStartup(account_id, refresh_token);
+
       UpdateCredentialsInMemory(account_id, refresh_token
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
                                 ,
@@ -548,9 +673,17 @@ void MutableProfileOAuth2TokenServiceDelegate::LoadAllCredentialsIntoMemory(
       FireRefreshTokenRevoked(account_id);
     }
   }
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+  RecordTokenBindingHistogramsOnCredentialsLoaded(
+      token_binding_helper_.get(),
+      std::ranges::count_if(refresh_tokens_, [](const auto& kv_pair) {
+        return kv_pair.second.value() != GaiaConstants::kInvalidRefreshToken;
+      }));
+#endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+  base::UmaHistogramBoolean("Signin.ReencryptTokensInDb", did_reencrypt);
 }
 
-void MutableProfileOAuth2TokenServiceDelegate::UpdateCredentials(
+void MutableProfileOAuth2TokenServiceDelegate::UpdateCredentialsInternal(
     const CoreAccountId& account_id,
     const std::string& refresh_token
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
@@ -563,8 +696,7 @@ void MutableProfileOAuth2TokenServiceDelegate::UpdateCredentials(
   DCHECK(!refresh_token.empty());
 
   ValidateAccountId(account_id);
-  const std::string& existing_token = GetRefreshToken(account_id);
-  if (existing_token != refresh_token) {
+  if (GetRefreshToken(account_id) != refresh_token) {
     UpdateCredentialsInMemory(account_id, refresh_token
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
                               ,
@@ -606,7 +738,7 @@ void MutableProfileOAuth2TokenServiceDelegate::UpdateCredentialsInMemory(
   // If token present, and different from the new one, cancel its requests,
   // and clear the entries in cache related to that account.
   if (refresh_token_present) {
-    DCHECK_NE(refresh_token, refresh_tokens_[account_id]);
+    DCHECK_NE(refresh_token, refresh_tokens_.at(account_id).value());
     VLOG(1) << "MutablePO2TS::UpdateCredentials; Refresh Token was present. "
             << "account_id=" << account_id;
 
@@ -621,10 +753,12 @@ void MutableProfileOAuth2TokenServiceDelegate::UpdateCredentialsInMemory(
     // when it is updated to a new valid one (otherwise the new refresh token
     // would also be invalidated server-side).
     // See http://crbug.com/865189 for more information about this regression.
-    if (is_refresh_token_invalidated)
-      RevokeCredentialsOnServer(refresh_tokens_[account_id]);
+    if (is_refresh_token_invalidated) {
+      RevokeCredentialsOnServer(refresh_tokens_.at(account_id).value());
+    }
 
-    refresh_tokens_[account_id] = refresh_token;
+    refresh_tokens_.insert_or_assign(account_id,
+                                     crypto::ProcessBoundString(refresh_token));
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
     if (token_binding_helper_) {
       token_binding_helper_->SetBindingKey(account_id, wrapped_binding_key);
@@ -653,14 +787,20 @@ void MutableProfileOAuth2TokenServiceDelegate::PersistCredentials(
   DCHECK(!account_id.empty());
   DCHECK(!refresh_token.empty());
   if (token_web_data_) {
-    // TODO(b/274463812): persist `wrapped_binding_key` on disk.
     VLOG(1) << "MutablePO2TS::PersistCredentials for account_id=" << account_id;
     token_web_data_->SetTokenForService(
-        ApplyAccountIdPrefix(account_id.ToString()), refresh_token);
+        ApplyAccountIdPrefix(account_id.ToString()), refresh_token,
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+        wrapped_binding_key
+#else
+        /*wrapped_binding_key=*/{}
+#endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+    );
   }
 }
 
-void MutableProfileOAuth2TokenServiceDelegate::RevokeAllCredentials() {
+void MutableProfileOAuth2TokenServiceDelegate::RevokeAllCredentialsInternal(
+    signin_metrics::SourceForRefreshTokenOperation source) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   VLOG(1) << "MutablePO2TS::RevokeAllCredentials";
@@ -678,19 +818,22 @@ void MutableProfileOAuth2TokenServiceDelegate::RevokeAllCredentials() {
 
   // Make a temporary copy of the account ids.
   std::vector<CoreAccountId> accounts;
-  for (const auto& token : refresh_tokens_)
+  for (const auto& token : refresh_tokens_) {
     accounts.push_back(token.first);
-  for (const auto& account : accounts)
-    RevokeCredentials(account);
+  }
+  for (const auto& account : accounts) {
+    RevokeCredentials(account, source);
+  }
 
   DCHECK_EQ(0u, refresh_tokens_.size());
 
   // Make sure all tokens are removed from storage.
-  if (token_web_data_)
+  if (token_web_data_) {
     token_web_data_->RemoveAllTokens();
+  }
 }
 
-void MutableProfileOAuth2TokenServiceDelegate::RevokeCredentials(
+void MutableProfileOAuth2TokenServiceDelegate::RevokeCredentialsInternal(
     const CoreAccountId& account_id) {
   RevokeCredentialsImpl(account_id, /*revoke_on_server=*/true);
 }
@@ -710,8 +853,9 @@ void MutableProfileOAuth2TokenServiceDelegate::RevokeCredentialsOnServer(
     const std::string& refresh_token) {
   DCHECK(!refresh_token.empty());
 
-  if (refresh_token == GaiaConstants::kInvalidRefreshToken)
+  if (refresh_token == GaiaConstants::kInvalidRefreshToken) {
     return;
+  }
 
   // Keep track or all server revoke requests.  This way they can be deleted
   // before the token service is shutdown and won't outlive the profile.
@@ -727,17 +871,37 @@ void MutableProfileOAuth2TokenServiceDelegate::CancelWebTokenFetch() {
   }
 }
 
-void MutableProfileOAuth2TokenServiceDelegate::ExtractCredentials(
+void MutableProfileOAuth2TokenServiceDelegate::ExtractCredentialsInternal(
     ProfileOAuth2TokenService* to_service,
     const CoreAccountId& account_id) {
-  to_service->UpdateCredentials(account_id, GetRefreshToken(account_id),
-                                signin_metrics::SourceForRefreshTokenOperation::
-                                    kTokenService_ExtractCredentials
+  bool should_update_credentials = true;
+  std::string refresh_token = GetRefreshToken(account_id);
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
-                                ,
-                                GetWrappedBindingKey(account_id)
+  std::vector<uint8_t> wrapped_binding_key = GetWrappedBindingKey(account_id);
+  if (!CanMoveAccountToService(*to_service, account_id, wrapped_binding_key)) {
+    if (to_service->HasRefreshToken(account_id)) {
+      // `to_service` already has this account. Do not override the existing,
+      // potentially valid token.
+      should_update_credentials = false;
+    } else {
+      // Insert an account without a token.
+      refresh_token = GaiaConstants::kInvalidRefreshToken;
+      wrapped_binding_key = std::vector<uint8_t>();
+    }
+  }
 #endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
-  );
+
+  if (should_update_credentials) {
+    to_service->UpdateCredentials(
+        account_id, refresh_token,
+        signin_metrics::SourceForRefreshTokenOperation::
+            kTokenService_ExtractCredentials
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+        ,
+        wrapped_binding_key
+#endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+    );
+  }
   RevokeCredentialsImpl(account_id, /*revoke_on_server=*/false);
 }
 
@@ -761,7 +925,7 @@ void MutableProfileOAuth2TokenServiceDelegate::OnConnectionChanged(
   ResetBackOffEntry();
 }
 
-bool MutableProfileOAuth2TokenServiceDelegate::FixRequestErrorIfPossible() {
+bool MutableProfileOAuth2TokenServiceDelegate::FixAccountErrorIfPossible() {
   return !fix_request_error_callback_.is_null()
              ? fix_request_error_callback_.Run()
              : false;
@@ -775,7 +939,8 @@ void MutableProfileOAuth2TokenServiceDelegate::AddAccountStatus(
 #endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
     const GoogleServiceAuthError& error) {
   DCHECK_EQ(0u, refresh_tokens_.count(account_id));
-  refresh_tokens_[account_id] = refresh_token;
+  refresh_tokens_.insert_or_assign(account_id,
+                                   crypto::ProcessBoundString(refresh_token));
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
   if (token_binding_helper_) {
     token_binding_helper_->SetBindingKey(account_id, wrapped_binding_key);
@@ -798,7 +963,7 @@ void MutableProfileOAuth2TokenServiceDelegate::RevokeCredentialsImpl(
   if (refresh_tokens_.count(account_id) > 0) {
     VLOG(1) << "MutablePO2TS::RevokeCredentials for account_id=" << account_id;
     if (revoke_on_server) {
-      RevokeCredentialsOnServer(refresh_tokens_[account_id]);
+      RevokeCredentialsOnServer(refresh_tokens_.at(account_id).value());
     }
     refresh_tokens_.erase(account_id);
     ClearAuthError(account_id);
@@ -810,4 +975,31 @@ void MutableProfileOAuth2TokenServiceDelegate::RevokeCredentialsImpl(
     ClearPersistedCredentials(account_id);
     FireRefreshTokenRevoked(account_id);
   }
+}
+
+void MutableProfileOAuth2TokenServiceDelegate::RecordAccountAvailabilityStartup(
+    const CoreAccountId& account_id,
+    const std::string& refresh_token) {
+  constexpr const char kAccountAvailabilityStartupHistogramBase[] =
+      "Signin.AccountInPref.StartupState.";
+
+  bool known_account =
+      !account_tracker_service_->GetAccountInfo(account_id).IsEmpty();
+  bool refersh_token_valid =
+      refresh_token != GaiaConstants::kInvalidRefreshToken;
+
+  AccountStartupState startup_state = AccountStartupState::kUnknownInvalidToken;
+  if (known_account && refersh_token_valid) {
+    startup_state = AccountStartupState::kKnownValidToken;
+  } else if (known_account) {
+    startup_state = AccountStartupState::kKnownInvalidToken;
+  } else if (refersh_token_valid) {
+    startup_state = AccountStartupState::kUnknownValidToken;
+  }
+
+  base::UmaHistogramEnumeration(
+      base::StrCat({kAccountAvailabilityStartupHistogramBase,
+                    loading_primary_account_id_ == account_id ? "Primary"
+                                                              : "Secondary"}),
+      startup_state);
 }

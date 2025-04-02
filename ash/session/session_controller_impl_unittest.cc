@@ -27,12 +27,14 @@
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/user_manager/user_type.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
 
@@ -60,6 +62,7 @@ class TestSessionObserver : public SessionObserver {
   }
 
   void OnFirstSessionStarted() override { first_session_started_ = true; }
+  void OnFirstSessionReady() override { ++first_session_ready_count_; }
 
   void OnSessionStateChanged(SessionState state) override { state_ = state; }
 
@@ -80,6 +83,7 @@ class TestSessionObserver : public SessionObserver {
   SessionState state() const { return state_; }
   const AccountId& active_account_id() const { return active_account_id_; }
   bool first_session_started() const { return first_session_started_; }
+  int first_session_ready_count() const { return first_session_ready_count_; }
   const std::vector<AccountId>& user_session_account_ids() const {
     return user_session_account_ids_;
   }
@@ -93,6 +97,7 @@ class TestSessionObserver : public SessionObserver {
   SessionState state_ = SessionState::UNKNOWN;
   AccountId active_account_id_;
   bool first_session_started_ = false;
+  int first_session_ready_count_ = 0;
   std::vector<AccountId> user_session_account_ids_;
   raw_ptr<PrefService> last_user_pref_service_ = nullptr;
   int user_prefs_changed_count_ = 0;
@@ -182,7 +187,7 @@ class SessionControllerImplWithShellTest : public AshTestBase {
   void CreateFullscreenWindow() {
     window_ = CreateTestWindow();
     window_->SetProperty(aura::client::kShowStateKey,
-                         ui::SHOW_STATE_FULLSCREEN);
+                         ui::mojom::WindowShowState::kFullscreen);
     window_state_ = WindowState::Get(window_.get());
   }
 
@@ -229,7 +234,7 @@ TEST_F(SessionControllerImplTest, SimpleSessionInfo) {
   EXPECT_TRUE(controller()->IsRunningInAppMode());
 }
 
-TEST_F(SessionControllerImplTest, OnFirstSessionStarted) {
+TEST_F(SessionControllerImplTest, FirstSession) {
   // Simulate chrome starting a user session.
   SessionInfo info;
   FillDefaultSessionInfo(&info);
@@ -239,6 +244,11 @@ TEST_F(SessionControllerImplTest, OnFirstSessionStarted) {
 
   // Observer is notified.
   EXPECT_TRUE(observer()->first_session_started());
+
+  EXPECT_EQ(0, observer()->first_session_ready_count());
+  // Simulate post login tasks finish.
+  controller()->NotifyFirstSessionReady();
+  EXPECT_EQ(1, observer()->first_session_ready_count());
 }
 
 // Tests that the CanLockScreen is only true with an active user session.
@@ -351,7 +361,6 @@ TEST_F(SessionControllerImplTest, GetLoginStateForActiveSession) {
       {user_manager::UserType::kPublicAccount, LoginStatus::PUBLIC},
       {user_manager::UserType::kKioskApp, LoginStatus::KIOSK_APP},
       {user_manager::UserType::kChild, LoginStatus::CHILD},
-      {user_manager::UserType::kArcKioskApp, LoginStatus::KIOSK_APP},
       {user_manager::UserType::kWebKioskApp, LoginStatus::KIOSK_APP}
   };
 
@@ -469,6 +478,31 @@ TEST_F(SessionControllerImplTest, IsUserChild) {
   EXPECT_TRUE(controller()->IsUserChild());
 }
 
+// Tests that Ash.Login.Lock.SessionStateChange is populated properly
+// when user session state is toggled between LOCKED and ACTIVE.
+TEST_F(SessionControllerImplTest, UserSessionLockMetrics) {
+  base::HistogramTester histograms;
+  SessionInfo info;
+  FillDefaultSessionInfo(&info);
+
+  histograms.ExpectBucketCount("Ash.Login.Lock.SessionStateChange",
+                               /*lock=*/0, 0);
+  histograms.ExpectBucketCount("Ash.Login.Lock.SessionStateChange",
+                               /*unlock=*/1, 0);
+  info.state = SessionState::LOCKED;
+  controller()->SetSessionInfo(info);
+  histograms.ExpectBucketCount("Ash.Login.Lock.SessionStateChange",
+                               /*lock=*/0, 1);
+  histograms.ExpectBucketCount("Ash.Login.Lock.SessionStateChange",
+                               /*unlock=*/1, 0);
+  info.state = SessionState::ACTIVE;
+  controller()->SetSessionInfo(info);
+  histograms.ExpectBucketCount("Ash.Login.Lock.SessionStateChange",
+                               /*lock=*/0, 1);
+  histograms.ExpectBucketCount("Ash.Login.Lock.SessionStateChange",
+                               /*unlock=*/1, 1);
+}
+
 class SessionControllerImplPrefsTest : public NoSessionAshTestBase {
  public:
   SessionControllerImplPrefsTest()
@@ -490,21 +524,17 @@ TEST_F(SessionControllerImplPrefsTest, Observer) {
   // Setup 2 users.
   TestSessionControllerClient* session = GetSessionControllerClient();
   // Disable auto-provision of PrefService for each user.
-  constexpr bool kProvidePrefService = false;
   session->AddUserSession(kUser1, user_manager::UserType::kRegular,
-                          kProvidePrefService);
+                          /*provide_user_prefs=*/false);
   session->AddUserSession(kUser2, user_manager::UserType::kRegular,
-                          kProvidePrefService);
+                          /*provide_user_prefs=*/false);
 
   // The observer is not notified because the PrefService for kUser1 is not yet
   // ready.
   session->SwitchActiveUser(kUserAccount1);
   EXPECT_EQ(nullptr, observer.last_user_pref_service());
 
-  auto pref_service = std::make_unique<TestingPrefServiceSimple>();
-  RegisterUserProfilePrefs(pref_service->registry(), /*country=*/"",
-                           /*for_test=*/true);
-  session->SetUserPrefService(kUserAccount1, std::move(pref_service));
+  session->ProvidePrefServiceForUser(kUserAccount1);
   EXPECT_EQ(controller->GetUserPrefServiceForUser(kUserAccount1),
             observer.last_user_pref_service());
   EXPECT_EQ(controller->GetUserPrefServiceForUser(kUserAccount1),
@@ -526,10 +556,7 @@ TEST_F(SessionControllerImplPrefsTest, Observer) {
 
   // There should be no notification about a PrefService for an inactive user
   // becoming initialized.
-  pref_service = std::make_unique<TestingPrefServiceSimple>();
-  RegisterUserProfilePrefs(pref_service->registry(), /*country=*/"",
-                           /*for_text=*/true);
-  session->SetUserPrefService(kUserAccount2, std::move(pref_service));
+  session->ProvidePrefServiceForUser(kUserAccount2);
   EXPECT_EQ(nullptr, observer.last_user_pref_service());
 
   session->SwitchActiveUser(kUserAccount2);
@@ -1007,7 +1034,8 @@ using SessionControllerImplUnblockTest = NoSessionAshTestBase;
 
 TEST_F(SessionControllerImplUnblockTest, ActiveWindowAfterUnblocking) {
   EXPECT_TRUE(Shell::Get()->session_controller()->IsUserSessionBlocked());
-  auto widget = CreateTestWidget();
+  auto widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   // |widget| should not be active as it is blocked by SessionControllerImpl.
   EXPECT_FALSE(widget->IsActive());
   SimulateUserLogin("user@test.com");

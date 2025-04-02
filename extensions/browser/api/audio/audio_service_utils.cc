@@ -4,7 +4,7 @@
 
 #include "extensions/browser/api/audio/audio_service_utils.h"
 
-#include "base/ranges/algorithm.h"
+#include <algorithm>
 
 namespace extensions {
 
@@ -19,7 +19,6 @@ api::audio::StreamType ConvertStreamTypeFromMojom(
       return api::audio::StreamType::kOutput;
   }
   NOTREACHED();
-  return api::audio::StreamType::kNone;
 }
 
 crosapi::mojom::StreamType ConvertStreamTypeToMojom(
@@ -33,7 +32,6 @@ crosapi::mojom::StreamType ConvertStreamTypeToMojom(
       return crosapi::mojom::StreamType::kOutput;
   }
   NOTREACHED();
-  return crosapi::mojom::StreamType::kNone;
 }
 
 api::audio::DeviceType ConvertDeviceTypeFromMojom(
@@ -75,7 +73,6 @@ api::audio::DeviceType ConvertDeviceTypeFromMojom(
       return api::audio::DeviceType::kOther;
   }
   NOTREACHED();
-  return api::audio::DeviceType::kNone;
 }
 
 crosapi::mojom::DeviceType ConvertDeviceTypeToMojom(
@@ -117,7 +114,6 @@ crosapi::mojom::DeviceType ConvertDeviceTypeToMojom(
       return crosapi::mojom::DeviceType::kOther;
   }
   NOTREACHED();
-  return crosapi::mojom::DeviceType::kNone;
 }
 
 std::unique_ptr<api::audio::DeviceFilter> ConvertDeviceFilterFromMojom(
@@ -141,9 +137,9 @@ std::unique_ptr<api::audio::DeviceFilter> ConvertDeviceFilterFromMojom(
 
   if (filter->includedStreamTypes) {
     result->stream_types.emplace(filter->includedStreamTypes->size());
-    base::ranges::transform(*filter->includedStreamTypes,
-                            result->stream_types->begin(),
-                            ConvertStreamTypeFromMojom);
+    std::ranges::transform(*filter->includedStreamTypes,
+                           result->stream_types->begin(),
+                           ConvertStreamTypeFromMojom);
   }
 
   return result;
@@ -170,9 +166,9 @@ crosapi::mojom::DeviceFilterPtr ConvertDeviceFilterToMojom(
   if (filter->stream_types) {
     result->includedStreamTypes =
         std::vector<crosapi::mojom::StreamType>(filter->stream_types->size());
-    base::ranges::transform(*filter->stream_types,
-                            result->includedStreamTypes->begin(),
-                            ConvertStreamTypeToMojom);
+    std::ranges::transform(*filter->stream_types,
+                           result->includedStreamTypes->begin(),
+                           ConvertStreamTypeToMojom);
   }
   return result;
 }

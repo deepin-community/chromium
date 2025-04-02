@@ -77,7 +77,6 @@ ControllerServiceWorkerConnector::GetControllerServiceWorker(
       return nullptr;
   }
   NOTREACHED();
-  return nullptr;
 }
 
 void ControllerServiceWorkerConnector::AddObserver(Observer* observer) {

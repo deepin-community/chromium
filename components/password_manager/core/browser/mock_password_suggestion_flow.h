@@ -6,7 +6,6 @@
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_MOCK_PASSWORD_SUGGESTION_FLOW_H_
 
 #include "components/password_manager/core/browser/password_suggestion_flow.h"
-
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace password_manager {
@@ -17,7 +16,9 @@ class MockPasswordSuggestionFlow : public PasswordSuggestionFlow {
   ~MockPasswordSuggestionFlow() override;
   MOCK_METHOD(void,
               RunFlow,
-              (const gfx::RectF&, base::i18n::TextDirection),
+              (autofill::FieldRendererId,
+               const gfx::RectF&,
+               base::i18n::TextDirection),
               (override));
 };
 

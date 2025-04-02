@@ -2,33 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import '//components/autofill/ios/form_util/resources/create_fill_namespace.js';
+
 import * as fillConstants from '//components/autofill/ios/form_util/resources/fill_constants.js';
 import {findChildText} from '//components/autofill/ios/form_util/resources/fill_element_inference_util.js';
 import {gCrWeb} from '//ios/web/public/js_messaging/resources/gcrweb.js';
-import {trim} from '//ios/web/public/js_messaging/resources/utils.js';
-
-declare global {
-    // Defines an additional property, `angular`, on the Window object.
-    // The code below assumes that this property exists within the object.
-    interface Window {
-        angular: any;
-    }
-
-    // Extends the Document object to add the ability to access its
-    // properties via the [] notation and defines a property that is
-    // assumed to exist within the object.
-    interface Document {
-      [key: symbol]: number;
-
-      __gCrWebURLNormalizer: HTMLAnchorElement;
-    }
-}
-
-// Extends the Element to add the ability to access its properties
-// via the [] notation.
-declare interface IndexableElement extends Element {
-    [key: symbol]: number;
-}
+import {removeQueryAndReferenceFromURL, trim} from '//ios/web/public/js_messaging/resources/utils.js';
 
 declare interface AutofillFormFieldData {
   name: string;
@@ -46,7 +25,7 @@ declare interface AutofillFormFieldData {
   placeholder_attribute: string;
   aria_label: string;
   aria_description: string;
-  option_contents: string[];
+  option_texts: string[];
   option_values: string[];
   label?: string;
   identifier?: string;
@@ -60,7 +39,7 @@ declare interface AutofillFormData {
   origin: string;
   action: string;
   fields: AutofillFormFieldData[];
-  frame_id: string;
+  host_frame: string;
   child_frames?: FrameTokenWithPredecessor[];
   name_attribute?: string;
   id_attribute?: string;
@@ -71,10 +50,11 @@ declare interface FrameTokenWithPredecessor {
   predecessor: number;
 }
 
-/**
- * Maps elements using their unique ID
+/*
+ Name of the html attribute used for storing the remote frame token assigned to
+ the current html document.
  */
-const elementMap = new Map();
+const REMOTE_FRAME_TOKEN_ATTRIBUTE = '__gChrome_remoteFrameToken';
 
 /**
  * Acquires the specified DOM `attribute` from the DOM `element` and returns
@@ -114,7 +94,7 @@ function autoComplete(element: fillConstants.FormControlElement|null): boolean {
   if (getLowerCaseAttribute(element, 'autocomplete') === 'off') {
     return false;
   }
-  if (getLowerCaseAttribute(element.form, 'autocomplete') == 'off') {
+  if (getLowerCaseAttribute(element.form, 'autocomplete') === 'off') {
     return false;
   }
   return true;
@@ -310,7 +290,7 @@ function setInputElementValue(value: string, input: HTMLInputElement): boolean {
 
   if (overrideProperty) {
     Object.defineProperty(input, propertyName, oldPropertyDescriptor);
-    if (!setterCalled && input[propertyName] !== value) {
+    if (!setterCalled) {
       // The setter was never called. This may be intentional (the framework
       // ignored the input event) or not (the event did not conform to what
       // framework expected). The whole function will likely fail, but try to
@@ -513,12 +493,12 @@ gCrWeb.fill.getCanonicalActionForForm = function(
     formElement: HTMLFormElement): string {
   const rawAction = formElement.getAttribute('action') || '';
   const absoluteUrl = absoluteURL(formElement.ownerDocument, rawAction);
-  return gCrWeb.common.removeQueryAndReferenceFromURL(absoluteUrl);
+  return removeQueryAndReferenceFromURL(absoluteUrl);
 };
 
 declare interface OptionFieldStrings {
     option_values: string[] & {toJSON?: string|null};
-    option_contents: string[] & {toJSON?: string|null};
+    option_texts: string[]&{toJSON?: string | null};
 }
 
 /**
@@ -528,7 +508,7 @@ declare interface OptionFieldStrings {
  * It is based on the logic in
  *     void GetOptionStringsFromElement(const WebSelectElement& select_element,
  *                                      std::vector<string16>* option_values,
- *                                      std::vector<string16>* option_contents)
+ *                                      std::vector<string16>* option_texts)
  * in chromium/src/components/autofill/content/renderer/form_autofill_util.cc.
  *
  * @param selectElement A select element from which option data are
@@ -541,14 +521,14 @@ gCrWeb.fill.getOptionStringsFromElement = function(
   field.option_values = [];
   // Protect against custom implementation of Array.toJSON in host pages.
   field.option_values.toJSON = null;
-  field.option_contents = [];
-  field.option_contents.toJSON = null;
+  field.option_texts = [];
+  field.option_texts.toJSON = null;
   const options = selectElement.options;
   for (let i = 0; i < options.length; ++i) {
     const option = options[i]!;
     field.option_values.push(
         option.value.substring(0, fillConstants.MAX_STRING_LENGTH));
-    field.option_contents.push(
+    field.option_texts.push(
         option.text.substring(0, fillConstants.MAX_STRING_LENGTH));
   }
 };
@@ -682,63 +662,53 @@ gCrWeb.fill.isElementInsideFormOrFieldSet = function(
 };
 
 /**
- * @param nextAvailableID Next available integer.
- */
-gCrWeb.fill['setUpForUniqueIDs'] = function(nextAvailableID: number): void {
-  const uniqueID = gCrWeb.fill.ID_SYMBOL;
-  document[uniqueID] = nextAvailableID;
-};
-
-/**
- * @param element Form or form input element.
- */
-gCrWeb.fill.setUniqueIDIfNeeded = function(element: IndexableElement): void {
-  try {
-    const uniqueID = gCrWeb.fill.ID_SYMBOL;
-    // Do not assign element id value if the base value for the document
-    // is not set.
-    if (typeof document[uniqueID] !== 'undefined' &&
-        typeof element[uniqueID] === 'undefined') {
-      element[uniqueID] = document[uniqueID]++;
-      // TODO(crbug.com/1350973): WeakRef starts in 14.5, remove checks once 14
-      // is deprecated.
-      elementMap.set(
-          element[uniqueID], window.WeakRef ? new WeakRef(element) : element);
-    }
-  } catch (e) {
-  }
-};
-
-/**
  * @param element Form or form input element.
  * @return Unique stable ID converted to string..
  */
 gCrWeb.fill.getUniqueID = function(element: any): string {
+  // `setUniqueIDIfNeeded` is only available in the isolated content world.
+  // Check before invoking it as this script is injected into the page content
+  // world as well.
+  if (gCrWeb.fill.setUniqueIDIfNeeded) {
+    gCrWeb.fill.setUniqueIDIfNeeded(element);
+  }
+
   try {
-    const uniqueID = gCrWeb.fill.ID_SYMBOL;
-    if (typeof element[uniqueID]! !== 'undefined' &&
-        !isNaN(element[uniqueID]!)) {
-      return element[uniqueID].toString();
+    const uniqueIDSymbol = gCrWeb.fill.ID_SYMBOL;
+    if (typeof element[uniqueIDSymbol] !== 'undefined' &&
+        !isNaN(element[uniqueIDSymbol]!)) {
+      return element[uniqueIDSymbol].toString();
     } else {
-      return fillConstants.RENDERER_ID_NOT_SET;
+      // Use the fallback value stored in the DOM. This will happen when the
+      // script is running in the page content world. JavaScript properties are
+      // not shared across content worlds. This means that `element[uniqueID]`
+      // will not have value in the page content world because it was set in the
+      // isolated content world.
+      const valueInDOM =
+          element.getAttribute(fillConstants.UNIQUE_ID_ATTRIBUTE);
+
+      // Check that there is a valid integer ID stored in the DOM. If not,
+      // return the fallback value.
+      return isNaN(parseInt(valueInDOM)) ? fillConstants.RENDERER_ID_NOT_SET :
+                                           valueInDOM;
     }
   } catch (e) {
     return fillConstants.RENDERER_ID_NOT_SET;
   }
 };
 
-/**
- * @param id Unique ID.
- * @return element Form or form input element.
- */
-gCrWeb.fill.getElementByUniqueID = function(id: number): Element | null {
-  try {
-    // TODO(crbug.com/1350973): WeakRef starts in 14.5, remove checks once 14 is
-    // deprecated.
-    return window.WeakRef ? elementMap.get(id).deref() : elementMap.get(id);
-  } catch (e) {
-    return null;
-  }
-};
+function setRemoteFrameToken(token: string) {
+  document.documentElement.setAttribute(REMOTE_FRAME_TOKEN_ATTRIBUTE, token);
+}
 
-export {AutofillFormFieldData, AutofillFormData, FrameTokenWithPredecessor};
+function getRemoteFrameToken(): string|null {
+  return document.documentElement.getAttribute(REMOTE_FRAME_TOKEN_ATTRIBUTE);
+}
+
+export {
+  AutofillFormFieldData,
+  AutofillFormData,
+  FrameTokenWithPredecessor,
+  setRemoteFrameToken,
+  getRemoteFrameToken,
+};

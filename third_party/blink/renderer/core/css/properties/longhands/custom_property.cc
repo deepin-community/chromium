@@ -11,6 +11,7 @@
 #include "third_party/blink/renderer/core/css/property_registration.h"
 #include "third_party/blink/renderer/core/css/property_registry.h"
 #include "third_party/blink/renderer/core/css/resolver/style_builder_converter.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 
 namespace blink {
@@ -87,8 +88,7 @@ void CustomProperty::ApplyInitial(StyleResolverState& state) const {
     return;
   }
 
-  const StyleInitialData* initial_data =
-      state.StyleBuilder().InitialData().get();
+  const StyleInitialData* initial_data = state.StyleBuilder().InitialData();
   DCHECK(initial_data);
   CSSVariableData* initial_variable_data = initial_data->GetVariableData(name_);
   const CSSValue* initial_value = initial_data->GetVariableValue(name_);
@@ -98,6 +98,10 @@ void CustomProperty::ApplyInitial(StyleResolverState& state) const {
 }
 
 void CustomProperty::ApplyInherit(StyleResolverState& state) const {
+  if (!state.ParentStyle()) {
+    ApplyInitial(state);
+    return;
+  }
   ComputedStyleBuilder& builder = state.StyleBuilder();
   bool is_inherited_property = IsInherited();
 
@@ -118,10 +122,16 @@ void CustomProperty::ApplyValue(StyleResolverState& state,
   ComputedStyleBuilder& builder = state.StyleBuilder();
   DCHECK(!value.IsCSSWideKeyword());
 
+  if (builder.StyleType() == kPseudoIdSelection) {
+    UseCounter::Count(state.GetDocument(),
+                      WebFeature::kSelectionCustomProperty);
+  }
+
   builder.SetHasVariableDeclaration();
 
   if (value.IsInvalidVariableValue()) {
     if (!SupportsGuaranteedInvalid()) {
+      state.SetHasUnsupportedGuaranteedInvalid();
       ApplyUnset(state);
       return;
     }
@@ -178,15 +188,12 @@ void CustomProperty::ApplyValue(StyleResolverState& state,
   if (!registered_value) {
     DCHECK(declaration);
     CSSVariableData& data = *declaration->VariableDataValue();
-    CSSTokenizer tokenizer(data.OriginalText());
-    Vector<CSSParserToken, 32> tokens = tokenizer.TokenizeToEOF();
-    CSSTokenizedValue tokenized_value{CSSParserTokenRange(tokens),
-                                      data.OriginalText()};
     registered_value =
-        Parse(tokenized_value, *context, CSSParserLocalContext());
+        Parse(data.OriginalText(), *context, CSSParserLocalContext());
   }
 
   if (!registered_value) {
+    state.SetHasUnsupportedGuaranteedInvalid();
     if (is_inherited_property) {
       ApplyInherit(state);
     } else {
@@ -197,28 +204,36 @@ void CustomProperty::ApplyValue(StyleResolverState& state,
 
   bool is_animation_tainted = value_mode == ValueMode::kAnimated;
 
+  // Note that the computed value ("SetVariableValue") is stored separately
+  // from the substitution value ("SetVariableData") on ComputedStyle.
+  // The substitution value is used for substituting var() references to
+  // the custom property, and the computed value is generally used in other
+  // cases (e.g. serialization).
+
+  bool is_attr_tainted = declaration && declaration->VariableDataValue() &&
+                         declaration->VariableDataValue()->IsAttrTainted();
+
   registered_value = &StyleBuilderConverter::ConvertRegisteredPropertyValue(
       state, *registered_value, context);
-  scoped_refptr<CSSVariableData> data =
+  CSSVariableData* data =
       StyleBuilderConverter::ConvertRegisteredPropertyVariableData(
-          *registered_value, is_animation_tainted);
-
+          *registered_value, is_animation_tainted, is_attr_tainted);
   builder.SetVariableData(name_, data, is_inherited_property);
   builder.SetVariableValue(name_, registered_value, is_inherited_property);
 }
 
 const CSSValue* CustomProperty::ParseSingleValue(
-    CSSParserTokenRange& range,
+    CSSParserTokenStream& stream,
     const CSSParserContext& context,
     const CSSParserLocalContext& local_context) const {
   NOTREACHED();
-  return nullptr;
 }
 
 const CSSValue* CustomProperty::CSSValueFromComputedStyleInternal(
     const ComputedStyle& style,
     const LayoutObject*,
-    bool allow_visited_style) const {
+    bool allow_visited_style,
+    CSSValuePhase value_phase) const {
   if (registration_) {
     const CSSValue* value = style.GetVariableValue(name_, IsInherited());
     if (value) {
@@ -240,21 +255,21 @@ const CSSValue* CustomProperty::CSSValueFromComputedStyleInternal(
 }
 
 const CSSValue* CustomProperty::ParseUntyped(
-    const CSSTokenizedValue& value,
+    StringView text,
     const CSSParserContext& context,
     const CSSParserLocalContext& local_context) const {
   return CSSVariableParser::ParseDeclarationValue(
-      value, local_context.IsAnimationTainted(), context);
+      text, local_context.IsAnimationTainted(), context);
 }
 
 const CSSValue* CustomProperty::Parse(
-    CSSTokenizedValue value,
+    StringView text,
     const CSSParserContext& context,
     const CSSParserLocalContext& local_context) const {
   if (!registration_) {
-    return ParseUntyped(value, context, local_context);
+    return ParseUntyped(text, context, local_context);
   }
-  return registration_->Syntax().Parse(value, context,
+  return registration_->Syntax().Parse(text, context,
                                        local_context.IsAnimationTainted());
 }
 

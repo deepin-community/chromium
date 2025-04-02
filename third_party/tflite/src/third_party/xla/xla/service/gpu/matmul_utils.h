@@ -16,50 +16,28 @@ limitations under the License.
 #ifndef XLA_SERVICE_GPU_MATMUL_UTILS_H_
 #define XLA_SERVICE_GPU_MATMUL_UTILS_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
-#include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "xla/autotuning.pb.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/mlir_hlo/lhlo_gpu/IR/lhlo_gpu_ops.h"
 #include "xla/service/gpu/backend_configs.pb.h"
-#include "xla/service/gpu/ir_emission_utils.h"
 #include "xla/shape.h"
-#include "xla/statusor.h"
 #include "xla/stream_executor/blas.h"
+#include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
-#include "xla/types.h"
 #include "xla/xla_data.pb.h"
-
-#if TENSORFLOW_USE_ROCM
-#include "rocm/rocm_config.h"
-#endif
 
 namespace xla {
 namespace gpu {
-
-// Ordered non-contracting dimensions for a dot instruction operand.
-absl::StatusOr<std::vector<int64_t>> GetNonContractingDims(
-    const Shape& shape, absl::Span<const int64_t> batch_dims,
-    absl::Span<const int64_t> contracting_dims);
-
-// Batch dimensions of an operand of a dot instruction.
-// Just an unified accessor to lhs_batch_dimensions and rhs_batch_dimensions.
-const tsl::protobuf::RepeatedField<int64_t>& BatchDimensionsForOperand(
-    const HloInstruction& dot, int operand_number);
-
-// Index of the only contracting dimension of dot instruction operand.
-int64_t ContractingDimensionIndex(const HloInstruction& dot,
-                                  int operand_number);
-
-// Index of the only non-contracting dimension of dot instruction operand.
-int64_t NonContractingDimensionIndex(const HloInstruction& dot,
-                                     int operand_number);
 
 // Normalize shape to (batch, rows, columns) logical dimensions.
 absl::StatusOr<Shape> GetBatchRowColumnShape(
@@ -69,6 +47,16 @@ absl::StatusOr<Shape> GetBatchRowColumnShape(
 // GPU folding rule for the `TransposeFolding` pass.
 absl::StatusOr<bool> CanFoldTransposeOperandIntoDot(const HloInstruction& dot,
                                                     int64_t operand_idx);
+
+// Returns true if the sum of the sizes of the unbatched operand matrices
+// for the dot is smaller than the given threshold.
+absl::StatusOr<bool> IsMatrixMultiplicationTooSmallForRewriting(
+    const HloInstruction& dot, int64_t threshold);
+
+// Returns true if the backend can lower the dot. Currently the classical
+// emitters cannot handle some dots, e.g., i8[] x i8[] -> i32[] dots,
+// so we need to always use cuBLAS or Triton for those.
+bool IsDotSupportedByClassicalEmitters(const HloInstruction& dot);
 
 // extending plain MatrixLayout struct with creator functions
 struct MatrixLayout : public se::gpu::MatrixLayout {
@@ -96,8 +84,14 @@ struct GemmConfig : public se::gpu::GemmConfig {
   static constexpr int64_t kHopperWorkspace = 32 * 1024 * 1024;  // 32 MiB
   static constexpr int64_t kDefaultWorkspace = 4 * 1024 * 1024;  // 4 MiB
 
-  static absl::StatusOr<GemmConfig> For(const HloInstruction* gemm);
-  static absl::StatusOr<GemmConfig> For(mlir::lmhlo_gpu::GEMMOp op);
+  static absl::StatusOr<GemmConfig> For(
+      const HloInstruction* gemm, const se::GpuComputeCapability& gpu_version);
+
+  // Gets the GemmConfig of the `gemm` instruction with overridden
+  // GemmBackendConfig.
+  static absl::StatusOr<GemmConfig> For(
+      const HloInstruction* gemm, const GemmBackendConfig& config,
+      const se::GpuComputeCapability& gpu_version);
 
   static absl::StatusOr<GemmConfig> For(
       const Shape& lhs_shape, absl::Span<const int64_t> lhs_batch_dims,
@@ -105,8 +99,9 @@ struct GemmConfig : public se::gpu::GemmConfig {
       absl::Span<const int64_t> rhs_batch_dims,
       absl::Span<const int64_t> rhs_contracting_dims, const Shape& output_shape,
       double alpha_real, double alpha_imag, double beta,
+      PrecisionConfig::Algorithm precision_algorithm,
       std::optional<int64_t> algorithm, int64_t compute_precision, bool grad_x,
-      bool grad_y);
+      bool grad_y, const se::GpuComputeCapability& gpu_version);
 
   // As above with additional `c_shape` and `bias_shape_ptr` parameter, both
   // which are only necessarily for F8 gemms.
@@ -116,45 +111,10 @@ struct GemmConfig : public se::gpu::GemmConfig {
       absl::Span<const int64_t> rhs_batch_dims,
       absl::Span<const int64_t> rhs_contracting_dims, const Shape& c_shape,
       const Shape* bias_shape_ptr, const Shape& output_shape, double alpha_real,
-      double alpha_imag, double beta, std::optional<int64_t> algorithm,
-      int64_t compute_precision, bool grad_x, bool grad_y);
-
-  template <typename CublasLtMatmulMaybeF8Op,
-            typename = std::enable_if<
-                std::is_same<CublasLtMatmulMaybeF8Op,
-                             mlir::lmhlo_gpu::CublasLtMatmulOp>::value ||
-                std::is_same<CublasLtMatmulMaybeF8Op,
-                             mlir::lmhlo_gpu::CublasLtMatmulF8Op>::value>>
-  static absl::StatusOr<GemmConfig> For(CublasLtMatmulMaybeF8Op op) {
-    mlir::mhlo::DotDimensionNumbersAttr dot_dims = op.getDotDimensionNumbers();
-
-    int64_t compute_precision = 0;  // Default
-    if (op.getPrecisionConfig().has_value()) {
-      auto precision_config = op.getPrecisionConfig();
-      for (auto attr : precision_config.value()) {
-        int64_t value = static_cast<int64_t>(
-            attr.template cast<mlir::mhlo::PrecisionAttr>().getValue());
-        if (value > compute_precision) {
-          compute_precision = value;
-        }
-      }
-    }
-
-    Shape bias_shape;
-    if (op.getBias() != nullptr) {
-      bias_shape = GetShape(op.getBias());
-    }
-    return GemmConfig::For(
-        GetShape(op.getA()), dot_dims.getLhsBatchingDimensions(),
-        dot_dims.getLhsContractingDimensions(), GetShape(op.getB()),
-        dot_dims.getRhsBatchingDimensions(),
-        dot_dims.getRhsContractingDimensions(), GetShape(op.getC()),
-        op.getBias() == nullptr ? nullptr : &bias_shape, GetShape(op.getD()),
-        op.getAlphaReal().convertToDouble(),
-        op.getAlphaImag().convertToDouble(), op.getBeta().convertToDouble(),
-        op.getAlgorithm(), compute_precision, /*grad_x=*/false,
-        /*grad_y=*/false);
-  }
+      double alpha_imag, double beta,
+      PrecisionConfig::Algorithm precision_algorithm,
+      std::optional<int64_t> algorithm, int64_t compute_precision, bool grad_x,
+      bool grad_y, const se::GpuComputeCapability& gpu_version);
 
   struct DescriptorsTuple {
     se::gpu::MatrixDescriptor lhs;
@@ -186,8 +146,6 @@ absl::StatusOr<bool> EpilogueAddsVectorBias(
 absl::StatusOr<bool> EpilogueHasAuxiliaryOutput(
     GemmBackendConfig_Epilogue epilogue);
 
-absl::StatusOr<se::gpu::BlasLt::Epilogue> AsBlasLtEpilogue(
-    mlir::lmhlo_gpu::CublasLtMatmulEpilogue epilogue);
 absl::StatusOr<se::gpu::BlasLt::Epilogue> AsBlasLtEpilogue(
     GemmBackendConfig_Epilogue epilogue);
 
@@ -231,7 +189,7 @@ struct TritonGemmConfig {
  public:
   // Creates a TritonGemmConfig from the supplied proto, doing a simple sanity
   // check.
-  static StatusOr<TritonGemmConfig> FromProto(
+  static absl::StatusOr<TritonGemmConfig> FromProto(
       const AutotuneResult::TritonGemmKey& proto);
   AutotuneResult::TritonGemmKey ToProto() const;
 

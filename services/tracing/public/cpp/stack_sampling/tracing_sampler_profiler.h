@@ -42,8 +42,6 @@
 
 namespace tracing {
 
-class PerfettoProducer;
-
 #if BUILDFLAG(ENABLE_LOADER_LOCK_SAMPLING)
 class LoaderLockSamplingThread;
 #endif
@@ -206,7 +204,7 @@ class COMPONENT_EXPORT(TRACING_CPP) TracingSamplerProfiler {
   // For tests.
   static void SetupStartupTracingForTesting();
   static void DeleteOnChildThreadForTesting();
-  static void StartTracingForTesting(tracing::PerfettoProducer* producer);
+  static void StartTracingForTesting();
   static void StopTracingForTesting();
   static void ResetDataSourceForTesting();
   // Returns whether of not the sampler profiling is able to unwind the stack
@@ -244,7 +242,7 @@ class COMPONENT_EXPORT(TRACING_CPP) TracingSamplerProfiler {
       aux_unwinder_factory_;
   // To differentiate b/w different unwinders used for browser main
   // thread sampling.
-  // TODO(crbug.com/1377364): Remove once we have single unwinder for browser
+  // TODO(crbug.com/40243562): Remove once we have single unwinder for browser
   // main.
   UnwinderType unwinder_type_;
 

@@ -75,7 +75,7 @@ class DlpCopyOrMoveHookDelegateTest : public DlpFilesTestBase {
 
   void SetUp() override {
     DlpFilesTestBase::SetUp();
-    controller_ = std::make_unique<MockController>(*rules_manager_);
+    controller_ = std::make_unique<MockController>(*rules_manager());
   }
 
   absl::flat_hash_map<std::pair<base::FilePath, base::FilePath>,
@@ -100,7 +100,7 @@ TEST_F(DlpCopyOrMoveHookDelegateTest, OnBeginProcessFileAllow) {
   base::MockCallback<base::OnceCallback<void()>> destructor_continuation;
   EXPECT_CALL(destructor_continuation, Run)
       .WillOnce([&continuation_run_loop]() { continuation_run_loop.Quit(); });
-  EXPECT_CALL(*rules_manager_, GetDlpFilesController)
+  EXPECT_CALL(*rules_manager(), GetDlpFilesController)
       .WillOnce(testing::Return(controller_.get()));
 
   EXPECT_CALL(*controller_, RequestCopyAccess(source, destination,
@@ -130,11 +130,19 @@ TEST_F(DlpCopyOrMoveHookDelegateTest, OnBeginProcessFileAllow) {
       base::BindOnce(&DlpCopyOrMoveHookDelegate::OnEndCopy,
                      base::Unretained(hook_.get()), source, destination));
   continuation_run_loop.Run();
+  // At this point the value in the map is removed - that does not mean the map
+  // is fully updated. For this we have to wait until at least the current task
+  // IO task is finished.
+  base::RunLoop end_run_loop;
+  task_runner->PostTask(
+      FROM_HERE,
+      base::BindOnce(&base::RunLoop::Quit, base::Unretained(&end_run_loop)));
+  end_run_loop.Run();
   EXPECT_EQ(0ul, GetAccessMap().size());
 }
 
 TEST_F(DlpCopyOrMoveHookDelegateTest, OnBeginProcessFileDeny) {
-  EXPECT_CALL(*rules_manager_, GetDlpFilesController)
+  EXPECT_CALL(*rules_manager(), GetDlpFilesController)
       .WillOnce(testing::Return(controller_.get()));
 
   EXPECT_CALL(*controller_, RequestCopyAccess(source, destination,
@@ -166,7 +174,7 @@ TEST_F(DlpCopyOrMoveHookDelegateTest, OnBeginProcessFileAllowHookDestruct) {
   base::MockCallback<base::OnceCallback<void()>> destructor_continuation;
   EXPECT_CALL(destructor_continuation, Run)
       .WillOnce([&continuation_run_loop]() { continuation_run_loop.Quit(); });
-  EXPECT_CALL(*rules_manager_, GetDlpFilesController)
+  EXPECT_CALL(*rules_manager(), GetDlpFilesController)
       .WillOnce(testing::Return(controller_.get()));
 
   EXPECT_CALL(*controller_, RequestCopyAccess(source, destination,
@@ -202,7 +210,7 @@ TEST_F(DlpCopyOrMoveHookDelegateTest, OnBeginProcessFileAllowHookDestruct) {
 
 TEST_F(DlpCopyOrMoveHookDelegateTest, OnBeginProcessFileNoManager) {
   policy::DlpRulesManagerFactory::GetInstance()->SetTestingFactory(
-      profile_,
+      profile(),
       base::BindRepeating(
           [](content::BrowserContext*) -> std::unique_ptr<KeyedService> {
             return nullptr;
@@ -224,7 +232,7 @@ TEST_F(DlpCopyOrMoveHookDelegateTest, OnBeginProcessFileNoManager) {
 }
 
 TEST_F(DlpCopyOrMoveHookDelegateTest, OnBeginProcessFileNoController) {
-  EXPECT_CALL(*rules_manager_, GetDlpFilesController)
+  EXPECT_CALL(*rules_manager(), GetDlpFilesController)
       .WillOnce(testing::Return(nullptr));
   auto task_runner = content::GetIOThreadTaskRunner({});
   base::RunLoop status_callback_run_loop;

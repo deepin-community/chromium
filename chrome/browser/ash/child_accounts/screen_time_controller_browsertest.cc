@@ -143,13 +143,9 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
   raw_ptr<Profile, DanglingUntriaged> child_profile_ = nullptr;
 
  private:
-  LoggedInUserMixin logged_in_user_mixin_{&mixin_host_,
-                                          LoggedInUserMixin::LogInType::kChild,
-                                          embedded_test_server(),
-                                          this,
-                                          true /*should_launch_browser*/,
-                                          std::nullopt /*account_id*/,
-                                          false /*include_initial_user*/};
+  LoggedInUserMixin logged_in_user_mixin_{
+      &mixin_host_, /*test_base=*/this, embedded_test_server(),
+      LoggedInUserMixin::LogInType::kChild, /*include_initial_user=*/false};
 };
 
 // Tests a simple lock override.
@@ -432,13 +428,8 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, UnlockDailyLimitWithDuration) {
 }
 
 // Tests the default time window limit.
-// TODO(crbug.com/1358216): Flaky on Linux
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_ASH)
-#define MAYBE_DefaultBedtime DISABLED_DefaultBedtime
-#else
-#define MAYBE_DefaultBedtime DefaultBedtime
-#endif
-IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, MAYBE_DefaultBedtime) {
+// TODO(crbug.com/1358216): Flaky
+IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_DefaultBedtime) {
   LogInChildAndSetupClockWithTime("1 Jan 2018 10:00:00 GMT");
   ScreenLockerTester().Lock();
 
@@ -717,7 +708,8 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
 }
 
 // Tests if call the observers for usage time limit warning.
-IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, CallObservers) {
+// TODO(crbug.com/334160972): Flaky on CrOS.
+IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_CallObservers) {
   LogInChildAndSetupClockWithTime("1 Jan 2018 10:00:00 PST");
 
   system::TimezoneSettings::GetInstance()->SetTimezoneFromID(u"PST");

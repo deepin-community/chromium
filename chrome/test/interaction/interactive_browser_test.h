@@ -11,10 +11,10 @@
 #include <optional>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "base/functional/callback_helpers.h"
-#include "base/strings/string_piece.h"
 #include "base/test/rectify_callback.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -25,7 +25,6 @@
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_test_util.h"
 #include "ui/base/interaction/element_tracker.h"
@@ -80,20 +79,27 @@ class InteractiveBrowserTestApi : public views::test::InteractiveViewsTestApi {
   void EnableWebUICodeCoverage();
 
   // Takes a screenshot of the specified element, with name `screenshot_name`
-  // (may be empty for tests that take only one screenshot) and `baseline`,
+  // (may be empty for tests that take only one screenshot) and `baseline_cl`,
   // which should be set to match the CL number when a screenshot should change.
   //
   // Currently, is somewhat unreliable for WebUI embedded in bubbles or dialogs
   // (e.g. Tab Search dropdown) but should work fairly well in most other cases.
-  [[nodiscard]] StepBuilder Screenshot(ElementSpecifier element,
-                                       const std::string& screenshot_name,
-                                       const std::string& baseline);
+  [[nodiscard]] MultiStep Screenshot(ElementSpecifier element,
+                                     const std::string& screenshot_name,
+                                     const std::string& baseline_cl);
+
+  // As `Screenshot()` but takes a screenshot of the entire surface (widget,
+  // WebUI, etc.) containing `element_in_surface`. See `Screenshot()` for more
+  // information.
+  [[nodiscard]] MultiStep ScreenshotSurface(ElementSpecifier element_in_surface,
+                                            const std::string& screenshot_name,
+                                            const std::string& baseline_cl);
 
   struct CurrentBrowser {};
   struct AnyBrowser {};
 
   // Specifies which browser to use when instrumenting a tab.
-  using BrowserSpecifier = absl::variant<
+  using BrowserSpecifier = std::variant<
       // Use the browser associated with the context of the current test step;
       // if unspecified use the default context for the sequence.
       CurrentBrowser,
@@ -150,6 +156,25 @@ class InteractiveBrowserTestApi : public views::test::InteractiveViewsTestApi {
       AbsoluteViewSpecifier web_view,
       bool wait_for_ready = true);
 
+  // Instruments an inner webview of an already-instrumented WebContents of any
+  // type; the resulting element will be present only when the parent element is
+  // *and* the inner webview is loaded and ready.
+  //
+  // Do not use with iframe; just instrument the primary contents and use
+  // `DeepQuery` instead.
+  [[nodiscard]] MultiStep InstrumentInnerWebContents(
+      ui::ElementIdentifier inner_id,
+      ui::ElementIdentifier outer_id,
+      size_t inner_contents_index,
+      bool wait_for_ready = true);
+
+  // Removes instrumentation for the WebContents with identifier `id`.
+  // `fail_if_not_instrumented` defines what happens if `id` is not in use;
+  // if true, crashes the test. If false, ignores and continues.
+  [[nodiscard]] StepBuilder UninstrumentWebContents(
+      ui::ElementIdentifier id,
+      bool fail_if_not_instrumented = true);
+
   // These convenience methods wait for page navigation/ready. If you specify
   // `expected_url`, the test will fail if that is not the loaded page. If you
   // do not, there is no step start callback and you can add your own logic.
@@ -163,6 +188,23 @@ class InteractiveBrowserTestApi : public views::test::InteractiveViewsTestApi {
   [[nodiscard]] static StepBuilder WaitForWebContentsNavigation(
       ui::ElementIdentifier webcontents_id,
       std::optional<GURL> expected_url = std::nullopt);
+
+  // Waits for the instrumented WebContents with the given `webcontents_id` to
+  // be painted at least once. If a WebContents is not painted when some events
+  // are being sent, they may not be routed correctly. Likewise, a screenshot of
+  // a WebContents won't be guaranteed to have any content without being painted
+  // first. Because paint often happens quickly, this can lead to tests that
+  // mostly pass but cause flakes due to hidden race conditions on slower
+  // machines and test-bots.
+  //
+  // Note: waiting for contentful paint isn't automatic when instrumenting,
+  // specifically because not all pages actually paint - empty pages, background
+  // pages, and pages loaded in WebViews that are hidden or zero size do not
+  // paint. They are also not required for all interactions. Where possible,
+  // verbs provided in this API that do require at least one paint will include
+  // this verb conditionally to avoid problems.
+  [[nodiscard]] static StepBuilder WaitForWebContentsPainted(
+      ui::ElementIdentifier webcontents_id);
 
   // This convenience method navigates the page at `webcontents_id` to
   // `new_url`, which must be different than its current URL. The sequence will
@@ -312,8 +354,8 @@ class InteractiveBrowserTestApi : public views::test::InteractiveViewsTestApi {
   //
   // If the DOM element may be scrolled outside of the current viewport,
   // consider using ScrollIntoView(web_contents, where) before this verb.
-  [[nodiscard]] StepBuilder MoveMouseTo(ElementSpecifier web_contents,
-                                        const DeepQuery& where);
+  [[nodiscard]] MultiStep MoveMouseTo(ui::ElementIdentifier web_contents,
+                                      const DeepQuery& where);
 
   // Find the DOM element at the given path in the reference element, which
   // should be an instrumented WebContents; see Instrument*(). Perform a drag
@@ -322,9 +364,9 @@ class InteractiveBrowserTestApi : public views::test::InteractiveViewsTestApi {
   //
   // If the DOM element may be scrolled outside of the current viewport,
   // consider using ScrollIntoView(web_contents, where) before this verb.
-  [[nodiscard]] StepBuilder DragMouseTo(ElementSpecifier web_contents,
-                                        const DeepQuery& where,
-                                        bool release = true);
+  [[nodiscard]] MultiStep DragMouseTo(ui::ElementIdentifier web_contents,
+                                      const DeepQuery& where,
+                                      bool release = true);
 
   using InteractiveViewsTestApi::ScrollIntoView;
 
@@ -335,6 +377,27 @@ class InteractiveBrowserTestApi : public views::test::InteractiveViewsTestApi {
   [[nodiscard]] StepBuilder ScrollIntoView(ui::ElementIdentifier web_contents,
                                            const DeepQuery& where);
 
+  // Waits until the intersection of the element's bounds and the window bounds
+  // are nonempty.
+  [[nodiscard]] MultiStep WaitForElementVisible(
+      ui::ElementIdentifier web_contents,
+      const DeepQuery& where);
+
+  // Simulates clicking on an HTML element by injecting the click event directly
+  // into the DOM. You can specify the mouse button and additional modifier
+  // keys (default is left-click, no modifiers).
+  //
+  // Normally, clicking with buttons other than the left mouse button generates
+  // an auxclick event rather than a click event. However, injecting auxclick
+  // does not e.g. trigger navigation when clicking a link, so in all these
+  // cases, vanilla click events are sent, which should be handled normally for
+  // backwards-compatibility reasons.
+  [[nodiscard]] StepBuilder ClickElement(
+      ui::ElementIdentifier web_contents,
+      const DeepQuery& where,
+      ui_controls::MouseButton button = ui_controls::LEFT,
+      ui_controls::AcceleratorState modifiers = ui_controls::kNoAccelerator);
+
  protected:
   explicit InteractiveBrowserTestApi(
       std::unique_ptr<internal::InteractiveBrowserTestPrivate>
@@ -343,6 +406,9 @@ class InteractiveBrowserTestApi : public views::test::InteractiveViewsTestApi {
  private:
   static RelativePositionCallback DeepQueryToRelativePosition(
       const DeepQuery& query);
+
+  // Possibly waits for `element_id` to be painted if it is a WebContents.
+  [[nodiscard]] MultiStep MaybeWaitForPaint(ElementSpecifier element);
 
   Browser* GetBrowserFor(ui::ElementContext current_context,
                          BrowserSpecifier spec);

@@ -20,6 +20,7 @@ using ::testing::AtLeast;
 using ::testing::ElementsAre;
 using ::testing::Field;
 using ::testing::IsEmpty;
+using ::testing::Property;
 using ::testing::ResultOf;
 using ::testing::SizeIs;
 using ::testing::Truly;
@@ -32,14 +33,15 @@ auto FormField(
     const std::string& name,
     const std::string& value = "",
     FormControlType form_control_type = FormControlType::kInputText) {
-  return AllOf(Field("name", &FormFieldData::name, base::UTF8ToUTF16(name)),
-               Field("value", &FormFieldData::value, base::UTF8ToUTF16(value)),
-               Field("form_control_type", &FormFieldData::form_control_type,
-                     form_control_type));
+  return AllOf(
+      Property("name", &FormFieldData::name, base::UTF8ToUTF16(name)),
+      Property("value", &FormFieldData::value, base::UTF8ToUTF16(value)),
+      Property("form_control_type", &FormFieldData::form_control_type,
+               form_control_type));
 }
 
 auto FormWithFields(auto matcher) {
-  return ElementsAre(Field(&FormData::fields, matcher));
+  return ElementsAre(Property(&FormData::fields, matcher));
 }
 
 auto Nth(int index, auto matcher) {
@@ -142,7 +144,7 @@ TEST_F(AutofillRendererTest, DynamicallyAddedUnownedFormElements) {
 }
 
 TEST_F(AutofillRendererTest, IgnoreNonUserGestureTextFieldChanges) {
-  EXPECT_CALL(autofill_driver(), TextFieldDidChange).Times(0);
+  EXPECT_CALL(autofill_driver(), TextFieldValueChanged).Times(0);
   LoadHTML(R"(<form method='post'>
                 <input type='text' id='full_name'/>
               </form>)");
@@ -156,10 +158,10 @@ TEST_F(AutofillRendererTest, IgnoreNonUserGestureTextFieldChanges) {
     GetMainFrame()->View()->AdvanceFocus(false);
 
   full_name.SetValue("Alice", true);
-  GetMainFrame()->AutofillClient()->TextFieldDidChange(full_name);
+  GetMainFrame()->AutofillClient()->TextFieldValueChanged(full_name);
 
-  EXPECT_CALL(autofill_driver(), TextFieldDidChange);
-  SimulateUserInputChangeForElement(&full_name, "Alice");
+  EXPECT_CALL(autofill_driver(), TextFieldValueChanged);
+  SimulateUserInputChangeForElement(full_name, "Alice");
 }
 
 }  // namespace

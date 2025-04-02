@@ -59,7 +59,7 @@ class PepperPlatformAudioInput
   void ShutDown();
 
   // media::AudioInputIPCDelegate.
-  void OnStreamCreated(base::ReadOnlySharedMemoryRegion shared_memory_region,
+  void OnStreamCreated(base::UnsafeSharedMemoryRegion shared_memory_region,
                        base::SyncSocket::ScopedHandle socket_handle,
                        bool initially_muted) override;
   void OnError(media::AudioCapturerSource::ErrorCode code) override;
@@ -96,7 +96,7 @@ class PepperPlatformAudioInput
 
   // The client to notify when the stream is created. THIS MUST ONLY BE
   // ACCESSED ON THE MAIN THREAD.
-  raw_ptr<PepperAudioInputHost, ExperimentalRenderer> client_ = nullptr;
+  raw_ptr<PepperAudioInputHost> client_ = nullptr;
 
   // Used to send/receive IPC. THIS MUST ONLY BE ACCESSED ON THE
   // I/O THREAD.

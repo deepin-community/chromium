@@ -113,14 +113,6 @@ const UIStrings = {
    */
   backgroundColor: 'Background color',
   /**
-   *@description Text in App Manifest View of the Application panel
-   */
-  darkThemeColor: 'Dark theme color',
-  /**
-   *@description Text in App Manifest View of the Application panel
-   */
-  darkBackgroundColor: 'Dark background color',
-  /**
    *@description Text for the orientation of something
    */
   orientation: 'Orientation',
@@ -458,14 +450,14 @@ export type ParsedSize = {
   formatted: string,
 };
 
-type Screenshot = {
-  src: string,
-  type?: string,
-  sizes?: string,
-  label?: string,
-  form_factor?: string,  // eslint-disable-line @typescript-eslint/naming-convention
-  platform?: string,
-};
+interface Screenshot {
+  src: string;
+  type?: string;
+  sizes?: string;
+  label?: string;
+  form_factor?: string;  // eslint-disable-line @typescript-eslint/naming-convention
+  platform?: string;
+}
 
 export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes, typeof UI.Widget.VBox>(UI.Widget.VBox)
     implements SDK.TargetManager.Observer {
@@ -486,10 +478,6 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
   private readonly startURLField: HTMLElement;
   private readonly themeColorSwatch: InlineEditor.ColorSwatch.ColorSwatch;
   private readonly backgroundColorSwatch: InlineEditor.ColorSwatch.ColorSwatch;
-  private readonly darkThemeColorField: HTMLElement;
-  private readonly darkThemeColorSwatch: InlineEditor.ColorSwatch.ColorSwatch;
-  private readonly darkBackgroundColorField: HTMLElement;
-  private readonly darkBackgroundColorSwatch: InlineEditor.ColorSwatch.ColorSwatch;
   private orientationField: HTMLElement;
   private displayField: HTMLElement;
   private readonly newNoteUrlField: HTMLElement;
@@ -505,6 +493,7 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
       emptyView: UI.EmptyWidget.EmptyWidget, reportView: UI.ReportView.ReportView,
       throttler: Common.Throttler.Throttler) {
     super(true);
+    this.registerRequiredCSS(appManifestViewStyles);
 
     this.contentElement.classList.add('manifest-container');
     this.contentElement.setAttribute('jslog', `${VisualLogging.pane('manifest')}`);
@@ -516,27 +505,25 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
     this.emptyView.hideWidget();
 
     this.reportView = reportView;
-
+    this.reportView.registerRequiredCSS(appManifestViewStyles);
     this.reportView.element.classList.add('manifest-view-header');
     this.reportView.show(this.contentElement);
     this.reportView.hideWidget();
 
-    this.errorsSection = this.reportView.appendSection(i18nString(UIStrings.errorsAndWarnings));
-    this.errorsSection.element.setAttribute('jslog', `${VisualLogging.section('errors-and-warnings')}`);
-    this.installabilitySection = this.reportView.appendSection(i18nString(UIStrings.installability));
-    this.installabilitySection.element.setAttribute('jslog', `${VisualLogging.section('installability')}`);
-    this.identitySection = this.reportView.appendSection(i18nString(UIStrings.identity));
-    this.identitySection.element.setAttribute('jslog', `${VisualLogging.section('identity')}`);
-    this.presentationSection = this.reportView.appendSection(i18nString(UIStrings.presentation));
-    this.presentationSection.element.setAttribute('jslog', `${VisualLogging.section('presentation')}`);
-    this.protocolHandlersSection = this.reportView.appendSection(i18nString(UIStrings.protocolHandlers));
-    this.protocolHandlersSection.element.setAttribute('jslog', `${VisualLogging.section('protocol-handlers')}`);
+    this.errorsSection =
+        this.reportView.appendSection(i18nString(UIStrings.errorsAndWarnings), undefined, 'errors-and-warnings');
+    this.installabilitySection =
+        this.reportView.appendSection(i18nString(UIStrings.installability), undefined, 'installability');
+    this.identitySection = this.reportView.appendSection(i18nString(UIStrings.identity), 'undefined,identity');
+    this.presentationSection =
+        this.reportView.appendSection(i18nString(UIStrings.presentation), 'undefined,presentation');
+    this.protocolHandlersSection =
+        this.reportView.appendSection(i18nString(UIStrings.protocolHandlers), 'undefined,protocol-handlers');
     this.protocolHandlersView = new ApplicationComponents.ProtocolHandlersView.ProtocolHandlersView();
     this.protocolHandlersSection.appendFieldWithCustomView(this.protocolHandlersView);
-    this.iconsSection = this.reportView.appendSection(i18nString(UIStrings.icons), 'report-section-icons');
-    this.iconsSection.element.setAttribute('jslog', `${VisualLogging.section('icons')}`);
-    this.windowControlsSection = this.reportView.appendSection(UIStrings.windowControlsOverlay);
-    this.windowControlsSection.element.setAttribute('jslog', `${VisualLogging.section('window-controls-overlay')}`);
+    this.iconsSection = this.reportView.appendSection(i18nString(UIStrings.icons), 'report-section-icons', 'icons');
+    this.windowControlsSection =
+        this.reportView.appendSection(UIStrings.windowControlsOverlay, undefined, 'window-controls-overlay');
     this.shortcutSections = [];
     this.screenshotsSections = [];
 
@@ -554,14 +541,6 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
     const backgroundColorField = this.presentationSection.appendField(i18nString(UIStrings.backgroundColor));
     this.backgroundColorSwatch = new InlineEditor.ColorSwatch.ColorSwatch();
     backgroundColorField.appendChild(this.backgroundColorSwatch);
-
-    this.darkThemeColorField = this.presentationSection.appendField(i18nString(UIStrings.darkThemeColor));
-    this.darkThemeColorSwatch = new InlineEditor.ColorSwatch.ColorSwatch();
-    this.darkThemeColorField.appendChild(this.darkThemeColorSwatch);
-
-    this.darkBackgroundColorField = this.presentationSection.appendField(i18nString(UIStrings.darkBackgroundColor));
-    this.darkBackgroundColorSwatch = new InlineEditor.ColorSwatch.ColorSwatch();
-    this.darkBackgroundColorField.appendChild(this.darkBackgroundColorSwatch);
 
     this.orientationField = this.presentationSection.appendField(i18nString(UIStrings.orientation));
     this.displayField = this.presentationSection.appendField(i18nString(UIStrings.display));
@@ -608,7 +587,7 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
             void this.updateManifest(true);
           }),
       this.serviceWorkerManager.addEventListener(
-          SDK.ServiceWorkerManager.Events.RegistrationUpdated,
+          SDK.ServiceWorkerManager.Events.REGISTRATION_UPDATED,
           () => {
             void this.updateManifest(false);
           }),
@@ -639,7 +618,8 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
     ]);
 
     void this.throttler.schedule(
-        () => this.renderManifest(url, data, errors, installabilityErrors, appId), immediately);
+        () => this.renderManifest(url, data, errors, installabilityErrors, appId),
+        immediately ? Common.Throttler.Scheduling.AS_SOON_AS_POSSIBLE : Common.Throttler.Scheduling.DEFAULT);
   }
 
   private async renderManifest(
@@ -648,15 +628,15 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
       appIdResponse: Protocol.Page.GetAppIdResponse): Promise<void> {
     const appId = appIdResponse?.appId || null;
     const recommendedId = appIdResponse?.recommendedId || null;
-    if (!data && !errors.length) {
+    if ((!data || data === '{}') && !errors.length) {
       this.emptyView.showWidget();
       this.reportView.hideWidget();
-      this.dispatchEventToListeners(Events.ManifestDetected, false);
+      this.dispatchEventToListeners(Events.MANIFEST_DETECTED, false);
       return;
     }
     this.emptyView.hideWidget();
     this.reportView.showWidget();
-    this.dispatchEventToListeners(Events.ManifestDetected, true);
+    this.dispatchEventToListeners(Events.MANIFEST_DETECTED, true);
 
     const link = Components.Linkifier.Linkifier.linkifyURL(url);
     link.tabIndex = 0;
@@ -723,12 +703,14 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
         suggestedIdSpan.textContent = recommendedId;
 
         const copyButton = new Buttons.Button.Button();
+        copyButton.data = {
+          variant: Buttons.Button.Variant.ICON,
+          iconName: 'copy',
+          size: Buttons.Button.Size.SMALL,
+          jslogContext: 'manifest.copy-id',
+          title: i18nString(UIStrings.copyToClipboard),
+        };
         copyButton.className = 'inline-button';
-        copyButton.variant = Buttons.Button.Variant.ROUND;
-        copyButton.size = Buttons.Button.Size.SMALL;
-        copyButton.iconName = 'copy';
-        copyButton.jslogContext = 'manifest.copy-id';
-        copyButton.title = i18nString(UIStrings.copyToClipboard);
         copyButton.addEventListener('click', () => {
           UI.ARIAUtils.alert(i18nString(UIStrings.copiedToClipboard, {PH1: recommendedId}));
           Host.InspectorFrontendHost.InspectorFrontendHostInstance.copyText(recommendedId);
@@ -756,35 +738,13 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
     this.themeColorSwatch.classList.toggle('hidden', !stringProperty('theme_color'));
     const themeColor = Common.Color.parse(stringProperty('theme_color') || 'white') || Common.Color.parse('white');
     if (themeColor) {
-      this.themeColorSwatch.renderColor(themeColor, true);
+      this.themeColorSwatch.renderColor(themeColor);
     }
     this.backgroundColorSwatch.classList.toggle('hidden', !stringProperty('background_color'));
     const backgroundColor =
         Common.Color.parse(stringProperty('background_color') || 'white') || Common.Color.parse('white');
     if (backgroundColor) {
-      this.backgroundColorSwatch.renderColor(backgroundColor, true);
-    }
-
-    const userPreferences = parsedManifest['user_preferences'] || {};
-    const colorScheme = userPreferences['color_scheme'] || {};
-    const colorSchemeDark = colorScheme['dark'] || {};
-    const darkThemeColorString = colorSchemeDark['theme_color'];
-    const hasDarkThemeColor = typeof darkThemeColorString === 'string';
-    this.darkThemeColorField.parentElement?.classList.toggle('hidden', !hasDarkThemeColor);
-    if (hasDarkThemeColor) {
-      const darkThemeColor = Common.Color.parse(darkThemeColorString);
-      if (darkThemeColor) {
-        this.darkThemeColorSwatch.renderColor(darkThemeColor, true);
-      }
-    }
-    const darkBackgroundColorString = colorSchemeDark['background_color'];
-    const hasDarkBackgroundColor = typeof darkBackgroundColorString === 'string';
-    this.darkBackgroundColorField.parentElement?.classList.toggle('hidden', !hasDarkBackgroundColor);
-    if (hasDarkBackgroundColor) {
-      const darkBackgroundColor = Common.Color.parse(darkBackgroundColorString);
-      if (darkBackgroundColor) {
-        this.darkBackgroundColorSwatch.renderColor(darkBackgroundColor, true);
-      }
+      this.backgroundColorSwatch.renderColor(backgroundColor);
     }
 
     this.orientationField.textContent = stringProperty('orientation');
@@ -1013,7 +973,7 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
     this.windowControlsSection.appendRow().appendChild(
         i18n.i18n.getFormatLocalizedString(str_, UIStrings.wcoNeedHelpReadMore, {PH1: wcoDocumentationLink}));
 
-    this.dispatchEventToListeners(Events.ManifestRendered);
+    this.dispatchEventToListeners(Events.MANIFEST_RENDERED);
   }
 
   getInstallabilityErrorMessages(installabilityErrors: Protocol.Page.InstallabilityError[]): string[] {
@@ -1132,7 +1092,7 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
     try {
       await result;
       return {wrapper, image};
-    } catch (e) {
+    } catch {
     }
     return null;
   }
@@ -1276,11 +1236,6 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
     field.appendChild(wrapper);
     return {imageResourceErrors, squareSizedIconAvailable, naturalWidth, naturalHeight};
   }
-  override wasShown(): void {
-    super.wasShown();
-    this.reportView.registerCSSFiles([appManifestViewStyles]);
-    this.registerCSSFiles([appManifestViewStyles]);
-  }
 
   private async appendWindowControlsToSection(
       overlayModel: SDK.OverlayModel.OverlayModel, url: Platform.DevToolsPath.UrlString,
@@ -1300,10 +1255,10 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
       await this.overlayModel?.toggleWindowControlsToolbar(wcoOsCheckbox.checkboxElement.checked);
     });
 
-    const osSelectElement = (wcoOsCheckbox.createChild('select', 'chrome-select') as HTMLSelectElement);
-    osSelectElement.appendChild(new Option('Windows', SDK.OverlayModel.EmulatedOSType.WindowsOS));
-    osSelectElement.appendChild(new Option('macOS', SDK.OverlayModel.EmulatedOSType.MacOS));
-    osSelectElement.appendChild(new Option('Linux', SDK.OverlayModel.EmulatedOSType.LinuxOS));
+    const osSelectElement = wcoOsCheckbox.createChild('select');
+    osSelectElement.appendChild(UI.UIUtils.createOption('Windows', SDK.OverlayModel.EmulatedOSType.WINDOWS, 'windows'));
+    osSelectElement.appendChild(UI.UIUtils.createOption('macOS', SDK.OverlayModel.EmulatedOSType.MAC, 'macos'));
+    osSelectElement.appendChild(UI.UIUtils.createOption('Linux', SDK.OverlayModel.EmulatedOSType.LINUX, 'linux'));
     osSelectElement.selectedIndex = 0;
 
     if (this.overlayModel) {
@@ -1326,11 +1281,11 @@ export class AppManifestView extends Common.ObjectWrapper.eventMixin<EventTypes,
 }
 
 export const enum Events {
-  ManifestDetected = 'ManifestDetected',
-  ManifestRendered = 'ManifestRendered',
+  MANIFEST_DETECTED = 'ManifestDetected',
+  MANIFEST_RENDERED = 'ManifestRendered',
 }
 
-export type EventTypes = {
-  [Events.ManifestDetected]: boolean,
-  [Events.ManifestRendered]: void,
-};
+export interface EventTypes {
+  [Events.MANIFEST_DETECTED]: boolean;
+  [Events.MANIFEST_RENDERED]: void;
+}

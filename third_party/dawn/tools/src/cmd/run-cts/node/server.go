@@ -123,6 +123,12 @@ func (c *cmd) runServer(
 		if c.flags.compatibilityMode {
 			args = append(args, "--compat")
 		}
+		if c.flags.enforceDefaultLimits {
+			args = append(args, "--enforce-default-limits")
+		}
+		if c.flags.debugCTS {
+			args = append(args, "--debug")
+		}
 		for _, f := range c.flags.dawn {
 			args = append(args, "--gpu-provider-flag", f)
 		}
@@ -145,7 +151,7 @@ func (c *cmd) runServer(
 		cmd.Stderr = &pl
 
 		if c.flags.Verbose {
-			PrintCommand(cmd)
+			PrintCommand(cmd, c.flags.skipVSCodeInfo)
 		}
 		err := cmd.Start()
 		if err != nil {
@@ -199,6 +205,7 @@ func (c *cmd) runServer(
 			Status       string
 			Message      string
 			CoverageData string
+			DurationMS   float32
 		}
 		postResp, err := http.Post(fmt.Sprintf("http://localhost:%v/run?%v", port, testCases[idx]), "", &bytes.Buffer{})
 		if err != nil {
@@ -217,6 +224,8 @@ func (c *cmd) runServer(
 				results <- res
 				continue
 			}
+
+			res.Duration = time.Duration(resp.DurationMS*1000) * time.Microsecond
 
 			switch resp.Status {
 			case "pass":

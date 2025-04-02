@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/public/web/modules/mediastream/media_stream_video_source.h"
 
 #include <algorithm>
@@ -163,7 +168,7 @@ void MediaStreamVideoSource::RemoveTrack(MediaStreamVideoTrack* video_track,
       suspended_tracks_.EraseAt(it);
   }
 
-  for (auto* it = pending_tracks_.begin(); it != pending_tracks_.end(); ++it) {
+  for (auto it = pending_tracks_.begin(); it != pending_tracks_.end(); ++it) {
     if (it->track == video_track) {
       pending_tracks_.erase(it);
       break;
@@ -354,8 +359,6 @@ void MediaStreamVideoSource::OnRestartDone(bool did_restart) {
 
 void MediaStreamVideoSource::OnRestartBySourceSwitchDone(bool did_restart) {
   DCHECK(GetTaskRunner()->BelongsToCurrentThread());
-  DCHECK(base::FeatureList::IsEnabled(
-      features::kAllowSourceSwitchOnPausedVideoMediaStream));
   if (state_ == ENDED)
     return;
   DCHECK_EQ(state_, STOPPED_FOR_RESTART);
@@ -436,11 +439,6 @@ void MediaStreamVideoSource::DoChangeSource(
   DVLOG(1) << "MediaStreamVideoSource::DoChangeSource: "
            << ", new device id = " << new_device.id
            << ", session id = " << new_device.session_id();
-  if (!base::FeatureList::IsEnabled(
-          features::kAllowSourceSwitchOnPausedVideoMediaStream) &&
-      state_ != STARTED) {
-    return;
-  }
   if (state_ != STARTED && state_ != STOPPED_FOR_RESTART) {
     return;
   }
@@ -478,6 +476,10 @@ void MediaStreamVideoSource::OnStartDone(
     StartFrameMonitoring();
   } else {
     StopSource();
+  }
+
+  if (start_callback_) {
+    std::move(start_callback_).Run(this, result);
   }
 
   // This object can be deleted after calling FinalizeAddPendingTracks. See
@@ -570,23 +572,6 @@ bool MediaStreamVideoSource::SupportsEncodedOutput() const {
 }
 
 #if !BUILDFLAG(IS_ANDROID)
-void MediaStreamVideoSource::SendWheel(
-    double relative_x,
-    double relative_y,
-    int wheel_delta_x,
-    int wheel_delta_y,
-    base::OnceCallback<void(DOMException*)> callback) {
-  std::move(callback).Run(MakeGarbageCollected<DOMException>(
-      DOMExceptionCode::kNotSupportedError, "Unsupported."));
-}
-
-void MediaStreamVideoSource::SetZoomLevel(
-    int zoom_level,
-    base::OnceCallback<void(DOMException*)> callback) {
-  std::move(callback).Run(MakeGarbageCollected<DOMException>(
-      DOMExceptionCode::kNotSupportedError, "Unsupported."));
-}
-
 void MediaStreamVideoSource::ApplySubCaptureTarget(
     media::mojom::blink::SubCaptureTargetType type,
     const base::Token& sub_capture_target,
@@ -610,6 +595,11 @@ uint32_t MediaStreamVideoSource::GetSubCaptureTargetVersion() const {
 VideoCaptureFeedbackCB MediaStreamVideoSource::GetFeedbackCallback() const {
   // Each source implementation has to implement its own feedback callbacks.
   return base::DoNothing();
+}
+
+void MediaStreamVideoSource::SetStartCallback(SourceStartCallback callback) {
+  DCHECK(GetTaskRunner()->BelongsToCurrentThread());
+  start_callback_ = std::move(callback);
 }
 
 scoped_refptr<VideoTrackAdapter> MediaStreamVideoSource::GetTrackAdapter() {

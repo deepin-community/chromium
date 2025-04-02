@@ -141,6 +141,7 @@ source_set("audio") {
   ]
   deps = [
     "//base",
+    "//build:android_buildflags",
     "//build:chromecast_buildflags",
     "//build:chromeos_buildflags",
     "//media/base",
@@ -189,8 +190,6 @@ source_set("audio") {
       "mac/audio_manager_mac.h",
       "mac/core_audio_util_mac.cc",
       "mac/core_audio_util_mac.h",
-      "mac/coreaudio_dispatch_override.cc",
-      "mac/coreaudio_dispatch_override.h",
       "mac/screen_capture_kit_swizzler.h",
       "mac/screen_capture_kit_swizzler.mm",
     ]
@@ -257,14 +256,18 @@ source_set("audio") {
       "android/audio_track_output_stream.cc",
       "android/audio_track_output_stream.h",
       "android/muteable_audio_output_stream.h",
-      "android/opensles_input.cc",
-      "android/opensles_input.h",
-      "android/opensles_output.cc",
-      "android/opensles_output.h",
-      "android/opensles_util.cc",
-      "android/opensles_util.h",
-      "android/opensles_wrapper.cc",
     ]
+    if (media_use_opensles) {
+      sources += [
+        "android/opensles_input.cc",
+        "android/opensles_input.h",
+        "android/opensles_output.cc",
+        "android/opensles_output.h",
+        "android/opensles_util.cc",
+        "android/opensles_util.h",
+        "android/opensles_wrapper.cc",
+      ]
+    }
     libs += [ "aaudio" ]
 
     deps += [ "//media/base/android:media_jni_headers" ]

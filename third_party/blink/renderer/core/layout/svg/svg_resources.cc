@@ -19,7 +19,8 @@
 
 #include "third_party/blink/renderer/core/layout/svg/svg_resources.h"
 
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+
 #include "third_party/blink/renderer/core/css/properties/longhands.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_resource_filter.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_resource_paint_server.h"
@@ -109,16 +110,13 @@ void SVGResources::UpdateEffects(LayoutObject& object,
   }
   if (style.HasFilter())
     style.Filter().AddClient(EnsureClient(object));
-  if (StyleSVGResource* masker_resource = style.MaskerResource())
-    masker_resource->AddClient(EnsureClient(object));
   // FilterChanged() includes changes from more than just the 'filter'
   // property, so explicitly check that a filter existed or exists.
   if (diff.FilterChanged() &&
       (style.HasFilter() || (old_style && old_style->HasFilter()))) {
     // We either created one above, or had one already.
     DCHECK(GetClient(object));
-    object.SetNeedsPaintPropertyUpdate();
-    GetClient(object)->MarkFilterDataDirty();
+    GetClient(object)->InvalidateFilterData();
   }
   if (!old_style || !had_client)
     return;
@@ -129,8 +127,6 @@ void SVGResources::UpdateEffects(LayoutObject& object,
   }
   if (old_style->HasFilter())
     old_style->Filter().RemoveClient(*client);
-  if (StyleSVGResource* masker_resource = old_style->MaskerResource())
-    masker_resource->RemoveClient(*client);
 }
 
 void SVGResources::ClearEffects(const LayoutObject& object) {
@@ -151,8 +147,6 @@ void SVGResources::ClearEffects(const LayoutObject& object) {
     // the LayoutObject is detached. Move ownership to the LayoutObject.
     client->InvalidateFilterData();
   }
-  if (StyleSVGResource* masker_resource = style->MaskerResource())
-    masker_resource->RemoveClient(*client);
 }
 
 void SVGResources::UpdatePaints(const LayoutObject& object,
@@ -263,7 +257,7 @@ bool ContainsResource(const ContainerType* container, SVGResource* resource) {
 
 bool ContainsResource(const FilterOperations& operations,
                       SVGResource* resource) {
-  return base::ranges::any_of(
+  return std::ranges::any_of(
       operations.Operations(), [resource](const FilterOperation* operation) {
         return ContainsResource(DynamicTo<ReferenceFilterOperation>(operation),
                                 resource);
@@ -303,14 +297,20 @@ void SVGElementResourceClient::ResourceContentChanged(SVGResource* resource) {
   if (ContainsResource(style.MarkerStartResource(), resource) ||
       ContainsResource(style.MarkerMidResource(), resource) ||
       ContainsResource(style.MarkerEndResource(), resource)) {
-    needs_layout = true;
+    // Within layout a <marker> with a percentage length can invalidate its
+    // clients if the viewport has changed. Skip layout invalidation.
+    if (RuntimeEnabledFeatures::SvgViewportOptimizationEnabled() &&
+        layout_object->GetFrameView()->IsInPerformLayout()) {
+      layout_object->SetShouldDoFullPaintInvalidation();
+    } else {
+      needs_layout = true;
+    }
     layout_object->SetNeedsBoundariesUpdate();
   }
 
   const auto* clip_reference =
       DynamicTo<ReferenceClipPathOperation>(style.ClipPath());
-  if (ContainsResource(clip_reference, resource) ||
-      ContainsResource(style.MaskerResource(), resource)) {
+  if (ContainsResource(clip_reference, resource)) {
     // TODO(fs): "Downgrade" to non-subtree?
     layout_object->SetSubtreeShouldDoFullPaintInvalidation();
     layout_object->SetNeedsPaintPropertyUpdate();
@@ -361,7 +361,8 @@ void SVGElementResourceClient::UpdateFilterData(
     return;
   const ComputedStyle& style = object.StyleRef();
   FilterEffectBuilder builder(
-      reference_box, 1, style.VisitedDependentColor(GetCSSPropertyColor()),
+      reference_box, std::nullopt, 1,
+      style.VisitedDependentColor(GetCSSPropertyColor()),
       style.UsedColorScheme());
   builder.SetShorthandScale(1 / style.EffectiveZoom());
   const FilterOperations& filter = style.Filter();
@@ -433,7 +434,7 @@ void SVGResourceInvalidator::InvalidateEffects() {
     if (SVGElementResourceClient* client = SVGResources::GetClient(object_))
       client->InvalidateFilterData();
   }
-  if (style.HasClipPath() || style.HasMaskForSVG()) {
+  if (style.HasClipPath() || style.HasMask()) {
     object_.SetShouldDoFullPaintInvalidation();
     object_.SetNeedsPaintPropertyUpdate();
   }

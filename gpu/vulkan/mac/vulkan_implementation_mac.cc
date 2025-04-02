@@ -71,14 +71,12 @@ VulkanImplementationMac::GetOptionalDeviceExtensions() {
 
 VkFence VulkanImplementationMac::CreateVkFenceForGpuFence(VkDevice vk_device) {
   NOTREACHED();
-  return VK_NULL_HANDLE;
 }
 
 std::unique_ptr<gfx::GpuFence> VulkanImplementationMac::ExportVkFenceToGpuFence(
     VkDevice vk_device,
     VkFence vk_fence) {
   NOTREACHED();
-  return nullptr;
 }
 
 VkExternalSemaphoreHandleTypeFlagBits

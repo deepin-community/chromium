@@ -4,12 +4,13 @@
 
 #include "chrome/browser/ash/child_accounts/time_limit_test_utils.h"
 
+#include <algorithm>
 #include <optional>
 #include <utility>
 
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
+#include "base/strings/string_number_conversions.h"
 
 namespace ash {
 namespace time_limit_test_utils {
@@ -53,7 +54,8 @@ std::string CreatePolicyTimestamp(const char* time_string) {
 }
 
 std::string CreatePolicyTimestamp(base::Time time) {
-  return std::to_string((time - base::Time::UnixEpoch()).InMilliseconds());
+  return base::NumberToString(
+      (time - base::Time::UnixEpoch()).InMilliseconds());
 }
 
 base::TimeDelta CreateTime(int hour, int minute) {
@@ -117,7 +119,7 @@ void AddTimeUsageLimit(base::Value::Dict* policy,
   DCHECK_EQ(quota.InNanoseconds() % base::Minutes(1).InNanoseconds(), 0);
   DCHECK_LT(quota, base::Hours(24));
 
-  base::ranges::transform(day, day.begin(), ::tolower);
+  std::ranges::transform(day, day.begin(), ::tolower);
   policy->Find(kTimeUsageLimit)
       ->GetDict()
       .Set(day, CreateTimeUsage(quota, last_updated));

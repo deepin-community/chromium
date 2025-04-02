@@ -7,7 +7,6 @@ import type * as SDK from '../../core/sdk/sdk.js';
 import * as Protocol from '../../generated/protocol.js';
 
 import {Issue, IssueCategory, IssueKind} from './Issue.js';
-
 import {
   resolveLazyDescription,
   type LazyMarkdownIssueDescription,
@@ -64,7 +63,7 @@ export class CrossOriginEmbedderPolicyIssue extends Issue {
   }
 
   getCategory(): IssueCategory {
-    return IssueCategory.CrossOriginEmbedderPolicy;
+    return IssueCategory.CROSS_ORIGIN_EMBEDDER_POLICY;
   }
 
   getDescription(): MarkdownIssueDescription|null {
@@ -76,7 +75,7 @@ export class CrossOriginEmbedderPolicyIssue extends Issue {
   }
 
   getKind(): IssueKind {
-    return IssueKind.PageError;
+    return IssueKind.PAGE_ERROR;
   }
 }
 

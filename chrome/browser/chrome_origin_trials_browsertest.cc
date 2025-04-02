@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <bitset>
+#include <string_view>
 #include <vector>
 
 #include "base/base64.h"
 #include "base/command_line.h"
-#include "base/ranges/algorithm.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -91,9 +92,9 @@ class ChromeOriginTrialsTest : public InProcessBrowserTest {
   ChromeOriginTrialsTest& operator=(const ChromeOriginTrialsTest&) = delete;
 
  protected:
-  ChromeOriginTrialsTest() {}
+  ChromeOriginTrialsTest() = default;
 
-  std::string GetCommandLineSwitch(const base::StringPiece& switch_name) {
+  std::string GetCommandLineSwitch(std::string_view switch_name) {
     base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
     EXPECT_TRUE(command_line->HasSwitch(switch_name));
     return command_line->GetSwitchValueASCII(switch_name);
@@ -203,7 +204,7 @@ IN_PROC_BROWSER_TEST_P(ChromeOriginTrialsDisabledTokensTest,
                        DisabledTokensInPolicy) {
   // Convert the uint8_t[] from generate_token.py into strings.
   std::vector<std::string> expected_signatures;
-  base::ranges::transform(
+  std::ranges::transform(
       GetParam().expected_list, std::back_inserter(expected_signatures),
       [](const uint8_t bytes[]) {
         return std::string(reinterpret_cast<const char*>(bytes),

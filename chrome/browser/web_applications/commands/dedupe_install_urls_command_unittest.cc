@@ -16,10 +16,16 @@
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
+#include "chrome/browser/web_applications/web_app_management_type.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/common/pref_names.h"
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chromeos/ash/components/system/fake_statistics_provider.h"
+#include "chromeos/ash/components/system/statistics_provider.h"
+#endif
 
 namespace web_app {
 
@@ -41,15 +47,24 @@ class DedupeInstallUrlsCommandTest : public WebAppTest {
         &provider().web_contents_manager());
 
     test::AwaitStartWebAppProviderAndSubsystems(profile());
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+    // Mocking the StatisticsProvider for testing.
+    ash::system::StatisticsProvider::SetTestProvider(&statistics_provider);
+    statistics_provider.SetMachineStatistic(ash::system::kActivateDateKey,
+                                            "2023-18");
+#endif
+  }
+
+  void TearDown() override {
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+    ash::system::StatisticsProvider::SetTestProvider(nullptr);
+#endif
+    WebAppTest::TearDown();
   }
 
   WebAppProvider& provider() {
     return *WebAppProvider::GetForWebApps(profile());
-  }
-
-  void TearDown() override {
-    provider().Shutdown();
-    WebAppTest::TearDown();
   }
 
   void SetPolicyInstallUrlAndSynchronize(const GURL& url) {
@@ -81,9 +96,10 @@ class DedupeInstallUrlsCommandTest : public WebAppTest {
     options.user_type_allowlist = {"unmanaged"};
     scope.apps.push_back(std::move(options));
 
-    base::test::TestFuture<std::map<GURL /*install_url*/,
-                                    ExternallyManagedAppManager::InstallResult>,
-                           std::map<GURL /*install_url*/, bool /*succeeded*/>>
+    base::test::TestFuture<
+        std::map<GURL /*install_url*/,
+                 ExternallyManagedAppManager::InstallResult>,
+        std::map<GURL /*install_url*/, webapps::UninstallResultCode>>
         future;
     provider().preinstalled_web_app_manager().LoadAndSynchronizeForTesting(
         future.GetCallback());
@@ -103,8 +119,8 @@ class DedupeInstallUrlsCommandTest : public WebAppTest {
       webapps::WebappInstallSource install_surface,
       const GURL& install_url,
       const GURL& start_url) {
-    auto web_app_info = std::make_unique<WebAppInstallInfo>();
-    web_app_info->start_url = start_url;
+    auto web_app_info =
+        WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
     web_app_info->title = u"Test app";
     web_app_info->install_url = install_url;
 
@@ -119,6 +135,10 @@ class DedupeInstallUrlsCommandTest : public WebAppTest {
   base::AutoReset<bool> bypass_dependencies_;
   base::AutoReset<bool> skip_preinstalled_web_app_startup_;
   base::AutoReset<bool> bypass_offline_manifest_requirement_;
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  ash::system::FakeStatisticsProvider statistics_provider;
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 };
 
 TEST_F(DedupeInstallUrlsCommandTest,
@@ -170,7 +190,7 @@ TEST_F(DedupeInstallUrlsCommandTest,
   }
 
   // Placeholder app should no longer be present.
-  EXPECT_FALSE(provider().registrar_unsafe().IsInstalled(placeholder_app_id));
+  EXPECT_FALSE(provider().registrar_unsafe().IsInRegistrar(placeholder_app_id));
 
   // Real app should be installed
   const WebApp* real_app =
@@ -242,7 +262,7 @@ TEST_F(DedupeInstallUrlsCommandTest,
   SynchronizePreinstalledWebAppManagerWithInstallUrl(install_url);
 
   // Placeholder app should no longer be present.
-  EXPECT_FALSE(provider().registrar_unsafe().IsInstalled(placeholder_app_id));
+  EXPECT_FALSE(provider().registrar_unsafe().IsInRegistrar(placeholder_app_id));
 
   // Real app should be installed
   const WebApp* real_app =
@@ -343,7 +363,7 @@ TEST_F(DedupeInstallUrlsCommandTest, SameInstallUrlForRealAndPlaceholder) {
   SynchronizePolicyWebAppManager();
 
   // Placeholder app should no longer be present.
-  EXPECT_FALSE(provider().registrar_unsafe().IsInstalled(placeholder_app_id));
+  EXPECT_FALSE(provider().registrar_unsafe().IsInRegistrar(placeholder_app_id));
 
   // Real app should be installed
   const WebApp* real_app =
@@ -449,7 +469,7 @@ TEST_F(DedupeInstallUrlsCommandTest, DefaultPlaceholderForceReinstalled) {
   SynchronizePreinstalledWebAppManagerWithInstallUrl(install_url);
 
   // Placeholder app should no longer be present.
-  EXPECT_FALSE(provider().registrar_unsafe().IsInstalled(placeholder_app_id));
+  EXPECT_FALSE(provider().registrar_unsafe().IsInRegistrar(placeholder_app_id));
 
   // Real app should be installed
   const WebApp* real_app =
@@ -519,8 +539,8 @@ TEST_F(DedupeInstallUrlsCommandTest, MoreThanTwoDuplicates) {
 
   // The most recently installed web app is chosen as the dedupe into target.
   const WebAppRegistrar& registrar = provider().registrar_unsafe();
-  EXPECT_FALSE(registrar.IsInstalled(app_id_a1));
-  EXPECT_FALSE(registrar.IsInstalled(app_id_a2));
+  EXPECT_FALSE(registrar.IsInRegistrar(app_id_a1));
+  EXPECT_FALSE(registrar.IsInRegistrar(app_id_a2));
   const WebApp* app_a = registrar.GetAppById(app_id_a3);
   ASSERT_TRUE(app_a);
   EXPECT_EQ(app_a->GetSources(),
@@ -528,8 +548,8 @@ TEST_F(DedupeInstallUrlsCommandTest, MoreThanTwoDuplicates) {
                                    WebAppManagement::Type::kKiosk,
                                    WebAppManagement::Type::kPolicy}));
 
-  EXPECT_FALSE(registrar.IsInstalled(app_id_b1));
-  EXPECT_FALSE(registrar.IsInstalled(app_id_b2));
+  EXPECT_FALSE(registrar.IsInRegistrar(app_id_b1));
+  EXPECT_FALSE(registrar.IsInRegistrar(app_id_b2));
   const WebApp* app_b = registrar.GetAppById(app_id_b3);
   ASSERT_TRUE(app_b);
   EXPECT_EQ(

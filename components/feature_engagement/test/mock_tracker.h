@@ -57,6 +57,11 @@ class MockTracker : public Tracker {
   MOCK_METHOD1(UnregisterPriorityNotificationHandler,
                void(const base::Feature&));
   MOCK_METHOD1(AddOnInitializedCallback, void(OnInitializedCallback callback));
+#if BUILDFLAG(IS_CHROMEOS)
+  MOCK_METHOD2(UpdateConfig,
+               void(const base::Feature& feature,
+                    const ConfigurationProvider* provider));
+#endif
   MOCK_CONST_METHOD0(GetConfigurationForTesting, const Configuration*());
   MOCK_METHOD2(SetClockForTesting,
                void(const base::Clock& clock, base::Time initial_now));

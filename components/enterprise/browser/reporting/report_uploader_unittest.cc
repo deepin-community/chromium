@@ -4,13 +4,13 @@
 
 #include "components/enterprise/browser/reporting/report_uploader.h"
 
+#include <array>
 #include <utility>
 
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/enterprise/browser/reporting/report_request.h"
 #include "components/enterprise/browser/reporting/report_type.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
@@ -29,7 +29,8 @@ namespace em = enterprise_management;
 
 namespace enterprise_reporting {
 namespace {
-constexpr const char* kBrowserVersionNames[] = {"name1", "name2"};
+constexpr const auto kBrowserVersionNames =
+    std::to_array<const char*>({"name1", "name2"});
 constexpr char kResponseMetricsName[] = "Enterprise.CloudReportingResponse";
 
 // Returns a function that schedules a callback it is passed as second parameter
@@ -48,7 +49,7 @@ class ReportUploaderTest : public ::testing::Test {
   // Different CloudPolicyClient functions will be used in test cases based
   // on the current operation system. They share same retry and error handling
   // behaviors provided by ReportUploader.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #define UploadReport UploadChromeOsUserReport
 #else
 #define UploadReport UploadChromeDesktopReport
@@ -62,7 +63,7 @@ class ReportUploaderTest : public ::testing::Test {
   ReportUploaderTest(const ReportUploaderTest&) = delete;
   ReportUploaderTest& operator=(const ReportUploaderTest&) = delete;
 
-  ~ReportUploaderTest() override {}
+  ~ReportUploaderTest() override = default;
 
   void UploadReportAndSetExpectation(
       int number_of_request,
@@ -144,7 +145,7 @@ class ReportUploaderTestWithReportType
   ReportType GetReportType() override { return GetParam(); }
 };
 
-// TODO(crbug/643760) This death test does not work on Android.
+// TODO(crbug.com/40483507) This death test does not work on Android.
 #if defined(GTEST_HAS_DEATH_TEST) && !BUILDFLAG(IS_ANDROID)
 TEST_F(ReportUploaderTest, NotRegisteredCrashes) {
   CreateUploader(/* retry_count = */ 1);

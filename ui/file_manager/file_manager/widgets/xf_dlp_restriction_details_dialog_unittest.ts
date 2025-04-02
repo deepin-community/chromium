@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
 import './xf_dlp_restriction_details_dialog.js';
 
-import {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
+import type {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
 import {getTrustedHTML} from 'chrome://resources/js/static_types.js';
 import {assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chromeos/chai_assert.js';
 
-import {XfDlpRestrictionDetailsDialog} from './xf_dlp_restriction_details_dialog.js';
+import type {XfDlpRestrictionDetailsDialog} from './xf_dlp_restriction_details_dialog.js';
 
 const drive = chrome.fileManagerPrivate.VolumeType.DRIVE;
 const removable = chrome.fileManagerPrivate.VolumeType.REMOVABLE;
@@ -33,24 +34,24 @@ function getDialog(): XfDlpRestrictionDetailsDialog {
 
 /** Returns the block details span element of the dialog. */
 function getBlockDetails(): HTMLSpanElement {
-  const details = getDialog().shadowRoot!.querySelector('#block-details')! as
-      HTMLSpanElement;
+  const details =
+      getDialog().shadowRoot!.querySelector<HTMLSpanElement>('#block-details')!;
   assertNotEquals(details, null);
   return details;
 }
 
 /** Returns the warn details span element of the dialog. */
 function getWarnDetails(): HTMLSpanElement {
-  const details = getDialog().shadowRoot!.querySelector('#warn-details')! as
-      HTMLSpanElement;
+  const details =
+      getDialog().shadowRoot!.querySelector<HTMLSpanElement>('#warn-details')!;
   assertNotEquals(details, null);
   return details;
 }
 
 /** Returns the report details span element of the dialog. */
 function getReportDetails(): HTMLSpanElement {
-  const details = getDialog().shadowRoot!.querySelector('#report-details')! as
-      HTMLSpanElement;
+  const details = getDialog().shadowRoot!.querySelector<HTMLSpanElement>(
+      '#report-details')!;
   assertNotEquals(details, null);
   return details;
 }
@@ -67,8 +68,8 @@ function getDestinationsLabelForLevel(
   assertFalse(
       getDialog().shadowRoot!.querySelector(`#${level}-li-${
           destinations}`)!.hasAttribute('hidden'));
-  return getDialog().shadowRoot!.querySelector(`#${level}-${destinations}`)! as
-      HTMLLabelElement;
+  return getDialog().shadowRoot!.querySelector<HTMLLabelElement>(
+      `#${level}-${destinations}`)!;
 }
 
 /**
@@ -122,7 +123,7 @@ function getReportComponents() {
 /** Closes the dialog. */
 function close() {
   const crDialog =
-      getDialog().shadowRoot!.querySelector('#dialog') as CrDialogElement;
+      getDialog().shadowRoot!.querySelector<CrDialogElement>('#dialog')!;
   crDialog.close();
 }
 

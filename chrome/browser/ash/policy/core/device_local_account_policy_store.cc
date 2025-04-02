@@ -11,6 +11,7 @@
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/policy/value_validation/onc_user_policy_value_validator.h"
+#include "chromeos/ash/components/dbus/session_manager/policy_descriptor.h"
 #include "components/ownership/owner_key_util.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
 #include "components/policy/core/common/external_data_fetcher.h"
@@ -37,7 +38,7 @@ DeviceLocalAccountPolicyStore::DeviceLocalAccountPolicyStore(
       session_manager_client_(session_manager_client),
       device_settings_service_(device_settings_service) {}
 
-DeviceLocalAccountPolicyStore::~DeviceLocalAccountPolicyStore() {}
+DeviceLocalAccountPolicyStore::~DeviceLocalAccountPolicyStore() = default;
 
 void DeviceLocalAccountPolicyStore::Load() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -45,8 +46,10 @@ void DeviceLocalAccountPolicyStore::Load() {
   // Cancel all pending requests.
   weak_factory_.InvalidateWeakPtrs();
 
-  session_manager_client_->RetrieveDeviceLocalAccountPolicy(
-      account_id_,
+  login_manager::PolicyDescriptor descriptor = ash::MakeChromePolicyDescriptor(
+      login_manager::ACCOUNT_TYPE_DEVICE_LOCAL_ACCOUNT, account_id_);
+  session_manager_client_->RetrievePolicy(
+      descriptor,
       base::BindOnce(&DeviceLocalAccountPolicyStore::ValidateLoadedPolicyBlob,
                      weak_factory_.GetWeakPtr(),
                      true /*validate_in_background*/));
@@ -78,9 +81,10 @@ void DeviceLocalAccountPolicyStore::LoadImmediately() {
   weak_factory_.InvalidateWeakPtrs();
 
   std::string policy_blob;
+  login_manager::PolicyDescriptor descriptor = ash::MakeChromePolicyDescriptor(
+      login_manager::ACCOUNT_TYPE_DEVICE_LOCAL_ACCOUNT, account_id_);
   RetrievePolicyResponseType response =
-      session_manager_client_->BlockingRetrieveDeviceLocalAccountPolicy(
-          account_id_, &policy_blob);
+      session_manager_client_->BlockingRetrievePolicy(descriptor, &policy_blob);
   ValidateLoadedPolicyBlob(false /*validate_in_background*/, response,
                            policy_blob);
 }
@@ -142,9 +146,9 @@ void DeviceLocalAccountPolicyStore::UpdatePolicy(
     return;
   }
 
-  InstallPolicy(
-      std::move(validator->policy()), std::move(validator->policy_data()),
-      std::move(validator->payload()), signature_validation_public_key);
+  InstallPolicy(std::move(validator->policy_data()),
+                std::move(validator->payload()),
+                signature_validation_public_key);
   status_ = STATUS_OK;
   NotifyStoreLoaded();
 }

@@ -5,7 +5,6 @@
 import {assert} from 'chai';
 
 import {goToResource, step} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   expandSelectedNodeRecursively,
   getGridsInLayoutPane,
@@ -18,7 +17,7 @@ import {
 } from '../helpers/elements-helpers.js';
 import {togglePreferenceInSettingsTab} from '../helpers/settings-helpers.js';
 
-describe('Layout Pane in the Elements Tab', async function() {
+describe('Layout Pane in the Elements Tab', function() {
   it('displays Layout pane', async () => {
     await goToResource('elements/css-grid.html');
     await step('Prepare elements tab', async () => {
@@ -41,7 +40,7 @@ describe('Layout Pane in the Elements Tab', async function() {
     await openLayoutPane();
 
     const grids = await getGridsInLayoutPane();
-    assert.strictEqual(grids.length, 1, 'Without UA shadow DOM, there is only one grid');
+    assert.lengthOf(grids, 1, 'Without UA shadow DOM, there is only one grid');
 
     await togglePreferenceInSettingsTab('Show user agent shadow DOM');
 

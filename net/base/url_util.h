@@ -169,8 +169,16 @@ NET_EXPORT bool IsSubdomainOf(std::string_view subdomain,
 
 // Canonicalizes |host| and returns it.  Also fills |host_info| with
 // IP address information.  |host_info| must not be NULL.
+// Canonicalization will follow the host parsing rules for a non-file
+// special URL (https://url.spec.whatwg.org/#is-special).
 NET_EXPORT std::string CanonicalizeHost(std::string_view host,
                                         url::CanonHostInfo* host_info);
+
+// Canonicalizes |host| and returns it.  Also fills |host_info| with
+// IP address information.  |host_info| must not be NULL.
+// Canonicalization will follow the host parsing rules for a file URL.
+NET_EXPORT std::string CanonicalizeFileHost(std::string_view host,
+                                            url::CanonHostInfo* host_info);
 
 // Returns true if |host| is not an IP address and is compliant with a set of
 // rules based on RFC 1738 and tweaked to be compatible with the real world.
@@ -190,6 +198,8 @@ NET_EXPORT bool IsCanonicalizedHostCompliant(std::string_view host);
 // Returns true if |hostname| contains a non-registerable or non-assignable
 // domain name (eg: a gTLD that has not been assigned by IANA) or an IP address
 // that falls in an range reserved for non-publicly routable networks.
+// Hostnames that are themselves known registry identifiers (e.g., "com",
+// "co.uk") are considered unique.
 NET_EXPORT bool IsHostnameNonUnique(std::string_view hostname);
 
 // Returns true if the host part of |url| is a local host name according to

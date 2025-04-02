@@ -43,7 +43,6 @@ std::vector<std::string> GetNamedList(const char* name,
   for (const base::Value& entry : *value_list) {
     if (!entry.is_string()) {
       NOTREACHED();
-      break;
     }
     list.push_back(entry.GetString());
   }
@@ -337,10 +336,11 @@ std::string InitialPreferences::ExtractPrefString(const std::string& name) {
   std::string result;
   std::optional<base::Value> pref_value = initial_dictionary_->Extract(name);
   if (pref_value.has_value()) {
-    if (pref_value->is_string())
+    if (pref_value->is_string()) {
       result = pref_value->GetString();
-    else
+    } else {
       NOTREACHED();
+    }
   }
   return result;
 }

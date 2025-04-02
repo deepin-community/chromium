@@ -49,6 +49,13 @@ TabStatsDataStore::TabStatsDataStore(PrefService* pref_service)
   tab_stats_.tab_discard_counts[static_cast<size_t>(
       LifecycleUnitDiscardReason::PROACTIVE)] =
       pref_service->GetInteger(::prefs::kTabStatsDiscardsProactive);
+  tab_stats_.tab_discard_counts[static_cast<size_t>(
+      LifecycleUnitDiscardReason::SUGGESTED)] =
+      pref_service->GetInteger(::prefs::kTabStatsDiscardsSuggested);
+  tab_stats_.tab_discard_counts[static_cast<size_t>(
+      LifecycleUnitDiscardReason::FROZEN_WITH_GROWING_MEMORY)] =
+      pref_service->GetInteger(
+          ::prefs::kTabStatsDiscardsFrozenWithGrowingMemory);
   tab_stats_.tab_reload_counts[static_cast<size_t>(
       LifecycleUnitDiscardReason::EXTERNAL)] =
       pref_service->GetInteger(::prefs::kTabStatsReloadsExternal);
@@ -58,9 +65,16 @@ TabStatsDataStore::TabStatsDataStore(PrefService* pref_service)
   tab_stats_.tab_reload_counts[static_cast<size_t>(
       LifecycleUnitDiscardReason::PROACTIVE)] =
       pref_service->GetInteger(::prefs::kTabStatsReloadsProactive);
+  tab_stats_.tab_reload_counts[static_cast<size_t>(
+      LifecycleUnitDiscardReason::SUGGESTED)] =
+      pref_service->GetInteger(::prefs::kTabStatsReloadsSuggested);
+  tab_stats_.tab_reload_counts[static_cast<size_t>(
+      LifecycleUnitDiscardReason::FROZEN_WITH_GROWING_MEMORY)] =
+      pref_service->GetInteger(
+          ::prefs::kTabStatsReloadsFrozenWithGrowingMemory);
 }
 
-TabStatsDataStore::~TabStatsDataStore() {}
+TabStatsDataStore::~TabStatsDataStore() = default;
 
 void TabStatsDataStore::OnWindowAdded() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -149,6 +163,21 @@ void TabStatsDataStore::OnTabDiscardStateChange(
         pref_service_->SetInteger(::prefs::kTabStatsReloadsProactive, count);
       }
       break;
+    case LifecycleUnitDiscardReason::SUGGESTED:
+      if (is_discarded) {
+        pref_service_->SetInteger(::prefs::kTabStatsDiscardsSuggested, count);
+      } else {
+        pref_service_->SetInteger(::prefs::kTabStatsReloadsSuggested, count);
+      }
+      break;
+    case LifecycleUnitDiscardReason::FROZEN_WITH_GROWING_MEMORY:
+      if (is_discarded) {
+        pref_service_->SetInteger(
+            ::prefs::kTabStatsDiscardsFrozenWithGrowingMemory, count);
+      } else {
+        pref_service_->SetInteger(
+            ::prefs::kTabStatsReloadsFrozenWithGrowingMemory, count);
+      }
   }
 }
 
@@ -158,9 +187,15 @@ void TabStatsDataStore::ClearTabDiscardAndReloadCounts() {
   pref_service_->SetInteger(::prefs::kTabStatsDiscardsExternal, 0);
   pref_service_->SetInteger(::prefs::kTabStatsDiscardsUrgent, 0);
   pref_service_->SetInteger(::prefs::kTabStatsDiscardsProactive, 0);
+  pref_service_->SetInteger(::prefs::kTabStatsDiscardsSuggested, 0);
+  pref_service_->SetInteger(::prefs::kTabStatsDiscardsFrozenWithGrowingMemory,
+                            0);
   pref_service_->SetInteger(::prefs::kTabStatsReloadsExternal, 0);
   pref_service_->SetInteger(::prefs::kTabStatsReloadsUrgent, 0);
   pref_service_->SetInteger(::prefs::kTabStatsReloadsProactive, 0);
+  pref_service_->SetInteger(::prefs::kTabStatsReloadsSuggested, 0);
+  pref_service_->SetInteger(::prefs::kTabStatsReloadsFrozenWithGrowingMemory,
+                            0);
 }
 
 void TabStatsDataStore::UpdateTotalTabCountMaxIfNeeded() {

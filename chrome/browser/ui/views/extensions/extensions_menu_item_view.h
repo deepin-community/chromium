@@ -26,6 +26,8 @@ namespace views {
 class ToggleButton;
 }  // namespace views
 
+DECLARE_ELEMENT_IDENTIFIER_VALUE(kExtensionMenuItemViewElementId);
+
 // Single row inside the extensions menu for every installed extension. Includes
 // information about the extension, a button to pin the extension to the toolbar
 // and a button for accessing the associated context menu.
@@ -78,13 +80,11 @@ class ExtensionMenuItemView : public views::FlexLayoutView {
   ExtensionMenuItemView& operator=(const ExtensionMenuItemView&) = delete;
   ~ExtensionMenuItemView() override;
 
-  // views::View:
-  void OnThemeChanged() override;
-
   // Updates the controller and child views to be on sync with the parent views.
   void Update(SiteAccessToggleState site_access_toggle_state,
               SitePermissionsButtonState site_permissions_button_state,
-              SitePermissionsButtonAccess site_permissions_button_access);
+              SitePermissionsButtonAccess site_permissions_button_access,
+              bool is_enterprise);
 
   // Updates the pin button.
   void UpdatePinButton(bool is_force_pinned, bool is_pinned);
@@ -110,9 +110,6 @@ class ExtensionMenuItemView : public views::FlexLayoutView {
   HoverButton* pin_button_for_testing() { return pin_button_; }
   HoverButton* site_permissions_button_for_testing() {
     return site_permissions_button_;
-  }
-  views::View* site_permissions_button_icon_for_testing() {
-    return site_permissions_button_icon_;
   }
 
  private:
@@ -144,7 +141,6 @@ class ExtensionMenuItemView : public views::FlexLayoutView {
   // Button that displays the extension site access and opens its site
   // permissions page.
   raw_ptr<HoverButton> site_permissions_button_ = nullptr;
-  raw_ptr<views::View> site_permissions_button_icon_ = nullptr;
 
   raw_ptr<HoverButton> pin_button_ = nullptr;
 

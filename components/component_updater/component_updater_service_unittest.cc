@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -22,8 +23,10 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
+#include "build/branding_buildflags.h"
 #include "components/component_updater/component_updater_service_internal.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/update_client/crx_update_item.h"
 #include "components/update_client/test_configurator.h"
 #include "components/update_client/test_installer.h"
 #include "components/update_client/update_client.h"
@@ -55,8 +58,8 @@ class MockInstaller : public update_client::CrxInstaller {
                     std::unique_ptr<InstallParams> install_params,
                     ProgressCallback progress_callback,
                     Callback callback));
-  MOCK_METHOD2(GetInstalledFile,
-               bool(const std::string& file, base::FilePath* installed_file));
+  MOCK_METHOD1(GetInstalledFile,
+               std::optional<base::FilePath>(const std::string& file));
   MOCK_METHOD0(Uninstall, bool());
 
  private:
@@ -104,17 +107,14 @@ class MockUpdateClient : public UpdateClient {
 
 class MockServiceObserver : public ServiceObserver {
  public:
-  MockServiceObserver() = default;
-  ~MockServiceObserver() override = default;
-
-  MOCK_METHOD2(OnEvent, void(Events event, const std::string&));
+  MOCK_METHOD1(OnEvent, void(const update_client::CrxUpdateItem&));
 };
 
 class MockUpdateScheduler : public UpdateScheduler {
  public:
   MOCK_METHOD4(Schedule,
-               void(const base::TimeDelta& initial_delay,
-                    const base::TimeDelta& delay,
+               void(base::TimeDelta initial_delay,
+                    base::TimeDelta delay,
                     const UserTask& user_task,
                     const OnStopTaskCallback& on_stop));
   MOCK_METHOD0(Stop, void());
@@ -178,8 +178,8 @@ class ComponentUpdaterTest : public testing::Test {
 
  private:
   void RunUpdateTask(const UpdateScheduler::UserTask& user_task);
-  void Schedule(const base::TimeDelta& initial_delay,
-                const base::TimeDelta& delay,
+  void Schedule(base::TimeDelta initial_delay,
+                base::TimeDelta delay,
                 const UpdateScheduler::UserTask& user_task,
                 const UpdateScheduler::OnStopTaskCallback& on_stop);
 
@@ -267,8 +267,8 @@ void ComponentUpdaterTest::RunUpdateTask(
 }
 
 void ComponentUpdaterTest::Schedule(
-    const base::TimeDelta& initial_delay,
-    const base::TimeDelta& delay,
+    base::TimeDelta initial_delay,
+    base::TimeDelta delay,
     const UpdateScheduler::UserTask& user_task,
     const UpdateScheduler::OnStopTaskCallback& on_stop) {
   RunUpdateTask(user_task);
@@ -317,7 +317,8 @@ TEST_F(ComponentUpdaterTest, RegisterComponent) {
       /*requires_network_encryption=*/false,
       /*supports_group_policy_enable_component_updates=*/true,
       /*allow_cached_copies=*/true,
-      /*allow_updates_on_metered_connection=*/true);
+      /*allow_updates_on_metered_connection=*/true,
+      /*allow_updates=*/true);
 
   hash.assign(std::begin(jebg_hash), std::end(jebg_hash));
   ComponentRegistration component2(
@@ -327,7 +328,8 @@ TEST_F(ComponentUpdaterTest, RegisterComponent) {
       /*requires_network_encryption=*/false,
       /*supports_group_policy_enable_component_updates=*/true,
       /*allow_cached_copies=*/true,
-      /*allow_updates_on_metered_connection=*/true);
+      /*allow_updates_on_metered_connection=*/true,
+      /*allow_updates=*/true);
 
   // Quit after two update checks have fired.
   LoopHandler loop_handler(2, quit_closure());
@@ -392,7 +394,8 @@ TEST_F(ComponentUpdaterTest, OnDemandUpdate) {
         /*requires_network_encryption=*/false,
         /*supports_group_policy_enable_component_updates=*/true,
         /*allow_cached_copies=*/true,
-        /*allow_updates_on_metered_connection=*/true)));
+        /*allow_updates_on_metered_connection=*/true,
+        /*allow_updates=*/true)));
   }
   {
     using update_client::abag_hash;
@@ -406,7 +409,8 @@ TEST_F(ComponentUpdaterTest, OnDemandUpdate) {
         /*requires_network_encryption=*/false,
         /*supports_group_policy_enable_component_updates=*/true,
         /*allow_cached_copies=*/true,
-        /*allow_updates_on_metered_connection=*/true)));
+        /*allow_updates_on_metered_connection=*/true,
+        /*allow_updates=*/true)));
   }
 
   OnDemandTester ondemand_tester;
@@ -451,7 +455,8 @@ TEST_F(ComponentUpdaterTest, MaybeThrottle) {
       /*requires_network_encryption=*/false,
       /*supports_group_policy_enable_component_updates=*/true,
       /*allow_cached_copies=*/true,
-      /*allow_updates_on_metered_connection=*/true)));
+      /*allow_updates_on_metered_connection=*/true,
+      /*allow_updates=*/true)));
   component_updater().MaybeThrottle("jebgalgnebhfojomionfpkfelancnnkf",
                                     base::DoNothing());
 
@@ -460,6 +465,73 @@ TEST_F(ComponentUpdaterTest, MaybeThrottle) {
   ht.ExpectUniqueSample("ComponentUpdater.Calls", 0, 1);
   ht.ExpectUniqueSample("ComponentUpdater.UpdateCompleteResult", 0, 1);
   ht.ExpectTotalCount("ComponentUpdater.UpdateCompleteTime", 1);
+}
+
+TEST_F(ComponentUpdaterTest, ComponentDetails) {
+  const std::string id = "abagagagagagagagagagagagagagagag";
+  const std::string name = "test_name";
+
+  using update_client::abag_hash;
+  std::vector<uint8_t> hash;
+  hash.assign(std::begin(abag_hash), std::end(abag_hash));
+
+  const auto version = base::Version("1.0");
+
+  ComponentRegistration component(
+      id, name, hash, version, /*fingerprint=*/{}, {},
+      /*action_handler=*/nullptr, base::MakeRefCounted<MockInstaller>(),
+      /*requires_network_encryption=*/false,
+      /*supports_group_policy_enable_component_updates=*/true,
+      /*allow_cached_copies=*/true,
+      /*allow_updates_on_metered_connection=*/true,
+      /*allow_updates=*/true);
+
+  ASSERT_TRUE(component_updater().RegisterComponent(component));
+
+  CrxUpdateItem item;
+  ASSERT_TRUE(component_updater().GetComponentDetails(id, &item));
+  ASSERT_TRUE(item.component);
+  const CrxComponent& registered = *item.component;
+
+  EXPECT_EQ(registered.app_id, id);
+  EXPECT_EQ(registered.version, version);
+  EXPECT_EQ(registered.name, name);
+
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  // In Chrome for Testing component updates are disabled.
+  EXPECT_FALSE(registered.updates_enabled);
+#else
+  EXPECT_TRUE(registered.updates_enabled);
+#endif  // BUILDFLAG(CHROME_FOR_TESTING)
+}
+
+TEST_F(ComponentUpdaterTest, UpdatesDisabled) {
+  const std::string id = "abagagagagagagagagagagagagagagag";
+  const std::string name = "test_name";
+
+  using update_client::abag_hash;
+  std::vector<uint8_t> hash;
+  hash.assign(std::begin(abag_hash), std::end(abag_hash));
+
+  const auto version = base::Version("1.0");
+
+  ComponentRegistration component(
+      id, name, hash, version, /*fingerprint=*/{}, {},
+      /*action_handler=*/nullptr, base::MakeRefCounted<MockInstaller>(),
+      /*requires_network_encryption=*/false,
+      /*supports_group_policy_enable_component_updates=*/true,
+      /*allow_cached_copies=*/true,
+      /*allow_updates_on_metered_connection=*/true,
+      /*allow_updates=*/false);
+
+  ASSERT_TRUE(component_updater().RegisterComponent(component));
+
+  CrxUpdateItem item;
+  ASSERT_TRUE(component_updater().GetComponentDetails(id, &item));
+  ASSERT_TRUE(item.component);
+  const CrxComponent& registered = *item.component;
+
+  EXPECT_FALSE(registered.updates_enabled);
 }
 
 }  // namespace component_updater

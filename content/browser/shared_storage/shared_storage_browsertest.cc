@@ -2,51 +2,67 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <cmath>
-#include <map>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
-#include "base/barrier_closure.h"
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/containers/contains.h"
+#include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
 #include "base/functional/overloaded.h"
-#include "base/memory/raw_ptr.h"
+#include "base/json/json_writer.h"
+#include "base/location.h"
+#include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/statistics_recorder.h"
-#include "base/path_service.h"
+#include "base/run_loop.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
-#include "base/test/mock_callback.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/test_future.h"
-#include "base/test/with_feature_override.h"
 #include "base/time/time.h"
-#include "content/browser/private_aggregation/private_aggregation_manager_impl.h"
-#include "content/browser/private_aggregation/private_aggregation_test_utils.h"
+#include "base/values.h"
+#include "content/browser/fenced_frame/fenced_frame_config.h"
 #include "content/browser/renderer_host/navigation_request.h"
+#include "content/browser/shared_storage/shared_storage_browsertest_base.h"
 #include "content/browser/shared_storage/shared_storage_document_service_impl.h"
 #include "content/browser/shared_storage/shared_storage_event_params.h"
-#include "content/browser/shared_storage/shared_storage_header_observer.h"
-#include "content/browser/shared_storage/shared_storage_worklet_driver.h"
+#include "content/browser/shared_storage/shared_storage_features.h"
+#include "content/browser/shared_storage/shared_storage_runtime_manager.h"
 #include "content/browser/shared_storage/shared_storage_worklet_host.h"
-#include "content/browser/shared_storage/shared_storage_worklet_host_manager.h"
+#include "content/browser/shared_storage/test_shared_storage_observer.h"
+#include "content/browser/shared_storage/test_shared_storage_runtime_manager.h"
+#include "content/browser/shared_storage/test_shared_storage_worklet_host.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/public/browser/back_forward_cache.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/document_user_data.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/network_service_util.h"
-#include "content/public/common/content_client.h"
-#include "content/public/common/content_features.h"
-#include "content/public/common/content_paths.h"
+#include "content/public/common/page_type.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
-#include "content/public/test/content_browser_test_content_browser_client.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/shared_storage_test_utils.h"
@@ -55,21 +71,34 @@
 #include "content/public/test/test_select_url_fenced_frame_config_observer.h"
 #include "content/public/test/test_shared_storage_header_observer.h"
 #include "content/public/test/test_utils.h"
-#include "content/public/test/url_loader_interceptor.h"
 #include "content/shell/browser/shell.h"
 #include "content/test/content_browser_test_utils_internal.h"
 #include "content/test/fenced_frame_test_utils.h"
-#include "net/dns/mock_host_resolver.h"
+#include "mojo/public/cpp/base/big_buffer.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "net/base/net_errors.h"
+#include "net/base/schemeful_site.h"
+#include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/controllable_http_response.h"
+#include "net/test/embedded_test_server/http_response.h"
 #include "net/test/embedded_test_server/request_handler_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/numeric/int128.h"
 #include "third_party/abseil-cpp/absl/types/variant.h"
+#include "third_party/blink/public/common/chrome_debug_urls.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/features_generated.h"
 #include "third_party/blink/public/common/fenced_frame/fenced_frame_utils.h"
+#include "third_party/blink/public/common/fenced_frame/redacted_fenced_frame_config.h"
+#include "third_party/blink/public/common/messaging/cloneable_message.h"
 #include "third_party/blink/public/common/shared_storage/shared_storage_utils.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
+#include "third_party/blink/public/mojom/loader/code_cache.mojom.h"
+#include "third_party/blink/public/mojom/shared_storage/shared_storage.mojom.h"
+#include "ui/base/page_transition_types.h"
+#include "url/url_constants.h"
 
 namespace content {
 
@@ -81,91 +110,62 @@ using SharedStorageUrlSpecWithMetadata =
 
 namespace {
 
-using WorkletHosts = SharedStorageWorkletHostManager::WorkletHosts;
+using WorkletHosts = SharedStorageRuntimeManager::WorkletHosts;
 
-const char kSharedStorageWorkletExpiredMessage[] =
+constexpr char kSharedStorageWorkletExpiredMessage[] =
     "The sharedStorage worklet cannot execute further operations because the "
     "previous operation did not include the option \'keepAlive: true\'.";
 
-const auto& SetOperation = SharedStorageWriteOperationAndResult::SetOperation;
-const auto& AppendOperation =
-    SharedStorageWriteOperationAndResult::AppendOperation;
-const auto& DeleteOperation =
-    SharedStorageWriteOperationAndResult::DeleteOperation;
-const auto& ClearOperation =
-    SharedStorageWriteOperationAndResult::ClearOperation;
+constexpr char kTitle1Path[] = "/title1.html";
 
-const char kSimplePagePath[] = "/simple_page.html";
+constexpr char kTitle2Path[] = "/title2.html";
 
-const char kTitle1Path[] = "/title1.html";
+constexpr char kTitle3Path[] = "/title3.html";
 
-const char kTitle2Path[] = "/title2.html";
+constexpr char kTitle4Path[] = "/title4.html";
 
-const char kTitle3Path[] = "/title3.html";
+constexpr char kPageWithBlankIframePath[] = "/page_with_blank_iframe.html";
 
-const char kTitle4Path[] = "/title4.html";
+constexpr char kPngPath[] = "/shared_storage/pixel.png";
 
-const char kFencedFramePath[] = "/fenced_frames/title0.html";
+constexpr char kSharedStorageTrustedOriginsPath[] =
+    "/.well-known/shared-storage/trusted-origins";
 
-const char kPageWithBlankIframePath[] = "/page_with_blank_iframe.html";
-
-const char kPngPath[] = "/shared_storage/pixel.png";
-
-const char kDestroyedStatusHistogram[] =
+constexpr char kDestroyedStatusHistogram[] =
     "Storage.SharedStorage.Worklet.DestroyedStatus";
 
-const char kTimingKeepAliveDurationHistogram[] =
+constexpr char kTimingKeepAliveDurationHistogram[] =
     "Storage.SharedStorage.Worklet.Timing."
     "KeepAliveEndedDueToOperationsFinished.KeepAliveDuration";
 
-const char kErrorTypeHistogram[] = "Storage.SharedStorage.Worklet.Error.Type";
+constexpr char kErrorTypeHistogram[] =
+    "Storage.SharedStorage.Worklet.Error.Type";
 
-const char kTimingUsefulResourceHistogram[] =
+constexpr char kTimingUsefulResourceHistogram[] =
     "Storage.SharedStorage.Worklet.Timing.UsefulResourceDuration";
 
-const char kTimingRunExecutedInWorkletHistogram[] =
+constexpr char kTimingRunExecutedInWorkletHistogram[] =
     "Storage.SharedStorage.Document.Timing.Run.ExecutedInWorklet";
 
-const char kTimingSelectUrlExecutedInWorkletHistogram[] =
+constexpr char kTimingSelectUrlExecutedInWorkletHistogram[] =
     "Storage.SharedStorage.Document.Timing.SelectURL.ExecutedInWorklet";
 
-const double kBudgetAllowed = 5.0;
+constexpr char kSelectUrlBudgetStatusHistogram[] =
+    "Storage.SharedStorage.Worklet.SelectURL.BudgetStatus";
 
-const int kStalenessThresholdDays = 1;
+constexpr double kSelectURLOverallBitBudget = 12.0;
 
-const int kSelectURLOverallBitBudget = 12;
+constexpr double kSelectURLSiteBitBudget = 6.0;
 
-const int kSelectURLSiteBitBudget = 6;
+constexpr char kEmptyAccessControlAllowOriginReplacement[] = "";
 
-const char kGenerateURLsListScript[] = R"(
-  function generateUrls(size) {
-    return new Array(size).fill(0).map((e, i) => {
-      return {
-        url: '/fenced_frames/title' + i.toString() + '.html',
-        reportingMetadata: {
-          'click': '/fenced_frames/report' + i.toString() + '.html',
-          'mouse interaction':
-            '/fenced_frames/report' + (i + 1).toString() + '.html'
-        }
-      }
-    });
-  }
-)";
-
-const char kRemainingBudgetPrefix[] = "remaining budget: ";
-
-std::string TimeDeltaToString(base::TimeDelta delta) {
-  return base::StrCat({base::NumberToString(delta.InMilliseconds()), "ms"});
-}
-
-using MockPrivateAggregationShellContentBrowserClient =
-    MockPrivateAggregationContentBrowserClientBase<
-        ContentBrowserTestContentBrowserClient>;
+constexpr char kEmptySharedStorageCrossOriginAllowedReplacement[] = "";
 
 void WaitForHistogram(const std::string& histogram_name) {
   // Continue if histogram was already recorded.
-  if (base::StatisticsRecorder::FindHistogram(histogram_name))
+  if (base::StatisticsRecorder::FindHistogram(histogram_name)) {
     return;
+  }
 
   // Else, wait until the histogram is recorded.
   base::RunLoop run_loop;
@@ -174,56 +174,32 @@ void WaitForHistogram(const std::string& histogram_name) {
           histogram_name,
           base::BindLambdaForTesting(
               [&](const char* histogram_name, uint64_t name_hash,
-                  base::HistogramBase::Sample sample) { run_loop.Quit(); }));
+                  base::HistogramBase::Sample32 sample) { run_loop.Quit(); }));
   run_loop.Run();
 }
 
 void WaitForHistograms(const std::vector<std::string>& histogram_names) {
-  for (const auto& name : histogram_names)
+  for (const auto& name : histogram_names) {
     WaitForHistogram(name);
-}
-
-std::string SerializeOptionalString(std::optional<std::string> str) {
-  if (str)
-    return *str;
-
-  return "std::nullopt";
-}
-
-std::string SerializeOptionalBool(std::optional<bool> b) {
-  if (b)
-    return (*b) ? "true" : "false";
-
-  return "std::nullopt";
-}
-
-std::string SerializeOptionalUrlsWithMetadata(
-    std::optional<std::vector<SharedStorageUrlSpecWithMetadata>>
-        urls_with_metadata) {
-  if (!urls_with_metadata)
-    return "std::nullopt";
-
-  std::vector<std::string> urls_str_vector = {"{ "};
-  for (const auto& url_with_metadata : *urls_with_metadata) {
-    urls_str_vector.push_back("{url: ");
-    urls_str_vector.push_back(url_with_metadata.url);
-    urls_str_vector.push_back(", reporting_metadata: { ");
-    for (const auto& metadata_pair : url_with_metadata.reporting_metadata) {
-      urls_str_vector.push_back("{");
-      urls_str_vector.push_back(metadata_pair.first);
-      urls_str_vector.push_back(" : ");
-      urls_str_vector.push_back(metadata_pair.second);
-      urls_str_vector.push_back("} ");
-    }
-    urls_str_vector.push_back("}} ");
   }
-  urls_str_vector.push_back("}");
-
-  return base::StrCat(urls_str_vector);
 }
 
 bool IsErrorMessage(const content::WebContentsConsoleObserver::Message& msg) {
   return msg.log_level == blink::mojom::ConsoleMessageLevel::kError;
+}
+
+bool IsInfoMessage(const content::WebContentsConsoleObserver::Message& msg) {
+  return msg.log_level == blink::mojom::ConsoleMessageLevel::kInfo;
+}
+
+std::string ReplacePortInString(std::string str, uint16_t port) {
+  const std::string kToReplace("{{port}}");
+  size_t index = str.find(kToReplace);
+  while (index != std::string::npos) {
+    str = str.replace(index, kToReplace.size(), base::NumberToString(port));
+    index = str.find(kToReplace);
+  }
+  return str;
 }
 
 auto describe_param = [](const auto& info) {
@@ -232,990 +208,52 @@ auto describe_param = [](const auto& info) {
 
 }  // namespace
 
-class TestSharedStorageWorkletHost : public SharedStorageWorkletHost {
+
+class SharedStorageTrustedOriginsResponse
+    : public net::test_server::BasicHttpResponse {
  public:
-  TestSharedStorageWorkletHost(
-      SharedStorageDocumentServiceImpl& document_service,
-      const url::Origin& frame_origin,
-      const GURL& script_source_url,
-      network::mojom::CredentialsMode credentials_mode,
-      const std::vector<blink::mojom::OriginTrialFeature>&
-          origin_trial_features,
-      mojo::PendingAssociatedReceiver<blink::mojom::SharedStorageWorkletHost>
-          worklet_host,
-      blink::mojom::SharedStorageDocumentService::CreateWorkletCallback
-          callback,
-      bool should_defer_worklet_messages)
-      : SharedStorageWorkletHost(document_service,
-                                 frame_origin,
-                                 script_source_url,
-                                 credentials_mode,
-                                 origin_trial_features,
-                                 std::move(worklet_host),
-                                 std::move(callback)),
-        should_defer_worklet_messages_(should_defer_worklet_messages) {}
-
-  ~TestSharedStorageWorkletHost() override = default;
-
-  // Separate from `WaitForWorkletResponses()` so that we can wait for it
-  // without having to set an expected response count beforehand. The worklet
-  // host won't exist before the first call to either `addModule(), `run()`, or
-  // `selectURL()`. In the correct flow, `addModule()` will be called first.
-  void WaitForAddModule() {
-    if (add_module_called_) {
-      ResetAddModuleCalledAndMaybeCloseWorklet();
-      return;
-    }
-
-    add_module_waiter_ = std::make_unique<base::RunLoop>();
-    add_module_waiter_->Run();
-    add_module_waiter_.reset();
-    ResetAddModuleCalledAndMaybeCloseWorklet();
-  }
-
-  // Only applies to `run()` and `selectURL()`. Must be set before calling the
-  // operation. Precondition: Either `addModule()`, `run()`, or `selectURL()`
-  // has previously been called so that this worklet host exists.
-  void SetExpectedWorkletResponsesCount(size_t count) {
-    expected_worklet_responses_count_ = count;
-    response_expectation_set_ = true;
-  }
-
-  // Only applies to `run()` and `selectURL()`.
-  // Precondition: `SetExpectedWorkletResponsesCount()` has been called with the
-  // desired expected `count`, followed by the operation(s) itself/themselves.
-  void WaitForWorkletResponses() {
-    if (worklet_responses_count_ >= expected_worklet_responses_count_) {
-      ResetResponseCountsAndMaybeCloseWorklet();
-      return;
-    }
-
-    worklet_responses_count_waiter_ = std::make_unique<base::RunLoop>();
-    worklet_responses_count_waiter_->Run();
-    worklet_responses_count_waiter_.reset();
-    ResetResponseCountsAndMaybeCloseWorklet();
-  }
-
-  void set_should_defer_worklet_messages(bool should_defer_worklet_messages) {
-    should_defer_worklet_messages_ = should_defer_worklet_messages;
-  }
-
-  const std::vector<base::OnceClosure>& pending_worklet_messages() {
-    return pending_worklet_messages_;
-  }
-
-  void DidAddMessageToConsole(blink::mojom::ConsoleMessageLevel level,
-                              const std::string& message) override {
-    DidAddMessageToConsoleHelper(level, message, /*initial_message=*/true);
-  }
-
-  void DidAddMessageToConsoleHelper(blink::mojom::ConsoleMessageLevel level,
-                                    const std::string& message,
-                                    bool initial_message) {
-    if (should_defer_worklet_messages_ && initial_message) {
-      pending_worklet_messages_.push_back(base::BindOnce(
-          &TestSharedStorageWorkletHost::DidAddMessageToConsoleHelper,
-          weak_ptr_factory_.GetWeakPtr(), level, message,
-          /*initial_message=*/false));
-      return;
-    }
-
-    SharedStorageWorkletHost::DidAddMessageToConsole(level, message);
-  }
-
-  void FireKeepAliveTimerNow() {
-    ASSERT_TRUE(GetKeepAliveTimerForTesting().IsRunning());
-    GetKeepAliveTimerForTesting().FireNow();
-  }
-
-  void ExecutePendingWorkletMessages() {
-    for (auto& callback : pending_worklet_messages_) {
-      std::move(callback).Run();
-    }
-  }
-
- private:
-  void OnAddModuleOnWorkletFinished(
-      blink::mojom::SharedStorageDocumentService::CreateWorkletCallback
-          callback,
-      bool success,
-      const std::string& error_message) override {
-    OnAddModuleOnWorkletFinishedHelper(std::move(callback), success,
-                                       error_message,
-                                       /*initial_message=*/true);
-  }
-
-  void OnAddModuleOnWorkletFinishedHelper(
-      blink::mojom::SharedStorageDocumentService::CreateWorkletCallback
-          callback,
-      bool success,
-      const std::string& error_message,
-      bool initial_message) {
-    bool in_keep_alive = IsInKeepAlivePhase();
-    if (should_defer_worklet_messages_ && initial_message) {
-      pending_worklet_messages_.push_back(base::BindOnce(
-          &TestSharedStorageWorkletHost::OnAddModuleOnWorkletFinishedHelper,
-          weak_ptr_factory_.GetWeakPtr(), std::move(callback), success,
-          error_message, /*initial_message=*/false));
-    } else {
-      SharedStorageWorkletHost::OnAddModuleOnWorkletFinished(
-          std::move(callback), success, error_message);
-    }
-
-    if (initial_message)
-      OnAddModuleResponseReceived();
-    if (!in_keep_alive) {
-      ProcessAddModuleExpirationIfWorkletExpired();
-    }
-  }
-
-  void OnRunOperationOnWorkletFinished(
-      base::TimeTicks start_time,
-      bool success,
-      const std::string& error_message) override {
-    OnRunOperationOnWorkletFinishedHelper(start_time, success, error_message,
-                                          /*initial_message=*/true);
-  }
-
-  void OnRunOperationOnWorkletFinishedHelper(base::TimeTicks start_time,
-                                             bool success,
-                                             const std::string& error_message,
-                                             bool initial_message) {
-    bool in_keep_alive = IsInKeepAlivePhase();
-    if (should_defer_worklet_messages_ && initial_message) {
-      pending_worklet_messages_.push_back(base::BindOnce(
-          &TestSharedStorageWorkletHost::OnRunOperationOnWorkletFinishedHelper,
-          weak_ptr_factory_.GetWeakPtr(), start_time, success, error_message,
-          /*initial_message=*/false));
-    } else {
-      SharedStorageWorkletHost::OnRunOperationOnWorkletFinished(
-          start_time, success, error_message);
-    }
-
-    if (initial_message)
-      OnWorkletResponseReceived();
-    if (!in_keep_alive) {
-      ProcessRunOrSelectURLExpirationIfWorkletExpired();
-    }
-  }
-
-  void OnRunURLSelectionOperationOnWorkletFinished(
-      const GURL& urn_uuid,
-      base::TimeTicks start_time,
-      bool script_execution_success,
-      const std::string& script_execution_error_message,
-      uint32_t index,
-      BudgetResult budget_result) override {
-    OnRunURLSelectionOperationOnWorkletFinishedHelper(
-        urn_uuid, start_time, script_execution_success,
-        script_execution_error_message, index, std::move(budget_result),
-        /*initial_message=*/true);
-  }
-
-  void OnRunURLSelectionOperationOnWorkletFinishedHelper(
-      const GURL& urn_uuid,
-      base::TimeTicks start_time,
-      bool script_execution_success,
-      const std::string& script_execution_error_message,
-      uint32_t index,
-      BudgetResult budget_result,
-      bool initial_message) {
-    bool in_keep_alive = IsInKeepAlivePhase();
-    if (should_defer_worklet_messages_ && initial_message) {
-      pending_worklet_messages_.push_back(base::BindOnce(
-          &TestSharedStorageWorkletHost::
-              OnRunURLSelectionOperationOnWorkletFinishedHelper,
-          weak_ptr_factory_.GetWeakPtr(), urn_uuid, start_time,
-          script_execution_success, script_execution_error_message, index,
-          std::move(budget_result),
-          /*initial_message=*/false));
-    } else {
-      SharedStorageWorkletHost::OnRunURLSelectionOperationOnWorkletFinished(
-          urn_uuid, start_time, script_execution_success,
-          script_execution_error_message, index, std::move(budget_result));
-    }
-
-    if (initial_message)
-      OnWorkletResponseReceived();
-    if (!in_keep_alive) {
-      ProcessRunOrSelectURLExpirationIfWorkletExpired();
-    }
-  }
-
-  void ExpireWorklet() override {
-    // We must defer the destruction of the expired worklet until the rest of
-    // the test worklet code has run, in order to avoid segmentation faults. In
-    // particular, if either the `add_module_waiter_` or the
-    // `worklet_responses_count_waiter_` is running, we must quit it first
-    // before we actually destroy the worklet (regardless of how many worklet
-    // responses have been received). Hence we save a callback to destroy the
-    // worklet after we quit the waiter. The `Quit()` will occur in
-    // `Process*ExpirationIfWorkletExpired()` after returning to
-    // `On*OnWorkletFinishedHelper()`. If no waiter is running, we still have to
-    // finish running whichever `On*OnWorkletFinishedHelper()` triggered the
-    // call to `ExpireWorklet()`.
-    DCHECK(!pending_expire_worklet_callback_);
-    pending_expire_worklet_callback_ =
-        base::BindOnce(&TestSharedStorageWorkletHost::ExpireWorkletOnBaseClass,
-                       weak_ptr_factory_.GetWeakPtr());
-  }
-
-  void ExpireWorkletOnBaseClass() { SharedStorageWorkletHost::ExpireWorklet(); }
-
-  void ProcessAddModuleExpirationIfWorkletExpired() {
-    if (!pending_expire_worklet_callback_) {
-      return;
-    }
-
-    // We can't have both waiters running at the same time.
-    DCHECK(!worklet_responses_count_waiter_);
-
-    if (add_module_waiter_ && add_module_waiter_->running()) {
-      // The worklet is expired and needs to be destroyed. Since
-      // `add_module_waiter_` is running, quitting it will return us to
-      // `WaitForAddModule()`, where the waiter will be reset, and then, in
-      // `ResetAddModuleCalledAndMaybeCloseWorklet()`, the
-      // `pending_expire_worklet_callback_` callback will be run.
-      add_module_waiter_->Quit();
-    }
-
-    std::move(pending_expire_worklet_callback_).Run();
-
-    // Do not add code after this. The worklet has been destroyed.
-  }
-
-  void ProcessRunOrSelectURLExpirationIfWorkletExpired() {
-    if (!pending_expire_worklet_callback_) {
-      return;
-    }
-
-    // We can't have both waiters running at the same time.
-    DCHECK(!add_module_waiter_);
-
-    if (worklet_responses_count_waiter_ &&
-        worklet_responses_count_waiter_->running()) {
-      // The worklet is expired and needs to be destroyed. Since
-      // `worklet_responses_count_waiter_` is running, quitting it will return
-      // us to `WaitForWorkletResponses()`, where the waiter will be reset, and
-      // then, in `ResetResponseCountsAndMaybeCloseWorklet()`, the
-      // `pending_expire_worklet_callback_` callback will be run.
-      worklet_responses_count_waiter_->Quit();
-      return;
-    }
-
-    if (response_expectation_set_) {
-      // We expect a call to `WaitForWorkletResponses()`, which will run the
-      // callback.
-      return;
-    }
-
-    // No response expectation has been set, so we do expect a call to
-    // `WaitForWorkletResponses()`.
-    std::move(pending_expire_worklet_callback_).Run();
-
-    // Do not add code after this. The worklet has been destroyed.
-  }
-
-  void OnAddModuleResponseReceived() {
-    add_module_called_ = true;
-
-    if (add_module_waiter_ && add_module_waiter_->running()) {
-      add_module_waiter_->Quit();
-    }
-  }
-
-  void OnWorkletResponseReceived() {
-    ++worklet_responses_count_;
-
-    if (worklet_responses_count_waiter_ &&
-        worklet_responses_count_waiter_->running() &&
-        worklet_responses_count_ >= expected_worklet_responses_count_) {
-      worklet_responses_count_waiter_->Quit();
-    }
-  }
-
-  void ResetAddModuleCalledAndMaybeCloseWorklet() {
-    add_module_called_ = false;
-
-    if (pending_expire_worklet_callback_) {
-      std::move(pending_expire_worklet_callback_).Run();
-
-      // Do not add code after this. The worklet has been destroyed.
-    }
-  }
-
-  void ResetResponseCountsAndMaybeCloseWorklet() {
-    expected_worklet_responses_count_ = 0u;
-    worklet_responses_count_ = 0u;
-    response_expectation_set_ = false;
-
-    if (pending_expire_worklet_callback_) {
-      std::move(pending_expire_worklet_callback_).Run();
-
-      // Do not add code after this. The worklet has been destroyed.
-    }
-  }
-
-  base::TimeDelta GetKeepAliveTimeout() const override {
-    // Configure a timeout large enough so that the scheduled task won't run
-    // automatically. Instead, we will manually call OneShotTimer::FireNow().
-    return base::Seconds(30);
-  }
-
-  // Whether or not `addModule()` has been called since the last time (if any)
-  // that `add_module_waiter_` was reset.
-  bool add_module_called_ = false;
-  std::unique_ptr<base::RunLoop> add_module_waiter_;
-
-  // How many worklet operations have finished. This only includes `selectURL()`
-  // and `run()`.
-  size_t worklet_responses_count_ = 0;
-  size_t expected_worklet_responses_count_ = 0;
-  bool response_expectation_set_ = false;
-  std::unique_ptr<base::RunLoop> worklet_responses_count_waiter_;
-
-  // Whether we should defer messages received from the worklet environment to
-  // handle them later. This includes request callbacks (e.g. for `addModule()`,
-  // `selectURL()` and `run()`), as well as commands initiated from the worklet
-  // (e.g. `console.log()`).
-  bool should_defer_worklet_messages_;
-  std::vector<base::OnceClosure> pending_worklet_messages_;
-
-  // This callback will be non-null if the worklet is pending expiration due to
-  // the option `keepAlive: false` (which is the default value) being received
-  // in the most recent call to `run()` or `selectURL()`.
-  base::OnceClosure pending_expire_worklet_callback_;
-
-  base::WeakPtrFactory<TestSharedStorageWorkletHost> weak_ptr_factory_{this};
-};
-
-class TestSharedStorageObserver
-    : public SharedStorageWorkletHostManager::SharedStorageObserverInterface {
- public:
-  using Access = std::
-      tuple<AccessType, std::string, std::string, SharedStorageEventParams>;
-
-  void OnSharedStorageAccessed(
-      const base::Time& access_time,
-      AccessType type,
-      const std::string& main_frame_id,
-      const std::string& owner_origin,
-      const SharedStorageEventParams& params) override {
-    accesses_.emplace_back(type, main_frame_id, owner_origin, params);
-  }
-
-  void OnUrnUuidGenerated(const GURL& urn_uuid) override {}
-
-  void OnConfigPopulated(
-      const std::optional<FencedFrameConfig>& config) override {}
-
-  bool EventParamsMatch(const SharedStorageEventParams& expected_params,
-                        const SharedStorageEventParams& actual_params) {
-    if (expected_params.script_source_url != actual_params.script_source_url) {
-      LOG(ERROR) << "expected `script_source_url`: '"
-                 << SerializeOptionalString(expected_params.script_source_url)
-                 << "'";
-      LOG(ERROR) << "actual `sript_source_url`:   '"
-                 << SerializeOptionalString(actual_params.script_source_url)
-                 << "'";
-      return false;
-    }
-    if (expected_params.operation_name != actual_params.operation_name) {
-      LOG(ERROR) << "expected `operation_name`: '"
-                 << SerializeOptionalString(expected_params.operation_name)
-                 << "'";
-      LOG(ERROR) << "actual `operation_name`:   '"
-                 << SerializeOptionalString(actual_params.operation_name)
-                 << "'";
-      return false;
-    }
-    if (expected_params.urls_with_metadata !=
-        actual_params.urls_with_metadata) {
-      LOG(ERROR) << "expected `urls_with_metadata`: "
-                 << SerializeOptionalUrlsWithMetadata(
-                        expected_params.urls_with_metadata);
-      LOG(ERROR) << "actual `urls_with_metadata`:   "
-                 << SerializeOptionalUrlsWithMetadata(
-                        actual_params.urls_with_metadata);
-      return false;
-    }
-    if (expected_params.key != actual_params.key) {
-      LOG(ERROR) << "expected `key`: '"
-                 << SerializeOptionalString(expected_params.key) << "'";
-      LOG(ERROR) << "actual key:   '"
-                 << SerializeOptionalString(actual_params.key) << "'";
-      return false;
-    }
-    if (expected_params.value != actual_params.value) {
-      LOG(ERROR) << "expected `value`: '"
-                 << SerializeOptionalString(expected_params.value) << "'";
-      LOG(ERROR) << "actual `value`:   '"
-                 << SerializeOptionalString(actual_params.value) << "'";
-      return false;
-    }
-    if (expected_params.ignore_if_present != actual_params.ignore_if_present) {
-      LOG(ERROR) << "expected `ignore_if_present`: "
-                 << SerializeOptionalBool(expected_params.ignore_if_present);
-      LOG(ERROR) << "actual `ignore_if_present`:   "
-                 << SerializeOptionalBool(actual_params.ignore_if_present);
-      return false;
-    }
-
-    if (expected_params.serialized_data && !actual_params.serialized_data) {
-      LOG(ERROR) << "`serialized_data` unexpectedly null";
-      LOG(ERROR) << "expected `serialized_data`: '"
-                 << SerializeOptionalString(expected_params.serialized_data)
-                 << "'";
-      LOG(ERROR) << "actual `serialized_data`: '"
-                 << SerializeOptionalString(actual_params.serialized_data)
-                 << "'";
-      return false;
-    }
-
-    if (!expected_params.serialized_data && actual_params.serialized_data) {
-      LOG(ERROR) << "`serialized_data` unexpectedly non-null";
-      LOG(ERROR) << "expected `serialized_data`: '"
-                 << SerializeOptionalString(expected_params.serialized_data)
-                 << "'";
-      LOG(ERROR) << "actual `serialized_data`: '"
-                 << SerializeOptionalString(actual_params.serialized_data)
-                 << "'";
-      return false;
-    }
-
-    return true;
-  }
-
-  bool AccessesMatch(const Access& expected_access,
-                     const Access& actual_access) {
-    if (std::get<0>(expected_access) != std::get<0>(actual_access)) {
-      LOG(ERROR) << "expected `type`: " << std::get<0>(expected_access);
-      LOG(ERROR) << "actual `type`:   " << std::get<0>(actual_access);
-      return false;
-    }
-
-    if (std::get<1>(expected_access) != std::get<1>(actual_access)) {
-      LOG(ERROR) << "expected `main_frame_id`: '"
-                 << std::get<1>(expected_access) << "'";
-      LOG(ERROR) << "actual `main_frame_id`:   '" << std::get<1>(actual_access)
-                 << "'";
-      return false;
-    }
-
-    if (std::get<2>(expected_access) != std::get<2>(actual_access)) {
-      LOG(ERROR) << "expected `origin`: '" << std::get<2>(expected_access)
-                 << "'";
-      LOG(ERROR) << "actual `origin`:   '" << std::get<2>(actual_access) << "'";
-      return false;
-    }
-
-    return EventParamsMatch(std::get<3>(expected_access),
-                            std::get<3>(actual_access));
-  }
-
-  void ExpectAccessObserved(const std::vector<Access>& expected_accesses) {
-    ASSERT_EQ(expected_accesses.size(), accesses_.size());
-    for (size_t i = 0; i < accesses_.size(); ++i) {
-      EXPECT_TRUE(AccessesMatch(expected_accesses[i], accesses_[i]));
-      if (!AccessesMatch(expected_accesses[i], accesses_[i]))
-        LOG(ERROR) << "Event access at index " << i << " differs";
-    }
-  }
-
- private:
-  std::vector<Access> accesses_;
-};
-
-class TestSharedStorageWorkletHostManager
-    : public SharedStorageWorkletHostManager {
- public:
-  using SharedStorageWorkletHostManager::SharedStorageWorkletHostManager;
-
-  ~TestSharedStorageWorkletHostManager() override = default;
-
-  std::unique_ptr<SharedStorageWorkletHost> CreateWorkletHostHelper(
-      SharedStorageDocumentServiceImpl& document_service,
-      const url::Origin& frame_origin,
-      const GURL& script_source_url,
-      network::mojom::CredentialsMode credentials_mode,
-      const std::vector<blink::mojom::OriginTrialFeature>&
-          origin_trial_features,
-      mojo::PendingAssociatedReceiver<blink::mojom::SharedStorageWorkletHost>
-          worklet_host,
-      blink::mojom::SharedStorageDocumentService::CreateWorkletCallback
-          callback) override {
-    return std::make_unique<TestSharedStorageWorkletHost>(
-        document_service, frame_origin, script_source_url, credentials_mode,
-        origin_trial_features, std::move(worklet_host), std::move(callback),
-        should_defer_worklet_messages_);
-  }
-
-  // Precondition: there's only one eligible worklet host.
-  TestSharedStorageWorkletHost* GetAttachedWorkletHost() {
-    std::vector<TestSharedStorageWorkletHost*> worklet_hosts =
-        GetAttachedWorkletHosts();
-
-    DCHECK_EQ(worklet_hosts.size(), 1u);
-    return worklet_hosts[0];
-  }
-
-  std::vector<TestSharedStorageWorkletHost*> GetAttachedWorkletHosts() {
-    std::vector<TestSharedStorageWorkletHost*> results;
-    for (auto& [document_service, worklet_hosts] :
-         GetAttachedWorkletHostsForTesting()) {
-      for (auto& [raw_worklet_host, worklet_host] : worklet_hosts) {
-        results.push_back(
-            static_cast<TestSharedStorageWorkletHost*>(raw_worklet_host));
+  SharedStorageTrustedOriginsResponse(
+      const base::Value* json_trusted_origins_list,
+      uint16_t port,
+      bool force_server_error)
+      : force_server_error_(force_server_error) {
+    if (json_trusted_origins_list) {
+      json_trusted_origins_list_str_ =
+          base::WriteJson(*json_trusted_origins_list);
+      if (json_trusted_origins_list_str_) {
+        json_trusted_origins_list_str_ =
+            ReplacePortInString(*json_trusted_origins_list_str_, port);
       }
     }
-
-    return results;
   }
 
-  // Precondition: there's only one eligible worklet host.
-  TestSharedStorageWorkletHost* GetKeepAliveWorkletHost() {
-    DCHECK_EQ(1u, GetKeepAliveWorkletHostsCount());
-    return static_cast<TestSharedStorageWorkletHost*>(
-        GetKeepAliveWorkletHostsForTesting().begin()->second.get());
-  }
+  SharedStorageTrustedOriginsResponse(
+      const SharedStorageTrustedOriginsResponse&) = delete;
+  SharedStorageTrustedOriginsResponse& operator=(
+      const SharedStorageTrustedOriginsResponse&) = delete;
 
-  // Precondition: `frame` is associated with a
-  // `SharedStorageDocumentServiceImpl`, and there's a single attached
-  // `SharedStorageWorkletHost` for that document service.
-  TestSharedStorageWorkletHost* GetAttachedWorkletHostForFrame(
-      RenderFrameHost* frame) {
-    std::vector<TestSharedStorageWorkletHost*> worklet_hosts =
-        GetAttachedWorkletHostsForFrame(frame);
+  ~SharedStorageTrustedOriginsResponse() override = default;
 
-    DCHECK_EQ(worklet_hosts.size(), 1u);
-    return worklet_hosts[0];
-  }
-
-  // Precondition: `frame` is associated with a
-  // `SharedStorageDocumentServiceImpl`.
-  std::vector<TestSharedStorageWorkletHost*> GetAttachedWorkletHostsForFrame(
-      RenderFrameHost* frame) {
-    SharedStorageDocumentServiceImpl* document_service = DocumentUserData<
-        SharedStorageDocumentServiceImpl>::GetForCurrentDocument(frame);
-    DCHECK(document_service);
-
-    WorkletHosts& worklet_hosts =
-        GetAttachedWorkletHostsForTesting().at(document_service);
-
-    std::vector<TestSharedStorageWorkletHost*> results;
-    for (auto& [raw_worklet_host, worklet_host] : worklet_hosts) {
-      results.push_back(
-          static_cast<TestSharedStorageWorkletHost*>(raw_worklet_host));
+  void SendResponse(
+      base::WeakPtr<net::test_server::HttpResponseDelegate> delegate) override {
+    if (!json_trusted_origins_list_str_ || force_server_error_) {
+      set_code(net::HttpStatusCode::HTTP_INTERNAL_SERVER_ERROR);
+      set_content_type("text/plain");
+      set_content("");
+    } else {
+      set_code(net::HttpStatusCode::HTTP_OK);
+      set_content_type("application/json");
+      AddCustomHeader("Access-Control-Allow-Origin", "*");
+      set_content(*json_trusted_origins_list_str_);
     }
-
-    return results;
-  }
-
-  void ConfigureShouldDeferWorkletMessagesOnWorkletHostCreation(
-      bool should_defer_worklet_messages) {
-    should_defer_worklet_messages_ = should_defer_worklet_messages;
-  }
-
-  size_t GetAttachedWorkletHostsCount() {
-    size_t count = 0;
-    for (const auto& [document_service, worklet_hosts] :
-         GetAttachedWorkletHostsForTesting()) {
-      count += worklet_hosts.size();
-    }
-
-    return count;
-  }
-
-  size_t GetKeepAliveWorkletHostsCount() {
-    return GetKeepAliveWorkletHostsForTesting().size();
+    delegate->SendResponseHeaders(code(), GetHttpReasonPhrase(code()),
+                                  BuildHeaders());
+    delegate->SendContents(content(), base::DoNothing());
   }
 
  private:
-  bool should_defer_worklet_messages_ = false;
-};
-
-class SharedStorageBrowserTestBase : public ContentBrowserTest {
- public:
-  using AccessType = TestSharedStorageObserver::AccessType;
-
-  SharedStorageBrowserTestBase() {
-    privacy_sandbox_ads_apis_override_feature_.InitAndEnableFeature(
-        features::kPrivacySandboxAdsAPIsOverride);
-
-    shared_storage_feature_.InitWithFeaturesAndParameters(
-        /*enabled_features=*/
-        {{blink::features::kSharedStorageAPI,
-          {
-              {"SharedStorageBitBudget", base::NumberToString(kBudgetAllowed)},
-              {"SharedStorageStalenessThreshold",
-               TimeDeltaToString(base::Days(kStalenessThresholdDays))},
-          }},
-         {blink::features::kSharedStorageAPIM123, {}}},
-        /*disabled_features=*/{});
-
-    fenced_frame_feature_.InitAndEnableFeature(blink::features::kFencedFrames);
-  }
-
-  void SetUpOnMainThread() override {
-    auto test_worklet_host_manager =
-        std::make_unique<TestSharedStorageWorkletHostManager>();
-    observer_ = std::make_unique<TestSharedStorageObserver>();
-
-    test_worklet_host_manager->AddSharedStorageObserver(observer_.get());
-    test_worklet_host_manager_ = test_worklet_host_manager.get();
-
-    static_cast<StoragePartitionImpl*>(GetStoragePartition())
-        ->OverrideSharedStorageWorkletHostManagerForTesting(
-            std::move(test_worklet_host_manager));
-
-    host_resolver()->AddRule("*", "127.0.0.1");
-
-    MakeMockPrivateAggregationShellContentBrowserClient();
-
-    ON_CALL(browser_client(), IsPrivateAggregationAllowed)
-        .WillByDefault(testing::Return(true));
-    ON_CALL(browser_client(), IsSharedStorageAllowed)
-        .WillByDefault(testing::Return(true));
-    ON_CALL(browser_client(), IsPrivacySandboxReportingDestinationAttested)
-        .WillByDefault(testing::Return(true));
-
-    FinishSetup();
-  }
-
-  MockPrivateAggregationShellContentBrowserClient& browser_client() {
-    return *browser_client_;
-  }
-
-  virtual bool ResolveSelectURLToConfig() { return false; }
-
-  StoragePartition* GetStoragePartition() {
-    return shell()
-        ->web_contents()
-        ->GetBrowserContext()
-        ->GetDefaultStoragePartition();
-  }
-
-  void TearDownOnMainThread() override { test_worklet_host_manager_ = nullptr; }
-
-  // Virtual so that derived classes can use a different flavor of mock instead
-  // of `testing::NiceMock`.
-  virtual void MakeMockPrivateAggregationShellContentBrowserClient() {
-    browser_client_ = std::make_unique<
-        testing::NiceMock<MockPrivateAggregationShellContentBrowserClient>>();
-  }
-
-  // Virtual so that derived classes can delay starting the server, and/or add
-  // other set up steps.
-  virtual void FinishSetup() {
-    https_server()->AddDefaultHandlers(GetTestDataFilePath());
-    https_server()->SetSSLConfig(net::EmbeddedTestServer::CERT_TEST_NAMES);
-    SetupCrossSiteRedirector(https_server());
-    ASSERT_TRUE(https_server()->Start());
-  }
-
-  void ExpectAccessObserved(
-      const std::vector<TestSharedStorageObserver::Access>& expected_accesses) {
-    observer_->ExpectAccessObserved(expected_accesses);
-  }
-
-  double GetRemainingBudget(const url::Origin& origin) {
-    base::test::TestFuture<SharedStorageWorkletHost::BudgetResult> future;
-    static_cast<StoragePartitionImpl*>(GetStoragePartition())
-        ->GetSharedStorageManager()
-        ->GetRemainingBudget(net::SchemefulSite(origin), future.GetCallback());
-    return future.Take().bits;
-  }
-
-  FrameTreeNode* PrimaryFrameTreeNodeRoot() {
-    return static_cast<WebContentsImpl*>(shell()->web_contents())
-        ->GetPrimaryFrameTree()
-        .root();
-  }
-
-  std::string MainFrameId() {
-    return PrimaryFrameTreeNodeRoot()
-        ->current_frame_host()
-        ->devtools_frame_token()
-        .ToString();
-  }
-
-  SharedStorageBudgetMetadata* GetSharedStorageBudgetMetadata(
-      const GURL& urn_uuid) {
-    FencedFrameURLMapping& fenced_frame_url_mapping =
-        PrimaryFrameTreeNodeRoot()
-            ->current_frame_host()
-            ->GetPage()
-            .fenced_frame_urls_map();
-
-    SharedStorageBudgetMetadata* metadata =
-        fenced_frame_url_mapping.GetSharedStorageBudgetMetadataForTesting(
-            GURL(urn_uuid));
-
-    return metadata;
-  }
-
-  SharedStorageReportingMap GetSharedStorageReportingMap(const GURL& urn_uuid) {
-    FencedFrameURLMapping& fenced_frame_url_mapping =
-        PrimaryFrameTreeNodeRoot()
-            ->current_frame_host()
-            ->GetPage()
-            .fenced_frame_urls_map();
-    FencedFrameURLMappingTestPeer fenced_frame_url_mapping_test_peer(
-        &fenced_frame_url_mapping);
-
-    SharedStorageReportingMap reporting_map;
-
-    fenced_frame_url_mapping_test_peer.GetSharedStorageReportingMap(
-        GURL(urn_uuid), &reporting_map);
-
-    return reporting_map;
-  }
-
-  void ExecuteScriptInWorklet(
-      const ToRenderFrameHost& execution_target,
-      const std::string& script,
-      GURL* out_module_script_url,
-      size_t expected_total_host_count = 1u,
-      bool keep_alive_after_operation = true,
-      std::optional<std::string> context_id = std::nullopt,
-      std::string* out_error = nullptr,
-      bool wait_for_operation_finish = true) {
-    DCHECK(out_module_script_url);
-
-    base::StringPairs run_function_body_replacement;
-    run_function_body_replacement.emplace_back("{{RUN_FUNCTION_BODY}}", script);
-
-    std::string host =
-        execution_target.render_frame_host()->GetLastCommittedOrigin().host();
-
-    *out_module_script_url = https_server()->GetURL(
-        host, net::test_server::GetFilePathWithReplacements(
-                  "/shared_storage/customizable_module.js",
-                  run_function_body_replacement));
-
-    EXPECT_TRUE(ExecJs(execution_target,
-                       JsReplace("sharedStorage.worklet.addModule($1)",
-                                 *out_module_script_url)));
-
-    // There may be more than one host in the worklet host manager if we are
-    // executing inside a nested fenced frame that was created using
-    // `selectURL()`.
-    EXPECT_EQ(expected_total_host_count,
-              test_worklet_host_manager().GetAttachedWorkletHostsCount());
-
-    EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
-
-    // There is 1 more "worklet operation": `run()`.
-    test_worklet_host_manager()
-        .GetAttachedWorkletHostForFrame(execution_target.render_frame_host())
-        ->SetExpectedWorkletResponsesCount(1);
-
-    EXPECT_TRUE(ExecJs(
-        execution_target,
-        JsReplace("window.keepWorklet = $1;", keep_alive_after_operation)));
-
-    testing::AssertionResult result = ExecJs(
-        execution_target,
-        base::StrCat(
-            {"sharedStorage.run('test-operation', {keepAlive: keepWorklet",
-             context_id.has_value()
-                 ? JsReplace(", privateAggregationConfig: {contextId: $1}});",
-                             context_id.value())
-                 : "});"}));
-    EXPECT_EQ(!!result, out_error == nullptr);
-    if (out_error) {
-      *out_error = std::string(result.message());
-      return;
-    }
-
-    if (wait_for_operation_finish) {
-      test_worklet_host_manager()
-          .GetAttachedWorkletHostForFrame(execution_target.render_frame_host())
-          ->WaitForWorkletResponses();
-    }
-  }
-
-  FrameTreeNode* CreateIFrame(FrameTreeNode* root, const GURL& url) {
-    size_t initial_child_count = root->child_count();
-
-    EXPECT_TRUE(ExecJs(root,
-                       "var f = document.createElement('iframe');"
-                       "document.body.appendChild(f);"));
-
-    EXPECT_EQ(initial_child_count + 1, root->child_count());
-    FrameTreeNode* child_node = root->child_at(initial_child_count);
-
-    TestFrameNavigationObserver observer(child_node);
-
-    EXPECT_EQ(url.spec(), EvalJs(root, JsReplace("f.src = $1;", url)));
-
-    observer.Wait();
-
-    return child_node;
-  }
-
-  // Create an iframe of origin `origin` inside `parent_node`, and run
-  // sharedStorage.selectURL() on 8 urls. If `parent_node` is not specified,
-  // the primary frame tree's root node will be chosen. This generates an URN
-  // associated with `origin` and 3 bits of shared storage budget.
-  std::optional<GURL> SelectFrom8URLsInContext(
-      const url::Origin& origin,
-      FrameTreeNode* parent_node = nullptr,
-      bool keep_alive_after_operation = true) {
-    if (!parent_node)
-      parent_node = PrimaryFrameTreeNodeRoot();
-
-    // If this is called inside a fenced frame, creating an iframe will need
-    // "Supports-Loading-Mode: fenced-frame" response header. Thus, we simply
-    // always set the path to `kFencedFramePath`.
-    GURL iframe_url = origin.GetURL().Resolve(kFencedFramePath);
-
-    FrameTreeNode* iframe = CreateIFrame(parent_node, iframe_url);
-
-    EXPECT_TRUE(ExecJs(iframe, JsReplace("window.keepWorklet = $1;",
-                                         keep_alive_after_operation)));
-
-    EXPECT_TRUE(ExecJs(iframe, R"(
-        sharedStorage.worklet.addModule('/shared_storage/simple_module.js');
-      )"));
-
-    // There is 1 more "worklet operation": `selectURL()`.
-    test_worklet_host_manager()
-        .GetAttachedWorkletHostForFrame(iframe->current_frame_host())
-        ->SetExpectedWorkletResponsesCount(1);
-
-    // Generate 8 candidates urls in to a list variable `urls`.
-    EXPECT_TRUE(ExecJs(iframe, kGenerateURLsListScript));
-    EXPECT_TRUE(
-        ExecJs(iframe, JsReplace("window.resolveSelectURLToConfig = $1;",
-                                 ResolveSelectURLToConfig())));
-
-    TestSelectURLFencedFrameConfigObserver config_observer(
-        GetStoragePartition());
-    EvalJsResult result = EvalJs(iframe, R"(
-        (async function() {
-          const urls = generateUrls(8);
-          window.select_url_result = await sharedStorage.selectURL(
-            'test-url-selection-operation',
-            urls,
-            {
-              data: {'mockResult': 1},
-              resolveToConfig: resolveSelectURLToConfig,
-              keepAlive: keepWorklet
-            }
-          );
-          if (resolveSelectURLToConfig &&
-              !(select_url_result instanceof FencedFrameConfig)) {
-            throw new Error('selectURL() did not return a FencedFrameConfig.');
-          }
-          return window.select_url_result;
-        })()
-      )");
-
-    EXPECT_TRUE(result.error.empty());
-    const std::optional<GURL>& observed_urn_uuid = config_observer.GetUrnUuid();
-    if (observed_urn_uuid.has_value()) {
-      EXPECT_TRUE(blink::IsValidUrnUuidURL(observed_urn_uuid.value()));
-
-      if (!ResolveSelectURLToConfig()) {
-        EXPECT_EQ(result.ExtractString(), observed_urn_uuid->spec());
-      }
-
-      test_worklet_host_manager()
-          .GetAttachedWorkletHostForFrame(iframe->current_frame_host())
-          ->WaitForWorkletResponses();
-    }
-    return observed_urn_uuid;
-  }
-
-  // Prerequisite: The worklet for `frame` has registered a
-  // "remaining-budget-operation" that logs the remaining budget to the console
-  // after `kRemainingBudgetPrefix`. Also, if any previous operations are
-  // called, they use the option `keepAlive: true`.
-  double RemainingBudgetViaJSForFrame(FrameTreeNode* frame,
-                                      bool keep_alive_after_operation = true) {
-    DCHECK(frame);
-
-    WebContentsConsoleObserver console_observer(shell()->web_contents());
-    const std::string kRemainingBudgetPrefixStr(kRemainingBudgetPrefix);
-    console_observer.SetPattern(base::StrCat({kRemainingBudgetPrefixStr, "*"}));
-    EXPECT_TRUE(ExecJs(frame, JsReplace("window.keepWorklet = $1;",
-                                        keep_alive_after_operation)));
-
-    // There is 1 "worklet operation": `run()`.
-    test_worklet_host_manager()
-        .GetAttachedWorkletHostForFrame(frame->current_frame_host())
-        ->SetExpectedWorkletResponsesCount(1);
-
-    EXPECT_TRUE(ExecJs(frame, R"(
-      sharedStorage.run('remaining-budget-operation',
-                        {
-                          data: {},
-                          keepAlive: keepWorklet
-                        }
-      );
-    )"));
-
-    bool observed = console_observer.Wait();
-    EXPECT_TRUE(observed);
-    if (!observed) {
-      return nan("");
-    }
-
-    EXPECT_LE(1u, console_observer.messages().size());
-    std::string console_message =
-        base::UTF16ToUTF8(console_observer.messages().back().message);
-    EXPECT_TRUE(base::StartsWith(console_message, kRemainingBudgetPrefixStr));
-
-    std::string result_string = console_message.substr(
-        kRemainingBudgetPrefixStr.size(),
-        console_message.size() - kRemainingBudgetPrefixStr.size());
-
-    double result = 0.0;
-    EXPECT_TRUE(base::StringToDouble(result_string, &result));
-
-    test_worklet_host_manager()
-        .GetAttachedWorkletHostForFrame(frame->current_frame_host())
-        ->WaitForWorkletResponses();
-    return result;
-  }
-
-  double RemainingBudgetViaJSForOrigin(const url::Origin& origin) {
-    FrameTreeNode* iframe =
-        CreateIFrame(PrimaryFrameTreeNodeRoot(), origin.GetURL());
-
-    EXPECT_TRUE(ExecJs(iframe, R"(
-        sharedStorage.worklet.addModule('shared_storage/simple_module.js');
-      )"));
-
-    return RemainingBudgetViaJSForFrame(iframe);
-  }
-
-  net::EmbeddedTestServer* https_server() { return &https_server_; }
-
-  TestSharedStorageWorkletHostManager& test_worklet_host_manager() {
-    DCHECK(test_worklet_host_manager_);
-    return *test_worklet_host_manager_;
-  }
-
-  ~SharedStorageBrowserTestBase() override = default;
-
- protected:
-  test::FencedFrameTestHelper fenced_frame_test_helper_;
-
-  base::test::ScopedFeatureList privacy_sandbox_ads_apis_override_feature_;
-  base::test::ScopedFeatureList shared_storage_feature_;
-  base::test::ScopedFeatureList fenced_frame_feature_;
-
-  net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
-  base::HistogramTester histogram_tester_;
-
-  raw_ptr<TestSharedStorageWorkletHostManager> test_worklet_host_manager_ =
-      nullptr;
-  std::unique_ptr<TestSharedStorageObserver> observer_;
-
-  std::unique_ptr<MockPrivateAggregationShellContentBrowserClient>
-      browser_client_;
+  bool force_server_error_;
+  std::optional<std::string> json_trusted_origins_list_str_;
 };
 
 class SharedStorageBrowserTest : public SharedStorageBrowserTestBase,
@@ -1224,14 +262,89 @@ class SharedStorageBrowserTest : public SharedStorageBrowserTestBase,
   SharedStorageBrowserTest() {
     fenced_frame_api_change_feature_.InitWithFeatureState(
         blink::features::kFencedFramesAPIChanges, ResolveSelectURLToConfig());
+    custom_data_origin_feature_.InitAndEnableFeature(
+        blink::features::kSharedStorageCreateWorkletCustomDataOrigin);
   }
 
   bool ResolveSelectURLToConfig() override { return GetParam(); }
 
+  mojo_base::BigBuffer GetCodeCacheDataForUrl(RenderFrameHost* rfh,
+                                              const GURL& url) {
+    mojo::PendingRemote<blink::mojom::CodeCacheHost> pending_code_cache_host;
+    RenderFrameHostImpl::From(rfh)->CreateCodeCacheHost(
+        pending_code_cache_host.InitWithNewPipeAndPassReceiver());
+
+    mojo::Remote<blink::mojom::CodeCacheHost> inspecting_code_cache_host(
+        std::move(pending_code_cache_host));
+
+    base::test::TestFuture<base::Time, mojo_base::BigBuffer> code_cache_future;
+    inspecting_code_cache_host->FetchCachedCode(
+        blink::mojom::CodeCacheType::kJavascript, url,
+        code_cache_future.GetCallback());
+
+    auto [response_time, data] = code_cache_future.Take();
+    return std::move(data);
+  }
+
   ~SharedStorageBrowserTest() override = default;
+
+  void set_trusted_origins_list_index(size_t trusted_origins_list_index) {
+    trusted_origins_list_index_ = trusted_origins_list_index;
+  }
+
+  void set_force_server_error(bool force_server_error) {
+    force_server_error_ = force_server_error;
+  }
+
+  void RegisterCustomRequestHandlers() override {
+    RegisterSharedStorageTrustedOriginsRequestHandler();
+  }
+
+  void RegisterSharedStorageTrustedOriginsRequestHandler() {
+    https_server()->RegisterRequestHandler(base::BindRepeating(
+        &SharedStorageBrowserTest::HandleSharedStorageTrustedOriginsRequest,
+        base::Unretained(this), BuildWellKnownTrustedOriginsLists()));
+  }
+
+  // Virtual so that a derived class can build more a realistic vector of
+  // values. We use base::Value instead of base::Value::List, even though a
+  // correctly formatted entry would be a base::Value::List, so that a derived
+  // class can test the parse error that would happen if the JSON returned isn't
+  // a list.
+  //
+  // SharedStorageBrowserTest::BuildWellKnownTrustedOriginsLists builds a vector
+  // with a single list entry that simply allowlists all combinations of script
+  // and context origins.
+  virtual std::vector<base::Value> BuildWellKnownTrustedOriginsLists() {
+    std::vector<base::Value> trusted_origins_lists;
+    trusted_origins_lists.push_back(static_cast<base::Value>(
+        base::Value::List().Append(base::Value::Dict()
+                                       .Set("scriptOrigin", "*")
+                                       .Set("contextOrigin", "*"))));
+    return trusted_origins_lists;
+  }
+
+  std::unique_ptr<net::test_server::HttpResponse>
+  HandleSharedStorageTrustedOriginsRequest(
+      const std::vector<base::Value>& json_well_known_trusted_origin_lists,
+      const net::test_server::HttpRequest& request) {
+    const auto& path = request.GetURL().path();
+    if (path != kSharedStorageTrustedOriginsPath ||
+        json_well_known_trusted_origin_lists.empty()) {
+      return nullptr;
+    }
+    size_t index = trusted_origins_list_index_ %
+                   json_well_known_trusted_origin_lists.size();
+    return std::make_unique<SharedStorageTrustedOriginsResponse>(
+        &json_well_known_trusted_origin_lists[index], port(),
+        force_server_error_);
+  }
 
  private:
   base::test::ScopedFeatureList fenced_frame_api_change_feature_;
+  base::test::ScopedFeatureList custom_data_origin_feature_;
+  size_t trusted_origins_list_index_ = 0;
+  bool force_server_error_ = false;
 };
 
 IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, AddModule_Success) {
@@ -1250,8 +363,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, AddModule_Success) {
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
             base::UTF16ToUTF8(console_observer.messages()[0].message));
@@ -1282,7 +395,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, AddModule_ScriptNotFound) {
   WebContentsConsoleObserver console_observer(shell()->web_contents());
 
   std::string expected_error = base::StrCat(
-      {"a JavaScript error: \"Error: Failed to load ",
+      {"a JavaScript error: \"OperationError: Failed to load ",
        https_server()
            ->GetURL("a.test", "/shared_storage/nonexistent_module.js")
            .spec(),
@@ -1294,8 +407,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, AddModule_ScriptNotFound) {
 
   EXPECT_EQ(expected_error, result.error);
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
   EXPECT_EQ(0u, console_observer.messages().size());
 
   ExpectAccessObserved(
@@ -1312,7 +425,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, AddModule_RedirectNotAllowed) {
   WebContentsConsoleObserver console_observer(shell()->web_contents());
 
   std::string expected_error = base::StrCat(
-      {"a JavaScript error: \"Error: Unexpected redirect on ",
+      {"a JavaScript error: \"OperationError: Unexpected redirect on ",
        https_server()
            ->GetURL("a.test",
                     "/server-redirect?shared_storage/simple_module.js")
@@ -1326,8 +439,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, AddModule_RedirectNotAllowed) {
 
   EXPECT_EQ(expected_error, result.error);
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
   EXPECT_EQ(0u, console_observer.messages().size());
 
   ExpectAccessObserved(
@@ -1352,8 +465,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
       result.error,
       testing::HasSubstr("ReferenceError: undefinedVariable is not defined"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
   EXPECT_EQ(1u, console_observer.messages().size());
   EXPECT_EQ("Start executing erroneous_module.js",
             base::UTF16ToUTF8(console_observer.messages()[0].message));
@@ -1390,8 +503,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
       result.error,
       testing::HasSubstr("addModule() can only be invoked once per worklet"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
             base::UTF16ToUTF8(console_observer.messages()[0].message));
@@ -1415,6 +528,63 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
             "a.test", "/shared_storage/simple_module.js"))}});
 }
 
+IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
+                       AddModue_TheThirdTimeCompilesWithV8CodeCache) {
+  // The test assumes pages get deleted after navigation. To ensure this,
+  // disable back/forward cache.
+  content::DisableBackForwardCacheForTesting(
+      shell()->web_contents(),
+      content::BackForwardCache::TEST_REQUIRES_NO_CACHING);
+
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  GURL module_url = https_server()->GetURL(
+      "a.test", "/shared_storage/large_cacheable_script.js");
+
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  // Initially, the code cache has no data.
+  mojo_base::BigBuffer code_cache_data0 = GetCodeCacheDataForUrl(
+      shell()->web_contents()->GetPrimaryMainFrame(), module_url);
+  EXPECT_EQ(code_cache_data0.size(), 0u);
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      sharedStorage.worklet.addModule(
+        'shared_storage/large_cacheable_script.js');
+    )"));
+
+  mojo_base::BigBuffer code_cache_data1 = GetCodeCacheDataForUrl(
+      shell()->web_contents()->GetPrimaryMainFrame(), module_url);
+  EXPECT_GT(code_cache_data1.size(), 0u);
+
+  // After the first script loading, the code cache has some data.
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      sharedStorage.worklet.addModule(
+        'shared_storage/large_cacheable_script.js');
+    )"));
+
+  // After the second script loading, the code cache has more data. This implies
+  // that the code cache wasn't used for the second compilation. This is
+  // expected, as we won't store the cached code entirely for first seen URLs.
+  mojo_base::BigBuffer code_cache_data2 = GetCodeCacheDataForUrl(
+      shell()->web_contents()->GetPrimaryMainFrame(), module_url);
+  EXPECT_GT(code_cache_data2.size(), code_cache_data1.size());
+
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      sharedStorage.worklet.addModule(
+        'shared_storage/large_cacheable_script.js');
+    )"));
+
+  // After the third script loading, the code cache does not change. This
+  // implies that the code cache was used for the third compilation.
+  mojo_base::BigBuffer code_cache_data3 = GetCodeCacheDataForUrl(
+      shell()->web_contents()->GetPrimaryMainFrame(), module_url);
+  EXPECT_EQ(code_cache_data3.size(), code_cache_data2.size());
+  EXPECT_TRUE(std::equal(code_cache_data3.begin(), code_cache_data3.end(),
+                         code_cache_data2.begin()));
+}
+
 IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, RunOperation_Success) {
   GURL url = https_server()->GetURL("a.test", kSimplePagePath);
   EXPECT_TRUE(NavigateToURL(shell(), url));
@@ -1425,8 +595,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, RunOperation_Success) {
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
@@ -1435,7 +605,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, RunOperation_Success) {
             base::UTF16ToUTF8(console_observer.messages()[1].message));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -1444,9 +614,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, RunOperation_Success) {
           'test-operation', {data: {'customKey': 'customValue'}});
     )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ(5u, console_observer.messages().size());
   EXPECT_EQ("Start executing 'test-operation'",
@@ -1497,8 +665,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
@@ -1514,7 +682,9 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
   histogram_tester_.ExpectUniqueSample(
       kDestroyedStatusHistogram,
       blink::SharedStorageWorkletDestroyedStatus::kDidNotEnterKeepAlive, 1);
-  histogram_tester_.ExpectUniqueSample(
+  histogram_tester_.ExpectBucketCount(
+      kErrorTypeHistogram, blink::SharedStorageWorkletErrorType::kSuccess, 1);
+  histogram_tester_.ExpectBucketCount(
       kErrorTypeHistogram, blink::SharedStorageWorkletErrorType::kRunWebVisible,
       1);
   histogram_tester_.ExpectTotalCount(kTimingUsefulResourceHistogram, 1);
@@ -1566,8 +736,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
@@ -1576,7 +746,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
             base::UTF16ToUTF8(console_observer.messages()[1].message));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -1584,9 +754,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
       sharedStorage.run('test-operation', /*options=*/{});
     )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ(5u, console_observer.messages().size());
   EXPECT_EQ("Start executing 'test-operation'",
@@ -1608,8 +776,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
@@ -1618,7 +786,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
             base::UTF16ToUTF8(console_observer.messages()[1].message));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -1627,9 +795,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
       sharedStorage.run('test-operation', /*options=*/{data: blob});
     )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ(3u, console_observer.messages().size());
   EXPECT_EQ("Cannot deserialize data.",
@@ -1647,8 +813,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
@@ -1657,7 +823,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
             base::UTF16ToUTF8(console_observer.messages()[1].message));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -1677,9 +843,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
       });
     )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ(5u, console_observer.messages().size());
   EXPECT_EQ("Start executing 'test-operation'",
@@ -1704,8 +868,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
           'shared_storage/erroneous_function_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("Start executing erroneous_function_module.js",
@@ -1718,7 +882,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
             console_observer.messages()[0].log_level);
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -1727,9 +891,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
           'test-operation', {data: {'customKey': 'customValue'}});
     )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ(4u, console_observer.messages().size());
   EXPECT_EQ("Start executing 'test-operation'",
@@ -1767,8 +929,8 @@ IN_PROC_BROWSER_TEST_P(
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
@@ -1777,7 +939,7 @@ IN_PROC_BROWSER_TEST_P(
             base::UTF16ToUTF8(console_observer.messages()[1].message));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -1787,12 +949,10 @@ IN_PROC_BROWSER_TEST_P(
                              keepAlive: true});
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ(5u, console_observer.messages().size());
   EXPECT_EQ("Start executing 'test-operation'",
@@ -1803,21 +963,19 @@ IN_PROC_BROWSER_TEST_P(
             base::UTF16ToUTF8(console_observer.messages()[4].message));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_TRUE(ExecJs(shell(), R"(
       sharedStorage.run(
           'test-operation', {data: {'customKey': 'customValue'}});
     )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ(8u, console_observer.messages().size());
   EXPECT_EQ("Start executing 'test-operation'",
@@ -1855,8 +1013,8 @@ IN_PROC_BROWSER_TEST_P(
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
@@ -1865,7 +1023,7 @@ IN_PROC_BROWSER_TEST_P(
             base::UTF16ToUTF8(console_observer.messages()[1].message));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -1875,15 +1033,13 @@ IN_PROC_BROWSER_TEST_P(
                              keepAlive: false});
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_EQ(5u, console_observer.messages().size());
   EXPECT_EQ("Start executing 'test-operation'",
@@ -1925,8 +1081,8 @@ IN_PROC_BROWSER_TEST_P(
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
@@ -1935,7 +1091,7 @@ IN_PROC_BROWSER_TEST_P(
             base::UTF16ToUTF8(console_observer.messages()[1].message));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -1944,15 +1100,13 @@ IN_PROC_BROWSER_TEST_P(
           'test-operation', {data: {'customKey': 'customValue'}});
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_EQ(5u, console_observer.messages().size());
   EXPECT_EQ("Start executing 'test-operation'",
@@ -1996,13 +1150,13 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, WorkletDestroyed) {
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_TRUE(NavigateToURL(shell(), GURL(url::kAboutBlankURL)));
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   WaitForHistograms(
       {kDestroyedStatusHistogram, kTimingUsefulResourceHistogram});
@@ -2038,21 +1192,21 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, TwoWorklets) {
       sharedStorage.worklet.addModule('shared_storage/simple_module2.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_TRUE(ExecJs(shell(), R"(
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(2u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(2u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   NavigateIframeToURL(shell()->web_contents(), "test_iframe",
                       GURL(url::kAboutBlankURL));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_EQ(3u, console_observer.messages().size());
   EXPECT_EQ("Executing simple_module2.js",
@@ -2094,7 +1248,7 @@ IN_PROC_BROWSER_TEST_P(
   GURL url = https_server()->GetURL("a.test", kSimplePagePath);
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
-  test_worklet_host_manager()
+  test_runtime_manager()
       .ConfigureShouldDeferWorkletMessagesOnWorkletHostCreation(true);
 
   WebContentsConsoleObserver console_observer(shell()->web_contents());
@@ -2106,25 +1260,25 @@ IN_PROC_BROWSER_TEST_P(
   // Navigate to trigger keep-alive
   EXPECT_TRUE(NavigateToURL(shell(), GURL(url::kAboutBlankURL)));
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(1u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
-  test_worklet_host_manager().GetKeepAliveWorkletHost()->WaitForAddModule();
+  test_runtime_manager().GetKeepAliveWorkletHost()->WaitForAddModule();
 
   // Three pending messages are expected: two for console.log and one for
   // `addModule()` response.
-  EXPECT_EQ(3u, test_worklet_host_manager()
+  EXPECT_EQ(3u, test_runtime_manager()
                     .GetKeepAliveWorkletHost()
                     ->pending_worklet_messages()
                     .size());
 
   // Execute all the deferred messages. This will terminate the keep-alive.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetKeepAliveWorkletHost()
       ->ExecutePendingWorkletMessages();
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // Expect no console logging, as messages logged during keep-alive are
   // dropped.
@@ -2159,7 +1313,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
   GURL url = https_server()->GetURL("a.test", kSimplePagePath);
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
-  test_worklet_host_manager()
+  test_runtime_manager()
       .ConfigureShouldDeferWorkletMessagesOnWorkletHostCreation(true);
 
   WebContentsConsoleObserver console_observer(shell()->web_contents());
@@ -2171,25 +1325,23 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
   // Navigate to trigger keep-alive
   EXPECT_TRUE(NavigateToURL(shell(), GURL(url::kAboutBlankURL)));
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(1u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
-  test_worklet_host_manager().GetKeepAliveWorkletHost()->WaitForAddModule();
+  test_runtime_manager().GetKeepAliveWorkletHost()->WaitForAddModule();
 
   // Three pending messages are expected: two for console.log and one for
   // `addModule()` response.
-  EXPECT_EQ(3u, test_worklet_host_manager()
+  EXPECT_EQ(3u, test_runtime_manager()
                     .GetKeepAliveWorkletHost()
                     ->pending_worklet_messages()
                     .size());
 
   // Fire the keep-alive timer. This will terminate the keep-alive.
-  test_worklet_host_manager()
-      .GetKeepAliveWorkletHost()
-      ->FireKeepAliveTimerNow();
+  test_runtime_manager().GetKeepAliveWorkletHost()->FireKeepAliveTimerNow();
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   WaitForHistograms(
       {kDestroyedStatusHistogram, kTimingUsefulResourceHistogram});
@@ -2229,12 +1381,12 @@ IN_PROC_BROWSER_TEST_P(
 
   // Configure the worklet host to defer processing the subsequent `run()`
   // response.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->set_should_defer_worklet_messages(true);
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -2246,27 +1398,25 @@ IN_PROC_BROWSER_TEST_P(
   // Navigate to trigger keep-alive
   EXPECT_TRUE(NavigateToURL(shell(), GURL(url::kAboutBlankURL)));
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(1u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
-  test_worklet_host_manager()
-      .GetKeepAliveWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetKeepAliveWorkletHost()->WaitForWorkletResponses();
 
   // Four pending messages are expected: three for console.log and one for
   // `run()` response.
-  EXPECT_EQ(4u, test_worklet_host_manager()
+  EXPECT_EQ(4u, test_runtime_manager()
                     .GetKeepAliveWorkletHost()
                     ->pending_worklet_messages()
                     .size());
 
   // Execute all the deferred messages. This will terminate the keep-alive.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetKeepAliveWorkletHost()
       ->ExecutePendingWorkletMessages();
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // Expect no more console logging, as messages logged during keep-alive was
   // dropped.
@@ -2295,6 +1445,131 @@ IN_PROC_BROWSER_TEST_P(
                                                blink::CloneableMessage())}});
 }
 
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageBrowserTest,
+    KeepAlive_StartBeforeSelectURLComplete_EndAfterSelectURLComplete) {
+  // The test assumes pages get deleted after navigation. To ensure this,
+  // disable back/forward cache.
+  content::DisableBackForwardCacheForTesting(
+      shell()->web_contents(),
+      content::BackForwardCache::TEST_REQUIRES_NO_CACHING);
+
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  WebContentsConsoleObserver console_observer(shell()->web_contents());
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      sharedStorage.worklet.addModule('shared_storage/simple_module.js');
+    )"));
+
+  EXPECT_EQ(2u, console_observer.messages().size());
+
+  EXPECT_TRUE(ExecJs(shell(), JsReplace("window.resolveSelectURLToConfig = $1;",
+                                        ResolveSelectURLToConfig())));
+
+  // Configure the worklet host to defer processing the subsequent `selectURL()`
+  // response.
+  test_runtime_manager()
+      .GetAttachedWorkletHost()
+      ->set_should_defer_worklet_messages(true);
+
+  // There is 1 more "worklet operation": `selectURL()`.
+  test_runtime_manager()
+      .GetAttachedWorkletHost()
+      ->SetExpectedWorkletResponsesCount(1);
+
+  EvalJsResult result = EvalJs(shell(), R"(
+      (async function() {
+        window.select_url_result = await sharedStorage.selectURL(
+          'test-url-selection-operation',
+          [
+            {url: 'fenced_frames/title0.html'},
+            {url: 'fenced_frames/title1.html'}
+          ],
+          {
+            data: {'mockResult': 1},
+            resolveToConfig: resolveSelectURLToConfig
+          }
+        );
+        if (resolveSelectURLToConfig &&
+            !(select_url_result instanceof FencedFrameConfig)) {
+          throw new Error('selectURL() did not return a FencedFrameConfig.');
+        }
+        return window.select_url_result;
+      })()
+    )");
+
+  EXPECT_TRUE(result.error.empty());
+
+  // Navigate to trigger keep-alive
+  EXPECT_TRUE(NavigateToURL(shell(), GURL(url::kAboutBlankURL)));
+
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
+
+  test_runtime_manager().GetKeepAliveWorkletHost()->WaitForWorkletResponses();
+
+  // Four pending messages are expected: four for console.log and one for
+  // `selectURL()` response.
+  EXPECT_EQ(5u, test_runtime_manager()
+                    .GetKeepAliveWorkletHost()
+                    ->pending_worklet_messages()
+                    .size());
+
+  // Execute all the deferred messages. This will terminate the keep-alive.
+  test_runtime_manager()
+      .GetKeepAliveWorkletHost()
+      ->ExecutePendingWorkletMessages();
+
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
+
+  // Expect no more console logging, as messages logged during keep-alive was
+  // dropped.
+  EXPECT_EQ(2u, console_observer.messages().size());
+
+  WaitForHistograms({kDestroyedStatusHistogram, kTimingUsefulResourceHistogram,
+                     kTimingKeepAliveDurationHistogram,
+                     kTimingSelectUrlExecutedInWorkletHistogram,
+                     kErrorTypeHistogram});
+
+  histogram_tester_.ExpectBucketCount(
+      kErrorTypeHistogram, blink::SharedStorageWorkletErrorType::kSuccess, 1);
+
+  // Since we have navigated away from the page that called `selectURL()`, we
+  // can't do anything with the resulting Fenced Frame config. So we log this
+  // outcome as a web-visible "error".
+  histogram_tester_.ExpectBucketCount(
+      kErrorTypeHistogram,
+      blink::SharedStorageWorkletErrorType::kSelectURLWebVisible, 1);
+
+  histogram_tester_.ExpectUniqueSample(
+      kDestroyedStatusHistogram,
+      blink::SharedStorageWorkletDestroyedStatus::
+          kKeepAliveEndedDueToOperationsFinished,
+      1);
+  histogram_tester_.ExpectTotalCount(kTimingKeepAliveDurationHistogram, 1);
+  histogram_tester_.ExpectTotalCount(kTimingUsefulResourceHistogram, 1);
+  histogram_tester_.ExpectTotalCount(kTimingSelectUrlExecutedInWorkletHistogram,
+                                     1);
+
+  std::string origin_str = url::Origin::Create(url).Serialize();
+  ExpectAccessObserved(
+      {{AccessType::kDocumentAddModule, MainFrameId(), origin_str,
+        SharedStorageEventParams::CreateForAddModule(https_server()->GetURL(
+            "a.test", "/shared_storage/simple_module.js"))},
+       {AccessType::kDocumentSelectURL, MainFrameId(), origin_str,
+        SharedStorageEventParams::CreateForSelectURL(
+            "test-url-selection-operation", blink::CloneableMessage(),
+            std::vector<SharedStorageUrlSpecWithMetadata>(
+                {{https_server()->GetURL("a.test",
+                                         "/fenced_frames/title0.html"),
+                  {}},
+                 {https_server()->GetURL("a.test",
+                                         "/fenced_frames/title1.html"),
+                  {}}}))}});
+}
+
 IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, KeepAlive_SubframeWorklet) {
   // The test assumes pages get deleted after navigation. To ensure this,
   // disable back/forward cache.
@@ -2308,7 +1583,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, KeepAlive_SubframeWorklet) {
   WebContentsConsoleObserver console_observer(shell()->web_contents());
 
   // Configure the worklet host for the subframe to defer worklet responses.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .ConfigureShouldDeferWorkletMessagesOnWorkletHostCreation(true);
 
   RenderFrameHost* iframe =
@@ -2323,38 +1598,38 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, KeepAlive_SubframeWorklet) {
   NavigateIframeToURL(shell()->web_contents(), "test_iframe",
                       GURL(url::kAboutBlankURL));
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(1u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // Ensure that the response is deferred.
-  test_worklet_host_manager().GetKeepAliveWorkletHost()->WaitForAddModule();
+  test_runtime_manager().GetKeepAliveWorkletHost()->WaitForAddModule();
 
   // Three pending messages are expected: two for console.log and one for
   // `addModule()` response.
-  EXPECT_EQ(3u, test_worklet_host_manager()
+  EXPECT_EQ(3u, test_runtime_manager()
                     .GetKeepAliveWorkletHost()
                     ->pending_worklet_messages()
                     .size());
 
   // Configure the worklet host for the main frame to handle worklet responses
   // directly.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .ConfigureShouldDeferWorkletMessagesOnWorkletHostCreation(false);
 
   EXPECT_TRUE(ExecJs(shell(), R"(
       sharedStorage.worklet.addModule('shared_storage/simple_module2.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(1u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // Execute all the deferred messages. This will terminate the keep-alive.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetKeepAliveWorkletHost()
       ->ExecutePendingWorkletMessages();
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // Expect loggings only from executing top document's worklet.
   EXPECT_EQ(1u, console_observer.messages().size());
@@ -2399,7 +1674,7 @@ IN_PROC_BROWSER_TEST_P(
   GURL url = https_server()->GetURL("a.test", kSimplePagePath);
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
-  test_worklet_host_manager()
+  test_runtime_manager()
       .ConfigureShouldDeferWorkletMessagesOnWorkletHostCreation(true);
 
   EvalJsResult result = EvalJs(shell(), R"(
@@ -2414,8 +1689,8 @@ IN_PROC_BROWSER_TEST_P(
                             https_server()->GetURL("c.test", kSimplePagePath)));
   rfh_deleted_observer.WaitUntilDeleted();
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(1u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // The BrowserContext will be destroyed right after this test body, which will
   // cause the RenderProcessHost to be destroyed before the keep-alive
@@ -2434,17 +1709,15 @@ IN_PROC_BROWSER_TEST_P(
   GURL url = https_server()->GetURL("a.test", kSimplePagePath);
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
-  test_worklet_host_manager()
+  test_runtime_manager()
       .ConfigureShouldDeferWorkletMessagesOnWorkletHostCreation(true);
 
-  base::StringPairs header_replacement;
-  header_replacement.emplace_back("{{ACCESS_CONTROL_ALLOW_ORIGIN_HEADER}}",
-                                  "Access-Control-Allow-Origin: *");
-
   GURL module_script_url = https_server()->GetURL(
-      "b.test",
-      net::test_server::GetFilePathWithReplacements(
-          "/shared_storage/module_with_custom_header.js", header_replacement));
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        "Shared-Storage-Cross-Origin-Worklet-Allowed: ?1")));
 
   EvalJsResult result = EvalJs(
       shell(),
@@ -2458,8 +1731,8 @@ IN_PROC_BROWSER_TEST_P(
                             https_server()->GetURL("c.test", kSimplePagePath)));
   rfh_deleted_observer.WaitUntilDeleted();
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(1u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // The BrowserContext will be destroyed right after this test body, which will
   // cause the RenderProcessHost to be destroyed before the keep-alive
@@ -2485,7 +1758,7 @@ IN_PROC_BROWSER_TEST_P(
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -2524,9 +1797,7 @@ IN_PROC_BROWSER_TEST_P(
     EXPECT_EQ(result.ExtractString(), observed_urn_uuid->spec());
   }
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config =
@@ -2552,9 +1823,13 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_EQ("Finish executing 'test-url-selection-operation'",
             base::UTF16ToUTF8(console_observer.messages().back().message));
 
-  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram});
+  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram,
+                     kSelectUrlBudgetStatusHistogram});
   histogram_tester_.ExpectTotalCount(kTimingSelectUrlExecutedInWorkletHistogram,
                                      1);
+  histogram_tester_.ExpectUniqueSample(
+      kSelectUrlBudgetStatusHistogram,
+      blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget, 1);
 
   std::string origin_str = url::Origin::Create(main_url).Serialize();
   ExpectAccessObserved(
@@ -2596,7 +1871,7 @@ IN_PROC_BROWSER_TEST_P(
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -2634,9 +1909,7 @@ IN_PROC_BROWSER_TEST_P(
     EXPECT_EQ(result.ExtractString(), observed_urn_uuid->spec());
   }
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config =
@@ -2696,15 +1969,15 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_TRUE(ExecJs(iframe, JsReplace("window.resolveSelectURLToConfig = $1;",
                                        ResolveSelectURLToConfig())));
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -2748,9 +2021,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
     EXPECT_EQ(result.ExtractString(), observed_urn_uuid->spec());
   }
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config =
@@ -2818,7 +2089,7 @@ IN_PROC_BROWSER_TEST_P(
   TestSelectURLFencedFrameConfigObserver config_observer1(
       GetStoragePartition());
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -2854,9 +2125,7 @@ IN_PROC_BROWSER_TEST_P(
     EXPECT_EQ(result1.ExtractString(), observed_urn_uuid1->spec());
   }
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer1.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config1 =
@@ -2871,7 +2140,7 @@ IN_PROC_BROWSER_TEST_P(
       GetStoragePartition());
 
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -2906,9 +2175,7 @@ IN_PROC_BROWSER_TEST_P(
     EXPECT_EQ(result2.ExtractString(), observed_urn_uuid2->spec());
   }
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer2.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config2 =
@@ -2963,7 +2230,7 @@ IN_PROC_BROWSER_TEST_P(
       GetStoragePartition());
 
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -2999,9 +2266,7 @@ IN_PROC_BROWSER_TEST_P(
     EXPECT_EQ(result1.ExtractString(), observed_urn_uuid1->spec());
   }
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer1.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config1 =
@@ -3079,7 +2344,7 @@ IN_PROC_BROWSER_TEST_P(
       GetStoragePartition());
 
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -3116,9 +2381,7 @@ IN_PROC_BROWSER_TEST_P(
     EXPECT_EQ(result1.ExtractString(), observed_urn_uuid1->spec());
   }
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer1.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config1 =
@@ -3169,7 +2432,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
     )"));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -3179,9 +2442,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
                              keepAlive: false});
     )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_TRUE(ExecJs(shell(), JsReplace("window.resolveSelectURLToConfig = $1;",
                                         ResolveSelectURLToConfig())));
@@ -3215,8 +2476,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
 
   EXPECT_FALSE(config_observer.ConfigObserved());
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
   EXPECT_EQ(5u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
             base::UTF16ToUTF8(console_observer.messages()[0].message));
@@ -3254,7 +2515,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
     )"));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -3264,9 +2525,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
                              keepAlive: true});
     )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ(5u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
@@ -3285,11 +2544,11 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -3324,9 +2583,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
     EXPECT_EQ(result.ExtractString(), observed_urn_uuid->spec());
   }
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config =
@@ -3337,8 +2594,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
   EXPECT_EQ("Finish executing 'test-url-selection-operation'",
             base::UTF16ToUTF8(console_observer.messages().back().message));
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   WaitForHistograms({kTimingRunExecutedInWorkletHistogram,
                      kTimingSelectUrlExecutedInWorkletHistogram});
@@ -3375,7 +2632,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
     )"));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -3384,9 +2641,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
           'test-operation', {data: {'customKey': 'customValue'}});
     )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_TRUE(ExecJs(shell(), JsReplace("window.resolveSelectURLToConfig = $1;",
                                         ResolveSelectURLToConfig())));
@@ -3420,8 +2675,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
 
   EXPECT_FALSE(config_observer.ConfigObserved());
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
   EXPECT_EQ(5u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
             base::UTF16ToUTF8(console_observer.messages()[0].message));
@@ -3469,11 +2724,11 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -3509,9 +2764,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
     EXPECT_EQ(result.ExtractString(), observed_urn_uuid->spec());
   }
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config =
@@ -3522,11 +2775,11 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
   EXPECT_EQ("Finish executing 'test-url-selection-operation'",
             base::UTF16ToUTF8(console_observer.messages().back().message));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -3535,15 +2788,13 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
           'test-operation', {data: {'customKey': 'customValue'}});
     )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ("Finish executing 'test-operation'",
             base::UTF16ToUTF8(console_observer.messages().back().message));
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   WaitForHistograms({kTimingRunExecutedInWorkletHistogram,
                      kTimingSelectUrlExecutedInWorkletHistogram});
@@ -3590,11 +2841,11 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -3630,9 +2881,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
     EXPECT_EQ(result1.ExtractString(), observed_urn_uuid->spec());
   }
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config =
@@ -3643,8 +2892,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
   EXPECT_EQ("Finish executing 'test-url-selection-operation'",
             base::UTF16ToUTF8(console_observer.messages().back().message));
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EvalJsResult result2 = EvalJs(shell(), R"(
       sharedStorage.run(
@@ -3653,8 +2902,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
   EXPECT_THAT(result2.error,
               testing::HasSubstr(kSharedStorageWorkletExpiredMessage));
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram});
   histogram_tester_.ExpectTotalCount(kTimingSelectUrlExecutedInWorkletHistogram,
@@ -3696,11 +2945,11 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -3735,9 +2984,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
     EXPECT_EQ(result1.ExtractString(), observed_urn_uuid->spec());
   }
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config =
@@ -3748,8 +2995,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
   EXPECT_EQ("Finish executing 'test-url-selection-operation'",
             base::UTF16ToUTF8(console_observer.messages().back().message));
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EvalJsResult result2 = EvalJs(shell(), R"(
       sharedStorage.run(
@@ -3758,8 +3005,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
   EXPECT_THAT(result2.error,
               testing::HasSubstr(kSharedStorageWorkletExpiredMessage));
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram});
   histogram_tester_.ExpectTotalCount(kTimingSelectUrlExecutedInWorkletHistogram,
@@ -3795,7 +3042,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -3833,9 +3080,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
     EXPECT_EQ(result.ExtractString(), observed_urn_uuid->spec());
   }
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config =
@@ -4122,10 +3367,10 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
 
   GURL out_script_url;
   ExecuteScriptInWorklet(shell(), R"(
-      await sharedStorage.set('key0', 'a'.repeat(1024));
+      await sharedStorage.set('k', 'a'.repeat(2621439));
 
-      // This will fail due to the would-be length being too big.
-      await sharedStorage.append('key0', 'a');
+      // This will fail due to the storage quota being reached.
+      await sharedStorage.append('k', 'a');
     )",
                          &out_script_url);
 
@@ -4146,10 +3391,10 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
         SharedStorageEventParams::CreateForRun("test-operation",
                                                blink::CloneableMessage())},
        {AccessType::kWorkletSet, MainFrameId(), origin_str,
-        SharedStorageEventParams::CreateForSet("key0", std::string(1024, 'a'),
+        SharedStorageEventParams::CreateForSet("k", std::string(2621439, 'a'),
                                                false)},
        {AccessType::kWorkletAppend, MainFrameId(), origin_str,
-        SharedStorageEventParams::CreateForAppend("key0", "a")}});
+        SharedStorageEventParams::CreateForAppend("k", "a")}});
 }
 
 IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, DeleteOperationInWorklet) {
@@ -4300,7 +3545,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, GetOperationInWorklet) {
       shell(), JsReplace("sharedStorage.worklet.addModule($1)", script_url)));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -4309,15 +3554,13 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, GetOperationInWorklet) {
                                             keepAlive: true});
       )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   // Advance clock so that key will expire.
   clock.Advance(base::Days(kStalenessThresholdDays) + base::Seconds(1));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -4325,9 +3568,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest, GetOperationInWorklet) {
         sharedStorage.run('get-operation', {data: {'key': 'key0'}});
       )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ(4u, console_observer.messages().size());
   EXPECT_EQ("sharedStorage.length(): 1",
@@ -4576,62 +3817,221 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
   GURL url = https_server()->GetURL("a.test", kSimplePagePath);
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
-  base::StringPairs header_replacement;
-  header_replacement.emplace_back("{{ACCESS_CONTROL_ALLOW_ORIGIN_HEADER}}", "");
-
   GURL module_script_url = https_server()->GetURL(
-      "a.test",
-      net::test_server::GetFilePathWithReplacements(
-          "/shared_storage/module_with_custom_header.js", header_replacement));
+      "a.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        kEmptyAccessControlAllowOriginReplacement,
+                        kEmptySharedStorageCrossOriginAllowedReplacement)));
 
   EXPECT_TRUE(ExecJs(shell(), JsReplace("sharedStorage.createWorklet($1)",
                                         module_script_url.spec())));
 
   TestSharedStorageWorkletHost* worklet_host =
-      test_worklet_host_manager().GetAttachedWorkletHost();
+      test_runtime_manager().GetAttachedWorkletHost();
   EXPECT_EQ(shell()->web_contents()->GetPrimaryMainFrame()->GetProcess(),
             worklet_host->GetProcessHost());
+
+  EXPECT_EQ(blink::mojom::SharedStorageWorkletCreationMethod::kCreateWorklet,
+            worklet_host->creation_method());
 }
 
-IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
-                       CreateWorklet_CrossOrigin_FailedCors) {
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageBrowserTest,
+    CreateWorklet_CrossOriginScript_DefaultDataOrigin_FailedCors) {
   GURL url = https_server()->GetURL("a.test", kSimplePagePath);
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
-  base::StringPairs header_replacement;
-  header_replacement.emplace_back("{{ACCESS_CONTROL_ALLOW_ORIGIN_HEADER}}", "");
-
   GURL module_script_url = https_server()->GetURL(
-      "b.test",
-      net::test_server::GetFilePathWithReplacements(
-          "/shared_storage/module_with_custom_header.js", header_replacement));
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        kEmptyAccessControlAllowOriginReplacement,
+                        "Shared-Storage-Cross-Origin-Worklet-Allowed: ?1")));
 
   EvalJsResult result = EvalJs(
       shell(),
       JsReplace("sharedStorage.createWorklet($1)", module_script_url.spec()));
 
-  EXPECT_THAT(result.error, testing::HasSubstr("error = net::ERR_FAILED"));
+  EXPECT_THAT(result.error, testing::HasSubstr("Failed to load"));
 }
 
-IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
-                       CreateWorklet_CrossOrigin_Success) {
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageBrowserTest,
+    CreateWorklet_CrossOriginScript_ContextDataOrigin_FailedCors) {
   GURL url = https_server()->GetURL("a.test", kSimplePagePath);
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
-  base::StringPairs header_replacement;
-  header_replacement.emplace_back("{{ACCESS_CONTROL_ALLOW_ORIGIN_HEADER}}",
-                                  "Access-Control-Allow-Origin: *");
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        kEmptyAccessControlAllowOriginReplacement,
+                        "Shared-Storage-Cross-Origin-Worklet-Allowed: ?1")));
+
+  EvalJsResult result = EvalJs(
+      shell(),
+      JsReplace(
+          "sharedStorage.createWorklet($1, {dataOrigin: 'context-origin'})",
+          module_script_url.spec()));
+
+  EXPECT_THAT(result.error, testing::HasSubstr("Failed to load"));
+}
+
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageBrowserTest,
+    CreateWorklet_CrossOriginScript_ScriptDataOrigin_FailedCors) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
 
   GURL module_script_url = https_server()->GetURL(
-      "b.test",
-      net::test_server::GetFilePathWithReplacements(
-          "/shared_storage/module_with_custom_header.js", header_replacement));
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        kEmptyAccessControlAllowOriginReplacement,
+                        "Shared-Storage-Cross-Origin-Worklet-Allowed: ?1")));
+
+  EvalJsResult result = EvalJs(
+      shell(),
+      JsReplace(
+          "sharedStorage.createWorklet($1, {dataOrigin: 'script-origin'})",
+          module_script_url.spec()));
+
+  EXPECT_THAT(result.error, testing::HasSubstr("Failed to load"));
+}
+
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageBrowserTest,
+    CreateWorklet_CrossOriginScript_CustomDataOrigin_FailedCors) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        kEmptyAccessControlAllowOriginReplacement,
+                        kEmptySharedStorageCrossOriginAllowedReplacement)));
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EvalJsResult result = EvalJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize()));
+
+  EXPECT_THAT(result.error, testing::HasSubstr("Failed to load"));
+}
+
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageBrowserTest,
+    CreateWorklet_CrossOriginScript_ScriptDataOrigin_FailedSharedStorageWorkletAllowedResponseHeaderCheck) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        kEmptySharedStorageCrossOriginAllowedReplacement)));
+
+  EvalJsResult result = EvalJs(
+      shell(),
+      JsReplace(
+          "sharedStorage.createWorklet($1, {dataOrigin: 'script-origin'})",
+          module_script_url.spec()));
+
+  EXPECT_THAT(result.error, testing::HasSubstr("Failed to load"));
+}
+
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageBrowserTest,
+    CreateWorklet_CrossOriginScript_ContextDataOrigin_NoSharedStorageWorkletAllowedResponseHeader_Success) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        kEmptySharedStorageCrossOriginAllowedReplacement)));
+
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      JsReplace(
+          "sharedStorage.createWorklet($1, {dataOrigin: 'context-origin'})",
+          module_script_url.spec())));
+
+  TestSharedStorageWorkletHost* worklet_host =
+      test_runtime_manager().GetAttachedWorkletHost();
+
+  // The worklet host should reuse the main frame's process because the context
+  // origin is being used as the data origin.
+  bool use_new_process =
+      (shell()->web_contents()->GetPrimaryMainFrame()->GetProcess() !=
+       worklet_host->GetProcessHost());
+
+  EXPECT_FALSE(use_new_process);
+
+  EXPECT_EQ(blink::mojom::SharedStorageWorkletCreationMethod::kCreateWorklet,
+            worklet_host->creation_method());
+}
+
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageBrowserTest,
+    CreateWorklet_CrossOriginScript_DefaultDataOrigin_NoSharedStorageWorkletAllowedResponseHeader_Success) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        kEmptySharedStorageCrossOriginAllowedReplacement)));
 
   EXPECT_TRUE(ExecJs(shell(), JsReplace("sharedStorage.createWorklet($1)",
                                         module_script_url.spec())));
 
   TestSharedStorageWorkletHost* worklet_host =
-      test_worklet_host_manager().GetAttachedWorkletHost();
+      test_runtime_manager().GetAttachedWorkletHost();
+
+  // The worklet host should reuse the main frame's process because the context
+  // origin is being used as the data origin.
+  bool use_new_process =
+      (shell()->web_contents()->GetPrimaryMainFrame()->GetProcess() !=
+       worklet_host->GetProcessHost());
+
+  EXPECT_FALSE(use_new_process);
+
+  EXPECT_EQ(blink::mojom::SharedStorageWorkletCreationMethod::kCreateWorklet,
+            worklet_host->creation_method());
+}
+
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageBrowserTest,
+    CreateWorklet_CrossOriginScript_ScriptDataOrigin_Success) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        "Shared-Storage-Cross-Origin-Worklet-Allowed: ?1")));
+
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      JsReplace(
+          "sharedStorage.createWorklet($1, {dataOrigin: 'script-origin'})",
+          module_script_url.spec())));
+
+  TestSharedStorageWorkletHost* worklet_host =
+      test_runtime_manager().GetAttachedWorkletHost();
 
   // The worklet host should reuse the main frame's process on Android without
   // strict site isolation; otherwise, it should use a new process.
@@ -4641,29 +4041,71 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
        worklet_host->GetProcessHost());
 
   EXPECT_EQ(expected_use_new_process, actual_use_new_process);
+
+  EXPECT_EQ(blink::mojom::SharedStorageWorkletCreationMethod::kCreateWorklet,
+            worklet_host->creation_method());
 }
 
-// Start a worklet under b.test (cross-origin to the main frame's origin), and
-// then append a subframe under b.test. Assert that they share the same process.
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageBrowserTest,
+    CreateWorklet_CrossOriginScript_CustomDataOrigin_Success) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        kEmptySharedStorageCrossOriginAllowedReplacement)));
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize())));
+
+  TestSharedStorageWorkletHost* worklet_host =
+      test_runtime_manager().GetAttachedWorkletHost();
+
+  // The worklet host should reuse the main frame's process on Android without
+  // strict site isolation; otherwise, it should use a new process.
+  bool expected_use_new_process = AreAllSitesIsolatedForTesting();
+  bool actual_use_new_process =
+      (shell()->web_contents()->GetPrimaryMainFrame()->GetProcess() !=
+       worklet_host->GetProcessHost());
+
+  EXPECT_EQ(expected_use_new_process, actual_use_new_process);
+
+  EXPECT_EQ(blink::mojom::SharedStorageWorkletCreationMethod::kCreateWorklet,
+            worklet_host->creation_method());
+}
+
+// Start a worklet under b.test using the script origin as the data
+// originb(cross-origin to the main frame's origin), and then append a subframe
+// under b.test. Assert that they share the same process.
 IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
                        CreateWorkletAndSubframe_CrossOrigin) {
   GURL url = https_server()->GetURL("a.test", kSimplePagePath);
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
-  base::StringPairs header_replacement;
-  header_replacement.emplace_back("{{ACCESS_CONTROL_ALLOW_ORIGIN_HEADER}}",
-                                  "Access-Control-Allow-Origin: *");
-
   GURL module_script_url = https_server()->GetURL(
-      "b.test",
-      net::test_server::GetFilePathWithReplacements(
-          "/shared_storage/module_with_custom_header.js", header_replacement));
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        "Shared-Storage-Cross-Origin-Worklet-Allowed: ?1")));
 
-  EXPECT_TRUE(ExecJs(shell(), JsReplace("sharedStorage.createWorklet($1)",
-                                        module_script_url.spec())));
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      JsReplace(
+          "sharedStorage.createWorklet($1, {dataOrigin: 'script-origin'})",
+          module_script_url.spec())));
 
   TestSharedStorageWorkletHost* worklet_host =
-      test_worklet_host_manager().GetAttachedWorkletHost();
+      test_runtime_manager().GetAttachedWorkletHost();
 
   GURL iframe_url = https_server()->GetURL("b.test", "/empty.thml");
   FrameTreeNode* iframe_node =
@@ -4674,7 +4116,8 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
 }
 
 // Append a subframe under b.test (cross-origin to the main frame's origin), and
-// then start a worklet under b.test. Assert that they share the same process.
+// then start a worklet under b.test using the script origin as the data origin.
+// Assert that they share the same process.
 IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
                        CreateSubframeAndWorklet_CrossOrigin) {
   GURL url = https_server()->GetURL("a.test", kSimplePagePath);
@@ -4684,76 +4127,80 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
   FrameTreeNode* iframe_node =
       CreateIFrame(PrimaryFrameTreeNodeRoot(), iframe_url);
 
-  base::StringPairs header_replacement;
-  header_replacement.emplace_back("{{ACCESS_CONTROL_ALLOW_ORIGIN_HEADER}}",
-                                  "Access-Control-Allow-Origin: *");
-
   GURL module_script_url = https_server()->GetURL(
-      "b.test",
-      net::test_server::GetFilePathWithReplacements(
-          "/shared_storage/module_with_custom_header.js", header_replacement));
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        "Shared-Storage-Cross-Origin-Worklet-Allowed: ?1")));
 
-  EXPECT_TRUE(ExecJs(shell(), JsReplace("sharedStorage.createWorklet($1)",
-                                        module_script_url.spec())));
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      JsReplace(
+          "sharedStorage.createWorklet($1, {dataOrigin: 'script-origin'})",
+          module_script_url.spec())));
 
   TestSharedStorageWorkletHost* worklet_host =
-      test_worklet_host_manager().GetAttachedWorkletHost();
+      test_runtime_manager().GetAttachedWorkletHost();
 
   EXPECT_EQ(worklet_host->GetProcessHost(),
             iframe_node->current_frame_host()->GetProcess());
 }
 
-// Start one worklet under b.test (cross-origin to the main frame's origin),
-// and then start another worklet under b.test. Assert that they share the same
-// process.
+// Start one worklet under b.test using the script origin as the data origin
+// (cross-origin to the main frame's origin), and then start another worklet
+// under b.test. Assert that they share the same process.
 IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
                        CreateTwoWorklets_CrossOrigin) {
   GURL url = https_server()->GetURL("a.test", kSimplePagePath);
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
-  base::StringPairs header_replacement;
-  header_replacement.emplace_back("{{ACCESS_CONTROL_ALLOW_ORIGIN_HEADER}}",
-                                  "Access-Control-Allow-Origin: *");
-
   GURL module_script_url = https_server()->GetURL(
-      "b.test",
-      net::test_server::GetFilePathWithReplacements(
-          "/shared_storage/module_with_custom_header.js", header_replacement));
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        "Shared-Storage-Cross-Origin-Worklet-Allowed: ?1")));
 
-  EXPECT_TRUE(ExecJs(shell(), JsReplace("sharedStorage.createWorklet($1)",
-                                        module_script_url.spec())));
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      JsReplace(
+          "sharedStorage.createWorklet($1, {dataOrigin: 'script-origin'})",
+          module_script_url.spec())));
 
-  EXPECT_TRUE(ExecJs(shell(), JsReplace("sharedStorage.createWorklet($1)",
-                                        module_script_url.spec())));
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      JsReplace(
+          "sharedStorage.createWorklet($1, {dataOrigin: 'script-origin'})",
+          module_script_url.spec())));
 
   std::vector<TestSharedStorageWorkletHost*> worklet_hosts =
-      test_worklet_host_manager().GetAttachedWorkletHosts();
+      test_runtime_manager().GetAttachedWorkletHosts();
 
   EXPECT_EQ(worklet_hosts.size(), 2u);
   EXPECT_EQ(worklet_hosts[0]->GetProcessHost(),
             worklet_hosts[1]->GetProcessHost());
 }
 
-// Start a worklet under b.test via createWorklet(), and then start a worklet
-// under b.test's iframe. Assert that the data stored in the first worklet can
-// be retrieved in the second worklet.
+// Start a worklet under b.test via createWorklet() using the script origin as
+// the data origin, and then start a worklet under b.test's iframe. Assert that
+// the data stored in the first worklet can be retrieved in the second worklet.
 IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
                        CrossOriginWorklet_VerifyDataOrigin) {
   GURL url = https_server()->GetURL("a.test", kSimplePagePath);
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
-  base::StringPairs header_replacement;
-  header_replacement.emplace_back("{{ACCESS_CONTROL_ALLOW_ORIGIN_HEADER}}",
-                                  "Access-Control-Allow-Origin: *");
-
   GURL module_script_url = https_server()->GetURL(
-      "b.test",
-      net::test_server::GetFilePathWithReplacements(
-          "/shared_storage/module_with_custom_header.js", header_replacement));
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        "Shared-Storage-Cross-Origin-Worklet-Allowed: ?1")));
 
   EXPECT_TRUE(ExecJs(shell(), JsReplace(R"(
       new Promise((resolve, reject) => {
-        sharedStorage.createWorklet($1).then((worklet) => {
+        sharedStorage.createWorklet($1, {dataOrigin: 'script-origin'})
+        .then((worklet) => {
           window.testWorklet = worklet;
           resolve();
         });
@@ -4762,7 +4209,7 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
                                         module_script_url.spec())));
 
   // Expect the run() operation.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -4776,11 +4223,315 @@ IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
       });
     )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   GURL iframe_url = https_server()->GetURL("b.test", "/empty.thml");
+  FrameTreeNode* iframe_node =
+      CreateIFrame(PrimaryFrameTreeNodeRoot(), iframe_url);
+
+  WebContentsConsoleObserver console_observer(shell()->web_contents());
+
+  GURL out_script_url;
+  ExecuteScriptInWorklet(iframe_node->current_frame_host(), R"(
+      console.log(await sharedStorage.get('key0'));
+    )",
+                         &out_script_url, /*expected_total_host_count=*/2);
+
+  EXPECT_EQ(1u, console_observer.messages().size());
+  EXPECT_EQ("value0",
+            base::UTF16ToUTF8(console_observer.messages()[0].message));
+}
+
+// Start a worklet with b.test script in a.test's context via createWorklet(),
+// and then start a worklet with same-origin script in a.test's context. Assert
+// that the data stored in the first worklet can be retrieved in the second
+// worklet.
+IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
+                       CrossOriginScript_ContextDataOrigin_VerifyDataOrigin) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        "Shared-Storage-Cross-Origin-Worklet-Allowed: ?1")));
+
+  EXPECT_TRUE(ExecJs(shell(), JsReplace(R"(
+      new Promise((resolve, reject) => {
+        sharedStorage.createWorklet($1, {dataOrigin: 'context-origin'})
+        .then((worklet) => {
+          window.testWorklet = worklet;
+          resolve();
+        });
+      })
+    )",
+                                        module_script_url.spec())));
+
+  // Expect the run() operation.
+  test_runtime_manager()
+      .GetAttachedWorkletHost()
+      ->SetExpectedWorkletResponsesCount(1);
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      window.testWorklet.run('test-operation', {
+        data: {
+          'set-key': 'key0',
+          'set-value': 'value0'
+        },
+        keepAlive: true
+      });
+    )"));
+
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
+
+  GURL iframe_url = https_server()->GetURL("a.test", "/empty.thml");
+  FrameTreeNode* iframe_node =
+      CreateIFrame(PrimaryFrameTreeNodeRoot(), iframe_url);
+
+  WebContentsConsoleObserver console_observer(shell()->web_contents());
+
+  GURL out_script_url;
+  ExecuteScriptInWorklet(iframe_node->current_frame_host(), R"(
+      console.log(await sharedStorage.get('key0'));
+    )",
+                         &out_script_url, /*expected_total_host_count=*/2);
+
+  EXPECT_EQ(1u, console_observer.messages().size());
+  EXPECT_EQ("value0",
+            base::UTF16ToUTF8(console_observer.messages()[0].message));
+}
+
+// Start a worklet with b.test script in a.test's context via createWorklet(),
+// and then start a worklet with same-origin script in a.test's context. Assert
+// that the data stored in the first worklet can be retrieved in the second
+// worklet.
+IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
+                       CrossOriginScript_DefaultDataOrigin_VerifyDataOrigin) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        "Shared-Storage-Cross-Origin-Worklet-Allowed: ?1")));
+
+  EXPECT_TRUE(ExecJs(shell(), JsReplace(R"(
+      new Promise((resolve, reject) => {
+        sharedStorage.createWorklet($1)
+        .then((worklet) => {
+          window.testWorklet = worklet;
+          resolve();
+        });
+      })
+    )",
+                                        module_script_url.spec())));
+
+  // Expect the run() operation.
+  test_runtime_manager()
+      .GetAttachedWorkletHost()
+      ->SetExpectedWorkletResponsesCount(1);
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      window.testWorklet.run('test-operation', {
+        data: {
+          'set-key': 'key0',
+          'set-value': 'value0'
+        },
+        keepAlive: true
+      });
+    )"));
+
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
+
+  GURL iframe_url = https_server()->GetURL("a.test", "/empty.thml");
+  FrameTreeNode* iframe_node =
+      CreateIFrame(PrimaryFrameTreeNodeRoot(), iframe_url);
+
+  WebContentsConsoleObserver console_observer(shell()->web_contents());
+
+  GURL out_script_url;
+  ExecuteScriptInWorklet(iframe_node->current_frame_host(), R"(
+      console.log(await sharedStorage.get('key0'));
+    )",
+                         &out_script_url, /*expected_total_host_count=*/2);
+
+  EXPECT_EQ(1u, console_observer.messages().size());
+  EXPECT_EQ("value0",
+            base::UTF16ToUTF8(console_observer.messages()[0].message));
+}
+
+// Start a worklet with b.test script in a.test's context with data origin
+// c.test via createWorklet(), and then start a worklet with same-origin script
+// in c.test's context. Assert that the data stored in the first worklet can be
+// retrieved in the second worklet.
+IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
+                       CrossOriginScript_CustomDataOrigin_VerifyDataOrigin) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        kEmptySharedStorageCrossOriginAllowedReplacement)));
+
+  GURL custom_data_origin_url =
+      https_server()->GetURL("c.test", kSimplePagePath);
+  url::Origin custom_data_origin = url::Origin::Create(custom_data_origin_url);
+
+  EXPECT_TRUE(ExecJs(shell(), JsReplace(R"(
+      new Promise((resolve, reject) => {
+        sharedStorage.createWorklet($1, {dataOrigin: $2})
+        .then((worklet) => {
+          window.testWorklet = worklet;
+          resolve();
+        });
+      })
+    )",
+                                        module_script_url.spec(),
+                                        custom_data_origin.Serialize())));
+
+  // Expect the run() operation.
+  test_runtime_manager()
+      .GetAttachedWorkletHost()
+      ->SetExpectedWorkletResponsesCount(1);
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      window.testWorklet.run('test-operation', {
+        data: {
+          'set-key': 'key0',
+          'set-value': 'value0'
+        },
+        keepAlive: true
+      });
+    )"));
+
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
+
+  FrameTreeNode* iframe_node =
+      CreateIFrame(PrimaryFrameTreeNodeRoot(), custom_data_origin_url);
+
+  WebContentsConsoleObserver console_observer(shell()->web_contents());
+
+  GURL out_script_url;
+  ExecuteScriptInWorklet(iframe_node->current_frame_host(), R"(
+      console.log(await sharedStorage.get('key0'));
+    )",
+                         &out_script_url, /*expected_total_host_count=*/2);
+
+  EXPECT_EQ(1u, console_observer.messages().size());
+  EXPECT_EQ("value0",
+            base::UTF16ToUTF8(console_observer.messages()[0].message));
+}
+
+IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
+                       AddModule_CrossOriginScript_FailedCors) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        kEmptyAccessControlAllowOriginReplacement,
+                        kEmptySharedStorageCrossOriginAllowedReplacement)));
+
+  EvalJsResult result =
+      EvalJs(shell(), JsReplace("sharedStorage.worklet.addModule($1)",
+                                module_script_url.spec()));
+
+  EXPECT_THAT(result.error, testing::HasSubstr("Failed to load"));
+}
+
+IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
+                       AddModule_CrossOriginScript_Success) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        kEmptySharedStorageCrossOriginAllowedReplacement)));
+
+  EXPECT_TRUE(ExecJs(shell(), JsReplace("sharedStorage.worklet.addModule($1)",
+                                        module_script_url.spec())));
+}
+
+// Start a worklet with b.test script (cross-origin to the main frame's origin),
+// but a.test data and then append a subframe under b.test. Assert that they
+// share the same process.
+IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
+                       CreateWorkletAndSubframe_AddModule_CrossOriginScript) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        kEmptySharedStorageCrossOriginAllowedReplacement)));
+
+  EXPECT_TRUE(ExecJs(shell(), JsReplace("sharedStorage.worklet.addModule($1)",
+                                        module_script_url.spec())));
+
+  TestSharedStorageWorkletHost* worklet_host =
+      test_runtime_manager().GetAttachedWorkletHost();
+
+  GURL iframe_url = https_server()->GetURL("a.test", "/empty.thml");
+  FrameTreeNode* iframe_node =
+      CreateIFrame(PrimaryFrameTreeNodeRoot(), iframe_url);
+
+  EXPECT_EQ(worklet_host->GetProcessHost(),
+            iframe_node->current_frame_host()->GetProcess());
+
+  EXPECT_EQ(blink::mojom::SharedStorageWorkletCreationMethod::kAddModule,
+            worklet_host->creation_method());
+}
+
+// Start a worklet with b.test script but a.test data, and then start a worklet
+// under a.test's iframe. Assert that the data stored in the first worklet can
+// be retrieved in the second worklet.
+IN_PROC_BROWSER_TEST_P(SharedStorageBrowserTest,
+                       AddModule_CrossOriginScript_VerifyDataOrigin) {
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", net::test_server::GetFilePathWithReplacements(
+                    "/shared_storage/module_with_custom_header.js",
+                    SharedStorageCrossOriginWorkletResponseHeaderReplacement(
+                        "Access-Control-Allow-Origin: *",
+                        kEmptySharedStorageCrossOriginAllowedReplacement)));
+
+  EXPECT_TRUE(ExecJs(shell(), JsReplace("sharedStorage.worklet.addModule($1)",
+                                        module_script_url.spec())));
+
+  // Expect the run() operation.
+  test_runtime_manager()
+      .GetAttachedWorkletHost()
+      ->SetExpectedWorkletResponsesCount(1);
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      sharedStorage.run('test-operation', {
+        data: {
+          'set-key': 'key0',
+          'set-value': 'value0'
+        },
+        keepAlive: true
+      });
+    )"));
+
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
+
+  GURL iframe_url = https_server()->GetURL("a.test", "/empty.thml");
   FrameTreeNode* iframe_node =
       CreateIFrame(PrimaryFrameTreeNodeRoot(), iframe_url);
 
@@ -4863,7 +4614,7 @@ class SharedStorageFencedFrameInteractionBrowserTestBase
  public:
   using FencedFrameNavigationTarget = absl::variant<GURL, std::string>;
 
-  // TODO(crbug.com/1414429): This function should be removed. Use
+  // TODO(crbug.com/40256120): This function should be removed. Use
   // `CreateFencedFrame` in fenced_frame_test_util.h instead.
   FrameTreeNode* CreateFencedFrame(FrameTreeNode* root,
                                    const FencedFrameNavigationTarget& target) {
@@ -4936,8 +4687,8 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("Start executing simple_module.js",
@@ -4950,7 +4701,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -4990,9 +4741,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
   EXPECT_TRUE(observed_urn_uuid.has_value());
   EXPECT_TRUE(blink::IsValidUrnUuidURL(observed_urn_uuid.value()));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config =
@@ -5064,12 +4813,12 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // Configure the worklet host to defer processing the subsequent
   // `selectURL()` response.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->set_should_defer_worklet_messages(true);
 
@@ -5078,7 +4827,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -5118,9 +4867,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
   EXPECT_TRUE(observed_urn_uuid.has_value());
   EXPECT_TRUE(blink::IsValidUrnUuidURL(observed_urn_uuid.value()));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   FrameTreeNode* root = PrimaryFrameTreeNodeRoot();
 
@@ -5161,7 +4908,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
 
   // Execute the deferred messages. This should finish the url mapping and
   // resume the deferred navigation.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->ExecutePendingWorkletMessages();
 
@@ -5258,12 +5005,12 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   // Configure the worklet host to defer processing the subsequent
   // `selectURL()` response.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->set_should_defer_worklet_messages(true);
 
@@ -5273,7 +5020,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -5316,12 +5063,10 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
   NavigateIframeToURL(shell()->web_contents(), "test_iframe",
                       GURL(url::kAboutBlankURL));
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(1u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
-  test_worklet_host_manager()
-      .GetKeepAliveWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetKeepAliveWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_TRUE(ExecJs(root,
                      "var f = document.createElement('fencedframe');"
@@ -5359,12 +5104,10 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
   // Fire the keep-alive timer. This will terminate the keep-alive, and the
   // deferred navigation will resume to navigate to the default url (at index
   // 0).
-  test_worklet_host_manager()
-      .GetKeepAliveWorkletHost()
-      ->FireKeepAliveTimerNow();
+  test_runtime_manager().GetKeepAliveWorkletHost()->FireKeepAliveTimerNow();
 
-  EXPECT_EQ(0u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   observer.Wait();
 
@@ -5411,15 +5154,15 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_TRUE(ExecJs(shell(), JsReplace("window.resolveSelectURLToConfig = $1;",
                                         ResolveSelectURLToConfig())));
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -5460,9 +5203,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
   EXPECT_TRUE(observed_urn_uuid.has_value());
   EXPECT_TRUE(blink::IsValidUrnUuidURL(observed_urn_uuid.value()));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config =
@@ -5522,15 +5263,15 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(1u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_TRUE(ExecJs(shell(), JsReplace("window.resolveSelectURLToConfig = $1;",
                                         ResolveSelectURLToConfig())));
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -5571,9 +5312,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
   EXPECT_TRUE(observed_urn_uuid.has_value());
   EXPECT_TRUE(blink::IsValidUrnUuidURL(observed_urn_uuid.value()));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config =
@@ -5798,7 +5537,7 @@ IN_PROC_BROWSER_TEST_F(
                                      1);
 }
 
-// TODO(crbug.com/1347953): Reenable this test when it is possible to create a
+// TODO(crbug.com/40233168): Reenable this test when it is possible to create a
 // nested fenced frame with no reporting metadata, that can call _unfencedTop.
 IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
                        DISABLED_NestedFencedFrameNavigateTop_BudgetWithdrawal) {
@@ -5887,7 +5626,7 @@ IN_PROC_BROWSER_TEST_F(
 
 IN_PROC_BROWSER_TEST_F(
     SharedStorageFencedFrameInteractionBrowserTest,
-    SelectURLNotAllowedInFencedFrameNotOriginatedFromSharedStorage) {
+    SharedStorageNotAllowedInFencedFrameNotOriginatedFromSharedStorage) {
   GURL main_url = https_server()->GetURL("a.test", kSimplePagePath);
   EXPECT_TRUE(NavigateToURL(shell(), main_url));
 
@@ -5901,30 +5640,14 @@ IN_PROC_BROWSER_TEST_F(
               net::OK, blink::FencedFrame::DeprecatedFencedFrameMode::kDefault))
           ->frame_tree_node();
 
-  EXPECT_TRUE(ExecJs(fenced_frame_root_node_1,
-                     JsReplace("window.resolveSelectURLToConfig = $1;",
-                               ResolveSelectURLToConfig())));
-
   EvalJsResult result = EvalJs(fenced_frame_root_node_1, R"(
-      sharedStorage.selectURL(
-        'test-url-selection-operation',
-        [
-          {
-            url: "fenced_frames/title0.html"
-          }
-        ],
-        {
-          data: {'mockResult': 0},
-          resolveToConfig: resolveSelectURLToConfig
-        }
-      );
+      sharedStorage.worklet.addModule('/shared_storage/simple_module.js');
     )");
 
   EXPECT_THAT(
       result.error,
       testing::HasSubstr(
-          "The \"shared-storage\" Permissions Policy denied the method on "
-          "window.sharedStorage."));
+          "The \"shared-storage\" Permissions Policy denied the method"));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
@@ -6080,7 +5803,7 @@ IN_PROC_BROWSER_TEST_F(
                                         ResolveSelectURLToConfig())));
 
   // There are 2 more "worklet operations": both `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(2);
 
@@ -6138,9 +5861,7 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_TRUE(observed_urn_uuid_2.has_value());
   EXPECT_TRUE(blink::IsValidUrnUuidURL(observed_urn_uuid_2.value()));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer_1.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config_1 =
@@ -6242,7 +5963,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
   url::Origin shared_storage_origin = url::Origin::Create(main_url);
 
   WebContentsConsoleObserver console_observer(shell()->web_contents());
-  console_observer.SetFilter(base::BindRepeating(IsErrorMessage));
+  console_observer.SetFilter(base::BindRepeating(IsInfoMessage));
 
   EXPECT_TRUE(ExecJs(shell(), R"(
       sharedStorage.worklet.addModule('shared_storage/simple_module.js');
@@ -6257,7 +5978,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
       GetStoragePartition());
 
   // There are 2 more "worklet operations": both `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(2);
 
@@ -6322,9 +6043,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
   EXPECT_TRUE(observed_urn_uuid_2.has_value());
   EXPECT_TRUE(blink::IsValidUrnUuidURL(observed_urn_uuid_2.value()));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   ASSERT_TRUE(config_observer_1.ConfigObserved());
   const std::optional<FencedFrameConfig>& fenced_frame_config_1 =
@@ -6356,9 +6075,18 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
   EXPECT_DOUBLE_EQ(RemainingBudgetViaJSForOrigin(shared_storage_origin),
                    kBudgetAllowed - 3);
 
-  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram});
+  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram,
+                     kSelectUrlBudgetStatusHistogram});
   histogram_tester_.ExpectTotalCount(kTimingSelectUrlExecutedInWorkletHistogram,
                                      2);
+  histogram_tester_.ExpectBucketCount(
+      kSelectUrlBudgetStatusHistogram,
+      blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget, 1);
+  histogram_tester_.ExpectBucketCount(
+      kSelectUrlBudgetStatusHistogram,
+      blink::SharedStorageSelectUrlBudgetStatus::
+          kInsufficientSiteNavigationBudget,
+      1);
 }
 
 // When number of urn mappings limit has been reached, subsequent `selectURL()`
@@ -6382,7 +6110,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
   EXPECT_TRUE(ExecJs(shell(), "window.keepWorklet = true;"));
 
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -6403,9 +6131,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
     )";
   EXPECT_TRUE(ExecJs(shell(), select_url_script));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   FencedFrameURLMapping& fenced_frame_url_mapping =
       root->current_frame_host()->GetPage().fenced_frame_urls_map();
@@ -6423,10 +6149,277 @@ IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameInteractionBrowserTest,
 
   // `selectURL()` fails when map is full.
   std::string expected_error = base::StrCat(
-      {"a JavaScript error: \"Error: ",
+      {"a JavaScript error: \"OperationError: ",
        "sharedStorage.selectURL() failed because number of urn::uuid to url ",
        "mappings has reached the limit.\"\n"});
   EXPECT_EQ(expected_error, extra_result.error);
+}
+
+class SharedStorageFencedFrameDocumentGetFeatureDisabledBrowserTest
+    : public SharedStorageFencedFrameInteractionBrowserTest {
+ public:
+  SharedStorageFencedFrameDocumentGetFeatureDisabledBrowserTest() {
+    fenced_frame_feature_.InitAndDisableFeature(
+        blink::features::kFencedFramesLocalUnpartitionedDataAccess);
+  }
+
+ private:
+  base::test::ScopedFeatureList fenced_frame_feature_;
+};
+
+IN_PROC_BROWSER_TEST_F(
+    SharedStorageFencedFrameDocumentGetFeatureDisabledBrowserTest,
+    GetDisabledInFencedFrameWithFeatureOff) {
+  GURL main_frame_url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), main_frame_url));
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+    sharedStorage.set('test', 'apple');
+  )"));
+
+  FrameTreeNode* fenced_frame_root_node =
+      CreateFencedFrame(https_server()->GetURL("a.test", kFencedFramePath));
+
+  EvalJsResult get_result = EvalJs(fenced_frame_root_node, R"(
+    sharedStorage.get('test');
+  )");
+
+  EXPECT_THAT(
+      get_result.error,
+      testing::HasSubstr("Cannot call get() in a fenced frame with feature "
+                         "FencedFramesLocalUnpartitionedDataAccess disabled."));
+}
+
+class SharedStorageFencedFrameDocumentGetBrowserTest
+    : public SharedStorageFencedFrameInteractionBrowserTest {
+ public:
+  SharedStorageFencedFrameDocumentGetBrowserTest() {
+    fenced_frame_feature_.InitAndEnableFeature(
+        /*feature=*/
+        blink::features::kFencedFramesLocalUnpartitionedDataAccess);
+  }
+
+  void SetUpOnMainThread() override {
+    SharedStorageFencedFrameInteractionBrowserTest::SetUpOnMainThread();
+
+    // Bypass fenced storage read attestation check.
+    ON_CALL(browser_client(), IsFencedStorageReadAllowed)
+        .WillByDefault(testing::Return(true));
+  }
+
+ private:
+  base::test::ScopedFeatureList fenced_frame_feature_;
+};
+
+IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameDocumentGetBrowserTest,
+                       GetAllowedInNetworkRestrictedFencedFrame) {
+  GURL main_frame_url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), main_frame_url));
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+    sharedStorage.set('test', 'apple');
+  )"));
+
+  FrameTreeNode* fenced_frame_root_node =
+      CreateFencedFrame(https_server()->GetURL("a.test", kFencedFramePath));
+
+  EvalJsResult get_result = EvalJs(fenced_frame_root_node, R"(
+    (async () => {
+      await window.fence.disableUntrustedNetwork();
+      return sharedStorage.get('test');
+    })();
+  )");
+
+  EXPECT_EQ(get_result, "apple");
+}
+
+IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameDocumentGetBrowserTest,
+                       GetRejectsInFencedFrameWithoutRestrictedNetwork) {
+  GURL main_frame_url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), main_frame_url));
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+    sharedStorage.set('test', 'apple');
+  )"));
+
+  FrameTreeNode* fenced_frame_root_node =
+      CreateFencedFrame(https_server()->GetURL("a.test", kFencedFramePath));
+
+  EvalJsResult get_result = EvalJs(fenced_frame_root_node, R"(
+    sharedStorage.get('test');
+  )");
+
+  EXPECT_THAT(
+      get_result.error,
+      testing::HasSubstr(
+          "sharedStorage.get() is not allowed in a fenced frame until network "
+          "access for it and all descendent frames has been revoked with "
+          "window.fence.disableUntrustedNetwork()"));
+}
+
+IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameDocumentGetBrowserTest,
+                       GetInFencedFrameOnlyFetchesValuesFromCurrentOrigin) {
+  // sharedStorage.set() for a.test
+  GURL main_frame_url1 = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), main_frame_url1));
+  EXPECT_TRUE(ExecJs(shell(), R"(
+    sharedStorage.set('test', 'apple');
+  )"));
+
+  // sharedStorage.set() for b.test
+  GURL main_frame_url2 = https_server()->GetURL("b.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), main_frame_url2));
+  EXPECT_TRUE(ExecJs(shell(), R"(
+    sharedStorage.set('test', 'banana');
+  )"));
+
+  // An a.test fenced frame embedded in b.test should only read a.test's set
+  // values.
+  FrameTreeNode* fenced_frame_root_node =
+      CreateFencedFrame(https_server()->GetURL("a.test", kFencedFramePath));
+
+  EvalJsResult get_result = EvalJs(fenced_frame_root_node, R"(
+    (async () => {
+      await window.fence.disableUntrustedNetwork();
+      return sharedStorage.get('test');
+    })();
+  )");
+
+  EXPECT_EQ(get_result, "apple");
+}
+
+IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameDocumentGetBrowserTest,
+                       GetRejectsInMainFrame) {
+  GURL main_frame_url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), main_frame_url));
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+    sharedStorage.set('test', 'apple');
+  )"));
+
+  EvalJsResult get_result_main_frame = EvalJs(shell(), R"(
+    sharedStorage.get('test');
+  )");
+
+  EXPECT_THAT(
+      get_result_main_frame.error,
+      testing::HasSubstr("Cannot call get() outside of a fenced frame."));
+}
+
+IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameDocumentGetBrowserTest,
+                       GetRejectsInIFrame) {
+  GURL main_frame_url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), main_frame_url));
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+    sharedStorage.set('test', 'apple');
+  )"));
+
+  FrameTreeNode* iframe_root =
+      CreateIFrame(PrimaryFrameTreeNodeRoot(), main_frame_url);
+
+  EvalJsResult get_result_iframe = EvalJs(iframe_root, R"(
+    sharedStorage.get('test');
+  )");
+
+  EXPECT_THAT(
+      get_result_iframe.error,
+      testing::HasSubstr("Cannot call get() outside of a fenced frame."));
+}
+
+IN_PROC_BROWSER_TEST_F(
+    SharedStorageFencedFrameDocumentGetBrowserTest,
+    GetAllowedInNetworkRestrictedNestedFencedFrameIfParentStillHasNetwork) {
+  GURL main_frame_url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), main_frame_url));
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+    sharedStorage.set('test', 'apple');
+  )"));
+
+  GURL fenced_frame_url = https_server()->GetURL("a.test", kFencedFramePath);
+  // The parent fenced frame never calls window.fence.disableUntrustedNetwork().
+  FrameTreeNode* fenced_frame_root_node = CreateFencedFrame(fenced_frame_url);
+
+  FrameTreeNode* nested_fenced_frame_root_node =
+      CreateFencedFrame(fenced_frame_root_node, fenced_frame_url);
+
+  EvalJsResult get_result = EvalJs(nested_fenced_frame_root_node, R"(
+    (async () => {
+      await window.fence.disableUntrustedNetwork();
+      return sharedStorage.get('test');
+    })();
+  )");
+
+  EXPECT_EQ(get_result, "apple");
+}
+
+IN_PROC_BROWSER_TEST_F(SharedStorageFencedFrameDocumentGetBrowserTest,
+                       GetNotAllowedInSandboxedIframeInFencedFrameTree) {
+  GURL main_frame_url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), main_frame_url));
+
+  GURL fenced_frame_url = https_server()->GetURL("a.test", kFencedFramePath);
+  FrameTreeNode* fenced_frame_root_node = CreateFencedFrame(fenced_frame_url);
+
+  FrameTreeNode* nested_iframe_node =
+      CreateIFrame(fenced_frame_root_node, fenced_frame_url,
+                   /*sandbox_flags=*/"allow-scripts");
+
+  EXPECT_TRUE(ExecJs(fenced_frame_root_node, R"(
+      window.fence.disableUntrustedNetwork();
+  )"));
+
+  EvalJsResult get_result = EvalJs(nested_iframe_node, R"(
+      sharedStorage.get('test');
+  )");
+
+  EXPECT_THAT(get_result.error,
+              testing::HasSubstr("is not allowed in an opaque origin context"));
+}
+
+IN_PROC_BROWSER_TEST_F(
+    SharedStorageFencedFrameDocumentGetBrowserTest,
+    GetNotAllowedInNetworkRestrictedParentFencedFrameIfChildStillHasNetwork) {
+  GURL main_frame_url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), main_frame_url));
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+    sharedStorage.set('test', 'apple');
+  )"));
+
+  GURL fenced_frame_url = https_server()->GetURL("a.test", kFencedFramePath);
+  FrameTreeNode* fenced_frame_root_node = CreateFencedFrame(fenced_frame_url);
+
+  CreateFencedFrame(fenced_frame_root_node, fenced_frame_url);
+
+  // Note that we do *not* await the call to disableUntrustedNetwork, because we
+  // need to operate in the top frame while the nested frame still hasn't
+  // disabled network access.
+  EXPECT_TRUE(ExecJs(fenced_frame_root_node, R"(
+    (async () => {
+      window.fence.disableUntrustedNetwork();
+    })();
+  )"));
+
+  // Wait before calling sharedStorage.get() in case the fenced frame was given
+  // access to Shared Storage without disableUntrustedNetwork() actually
+  // resolving.
+  base::RunLoop disable_network_wait;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, disable_network_wait.QuitClosure(), base::Milliseconds(500));
+  disable_network_wait.Run();
+
+  EvalJsResult get_result = EvalJs(fenced_frame_root_node, R"(
+    sharedStorage.get('test');
+  )");
+
+  EXPECT_THAT(
+      get_result.error,
+      testing::HasSubstr(
+          "sharedStorage.get() is not allowed in a fenced frame until network "
+          "access for it and all descendent frames has been revoked with "
+          "window.fence.disableUntrustedNetwork()"));
 }
 
 class SharedStorageSelectURLNotAllowedInFencedFrameBrowserTest
@@ -6463,8 +6456,8 @@ IN_PROC_BROWSER_TEST_F(SharedStorageSelectURLNotAllowedInFencedFrameBrowserTest,
       sharedStorage.worklet.addModule('/shared_storage/simple_module.js');
     )"));
 
-  EXPECT_EQ(2u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-  EXPECT_EQ(0u, test_worklet_host_manager().GetKeepAliveWorkletHostsCount());
+  EXPECT_EQ(2u, test_runtime_manager().GetAttachedWorkletHostsCount());
+  EXPECT_EQ(0u, test_runtime_manager().GetKeepAliveWorkletHostsCount());
 
   EXPECT_TRUE(ExecJs(fenced_frame_node,
                      JsReplace("window.resolveSelectURLToConfig = $1;",
@@ -6520,7 +6513,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageReportEventBrowserTest,
 
   TestSelectURLFencedFrameConfigObserver config_observer(GetStoragePartition());
   // There is 1 more "worklet operation": `selectURL()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -6562,9 +6555,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageReportEventBrowserTest,
     EXPECT_EQ(result.ExtractString(), observed_urn_uuid->spec());
   }
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   FrameTreeNode* fenced_frame_root_node = CreateFencedFrame(
       ResolveSelectURLToConfig()
@@ -6600,729 +6591,21 @@ IN_PROC_BROWSER_TEST_F(SharedStorageReportEventBrowserTest,
                                      1);
 }
 
-class SharedStoragePrivateAggregationDisabledBrowserTest
+class SharedStorageSelectURLLimitBrowserTestBase
     : public SharedStorageBrowserTestBase {
  public:
-  SharedStoragePrivateAggregationDisabledBrowserTest() {
-    private_aggregation_feature_.InitAndDisableFeature(
-        blink::features::kPrivateAggregationApi);
-  }
-
- private:
-  base::test::ScopedFeatureList private_aggregation_feature_;
-};
-
-IN_PROC_BROWSER_TEST_F(SharedStoragePrivateAggregationDisabledBrowserTest,
-                       PrivateAggregationNotDefined) {
-  EXPECT_TRUE(NavigateToURL(shell(),
-                            https_server()->GetURL("a.test", kSimplePagePath)));
-
-  WebContentsConsoleObserver console_observer(shell()->web_contents());
-
-  GURL out_script_url;
-  ExecuteScriptInWorklet(shell(), R"(
-      privateAggregation.contributeToHistogram({bucket: 1n, value: 2});
-    )",
-                         &out_script_url);
-
-  ASSERT_EQ(1u, console_observer.messages().size());
-  EXPECT_THAT(base::UTF16ToUTF8(console_observer.messages()[0].message),
-              testing::HasSubstr("privateAggregation is not defined"));
-  EXPECT_EQ(blink::mojom::ConsoleMessageLevel::kError,
-            console_observer.messages()[0].log_level);
-}
-
-class SharedStoragePrivateAggregationDisabledForSharedStorageOnlyBrowserTest
-    : public SharedStorageBrowserTestBase {
- public:
-  SharedStoragePrivateAggregationDisabledForSharedStorageOnlyBrowserTest() {
-    private_aggregation_feature_.InitAndEnableFeatureWithParameters(
-        blink::features::kPrivateAggregationApi,
-        {{"enabled_in_shared_storage", "false"}});
-  }
-
- private:
-  base::test::ScopedFeatureList private_aggregation_feature_;
-};
-
-IN_PROC_BROWSER_TEST_F(
-    SharedStoragePrivateAggregationDisabledForSharedStorageOnlyBrowserTest,
-    PrivateAggregationNotDefined) {
-  EXPECT_TRUE(NavigateToURL(shell(),
-                            https_server()->GetURL("a.test", kSimplePagePath)));
-
-  WebContentsConsoleObserver console_observer(shell()->web_contents());
-
-  GURL out_script_url;
-  ExecuteScriptInWorklet(shell(), R"(
-      privateAggregation.contributeToHistogram({bucket: 1n, value: 2});
-    )",
-                         &out_script_url);
-
-  ASSERT_EQ(1u, console_observer.messages().size());
-  EXPECT_THAT(base::UTF16ToUTF8(console_observer.messages()[0].message),
-              testing::HasSubstr("privateAggregation is not defined"));
-  EXPECT_EQ(blink::mojom::ConsoleMessageLevel::kError,
-            console_observer.messages()[0].log_level);
-}
-
-class SharedStoragePrivateAggregationEnabledBrowserTest
-    : public SharedStorageBrowserTestBase {
- public:
-  // TODO(alexmt): Consider factoring out along with FLEDGE definition.
-  class TestPrivateAggregationManagerImpl
-      : public PrivateAggregationManagerImpl {
-   public:
-    TestPrivateAggregationManagerImpl(
-        std::unique_ptr<PrivateAggregationBudgeter> budgeter,
-        std::unique_ptr<PrivateAggregationHost> host)
-        : PrivateAggregationManagerImpl(std::move(budgeter),
-                                        std::move(host),
-                                        /*storage_partition=*/nullptr) {}
-  };
-
-  SharedStoragePrivateAggregationEnabledBrowserTest() {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{blink::features::kPrivateAggregationApi,
-                              blink::features::kSharedStorageAPIM118},
-        /*disabled_features=*/{});
-  }
-
-  void SetUpOnMainThread() override {
-    SharedStorageBrowserTestBase::SetUpOnMainThread();
-
-    a_test_origin_ = https_server()->GetOrigin("a.test");
-
-    auto* storage_partition_impl =
-        static_cast<StoragePartitionImpl*>(GetStoragePartition());
-
-    private_aggregation_host_ = new PrivateAggregationHost(
-        /*on_report_request_details_received=*/mock_callback_.Get(),
-        storage_partition_impl->browser_context());
-
-    storage_partition_impl->OverridePrivateAggregationManagerForTesting(
-        std::make_unique<TestPrivateAggregationManagerImpl>(
-            std::make_unique<MockPrivateAggregationBudgeter>(),
-            base::WrapUnique<PrivateAggregationHost>(
-                private_aggregation_host_.get())));
-
-    EXPECT_TRUE(NavigateToURL(
-        shell(), https_server()->GetURL("a.test", kSimplePagePath)));
-  }
-
-  void TearDownOnMainThread() override {
-    private_aggregation_host_ = nullptr;
-    SharedStorageBrowserTestBase::TearDownOnMainThread();
-  }
-
-  void MakeMockPrivateAggregationShellContentBrowserClient() override {
-    browser_client_ =
-        std::make_unique<MockPrivateAggregationShellContentBrowserClient>();
-  }
-
-  const base::MockRepeatingCallback<
-      void(PrivateAggregationHost::ReportRequestGenerator,
-           std::vector<blink::mojom::AggregatableReportHistogramContribution>,
-           PrivateAggregationBudgetKey,
-           PrivateAggregationBudgeter::BudgetDeniedBehavior)>&
-  mock_callback() {
-    return mock_callback_;
-  }
-
- protected:
-  url::Origin a_test_origin_;
-
- private:
-  raw_ptr<PrivateAggregationHost> private_aggregation_host_;
-
-  base::test::ScopedFeatureList scoped_feature_list_;
-
-  base::MockRepeatingCallback<void(
-      PrivateAggregationHost::ReportRequestGenerator,
-      std::vector<blink::mojom::AggregatableReportHistogramContribution>,
-      PrivateAggregationBudgetKey,
-      PrivateAggregationBudgeter::BudgetDeniedBehavior)>
-      mock_callback_;
-};
-
-IN_PROC_BROWSER_TEST_F(SharedStoragePrivateAggregationEnabledBrowserTest,
-                       BasicTest) {
-  WebContentsConsoleObserver console_observer(shell()->web_contents());
-
-  base::RunLoop run_loop;
-
-  EXPECT_CALL(mock_callback(), Run)
-      .WillOnce(testing::Invoke(
-          [&](PrivateAggregationHost::ReportRequestGenerator generator,
-              std::vector<blink::mojom::AggregatableReportHistogramContribution>
-                  contributions,
-              PrivateAggregationBudgetKey budget_key,
-              PrivateAggregationBudgeter::BudgetDeniedBehavior
-                  budget_denied_behavior) {
-            AggregatableReportRequest request =
-                std::move(generator).Run(contributions);
-            ASSERT_EQ(request.payload_contents().contributions.size(), 1u);
-            EXPECT_EQ(request.payload_contents().contributions[0].bucket, 1);
-            EXPECT_EQ(request.payload_contents().contributions[0].value, 2);
-            EXPECT_EQ(request.shared_info().reporting_origin, a_test_origin_);
-            EXPECT_EQ(budget_key.origin(), a_test_origin_);
-            EXPECT_EQ(budget_key.api(),
-                      PrivateAggregationBudgetKey::Api::kSharedStorage);
-            EXPECT_TRUE(request.additional_fields().empty());
-            EXPECT_EQ(budget_denied_behavior,
-                      PrivateAggregationBudgeter::BudgetDeniedBehavior::
-                          kDontSendReport);
-            run_loop.Quit();
-          }));
-
-  EXPECT_CALL(browser_client(),
-              LogWebFeatureForCurrentPage(
-                  shell()->web_contents()->GetPrimaryMainFrame(),
-                  blink::mojom::WebFeature::kPrivateAggregationApiAll));
-  EXPECT_CALL(
-      browser_client(),
-      LogWebFeatureForCurrentPage(
-          shell()->web_contents()->GetPrimaryMainFrame(),
-          blink::mojom::WebFeature::kPrivateAggregationApiSharedStorage));
-  ON_CALL(browser_client(), IsPrivateAggregationAllowed)
-      .WillByDefault(testing::Return(true));
-  ON_CALL(browser_client(), IsSharedStorageAllowed)
-      .WillByDefault(testing::Return(true));
-
-  GURL out_script_url;
-  ExecuteScriptInWorklet(shell(), R"(
-      privateAggregation.contributeToHistogram({bucket: 1n, value: 2});
-    )",
-                         &out_script_url);
-
-  EXPECT_TRUE(console_observer.messages().empty());
-
-  run_loop.Run();
-}
-
-IN_PROC_BROWSER_TEST_F(SharedStoragePrivateAggregationEnabledBrowserTest,
-                       RejectedTest) {
-  WebContentsConsoleObserver console_observer(shell()->web_contents());
-
-  EXPECT_CALL(browser_client(),
-              LogWebFeatureForCurrentPage(
-                  shell()->web_contents()->GetPrimaryMainFrame(),
-                  blink::mojom::WebFeature::kPrivateAggregationApiAll));
-  EXPECT_CALL(
-      browser_client(),
-      LogWebFeatureForCurrentPage(
-          shell()->web_contents()->GetPrimaryMainFrame(),
-          blink::mojom::WebFeature::kPrivateAggregationApiSharedStorage));
-  ON_CALL(browser_client(), IsPrivateAggregationAllowed)
-      .WillByDefault(testing::Return(true));
-  ON_CALL(browser_client(), IsSharedStorageAllowed)
-      .WillByDefault(testing::Return(true));
-
-  GURL out_script_url;
-  ExecuteScriptInWorklet(shell(), R"(
-      privateAggregation.contributeToHistogram({bucket: -1n, value: 2});
-    )",
-                         &out_script_url);
-
-  ASSERT_EQ(1u, console_observer.messages().size());
-  EXPECT_THAT(
-      base::UTF16ToUTF8(console_observer.messages()[0].message),
-      testing::HasSubstr(
-          "contribution['bucket'] is negative or does not fit in 128 bits"));
-  EXPECT_EQ(blink::mojom::ConsoleMessageLevel::kError,
-            console_observer.messages()[0].log_level);
-}
-
-IN_PROC_BROWSER_TEST_F(SharedStoragePrivateAggregationEnabledBrowserTest,
-                       MultipleRequests) {
-  WebContentsConsoleObserver console_observer(shell()->web_contents());
-
-  base::RunLoop run_loop;
-
-  EXPECT_CALL(mock_callback(), Run)
-      .WillOnce(testing::Invoke(
-          [&](PrivateAggregationHost::ReportRequestGenerator generator,
-              std::vector<blink::mojom::AggregatableReportHistogramContribution>
-                  contributions,
-              PrivateAggregationBudgetKey budget_key,
-              PrivateAggregationBudgeter::BudgetDeniedBehavior
-                  budget_denied_behavior) {
-            AggregatableReportRequest request =
-                std::move(generator).Run(contributions);
-            ASSERT_EQ(request.payload_contents().contributions.size(), 2u);
-            EXPECT_EQ(request.payload_contents().contributions[0].bucket, 1);
-            EXPECT_EQ(request.payload_contents().contributions[0].value, 2);
-            EXPECT_EQ(request.payload_contents().contributions[1].bucket, 3);
-            EXPECT_EQ(request.payload_contents().contributions[1].value, 4);
-            EXPECT_EQ(request.shared_info().reporting_origin, a_test_origin_);
-            EXPECT_EQ(budget_key.origin(), a_test_origin_);
-            EXPECT_EQ(budget_key.api(),
-                      PrivateAggregationBudgetKey::Api::kSharedStorage);
-            EXPECT_EQ(budget_denied_behavior,
-                      PrivateAggregationBudgeter::BudgetDeniedBehavior::
-                          kDontSendReport);
-            run_loop.Quit();
-          }));
-
-  EXPECT_CALL(browser_client(),
-              LogWebFeatureForCurrentPage(
-                  shell()->web_contents()->GetPrimaryMainFrame(),
-                  blink::mojom::WebFeature::kPrivateAggregationApiAll));
-  EXPECT_CALL(
-      browser_client(),
-      LogWebFeatureForCurrentPage(
-          shell()->web_contents()->GetPrimaryMainFrame(),
-          blink::mojom::WebFeature::kPrivateAggregationApiSharedStorage));
-  ON_CALL(browser_client(), IsPrivateAggregationAllowed)
-      .WillByDefault(testing::Return(true));
-  ON_CALL(browser_client(), IsSharedStorageAllowed)
-      .WillByDefault(testing::Return(true));
-
-  GURL out_script_url;
-  ExecuteScriptInWorklet(shell(), R"(
-      privateAggregation.contributeToHistogram({bucket: 1n, value: 2});
-      privateAggregation.contributeToHistogram({bucket: 3n, value: 4});
-    )",
-                         &out_script_url);
-
-  EXPECT_TRUE(console_observer.messages().empty());
-
-  run_loop.Run();
-}
-
-IN_PROC_BROWSER_TEST_F(SharedStoragePrivateAggregationEnabledBrowserTest,
-                       TimeoutBeforeOperationFinish) {
-  EXPECT_CALL(mock_callback(), Run)
-      .WillOnce(testing::Invoke(
-          [&](PrivateAggregationHost::ReportRequestGenerator generator,
-              std::vector<blink::mojom::AggregatableReportHistogramContribution>
-                  contributions,
-              PrivateAggregationBudgetKey budget_key,
-              PrivateAggregationBudgeter::BudgetDeniedBehavior
-                  budget_denied_behavior) {
-            AggregatableReportRequest request =
-                std::move(generator).Run(contributions);
-            ASSERT_EQ(request.payload_contents().contributions.size(), 1u);
-            EXPECT_EQ(request.payload_contents().contributions[0].bucket, 1);
-            EXPECT_EQ(request.payload_contents().contributions[0].value, 2);
-            EXPECT_EQ(request.shared_info().reporting_origin, a_test_origin_);
-            EXPECT_EQ(budget_key.origin(), a_test_origin_);
-            EXPECT_EQ(budget_key.api(),
-                      PrivateAggregationBudgetKey::Api::kSharedStorage);
-            EXPECT_EQ(budget_denied_behavior,
-                      PrivateAggregationBudgeter::BudgetDeniedBehavior::
-                          kSendNullReport);
-            EXPECT_THAT(request.additional_fields(),
-                        testing::ElementsAre(
-                            testing::Pair("context_id", "example_context_id")));
-          }));
-
-  EXPECT_CALL(browser_client(),
-              LogWebFeatureForCurrentPage(
-                  shell()->web_contents()->GetPrimaryMainFrame(),
-                  blink::mojom::WebFeature::kPrivateAggregationApiAll));
-  EXPECT_CALL(
-      browser_client(),
-      LogWebFeatureForCurrentPage(
-          shell()->web_contents()->GetPrimaryMainFrame(),
-          blink::mojom::WebFeature::kPrivateAggregationApiSharedStorage));
-  ON_CALL(browser_client(), IsPrivateAggregationAllowed)
-      .WillByDefault(testing::Return(true));
-  ON_CALL(browser_client(), IsSharedStorageAllowed)
-      .WillByDefault(testing::Return(true));
-
-  GURL out_script_url;
-
-  // Run an operation that returns a promise that never resolves.
-  ExecuteScriptInWorklet(shell(), R"(
-      privateAggregation.contributeToHistogram({bucket: 1n, value: 2});
-      return new Promise(() => {});
-    )",
-                         &out_script_url, /*expected_total_host_count=*/1u,
-                         /*keep_alive_after_operation=*/true,
-                         /*context_id=*/"example_context_id",
-                         /*out_error=*/nullptr,
-                         /*wait_for_operation_finish=*/false);
-
-  // Wait for 5 seconds for the timeout to be reached.
-  {
-    base::RunLoop run_loop;
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, run_loop.QuitClosure(), base::Seconds(5));
-    run_loop.Run();
-  }
-}
-
-IN_PROC_BROWSER_TEST_F(SharedStoragePrivateAggregationEnabledBrowserTest,
-                       ContextId) {
-  WebContentsConsoleObserver console_observer(shell()->web_contents());
-
-  base::RunLoop run_loop;
-
-  EXPECT_CALL(mock_callback(), Run)
-      .WillOnce(testing::Invoke(
-          [&](PrivateAggregationHost::ReportRequestGenerator generator,
-              std::vector<blink::mojom::AggregatableReportHistogramContribution>
-                  contributions,
-              PrivateAggregationBudgetKey budget_key,
-              PrivateAggregationBudgeter::BudgetDeniedBehavior
-                  budget_denied_behavior) {
-            AggregatableReportRequest request =
-                std::move(generator).Run(contributions);
-            ASSERT_EQ(request.payload_contents().contributions.size(), 1u);
-            EXPECT_EQ(request.payload_contents().contributions[0].bucket, 1);
-            EXPECT_EQ(request.payload_contents().contributions[0].value, 2);
-            EXPECT_EQ(request.shared_info().reporting_origin, a_test_origin_);
-            EXPECT_EQ(budget_key.origin(), a_test_origin_);
-            EXPECT_EQ(budget_key.api(),
-                      PrivateAggregationBudgetKey::Api::kSharedStorage);
-            EXPECT_THAT(request.additional_fields(),
-                        testing::ElementsAre(
-                            testing::Pair("context_id", "example_context_id")));
-            EXPECT_EQ(budget_denied_behavior,
-                      PrivateAggregationBudgeter::BudgetDeniedBehavior::
-                          kSendNullReport);
-            run_loop.Quit();
-          }));
-
-  EXPECT_CALL(browser_client(),
-              LogWebFeatureForCurrentPage(
-                  shell()->web_contents()->GetPrimaryMainFrame(),
-                  blink::mojom::WebFeature::kPrivateAggregationApiAll));
-  EXPECT_CALL(
-      browser_client(),
-      LogWebFeatureForCurrentPage(
-          shell()->web_contents()->GetPrimaryMainFrame(),
-          blink::mojom::WebFeature::kPrivateAggregationApiSharedStorage));
-  ON_CALL(browser_client(), IsPrivateAggregationAllowed)
-      .WillByDefault(testing::Return(true));
-  ON_CALL(browser_client(), IsSharedStorageAllowed)
-      .WillByDefault(testing::Return(true));
-
-  GURL out_script_url;
-  ExecuteScriptInWorklet(shell(), R"(
-      privateAggregation.contributeToHistogram({bucket: 1n, value: 2});
-    )",
-                         &out_script_url, /*expected_total_host_count=*/1u,
-                         /*keep_alive_after_operation=*/true,
-                         /*context_id=*/"example_context_id");
-
-  EXPECT_TRUE(console_observer.messages().empty());
-
-  run_loop.Run();
-}
-
-IN_PROC_BROWSER_TEST_F(SharedStoragePrivateAggregationEnabledBrowserTest,
-                       ContextIdEmptyString) {
-  WebContentsConsoleObserver console_observer(shell()->web_contents());
-
-  base::RunLoop run_loop;
-
-  EXPECT_CALL(mock_callback(), Run)
-      .WillOnce(testing::Invoke(
-          [&](PrivateAggregationHost::ReportRequestGenerator generator,
-              std::vector<blink::mojom::AggregatableReportHistogramContribution>
-                  contributions,
-              PrivateAggregationBudgetKey budget_key,
-              PrivateAggregationBudgeter::BudgetDeniedBehavior
-                  budget_denied_behavior) {
-            AggregatableReportRequest request =
-                std::move(generator).Run(contributions);
-            ASSERT_EQ(request.payload_contents().contributions.size(), 1u);
-            EXPECT_EQ(request.payload_contents().contributions[0].bucket, 1);
-            EXPECT_EQ(request.payload_contents().contributions[0].value, 2);
-            EXPECT_EQ(request.shared_info().reporting_origin, a_test_origin_);
-            EXPECT_EQ(budget_key.origin(), a_test_origin_);
-            EXPECT_EQ(budget_key.api(),
-                      PrivateAggregationBudgetKey::Api::kSharedStorage);
-            EXPECT_THAT(request.additional_fields(),
-                        testing::ElementsAre(testing::Pair("context_id", "")));
-            EXPECT_EQ(budget_denied_behavior,
-                      PrivateAggregationBudgeter::BudgetDeniedBehavior::
-                          kSendNullReport);
-            run_loop.Quit();
-          }));
-
-  EXPECT_CALL(browser_client(),
-              LogWebFeatureForCurrentPage(
-                  shell()->web_contents()->GetPrimaryMainFrame(),
-                  blink::mojom::WebFeature::kPrivateAggregationApiAll));
-  EXPECT_CALL(
-      browser_client(),
-      LogWebFeatureForCurrentPage(
-          shell()->web_contents()->GetPrimaryMainFrame(),
-          blink::mojom::WebFeature::kPrivateAggregationApiSharedStorage));
-  ON_CALL(browser_client(), IsPrivateAggregationAllowed)
-      .WillByDefault(testing::Return(true));
-  ON_CALL(browser_client(), IsSharedStorageAllowed)
-      .WillByDefault(testing::Return(true));
-
-  GURL out_script_url;
-  ExecuteScriptInWorklet(shell(), R"(
-      privateAggregation.contributeToHistogram({bucket: 1n, value: 2});
-    )",
-                         &out_script_url, /*expected_total_host_count=*/1u,
-                         /*keep_alive_after_operation=*/true,
-                         /*context_id=*/
-                         "");
-
-  EXPECT_TRUE(console_observer.messages().empty());
-
-  run_loop.Run();
-}
-
-IN_PROC_BROWSER_TEST_F(SharedStoragePrivateAggregationEnabledBrowserTest,
-                       ContextIdMaxAllowedLength) {
-  WebContentsConsoleObserver console_observer(shell()->web_contents());
-
-  base::RunLoop run_loop;
-
-  EXPECT_CALL(mock_callback(), Run)
-      .WillOnce(testing::Invoke(
-          [&](PrivateAggregationHost::ReportRequestGenerator generator,
-              std::vector<blink::mojom::AggregatableReportHistogramContribution>
-                  contributions,
-              PrivateAggregationBudgetKey budget_key,
-              PrivateAggregationBudgeter::BudgetDeniedBehavior
-                  budget_denied_behavior) {
-            AggregatableReportRequest request =
-                std::move(generator).Run(contributions);
-            ASSERT_EQ(request.payload_contents().contributions.size(), 1u);
-            EXPECT_EQ(request.payload_contents().contributions[0].bucket, 1);
-            EXPECT_EQ(request.payload_contents().contributions[0].value, 2);
-            EXPECT_EQ(request.shared_info().reporting_origin, a_test_origin_);
-            EXPECT_EQ(budget_key.origin(), a_test_origin_);
-            EXPECT_EQ(budget_key.api(),
-                      PrivateAggregationBudgetKey::Api::kSharedStorage);
-            EXPECT_THAT(request.additional_fields(),
-                        testing::ElementsAre(
-                            testing::Pair("context_id",
-                                          "an_example_of_a_context_id_with_the_"
-                                          "exact_maximum_allowed_length")));
-            EXPECT_EQ(budget_denied_behavior,
-                      PrivateAggregationBudgeter::BudgetDeniedBehavior::
-                          kSendNullReport);
-            run_loop.Quit();
-          }));
-
-  EXPECT_CALL(browser_client(),
-              LogWebFeatureForCurrentPage(
-                  shell()->web_contents()->GetPrimaryMainFrame(),
-                  blink::mojom::WebFeature::kPrivateAggregationApiAll));
-  EXPECT_CALL(
-      browser_client(),
-      LogWebFeatureForCurrentPage(
-          shell()->web_contents()->GetPrimaryMainFrame(),
-          blink::mojom::WebFeature::kPrivateAggregationApiSharedStorage));
-  ON_CALL(browser_client(), IsPrivateAggregationAllowed)
-      .WillByDefault(testing::Return(true));
-  ON_CALL(browser_client(), IsSharedStorageAllowed)
-      .WillByDefault(testing::Return(true));
-
-  GURL out_script_url;
-  ExecuteScriptInWorklet(
-      shell(), R"(
-      privateAggregation.contributeToHistogram({bucket: 1n, value: 2});
-    )",
-      &out_script_url, /*expected_total_host_count=*/1u,
-      /*keep_alive_after_operation=*/true,
-      /*context_id=*/
-      "an_example_of_a_context_id_with_the_exact_maximum_allowed_length");
-
-  EXPECT_TRUE(console_observer.messages().empty());
-
-  run_loop.Run();
-}
-
-IN_PROC_BROWSER_TEST_F(SharedStoragePrivateAggregationEnabledBrowserTest,
-                       ContextIdTooLong) {
-  WebContentsConsoleObserver console_observer(shell()->web_contents());
-
-  EXPECT_CALL(mock_callback(), Run).Times(0);
-  EXPECT_CALL(browser_client(),
-              LogWebFeatureForCurrentPage(
-                  shell()->web_contents()->GetPrimaryMainFrame(),
-                  blink::mojom::WebFeature::kPrivateAggregationApiAll))
-      .Times(0);
-  EXPECT_CALL(
-      browser_client(),
-      LogWebFeatureForCurrentPage(
-          shell()->web_contents()->GetPrimaryMainFrame(),
-          blink::mojom::WebFeature::kPrivateAggregationApiSharedStorage))
-      .Times(0);
-  ON_CALL(browser_client(), IsPrivateAggregationAllowed)
-      .WillByDefault(testing::Return(true));
-  ON_CALL(browser_client(), IsSharedStorageAllowed)
-      .WillByDefault(testing::Return(true));
-
-  GURL out_script_url;
-  std::string out_error;
-  ExecuteScriptInWorklet(
-      shell(), R"(
-      privateAggregation.contributeToHistogram({bucket: 1n, value: 2});
-    )",
-      &out_script_url, /*expected_total_host_count=*/1u,
-      /*keep_alive_after_operation=*/true,
-      /*context_id=*/
-      "this_is_an_example_of_a_context_id_that_is_too_long_to_be_allowed",
-      &out_error);
-
-  EXPECT_THAT(
-      out_error,
-      testing::HasSubstr("Error: contextId length cannot be larger than 64"));
-
-  EXPECT_TRUE(console_observer.messages().empty());
-}
-
-IN_PROC_BROWSER_TEST_F(SharedStoragePrivateAggregationEnabledBrowserTest,
-                       PrivateAggregationPermissionsPolicyNone) {
-  GURL url = https_server()->GetURL(
-      "a.test",
-      "/shared_storage/private_aggregation_permissions_policy_none.html");
-
-  EXPECT_TRUE(NavigateToURL(shell(), url));
-
-  WebContentsConsoleObserver console_observer(shell()->web_contents());
-
-  EXPECT_CALL(browser_client(),
-              LogWebFeatureForCurrentPage(
-                  shell()->web_contents()->GetPrimaryMainFrame(),
-                  blink::mojom::WebFeature::kPrivateAggregationApiAll));
-  EXPECT_CALL(
-      browser_client(),
-      LogWebFeatureForCurrentPage(
-          shell()->web_contents()->GetPrimaryMainFrame(),
-          blink::mojom::WebFeature::kPrivateAggregationApiSharedStorage));
-  ON_CALL(browser_client(), IsPrivateAggregationAllowed)
-      .WillByDefault(testing::Return(true));
-  ON_CALL(browser_client(), IsSharedStorageAllowed)
-      .WillByDefault(testing::Return(true));
-
-  GURL out_script_url;
-  ExecuteScriptInWorklet(shell(), R"(
-      privateAggregation.contributeToHistogram({bucket: 1n, value: 2});
-    )",
-                         &out_script_url);
-
-  EXPECT_EQ(1u, console_observer.messages().size());
-  EXPECT_THAT(
-      base::UTF16ToUTF8(console_observer.messages()[0].message),
-      testing::HasSubstr("The \"private-aggregation\" Permissions Policy "
-                         "denied the method on privateAggregation"));
-}
-
-// This is a regression test for crbug.com/1428110.
-IN_PROC_BROWSER_TEST_F(SharedStoragePrivateAggregationEnabledBrowserTest,
-                       SimultaneousOperationsReportsArentBatchedTogether) {
-  WebContentsConsoleObserver console_observer(shell()->web_contents());
-
-  EXPECT_CALL(browser_client(),
-              LogWebFeatureForCurrentPage(
-                  shell()->web_contents()->GetPrimaryMainFrame(),
-                  blink::mojom::WebFeature::kPrivateAggregationApiAll));
-  EXPECT_CALL(
-      browser_client(),
-      LogWebFeatureForCurrentPage(
-          shell()->web_contents()->GetPrimaryMainFrame(),
-          blink::mojom::WebFeature::kPrivateAggregationApiSharedStorage));
-  ON_CALL(browser_client(), IsPrivateAggregationAllowed)
-      .WillByDefault(testing::Return(true));
-  ON_CALL(browser_client(), IsSharedStorageAllowed)
-      .WillByDefault(testing::Return(true));
-
-  EXPECT_TRUE(ExecJs(shell(), R"(
-      sharedStorage.worklet.addModule('shared_storage/slow_and_fast_module.js');
-    )"));
-
-  EXPECT_EQ(1u, test_worklet_host_manager().GetAttachedWorkletHostsCount());
-
-  base::RunLoop run_loop;
-  base::RepeatingClosure barrier =
-      base::BarrierClosure(/*num_closures=*/3, run_loop.QuitClosure());
-
-  int num_one_contribution_reports = 0;
-
-  EXPECT_CALL(mock_callback(), Run)
-      .Times(3)
-      .WillRepeatedly(testing::Invoke(
-          [&](PrivateAggregationHost::ReportRequestGenerator generator,
-              std::vector<blink::mojom::AggregatableReportHistogramContribution>
-                  contributions,
-              PrivateAggregationBudgetKey budget_key,
-              PrivateAggregationBudgeter::BudgetDeniedBehavior
-                  budget_denied_behavior) {
-            AggregatableReportRequest request =
-                std::move(generator).Run(contributions);
-            if (request.payload_contents().contributions.size() == 1u) {
-              EXPECT_EQ(request.payload_contents().contributions[0].bucket, 3);
-              EXPECT_EQ(request.payload_contents().contributions[0].value, 1);
-              ++num_one_contribution_reports;
-            } else {
-              ASSERT_EQ(request.payload_contents().contributions.size(), 2u);
-              EXPECT_EQ(request.payload_contents().contributions[0].bucket, 1);
-              EXPECT_EQ(request.payload_contents().contributions[0].value, 1);
-              EXPECT_EQ(request.payload_contents().contributions[1].bucket, 2);
-              EXPECT_EQ(request.payload_contents().contributions[1].value, 1);
-            }
-            EXPECT_EQ(request.shared_info().reporting_origin, a_test_origin_);
-            EXPECT_EQ(budget_key.origin(), a_test_origin_);
-            EXPECT_EQ(budget_key.api(),
-                      PrivateAggregationBudgetKey::Api::kSharedStorage);
-            EXPECT_EQ(budget_denied_behavior,
-                      PrivateAggregationBudgeter::BudgetDeniedBehavior::
-                          kDontSendReport);
-            barrier.Run();
-          }));
-
-  EXPECT_TRUE(ExecJs(shell(), R"(
-      sharedStorage.run('slow-operation', {keepAlive: true});
-      sharedStorage.run('slow-operation', {keepAlive: true});
-      sharedStorage.run('fast-operation');
-    )"));
-
-  run_loop.Run();
-
-  // Ensures we saw exactly one report for the fast operation (and therefore two
-  // for the slow operations).
-  EXPECT_EQ(num_one_contribution_reports, 1);
-}
-
-class SharedStorageSelectURLLimitBrowserTest
-    : public SharedStorageBrowserTestBase,
-      public testing::WithParamInterface<std::tuple<bool, bool>> {
- public:
-  SharedStorageSelectURLLimitBrowserTest() {
-    if (LimitSelectURLCalls()) {
-      select_url_limit_feature_list_.InitWithFeaturesAndParameters(
-          /*enabled_features=*/
-          {{blink::features::kSharedStorageSelectURLLimit,
-            {{"SharedStorageSelectURLBitBudgetPerPageLoad",
-              base::NumberToString(kSelectURLOverallBitBudget)},
-             {"SharedStorageSelectURLBitBudgetPerSitePerPageLoad",
-              base::NumberToString(kSelectURLSiteBitBudget)}}}},
-          /*disabled_features=*/{});
-    } else {
-      select_url_limit_feature_list_.InitAndDisableFeature(
-          blink::features::kSharedStorageSelectURLLimit);
-    }
-
-    fenced_frame_api_change_feature_.InitWithFeatureState(
-        blink::features::kFencedFramesAPIChanges, ResolveSelectURLToConfig());
-  }
-
-  bool LimitSelectURLCalls() const { return std::get<0>(GetParam()); }
-
-  bool ResolveSelectURLToConfig() override { return std::get<1>(GetParam()); }
+  virtual bool LimitSelectURLCalls() const { return true; }
 
   // Precondition: `addModule('shared_storage/simple_module.js')` has been
   // called in the main frame.
   void RunSuccessfulSelectURLInMainFrame(
       std::string host_str,
       int num_urls,
-      WebContentsConsoleObserver* console_observer) {
+      WebContentsConsoleObserver* console_observer,
+      const std::u16string& saved_query_name = u"") {
     std::optional<std::pair<GURL, double>> result_pair =
-        RunSelectURLExtractingMappedURLAndBudgetToCharge(shell(), host_str,
-                                                         num_urls);
+        RunSelectURLExtractingMappedURLAndBudgetToCharge(
+            shell(), host_str, num_urls, saved_query_name);
     ASSERT_TRUE(result_pair.has_value());
 
     GURL expected_mapped_url = https_server()->GetURL(
@@ -7340,7 +6623,8 @@ class SharedStorageSelectURLLimitBrowserTest
   void RunSuccessfulSelectURLInIframe(
       FrameTreeNode* iframe_node,
       int num_urls,
-      WebContentsConsoleObserver* console_observer) {
+      WebContentsConsoleObserver* console_observer,
+      const std::u16string& saved_query_name = u"") {
     std::string host_str =
         iframe_node->current_frame_host()->GetLastCommittedURL().host();
     EXPECT_TRUE(ExecJs(iframe_node, R"(
@@ -7348,8 +6632,8 @@ class SharedStorageSelectURLLimitBrowserTest
     )"));
 
     std::optional<std::pair<GURL, double>> result_pair =
-        RunSelectURLExtractingMappedURLAndBudgetToCharge(iframe_node, host_str,
-                                                         num_urls);
+        RunSelectURLExtractingMappedURLAndBudgetToCharge(
+            iframe_node, host_str, num_urls, saved_query_name);
     ASSERT_TRUE(result_pair.has_value());
 
     GURL expected_mapped_url = https_server()->GetURL(
@@ -7368,16 +6652,18 @@ class SharedStorageSelectURLLimitBrowserTest
   RunSelectURLExtractingMappedURLAndBudgetToCharge(
       const ToRenderFrameHost& execution_target,
       std::string host_str,
-      int num_urls) {
+      int num_urls,
+      const std::u16string& saved_query_name = u"") {
     TestSelectURLFencedFrameConfigObserver config_observer(
         GetStoragePartition());
 
     // There is 1 "worklet operation": `selectURL()`.
-    test_worklet_host_manager()
+    test_runtime_manager()
         .GetAttachedWorkletHostForFrame(execution_target.render_frame_host())
         ->SetExpectedWorkletResponsesCount(1);
 
-    EvalJsResult result = RunSelectURLScript(execution_target, num_urls);
+    EvalJsResult result =
+        RunSelectURLScript(execution_target, num_urls, saved_query_name);
 
     EXPECT_TRUE(result.error.empty()) << result.error;
     const std::optional<GURL>& observed_urn_uuid = config_observer.GetUrnUuid();
@@ -7390,7 +6676,7 @@ class SharedStorageSelectURLLimitBrowserTest
       EXPECT_EQ(result.ExtractString(), observed_urn_uuid->spec());
     }
 
-    test_worklet_host_manager()
+    test_runtime_manager()
         .GetAttachedWorkletHostForFrame(execution_target.render_frame_host())
         ->WaitForWorkletResponses();
 
@@ -7416,6 +6702,7 @@ class SharedStorageSelectURLLimitBrowserTest
  private:
   EvalJsResult RunSelectURLScript(const ToRenderFrameHost& execution_target,
                                   int num_urls,
+                                  const std::u16string& saved_query_name = u"",
                                   bool keep_alive_after_operation = true) {
     EXPECT_TRUE(ExecJs(execution_target, kGenerateURLsListScript));
     EXPECT_TRUE(
@@ -7426,6 +6713,9 @@ class SharedStorageSelectURLLimitBrowserTest
     EXPECT_TRUE(ExecJs(
         execution_target,
         JsReplace("window.keepWorklet = $1;", keep_alive_after_operation)));
+    EXPECT_TRUE(
+        ExecJs(execution_target,
+               JsReplace("window.savedQueryName = $1;", saved_query_name)));
 
     EvalJsResult result = EvalJs(execution_target, R"(
       (async function() {
@@ -7436,7 +6726,8 @@ class SharedStorageSelectURLLimitBrowserTest
           {
             data: {'mockResult': numUrls - 1},
             resolveToConfig: resolveSelectURLToConfig,
-            keepAlive: keepWorklet
+            keepAlive: keepWorklet,
+            savedQuery: savedQueryName
           }
         );
         if (resolveSelectURLToConfig &&
@@ -7448,7 +6739,36 @@ class SharedStorageSelectURLLimitBrowserTest
     )");
     return result;
   }
+};
 
+class SharedStorageSelectURLLimitBrowserTest
+    : public SharedStorageSelectURLLimitBrowserTestBase,
+      public testing::WithParamInterface<std::tuple<bool, bool>> {
+ public:
+  SharedStorageSelectURLLimitBrowserTest() {
+    if (LimitSelectURLCalls()) {
+      select_url_limit_feature_list_.InitWithFeaturesAndParameters(
+          /*enabled_features=*/
+          {{features::kSharedStorageSelectURLLimit,
+            {{"SharedStorageSelectURLBitBudgetPerPageLoad",
+              base::NumberToString(kSelectURLOverallBitBudget)},
+             {"SharedStorageSelectURLBitBudgetPerSitePerPageLoad",
+              base::NumberToString(kSelectURLSiteBitBudget)}}}},
+          /*disabled_features=*/{});
+    } else {
+      select_url_limit_feature_list_.InitAndDisableFeature(
+          features::kSharedStorageSelectURLLimit);
+    }
+
+    fenced_frame_api_change_feature_.InitWithFeatureState(
+        blink::features::kFencedFramesAPIChanges, ResolveSelectURLToConfig());
+  }
+
+  bool LimitSelectURLCalls() const override { return std::get<0>(GetParam()); }
+
+  bool ResolveSelectURLToConfig() override { return std::get<1>(GetParam()); }
+
+ private:
   base::test::ScopedFeatureList select_url_limit_feature_list_;
   base::test::ScopedFeatureList fenced_frame_api_change_feature_;
 };
@@ -7511,10 +6831,28 @@ IN_PROC_BROWSER_TEST_P(SharedStorageSelectURLLimitBrowserTest,
                                       &console_observer);
   }
 
-  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram});
+  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram,
+                     kSelectUrlBudgetStatusHistogram});
 
   histogram_tester_.ExpectTotalCount(kTimingSelectUrlExecutedInWorkletHistogram,
                                      call_limit + 1);
+
+  if (LimitSelectURLCalls()) {
+    histogram_tester_.ExpectBucketCount(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+        call_limit);
+    histogram_tester_.ExpectBucketCount(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::
+            kInsufficientSitePageloadBudget,
+        1);
+  } else {
+    histogram_tester_.ExpectUniqueSample(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+        call_limit + 1);
+  }
 }
 
 IN_PROC_BROWSER_TEST_P(SharedStorageSelectURLLimitBrowserTest,
@@ -7569,10 +6907,28 @@ IN_PROC_BROWSER_TEST_P(SharedStorageSelectURLLimitBrowserTest,
                                       &console_observer);
   }
 
-  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram});
+  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram,
+                     kSelectUrlBudgetStatusHistogram});
 
   histogram_tester_.ExpectTotalCount(kTimingSelectUrlExecutedInWorkletHistogram,
                                      input4_call_limit + 2);
+
+  if (LimitSelectURLCalls()) {
+    histogram_tester_.ExpectBucketCount(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+        input4_call_limit + 1);
+    histogram_tester_.ExpectBucketCount(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::
+            kInsufficientSitePageloadBudget,
+        1);
+  } else {
+    histogram_tester_.ExpectUniqueSample(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+        input4_call_limit + 2);
+  }
 }
 
 IN_PROC_BROWSER_TEST_P(
@@ -7632,9 +6988,27 @@ IN_PROC_BROWSER_TEST_P(
                                    &console_observer);
   }
 
-  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram});
+  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram,
+                     kSelectUrlBudgetStatusHistogram});
   histogram_tester_.ExpectTotalCount(kTimingSelectUrlExecutedInWorkletHistogram,
                                      call_limit + 1);
+
+  if (LimitSelectURLCalls()) {
+    histogram_tester_.ExpectBucketCount(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+        call_limit);
+    histogram_tester_.ExpectBucketCount(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::
+            kInsufficientSitePageloadBudget,
+        1);
+  } else {
+    histogram_tester_.ExpectUniqueSample(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+        call_limit + 1);
+  }
 }
 
 IN_PROC_BROWSER_TEST_P(
@@ -7705,9 +7079,27 @@ IN_PROC_BROWSER_TEST_P(
                                    &console_observer);
   }
 
-  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram});
+  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram,
+                     kSelectUrlBudgetStatusHistogram});
   histogram_tester_.ExpectTotalCount(kTimingSelectUrlExecutedInWorkletHistogram,
                                      input4_call_limit + 2);
+
+  if (LimitSelectURLCalls()) {
+    histogram_tester_.ExpectBucketCount(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+        input4_call_limit + 1);
+    histogram_tester_.ExpectBucketCount(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::
+            kInsufficientSitePageloadBudget,
+        1);
+  } else {
+    histogram_tester_.ExpectUniqueSample(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+        input4_call_limit + 2);
+  }
 }
 
 IN_PROC_BROWSER_TEST_P(
@@ -7780,9 +7172,27 @@ IN_PROC_BROWSER_TEST_P(
   RunSuccessfulSelectURLInIframe(last_iframe_node, /*num_urls=*/8,
                                  &console_observer);
 
-  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram});
+  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram,
+                     kSelectUrlBudgetStatusHistogram});
   histogram_tester_.ExpectTotalCount(kTimingSelectUrlExecutedInWorkletHistogram,
                                      per_site_call_limit + 2);
+
+  if (LimitSelectURLCalls()) {
+    histogram_tester_.ExpectBucketCount(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+        per_site_call_limit + 1);
+    histogram_tester_.ExpectBucketCount(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::
+            kInsufficientSitePageloadBudget,
+        1);
+  } else {
+    histogram_tester_.ExpectUniqueSample(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+        per_site_call_limit + 2);
+  }
 }
 
 IN_PROC_BROWSER_TEST_P(
@@ -7866,18 +7276,6 @@ IN_PROC_BROWSER_TEST_P(
       base::StrCat({std::string(1, 'b' + num_site_limit), ".test"});
   GURL iframe_url = https_server()->GetURL(iframe_host, kSimplePagePath);
 
-  int overall_budget_remaining =
-      kSelectURLOverallBitBudget % kSelectURLSiteBitBudget;
-
-  for (int j = 0; j < overall_budget_remaining; j++) {
-    // Create a new iframe.
-    FrameTreeNode* iframe_node =
-        CreateIFrame(PrimaryFrameTreeNodeRoot(), iframe_url);
-
-    RunSuccessfulSelectURLInIframe(iframe_node,
-                                   /*num_urls=*/2, &console_observer);
-  }
-
   // Create a new iframe.
   FrameTreeNode* final_iframe_node =
       CreateIFrame(PrimaryFrameTreeNodeRoot(), iframe_url);
@@ -7910,11 +7308,275 @@ IN_PROC_BROWSER_TEST_P(
                                    /*num_urls=*/2, &console_observer);
   }
 
-  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram});
+  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram,
+                     kSelectUrlBudgetStatusHistogram});
   histogram_tester_.ExpectTotalCount(
       kTimingSelectUrlExecutedInWorkletHistogram,
-      num_site_limit * (2 + per_site_input2_call_limit) +
-          overall_budget_remaining + 1);
+      num_site_limit * (2 + per_site_input2_call_limit) + 1);
+
+  if (LimitSelectURLCalls()) {
+    histogram_tester_.ExpectBucketCount(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+        num_site_limit * (1 + per_site_input2_call_limit));
+    histogram_tester_.ExpectBucketCount(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::
+            kInsufficientSitePageloadBudget,
+        num_site_limit - 1);
+    histogram_tester_.ExpectBucketCount(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::
+            kInsufficientOverallPageloadBudget,
+        2);
+  } else {
+    histogram_tester_.ExpectUniqueSample(
+        kSelectUrlBudgetStatusHistogram,
+        blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+        num_site_limit * (2 + per_site_input2_call_limit) + 1);
+  }
+}
+
+class SharedStorageSelectURLSavedQueryBrowserTest
+    : public SharedStorageSelectURLLimitBrowserTestBase {
+ public:
+  SharedStorageSelectURLSavedQueryBrowserTest() {
+    select_url_limit_feature_list_.InitWithFeaturesAndParameters(
+        /*enabled_features=*/
+        {{features::kSharedStorageSelectURLLimit,
+          {{"SharedStorageSelectURLBitBudgetPerPageLoad",
+            base::NumberToString(kSelectURLOverallBitBudget)},
+           {"SharedStorageSelectURLBitBudgetPerSitePerPageLoad",
+            base::NumberToString(kSelectURLSiteBitBudget)}}}},
+        /*disabled_features=*/{});
+    select_url_saved_query_feature_.InitAndEnableFeature(
+        blink::features::kSharedStorageSelectURLSavedQueries);
+    fenced_frame_api_change_feature_.InitWithFeatureState(
+        blink::features::kFencedFramesAPIChanges, ResolveSelectURLToConfig());
+  }
+
+  bool ResolveSelectURLToConfig() override { return true; }
+
+  // Precondition: `addModule('shared_storage/simple_module.js')` has been
+  // called in the main frame.
+  void RunSuccessfulSelectURLFromPreviouslySavedQueryInMainFrame(
+      std::string host_str,
+      int num_urls,
+      WebContentsConsoleObserver* console_observer,
+      const std::u16string& saved_query_name) {
+    CHECK(!saved_query_name.empty());
+    size_t num_previous_messages = console_observer->messages().size();
+
+    std::optional<std::pair<GURL, double>> result_pair =
+        RunSelectURLExtractingMappedURLAndBudgetToCharge(
+            shell(), host_str, num_urls, saved_query_name);
+    ASSERT_TRUE(result_pair.has_value());
+
+    GURL expected_mapped_url = https_server()->GetURL(
+        host_str, base::StrCat({"/fenced_frames/title",
+                                base::NumberToString(num_urls - 1), ".html"}));
+    EXPECT_EQ(result_pair->first, expected_mapped_url);
+    EXPECT_DOUBLE_EQ(result_pair->second, std::log2(num_urls));
+
+    // There should be no new console messages, since the saved index was
+    // retrieved instead of running a worklet operation.
+    int num_new_messages =
+        console_observer->messages().size() - num_previous_messages;
+    EXPECT_EQ(num_new_messages, 0);
+  }
+
+  // Precondition: `addModule('shared_storage/simple_module.js')` has NOT been
+  // called in `iframe_node`.
+  void RunSuccessfulSelectURLFromPreviouslySavedQueryInIframe(
+      FrameTreeNode* iframe_node,
+      int num_urls,
+      WebContentsConsoleObserver* console_observer,
+      const std::u16string& saved_query_name) {
+    CHECK(!saved_query_name.empty());
+    size_t num_previous_messages = console_observer->messages().size();
+
+    std::string host_str =
+        iframe_node->current_frame_host()->GetLastCommittedURL().host();
+    EXPECT_TRUE(ExecJs(iframe_node, R"(
+      sharedStorage.worklet.addModule('shared_storage/simple_module.js');
+    )"));
+
+    std::optional<std::pair<GURL, double>> result_pair =
+        RunSelectURLExtractingMappedURLAndBudgetToCharge(
+            iframe_node, host_str, num_urls, saved_query_name);
+    ASSERT_TRUE(result_pair.has_value());
+
+    GURL expected_mapped_url = https_server()->GetURL(
+        host_str, base::StrCat({"/fenced_frames/title",
+                                base::NumberToString(num_urls - 1), ".html"}));
+    EXPECT_EQ(result_pair->first, expected_mapped_url);
+    EXPECT_DOUBLE_EQ(result_pair->second, std::log2(num_urls));
+
+    // `addModule` should generate 2 new console nessages. There should be no
+    // new console messages from `selectURL`, since the saved index was
+    // retrieved instead of running a worklet operation.
+    int num_new_messages =
+        console_observer->messages().size() - num_previous_messages;
+    EXPECT_EQ(num_new_messages, 2);
+  }
+
+ private:
+  base::test::ScopedFeatureList select_url_limit_feature_list_;
+  base::test::ScopedFeatureList select_url_saved_query_feature_;
+  base::test::ScopedFeatureList fenced_frame_api_change_feature_;
+};
+
+IN_PROC_BROWSER_TEST_F(SharedStorageSelectURLSavedQueryBrowserTest,
+                       SelectURL_MainFrame_SiteLimitReached_ReuseSavedQueries) {
+  GURL main_url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  WebContentsConsoleObserver console_observer(shell()->web_contents());
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      sharedStorage.worklet.addModule('shared_storage/simple_module.js');
+    )"));
+
+  // This test relies on the assumption that `kSelectURLOverallBitBudget` is set
+  // to be greater than or equal to `kSelectURLSiteBitBudget`.
+  EXPECT_GE(kSelectURLOverallBitBudget, kSelectURLSiteBitBudget);
+
+  // Here each call to `selectURL()` will have 8 input URLs, and hence
+  // 3 = log2(8) bits of entropy.
+  int call_limit = kSelectURLSiteBitBudget / 3;
+
+  for (int call = 0; call < call_limit; call++) {
+    RunSuccessfulSelectURLInMainFrame("a.test", /*num_urls=*/8,
+                                      &console_observer,
+                                      u"query" + base::NumberToString16(call));
+  }
+
+  // The limit for `selectURL()` has now been reached for "a.test". Make one
+  // more call without using the previously saved queries. This will return the
+  // default URL due to insufficient site pageload budget.
+  std::optional<std::pair<GURL, double>> result_pair =
+      RunSelectURLExtractingMappedURLAndBudgetToCharge(shell(), "a.test",
+                                                       /*num_urls=*/8);
+  ASSERT_TRUE(result_pair.has_value());
+
+  GURL expected_mapped_url =
+      https_server()->GetURL("a.test", "/fenced_frames/title0.html");
+  EXPECT_EQ(result_pair->first, expected_mapped_url);
+  EXPECT_DOUBLE_EQ(result_pair->second, 0.0);
+
+  EXPECT_EQ("Insufficient budget for selectURL().",
+            base::UTF16ToUTF8(console_observer.messages().back().message));
+
+  // Making calls using previously saved queries will succeed despite the lack
+  // of budget.
+  for (int call = 0; call < call_limit; call++) {
+    RunSuccessfulSelectURLFromPreviouslySavedQueryInMainFrame(
+        "a.test", /*num_urls=*/8, &console_observer,
+        u"query" + base::NumberToString16(call));
+  }
+
+  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram,
+                     kSelectUrlBudgetStatusHistogram});
+
+  histogram_tester_.ExpectTotalCount(kTimingSelectUrlExecutedInWorkletHistogram,
+                                     2 * call_limit + 1);
+  histogram_tester_.ExpectBucketCount(
+      kSelectUrlBudgetStatusHistogram,
+      blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+      2 * call_limit);
+  histogram_tester_.ExpectBucketCount(
+      kSelectUrlBudgetStatusHistogram,
+      blink::SharedStorageSelectUrlBudgetStatus::
+          kInsufficientSitePageloadBudget,
+      1);
+}
+
+IN_PROC_BROWSER_TEST_F(
+    SharedStorageSelectURLSavedQueryBrowserTest,
+    SelectURL_CrossOriginIframesSharingCommonSite_SiteLimitReached_ReuseSavedQueries) {
+  GURL main_url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  WebContentsConsoleObserver console_observer(shell()->web_contents());
+
+  // This test relies on the assumption that `kSelectURLOverallBitBudget` is set
+  // to be greater than or equal to `kSelectURLSiteBitBudget`.
+  EXPECT_GE(kSelectURLOverallBitBudget, kSelectURLSiteBitBudget);
+
+  // Here each call to `selectURL()` will have 8 input URLs, and hence
+  // 3 = log2(8) bits of entropy.
+  int call_limit = kSelectURLSiteBitBudget / 3;
+
+  GURL iframe_url;
+
+  for (int call = 0; call < call_limit; call++) {
+    std::string iframe_host =
+        base::StrCat({"subdomain", base::NumberToString(call), ".b.test"});
+
+    iframe_url = https_server()->GetURL(iframe_host, kSimplePagePath);
+
+    // Create a new iframe.
+    FrameTreeNode* iframe_node =
+        CreateIFrame(PrimaryFrameTreeNodeRoot(), iframe_url);
+
+    RunSuccessfulSelectURLInIframe(iframe_node, /*num_urls=*/8,
+                                   &console_observer,
+                                   u"query" + base::NumberToString16(call));
+  }
+
+  iframe_url = https_server()->GetURL("b.test", kSimplePagePath);
+
+  // Create a new iframe.
+  FrameTreeNode* iframe_node =
+      CreateIFrame(PrimaryFrameTreeNodeRoot(), iframe_url);
+
+  EXPECT_TRUE(ExecJs(iframe_node, R"(
+      sharedStorage.worklet.addModule('shared_storage/simple_module.js');
+    )"));
+
+  // The limit for `selectURL()` has now been reached for "b.test". Make one
+  // more call, which will return the default URL due to insufficient site
+  // pageload budget.
+  std::optional<std::pair<GURL, double>> result_pair =
+      RunSelectURLExtractingMappedURLAndBudgetToCharge(iframe_node, "b.test",
+                                                       /*num_urls=*/8);
+  ASSERT_TRUE(result_pair.has_value());
+
+  GURL expected_mapped_url =
+      https_server()->GetURL("b.test", "/fenced_frames/title0.html");
+  EXPECT_EQ(result_pair->first, expected_mapped_url);
+  EXPECT_DOUBLE_EQ(result_pair->second, 0.0);
+
+  EXPECT_EQ("Insufficient budget for selectURL().",
+            base::UTF16ToUTF8(console_observer.messages().back().message));
+
+  for (int call = 0; call < call_limit; call++) {
+    std::string iframe_host =
+        base::StrCat({"subdomain", base::NumberToString(call), ".b.test"});
+
+    iframe_url = https_server()->GetURL(iframe_host, kSimplePagePath);
+
+    // Create a new iframe.
+    iframe_node = CreateIFrame(PrimaryFrameTreeNodeRoot(), iframe_url);
+
+    RunSuccessfulSelectURLFromPreviouslySavedQueryInIframe(
+        iframe_node, /*num_urls=*/8, &console_observer,
+        u"query" + base::NumberToString16(call));
+  }
+
+  WaitForHistograms({kTimingSelectUrlExecutedInWorkletHistogram,
+                     kSelectUrlBudgetStatusHistogram});
+  histogram_tester_.ExpectTotalCount(kTimingSelectUrlExecutedInWorkletHistogram,
+                                     2 * call_limit + 1);
+  histogram_tester_.ExpectBucketCount(
+      kSelectUrlBudgetStatusHistogram,
+      blink::SharedStorageSelectUrlBudgetStatus::kSufficientBudget,
+      2 * call_limit);
+  histogram_tester_.ExpectBucketCount(
+      kSelectUrlBudgetStatusHistogram,
+      blink::SharedStorageSelectUrlBudgetStatus::
+          kInsufficientSitePageloadBudget,
+      1);
 }
 
 class SharedStorageContextBrowserTest
@@ -7940,7 +7602,7 @@ class SharedStorageContextBrowserTest
     GURL fenced_frame_url = https_server()->GetURL(hostname, kFencedFramePath);
 
     // There is 1 more "worklet operation": `selectURL()`.
-    test_worklet_host_manager()
+    test_runtime_manager()
         .GetAttachedWorkletHost()
         ->SetExpectedWorkletResponsesCount(1);
 
@@ -7972,9 +7634,7 @@ class SharedStorageContextBrowserTest
     ASSERT_TRUE(observed_urn_uuid.has_value());
     EXPECT_TRUE(blink::IsValidUrnUuidURL(observed_urn_uuid.value()));
 
-    test_worklet_host_manager()
-        .GetAttachedWorkletHost()
-        ->WaitForWorkletResponses();
+    test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
     ASSERT_TRUE(config_observer.ConfigObserved());
     const std::optional<FencedFrameConfig>& fenced_frame_config =
@@ -8247,14 +7907,14 @@ IN_PROC_BROWSER_TEST_P(
                                 &base_output));
 
     // The dummy assignment is necessary, because otherwise under the hood,
-    // `ExecJs` makes a call to that tries to evaluate the most recent script
+    // `ExecJs` makes a call that tries to evaluate the most recent script
     // result as a `base::Value`, and `char_code_values` causes that to fail.
     EXPECT_TRUE(ExecJs(shell(), JsReplace(R"(window.charCodeArray = $1;
                                              window.dummyAssignment = 0;)",
                                           std::move(char_code_values))));
 
     // We will wait for 1 "worklet operation": `run()`.
-    test_worklet_host_manager()
+    test_runtime_manager()
         .GetAttachedWorkletHost()
         ->SetExpectedWorkletResponsesCount(1);
 
@@ -8265,21 +7925,11 @@ IN_PROC_BROWSER_TEST_P(
                            keepAlive: true});
       )"));
 
-    test_worklet_host_manager()
-        .GetAttachedWorkletHost()
-        ->WaitForWorkletResponses();
+    test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
-    EXPECT_EQ(4u * (i + 1), console_observer.messages().size());
-    EXPECT_EQ(u"key: 'asValue'", console_observer.messages()[4 * i].message);
-    EXPECT_THAT(
-        base::UTF16ToUTF8(console_observer.messages()[4 * i + 1].message),
-        testing::HasSubstr("value: '"));
-    EXPECT_THAT(
-        base::UTF16ToUTF8(console_observer.messages()[4 * i + 2].message),
-        testing::HasSubstr("retrieved sharedStorage.get('asValue'): '"));
-    EXPECT_THAT(
-        base::UTF16ToUTF8(console_observer.messages()[4 * i + 3].message),
-        testing::HasSubstr("' was retrieved: true"));
+    EXPECT_EQ(i + 1, console_observer.messages().size());
+    EXPECT_THAT(base::UTF16ToUTF8(console_observer.messages().back().message),
+                testing::HasSubstr("was retrieved: true"));
   }
 }
 
@@ -8322,14 +7972,14 @@ IN_PROC_BROWSER_TEST_P(
                                 &base_output));
 
     // The dummy assignment is necessary, because otherwise under the hood,
-    // `ExecJs` makes a call to that tries to evaluate the most recent script
+    // `ExecJs` makes a call that tries to evaluate the most recent script
     // result as a `base::Value`, and `char_code_values` causes that to fail.
     EXPECT_TRUE(ExecJs(shell(), JsReplace(R"(window.charCodeArray = $1;
                                              window.dummyAssignment = 0;)",
                                           std::move(char_code_values))));
 
     // We will wait for 1 "worklet operation": `run()`.
-    test_worklet_host_manager()
+    test_runtime_manager()
         .GetAttachedWorkletHost()
         ->SetExpectedWorkletResponsesCount(1);
 
@@ -8340,21 +7990,11 @@ IN_PROC_BROWSER_TEST_P(
                            keepAlive: true});
       )"));
 
-    test_worklet_host_manager()
-        .GetAttachedWorkletHost()
-        ->WaitForWorkletResponses();
+    test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
-    EXPECT_EQ(4u * (i + 1), console_observer.messages().size());
-    EXPECT_THAT(base::UTF16ToUTF8(console_observer.messages()[4 * i].message),
-                testing::HasSubstr("key: '"));
-    EXPECT_EQ(u"value: 'asKey'",
-              console_observer.messages()[4 * i + 1].message);
-    EXPECT_THAT(
-        base::UTF16ToUTF8(console_observer.messages()[4 * i + 2].message),
-        testing::HasSubstr("retrieved key: '"));
-    EXPECT_THAT(
-        base::UTF16ToUTF8(console_observer.messages()[4 * i + 3].message),
-        testing::HasSubstr("' was retrieved: true"));
+    EXPECT_EQ(i + 1, console_observer.messages().size());
+    EXPECT_THAT(base::UTF16ToUTF8(console_observer.messages().back().message),
+                testing::HasSubstr("was retrieved: true"));
   }
 }
 
@@ -8397,14 +8037,14 @@ IN_PROC_BROWSER_TEST_P(
                                 &base_output));
 
     // The dummy assignment is necessary, because otherwise under the hood,
-    // `ExecJs` makes a call to that tries to evaluate the most recent script
+    // `ExecJs` makes a call that tries to evaluate the most recent script
     // result as a `base::Value`, and `char_code_values` causes that to fail.
     EXPECT_TRUE(ExecJs(shell(), JsReplace(R"(window.charCodeArray = $1;
                                              window.dummyAssignment = 0;)",
                                           std::move(char_code_values))));
 
     // We will wait for 1 "worklet operation": `run()`.
-    test_worklet_host_manager()
+    test_runtime_manager()
         .GetAttachedWorkletHost()
         ->SetExpectedWorkletResponsesCount(1);
 
@@ -8415,17 +8055,11 @@ IN_PROC_BROWSER_TEST_P(
                            keepAlive: true});
       )"));
 
-    test_worklet_host_manager()
-        .GetAttachedWorkletHost()
-        ->WaitForWorkletResponses();
+    test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
-    EXPECT_EQ(3u * (i + 1), console_observer.messages().size());
-    EXPECT_THAT(base::UTF16ToUTF8(console_observer.messages()[3 * i].message),
-                testing::HasSubstr("key: '"));
-    EXPECT_EQ(u"value: 'asKey'",
-              console_observer.messages()[3 * i + 1].message);
+    EXPECT_EQ(i + 1, console_observer.messages().size());
     EXPECT_EQ(u"delete success: true",
-              console_observer.messages()[3 * i + 2].message);
+              console_observer.messages().back().message);
   }
 }
 
@@ -8468,14 +8102,14 @@ IN_PROC_BROWSER_TEST_P(
                                 &base_output));
 
     // The dummy assignment is necessary, because otherwise under the hood,
-    // `ExecJs` makes a call to that tries to evaluate the most recent script
+    // `ExecJs` makes a call that tries to evaluate the most recent script
     // result as a `base::Value`, and `char_code_values` causes that to fail.
     EXPECT_TRUE(ExecJs(shell(), JsReplace(R"(window.charCodeArray = $1;
                                              window.dummyAssignment = 0;)",
                                           std::move(char_code_values))));
 
     // We will wait for 1 "worklet operation": `run()`.
-    test_worklet_host_manager()
+    test_runtime_manager()
         .GetAttachedWorkletHost()
         ->SetExpectedWorkletResponsesCount(1);
 
@@ -8486,37 +8120,18 @@ IN_PROC_BROWSER_TEST_P(
                            keepAlive: true});
       )"));
 
-    test_worklet_host_manager()
-        .GetAttachedWorkletHost()
-        ->WaitForWorkletResponses();
+    test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
-    EXPECT_EQ(4u * (i + 1), console_observer.messages().size());
-    EXPECT_EQ(u"key: 'asValue'", console_observer.messages()[4 * i].message);
-    EXPECT_THAT(
-        base::UTF16ToUTF8(console_observer.messages()[4 * i + 1].message),
-        testing::HasSubstr("value: '"));
-    EXPECT_THAT(
-        base::UTF16ToUTF8(console_observer.messages()[4 * i + 2].message),
-        testing::HasSubstr("retrieved key: '"));
-    EXPECT_THAT(
-        base::UTF16ToUTF8(console_observer.messages()[4 * i + 2].message),
-        testing::HasSubstr("; retrieved value: '"));
-    EXPECT_THAT(
-        base::UTF16ToUTF8(console_observer.messages()[4 * i + 3].message),
-        testing::HasSubstr("' was retrieved: true"));
+    EXPECT_EQ(i + 1, console_observer.messages().size());
+    EXPECT_THAT(base::UTF16ToUTF8(console_observer.messages().back().message),
+                testing::HasSubstr("was retrieved: true"));
   }
 }
 
 class SharedStorageHeaderObserverBrowserTest
     : public SharedStorageBrowserTestBase {
  public:
-  using Operation = network::mojom::SharedStorageOperation;
   using OperationResult = storage::SharedStorageManager::OperationResult;
-
-  SharedStorageHeaderObserverBrowserTest() {
-    shared_storage_m118_feature_.InitAndEnableFeature(
-        blink::features::kSharedStorageAPIM118);
-  }
 
   void FinishSetup() override {
     https_server()->ServeFilesFromSourceDirectory(GetTestDataFilePath());
@@ -8528,8 +8143,6 @@ class SharedStorageHeaderObserverBrowserTest
     static_cast<StoragePartitionImpl*>(GetStoragePartition())
         ->OverrideSharedStorageHeaderObserverForTesting(std::move(observer));
   }
-
-  uint16_t port() { return https_server()->port(); }
 
   bool NavigateToURLWithResponse(
       Shell* window,
@@ -8582,13 +8195,7 @@ class SharedStorageHeaderObserverBrowserTest
   }
 
   std::string ReplacePortInString(std::string str) {
-    const std::string kToReplace("{{port}}");
-    size_t index = str.find(kToReplace);
-    while (index != std::string::npos) {
-      str = str.replace(index, kToReplace.size(), base::NumberToString(port()));
-      index = str.find(kToReplace);
-    }
-    return str;
+    return ::content::ReplacePortInString(str, port());
   }
 
   void SetUpResponsesAndNavigateMainPage(
@@ -8751,9 +8358,6 @@ class SharedStorageHeaderObserverBrowserTest
   url::Origin subresource_or_subframe_origin_;
   std::vector<url::Origin> redirect_origins_;
   std::string subresource_or_subframe_content_type_;
-
- private:
-  base::test::ScopedFeatureList shared_storage_m118_feature_;
 };
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -8787,21 +8391,11 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   EXPECT_EQ("1", base::UTF16ToUTF8(console_observer.messages()[1].message));
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -8858,21 +8452,23 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   EXPECT_EQ("1", base::UTF16ToUTF8(console_observer.messages()[1].message));
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomClearMethod());
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"world",
+                                                /*ignore_if_present=*/true));
+  methods_with_options.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -8907,21 +8503,23 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   EXPECT_EQ("1", base::UTF16ToUTF8(console_observer.messages()[1].message));
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomClearMethod());
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"world",
+                                                /*ignore_if_present=*/true));
+  methods_with_options.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -8960,21 +8558,23 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   EXPECT_EQ("1", base::UTF16ToUTF8(console_observer.messages()[1].message));
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomClearMethod());
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"world",
+                                                /*ignore_if_present=*/true));
+  methods_with_options.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -9017,21 +8617,23 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
        "append;key=hello;value=there"});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomClearMethod());
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"world",
+                                                /*ignore_if_present=*/true));
+  methods_with_options.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 
   // Create an iframe that's same-origin to the fetch URL.
   FrameTreeNode* iframe_node =
@@ -9099,21 +8701,23 @@ IN_PROC_BROWSER_TEST_F(
        "append;key=hello;value=there"});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options1;
+  methods_with_options1.push_back(MojomClearMethod());
+  methods_with_options1.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                 /*value=*/u"world",
+                                                 /*ignore_if_present=*/true));
+  methods_with_options1.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options1)));
 
   WaitForRedirectRequestAndSendResponse(
       /*expect_writable_header=*/true,
@@ -9123,18 +8727,20 @@ IN_PROC_BROWSER_TEST_F(
 
   // There won't be additional operations invoked.
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options2;
+  methods_with_options2.push_back(MojomClearMethod());
+  methods_with_options2.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                 /*value=*/u"world",
+                                                 /*ignore_if_present=*/true));
+  methods_with_options2.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options2)));
 
   // Create an iframe that's same-origin to the original fetch URL.
   FrameTreeNode* iframe_node1 =
@@ -9183,18 +8789,20 @@ IN_PROC_BROWSER_TEST_F(
        "Shared-Storage-Write: delete;key=a, set;value=will;key=set"});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(2);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().back().first, redirect_origins_.back());
-  EXPECT_THAT(observer_->header_results().back().second,
-              testing::ElementsAre(true, true));
-  EXPECT_THAT(
-      observer_->operations(),
-      testing::ElementsAre(DeleteOperation(redirect_origins_.back(), "a",
-                                           OperationResult::kSuccess),
-                           SetOperation(redirect_origins_.back(), "set", "will",
-                                        std::nullopt, OperationResult::kSet)));
+  EXPECT_EQ(observer_->header_results().back(), redirect_origins_.back());
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomDeleteMethod(/*key=*/u"a"));
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"set",
+                                                /*value=*/u"will",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(redirect_origins_.back(),
+                                   std::move(methods_with_options)));
 
   // Create an iframe that's same-origin to the original fetch URL.
   FrameTreeNode* iframe_node1 =
@@ -9256,21 +8864,23 @@ IN_PROC_BROWSER_TEST_F(
        "append;key=hello;value=there"});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options1;
+  methods_with_options1.push_back(MojomClearMethod());
+  methods_with_options1.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                 /*value=*/u"world",
+                                                 /*ignore_if_present=*/true));
+  methods_with_options1.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options1)));
 
   WaitForRedirectRequestAndSendResponse(
       /*expect_writable_header=*/true,
@@ -9279,26 +8889,22 @@ IN_PROC_BROWSER_TEST_F(
       {"Access-Control-Allow-Origin: *",
        "Shared-Storage-Write: delete;key=a, set;value=will;key=set"});
 
-  // There will now have been a total of 5 operations (3 previous, 2 current).
+  // There will now have been a total of 2 operations (1 previous, 1 current).
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(5);
+  observer_->WaitForOperations(2);
 
   EXPECT_EQ(observer_->header_results().size(), 2u);
-  EXPECT_EQ(observer_->header_results().back().first, redirect_origins_.back());
-  EXPECT_THAT(observer_->header_results().back().second,
-              testing::ElementsAre(true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet),
-                  DeleteOperation(redirect_origins_.back(), "a",
-                                  OperationResult::kSuccess),
-                  SetOperation(redirect_origins_.back(), "set", "will",
-                               std::nullopt, OperationResult::kSet)));
+  EXPECT_EQ(observer_->header_results().back(), redirect_origins_.back());
+
+  std::vector<MethodWithOptionsPtr> methods_with_options2;
+  methods_with_options2.push_back(MojomDeleteMethod(/*key=*/u"a"));
+  methods_with_options2.push_back(MojomSetMethod(/*key=*/u"set",
+                                                 /*value=*/u"will",
+                                                 /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 2u);
+  EXPECT_EQ(observer_->operations()[1],
+            HeaderOperationSuccess(redirect_origins_.back(),
+                                   std::move(methods_with_options2)));
 
   // Create an iframe that's same-origin to the original fetch URL.
   FrameTreeNode* iframe_node1 =
@@ -9362,21 +8968,23 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
        "append;key=hello;value=there"});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options1;
+  methods_with_options1.push_back(MojomClearMethod());
+  methods_with_options1.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                 /*value=*/u"world",
+                                                 /*ignore_if_present=*/true));
+  methods_with_options1.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options1)));
 
   WaitForRedirectRequestAndSendResponse(
       /*expect_writable_header=*/false,
@@ -9387,18 +8995,20 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
 
   // No new operations are invoked.
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options2;
+  methods_with_options2.push_back(MojomClearMethod());
+  methods_with_options2.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                 /*value=*/u"world",
+                                                 /*ignore_if_present=*/true));
+  methods_with_options2.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options2)));
 
   // Create an iframe that's same-origin to the original fetch URL.
   FrameTreeNode* iframe_node1 =
@@ -9428,7 +9038,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
 
   EXPECT_THAT(result.error,
               testing::HasSubstr("The \"shared-storage\" Permissions Policy "
-                                 "denied the method on window.sharedStorage."));
+                                 "denied the method"));
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -9455,21 +9065,23 @@ IN_PROC_BROWSER_TEST_F(
        "append;key=hello;value=there"});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options1;
+  methods_with_options1.push_back(MojomClearMethod());
+  methods_with_options1.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                 /*value=*/u"world",
+                                                 /*ignore_if_present=*/true));
+  methods_with_options1.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options1)));
 
   WaitForRedirectRequestAndSendResponse(
       /*expect_writable_header=*/false,
@@ -9488,26 +9100,22 @@ IN_PROC_BROWSER_TEST_F(
        "Shared-Storage-Write: delete;key=a, set;value=will;key=set"},
       /*redirect_index=*/1);
 
-  // There will now have been a total of 5 operations (3 previous, 2 current).
+  // There will now have been a total of 2 operations (1 previous, 1 current).
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(5);
+  observer_->WaitForOperations(2);
 
   EXPECT_EQ(observer_->header_results().size(), 2u);
-  EXPECT_EQ(observer_->header_results().back().first, redirect_origins_.back());
-  EXPECT_THAT(observer_->header_results().back().second,
-              testing::ElementsAre(true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet),
-                  DeleteOperation(redirect_origins_.back(), "a",
-                                  OperationResult::kSuccess),
-                  SetOperation(redirect_origins_.back(), "set", "will",
-                               std::nullopt, OperationResult::kSet)));
+  EXPECT_EQ(observer_->header_results().back(), redirect_origins_.back());
+
+  std::vector<MethodWithOptionsPtr> methods_with_options2;
+  methods_with_options2.push_back(MojomDeleteMethod(/*key=*/u"a"));
+  methods_with_options2.push_back(MojomSetMethod(/*key=*/u"set",
+                                                 /*value=*/u"will",
+                                                 /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 2u);
+  EXPECT_EQ(observer_->operations()[1],
+            HeaderOperationSuccess(redirect_origins_.back(),
+                                   std::move(methods_with_options2)));
 
   // Create an iframe that's same-origin to the original fetch URL.
   FrameTreeNode* iframe_node1 =
@@ -9543,7 +9151,7 @@ IN_PROC_BROWSER_TEST_F(
   // c.test does not have permission to use shared storage.
   EXPECT_THAT(result.error,
               testing::HasSubstr("The \"shared-storage\" Permissions Policy "
-                                 "denied the method on window.sharedStorage."));
+                                 "denied the method"));
 
   // Create an iframe that's same-origin to the second redirect URL.
   FrameTreeNode* iframe_node3 =
@@ -9597,19 +9205,20 @@ IN_PROC_BROWSER_TEST_F(
       {"Access-Control-Allow-Origin: *",
        "Shared-Storage-Write: delete;key=a, set;value=will;key=set"});
 
-  observer_->WaitForOperations(2);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
-            redirect_origins_.back());
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true));
-  EXPECT_THAT(
-      observer_->operations(),
-      testing::ElementsAre(DeleteOperation(redirect_origins_.back(), "a",
-                                           OperationResult::kSuccess),
-                           SetOperation(redirect_origins_.back(), "set", "will",
-                                        std::nullopt, OperationResult::kSet)));
+  EXPECT_EQ(observer_->header_results().front(), redirect_origins_.back());
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomDeleteMethod(/*key=*/u"a"));
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"set",
+                                                /*value=*/u"will",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(redirect_origins_.back(),
+                                   std::move(methods_with_options)));
 
   WebContentsConsoleObserver console_observer(shell()->web_contents());
 
@@ -9623,7 +9232,7 @@ IN_PROC_BROWSER_TEST_F(
 
   EXPECT_THAT(result.error,
               testing::HasSubstr("The \"shared-storage\" Permissions Policy "
-                                 "denied the method on window.sharedStorage."));
+                                 "denied the method"));
 
   // Create an iframe that's same-origin to the redirect URL.
   FrameTreeNode* iframe_node2 =
@@ -9658,7 +9267,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
       shell(), JsReplace("sharedStorage.worklet.addModule($1)", script_url)));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -9667,9 +9276,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
                                             keepAlive: true});
       )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("sharedStorage.length(): 1",
@@ -9689,17 +9296,18 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  DeleteOperation(subresource_or_subframe_origin_, "hello",
-                                  OperationResult::kSuccess)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomDeleteMethod(/*key=*/u"hello"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -9707,9 +9315,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
         sharedStorage.run('get-operation', {data: {'key': 'hello'}});
       )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ(4u, console_observer.messages().size());
   EXPECT_EQ("sharedStorage.length(): 0",
@@ -9734,7 +9340,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
       shell(), JsReplace("sharedStorage.worklet.addModule($1)", script_url)));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -9743,9 +9349,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
                                             keepAlive: true});
       )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ(2u, console_observer.messages().size());
   EXPECT_EQ("sharedStorage.length(): 1",
@@ -9765,16 +9369,18 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(ClearOperation(
-                  subresource_or_subframe_origin_, OperationResult::kSuccess)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomClearMethod());
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 
   // There is 1 more "worklet operation": `run()`.
-  test_worklet_host_manager()
+  test_runtime_manager()
       .GetAttachedWorkletHost()
       ->SetExpectedWorkletResponsesCount(1);
 
@@ -9782,9 +9388,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
         sharedStorage.run('get-operation', {data: {'key': 'hello'}});
       )"));
 
-  test_worklet_host_manager()
-      .GetAttachedWorkletHost()
-      ->WaitForWorkletResponses();
+  test_runtime_manager().GetAttachedWorkletHost()->WaitForWorkletResponses();
 
   EXPECT_EQ(4u, console_observer.messages().size());
   EXPECT_EQ("sharedStorage.length(): 0",
@@ -9810,21 +9414,26 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
        "set;ignore_if_present;key=hello;value=there"});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", std::nullopt, OperationResult::kSet),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "friend", false, OperationResult::kSet),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "there", true, OperationResult::kIgnored)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"world",
+                                                /*ignore_if_present=*/false));
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"friend",
+                                                /*ignore_if_present=*/false));
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"there",
+                                                /*ignore_if_present=*/true));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 
   WebContentsConsoleObserver console_observer(shell()->web_contents());
 
@@ -9888,23 +9497,25 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
        "append;key=hello;value=there"});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   subresource_or_subframe_origin_ =
       url::Origin::Create(subresource_or_subframe_url_);
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomClearMethod());
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"world",
+                                                /*ignore_if_present=*/true));
+  methods_with_options.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 
   WebContentsConsoleObserver console_observer(shell()->web_contents());
 
@@ -9970,21 +9581,23 @@ IN_PROC_BROWSER_TEST_F(
        "append;key=hello;value=there"});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomClearMethod());
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"world",
+                                                /*ignore_if_present=*/true));
+  methods_with_options.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 
   WebContentsConsoleObserver console_observer(shell()->web_contents());
 
@@ -10033,23 +9646,24 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   EXPECT_EQ("1", base::UTF16ToUTF8(console_observer.messages()[1].message));
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(4);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", std::nullopt, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet),
-                  DeleteOperation(subresource_or_subframe_origin_, "toDelete",
-                                  OperationResult::kSuccess)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomClearMethod());
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"world",
+                                                /*ignore_if_present=*/false));
+  methods_with_options.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  methods_with_options.push_back(MojomDeleteMethod(/*key=*/u"toDelete"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -10060,33 +9674,28 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
 
   FetchWithSharedStorageWritable(shell(), subresource_or_subframe_url_);
 
-  std::string long_str(1025, 'x');
   WaitForSubresourceOrSubframeRequestAndSendResponse(
       /*expect_writable_header=*/true,
       /*http_status=*/net::HTTP_OK,
       /*extra_headers=*/
-      {base::StrCat(
-          {"Shared-Storage-Write: clear, set;key=", long_str,
-           ";value=v,set;key=k;value=", long_str, ",append;key=k;value=",
-           long_str, ",append;key=", long_str, ";value=v,delete;key=", long_str,
-           ",set;key=\"\";value=v,append;key=\"\";value=v,delete;key=\"\","
-           "clear"})});
+      {base::StrCat({"Shared-Storage-Write: clear, ",
+                     "set;key=\"\";value=v,append;key=\"\";value=v,",
+                     "delete;key=\"\",clear"})});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(2);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, false, false, false, false, false,
-                                   false, false, false, true));
-  EXPECT_THAT(
-      observer_->operations(),
-      testing::ElementsAre(ClearOperation(subresource_or_subframe_origin_,
-                                          OperationResult::kSuccess),
-                           ClearOperation(subresource_or_subframe_origin_,
-                                          OperationResult::kSuccess)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomClearMethod());
+  methods_with_options.push_back(MojomClearMethod());
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 
   WebContentsConsoleObserver console_observer(shell()->web_contents());
 
@@ -10133,14 +9742,16 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(SetOperation(subresource_or_subframe_origin_,
-                                                "a", "b", std::nullopt,
-                                                OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"a", /*value=*/u"b",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -10200,14 +9811,16 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(SetOperation(subresource_or_subframe_origin_,
-                                                "a", "b", std::nullopt,
-                                                OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"a", /*value=*/u"b",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -10244,14 +9857,16 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(SetOperation(subresource_or_subframe_origin_,
-                                                "a", "b", std::nullopt,
-                                                OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"a", /*value=*/u"b",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -10292,14 +9907,16 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(SetOperation(subresource_or_subframe_origin_,
-                                                "a", "b", std::nullopt,
-                                                OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"a", /*value=*/u"b",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -10364,14 +9981,16 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(SetOperation(subresource_or_subframe_origin_,
-                                                "a", "b", std::nullopt,
-                                                OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"a", /*value=*/u"b",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -10447,21 +10066,23 @@ IN_PROC_BROWSER_TEST_F(
   // There won't be additional operations invoked from the redirect, just the
   // original 3.
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomClearMethod());
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"world",
+                                                /*ignore_if_present=*/true));
+  methods_with_options.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -10492,18 +10113,20 @@ IN_PROC_BROWSER_TEST_F(
        "Shared-Storage-Write: delete;key=a, set;value=will;key=set"});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(2);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().back().first, redirect_origins_.back());
-  EXPECT_THAT(observer_->header_results().back().second,
-              testing::ElementsAre(true, true));
-  EXPECT_THAT(
-      observer_->operations(),
-      testing::ElementsAre(DeleteOperation(redirect_origins_.back(), "a",
-                                           OperationResult::kSuccess),
-                           SetOperation(redirect_origins_.back(), "set", "will",
-                                        std::nullopt, OperationResult::kSet)));
+  EXPECT_EQ(observer_->header_results().back(), redirect_origins_.back());
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomDeleteMethod(/*key=*/u"a"));
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"set",
+                                                /*value=*/u"will",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(redirect_origins_.back(),
+                                   std::move(methods_with_options)));
 
   // Create an iframe that's same-origin to the original image URL.
   FrameTreeNode* iframe_node1 =
@@ -10571,26 +10194,33 @@ IN_PROC_BROWSER_TEST_F(
       {"Access-Control-Allow-Origin: *",
        "Shared-Storage-Write: delete;key=a, set;value=will;key=set"});
 
-  // There will now have been a total of 5 operations (3 previous, 2 current).
+  // There will now have been a total of 2 operations (1 previous, 1 current).
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(5);
+  observer_->WaitForOperations(2);
 
   EXPECT_EQ(observer_->header_results().size(), 2u);
-  EXPECT_EQ(observer_->header_results().back().first, redirect_origins_.back());
-  EXPECT_THAT(observer_->header_results().back().second,
-              testing::ElementsAre(true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet),
-                  DeleteOperation(redirect_origins_.back(), "a",
-                                  OperationResult::kSuccess),
-                  SetOperation(redirect_origins_.back(), "set", "will",
-                               std::nullopt, OperationResult::kSet)));
+  EXPECT_EQ(observer_->header_results().back(), redirect_origins_.back());
+  EXPECT_EQ(observer_->operations().size(), 2u);
+
+  std::vector<MethodWithOptionsPtr> methods_with_options1;
+  methods_with_options1.push_back(MojomClearMethod());
+  methods_with_options1.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                 /*value=*/u"world",
+                                                 /*ignore_if_present=*/true));
+  methods_with_options1.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options1)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options2;
+  methods_with_options2.push_back(MojomDeleteMethod(/*key=*/u"a"));
+  methods_with_options2.push_back(MojomSetMethod(/*key=*/u"set",
+                                                 /*value=*/u"will",
+                                                 /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations()[1],
+            HeaderOperationSuccess(redirect_origins_.back(),
+                                   std::move(methods_with_options2)));
 
   // Create an iframe that's same-origin to the original image URL.
   FrameTreeNode* iframe_node1 =
@@ -10663,21 +10293,23 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   // There won't be additional operations invoked from the redirect, just the
   // original 3.
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomClearMethod());
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"world",
+                                                /*ignore_if_present=*/true));
+  methods_with_options.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 
   // Create an iframe that's same-origin to the original image URL.
   FrameTreeNode* iframe_node1 =
@@ -10707,7 +10339,7 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
 
   EXPECT_THAT(result.error,
               testing::HasSubstr("The \"shared-storage\" Permissions Policy "
-                                 "denied the method on window.sharedStorage."));
+                                 "denied the method"));
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -10734,21 +10366,23 @@ IN_PROC_BROWSER_TEST_F(
        "append;key=hello;value=there"});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options1;
+  methods_with_options1.push_back(MojomClearMethod());
+  methods_with_options1.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                 /*value=*/u"world",
+                                                 /*ignore_if_present=*/true));
+  methods_with_options1.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options1)));
 
   WaitForRedirectRequestAndSendResponse(
       /*expect_writable_header=*/false,
@@ -10767,26 +10401,22 @@ IN_PROC_BROWSER_TEST_F(
        "Shared-Storage-Write: delete;key=a, set;value=will;key=set"},
       /*redirect_index=*/1);
 
-  // There will now have been a total of 5 operations (3 previous, 2 current).
+  // There will now have been a total of 2 operations (1 previous, 1 current).
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(5);
+  observer_->WaitForOperations(2);
 
   EXPECT_EQ(observer_->header_results().size(), 2u);
-  EXPECT_EQ(observer_->header_results().back().first, redirect_origins_.back());
-  EXPECT_THAT(observer_->header_results().back().second,
-              testing::ElementsAre(true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet),
-                  DeleteOperation(redirect_origins_.back(), "a",
-                                  OperationResult::kSuccess),
-                  SetOperation(redirect_origins_.back(), "set", "will",
-                               std::nullopt, OperationResult::kSet)));
+  EXPECT_EQ(observer_->header_results().back(), redirect_origins_.back());
+
+  std::vector<MethodWithOptionsPtr> methods_with_options2;
+  methods_with_options2.push_back(MojomDeleteMethod(/*key=*/u"a"));
+  methods_with_options2.push_back(MojomSetMethod(/*key=*/u"set",
+                                                 /*value=*/u"will",
+                                                 /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 2u);
+  EXPECT_EQ(observer_->operations()[1],
+            HeaderOperationSuccess(redirect_origins_.back(),
+                                   std::move(methods_with_options2)));
 
   // Create an iframe that's same-origin to the original image URL.
   FrameTreeNode* iframe_node1 =
@@ -10822,7 +10452,7 @@ IN_PROC_BROWSER_TEST_F(
   // c.test does not have permission to use shared storage.
   EXPECT_THAT(result.error,
               testing::HasSubstr("The \"shared-storage\" Permissions Policy "
-                                 "denied the method on window.sharedStorage."));
+                                 "denied the method"));
 
   // Create an iframe that's same-origin to the second redirect URL.
   FrameTreeNode* iframe_node3 =
@@ -10876,19 +10506,20 @@ IN_PROC_BROWSER_TEST_F(
       {"Access-Control-Allow-Origin: *",
        "Shared-Storage-Write: delete;key=a, set;value=will;key=set"});
 
-  observer_->WaitForOperations(2);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
-            redirect_origins_.back());
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true));
-  EXPECT_THAT(
-      observer_->operations(),
-      testing::ElementsAre(DeleteOperation(redirect_origins_.back(), "a",
-                                           OperationResult::kSuccess),
-                           SetOperation(redirect_origins_.back(), "set", "will",
-                                        std::nullopt, OperationResult::kSet)));
+  EXPECT_EQ(observer_->header_results().front(), redirect_origins_.back());
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomDeleteMethod(/*key=*/u"a"));
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"set",
+                                                /*value=*/u"will",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(redirect_origins_.back(),
+                                   std::move(methods_with_options)));
 
   WebContentsConsoleObserver console_observer(shell()->web_contents());
 
@@ -10902,7 +10533,7 @@ IN_PROC_BROWSER_TEST_F(
 
   EXPECT_THAT(result.error,
               testing::HasSubstr("The \"shared-storage\" Permissions Policy "
-                                 "denied the method on window.sharedStorage."));
+                                 "denied the method"));
 
   // Create an iframe that's same-origin to the redirect URL.
   FrameTreeNode* iframe_node2 =
@@ -10952,13 +10583,16 @@ IN_PROC_BROWSER_TEST_F(
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(), testing::ElementsAre(AppendOperation(
-                                           subresource_or_subframe_origin_, "a",
-                                           "b", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options1;
+  methods_with_options1.push_back(
+      MojomAppendMethod(/*key=*/u"a", /*value=*/u"b"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options1)));
 
   EXPECT_EQ(
       true,
@@ -10999,13 +10633,16 @@ IN_PROC_BROWSER_TEST_F(
   // No new operations are invoked.
   ASSERT_TRUE(observer_);
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(), testing::ElementsAre(AppendOperation(
-                                           subresource_or_subframe_origin_, "a",
-                                           "b", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options2;
+  methods_with_options2.push_back(
+      MojomAppendMethod(/*key=*/u"a", /*value=*/u"b"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options2)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -11073,14 +10710,16 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(SetOperation(subresource_or_subframe_origin_,
-                                                "a", "b", std::nullopt,
-                                                OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"a", /*value=*/u"b",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -11140,14 +10779,16 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(SetOperation(subresource_or_subframe_origin_,
-                                                "a", "b", std::nullopt,
-                                                OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"a", /*value=*/u"b",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -11184,14 +10825,16 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(SetOperation(subresource_or_subframe_origin_,
-                                                "a", "b", std::nullopt,
-                                                OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"a", /*value=*/u"b",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -11232,14 +10875,16 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(SetOperation(subresource_or_subframe_origin_,
-                                                "a", "b", std::nullopt,
-                                                OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"a", /*value=*/u"b",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -11304,14 +10949,16 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(SetOperation(subresource_or_subframe_origin_,
-                                                "a", "b", std::nullopt,
-                                                OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"a", /*value=*/u"b",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -11387,21 +11034,23 @@ IN_PROC_BROWSER_TEST_F(
   // There won't be additional operations invoked from the redirect, just the
   // original 3.
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomClearMethod());
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"world",
+                                                /*ignore_if_present=*/true));
+  methods_with_options.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -11432,18 +11081,20 @@ IN_PROC_BROWSER_TEST_F(
        "Shared-Storage-Write: delete;key=a, set;value=will;key=set"});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(2);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().back().first, redirect_origins_.back());
-  EXPECT_THAT(observer_->header_results().back().second,
-              testing::ElementsAre(true, true));
-  EXPECT_THAT(
-      observer_->operations(),
-      testing::ElementsAre(DeleteOperation(redirect_origins_.back(), "a",
-                                           OperationResult::kSuccess),
-                           SetOperation(redirect_origins_.back(), "set", "will",
-                                        std::nullopt, OperationResult::kSet)));
+  EXPECT_EQ(observer_->header_results().back(), redirect_origins_.back());
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomDeleteMethod(/*key=*/u"a"));
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"set",
+                                                /*value=*/u"will",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(redirect_origins_.back(),
+                                   std::move(methods_with_options)));
 
   // Create another iframe that's same-origin to the original iframe URL.
   FrameTreeNode* iframe_node2 =
@@ -11511,26 +11162,33 @@ IN_PROC_BROWSER_TEST_F(
       {"Access-Control-Allow-Origin: *",
        "Shared-Storage-Write: delete;key=a, set;value=will;key=set"});
 
-  // There will now have been a total of 5 operations (3 previous, 2 current).
+  // There will now have been a total of 2 operations (1 previous, 1 current).
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(5);
+  observer_->WaitForOperations(2);
 
   EXPECT_EQ(observer_->header_results().size(), 2u);
-  EXPECT_EQ(observer_->header_results().back().first, redirect_origins_.back());
-  EXPECT_THAT(observer_->header_results().back().second,
-              testing::ElementsAre(true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet),
-                  DeleteOperation(redirect_origins_.back(), "a",
-                                  OperationResult::kSuccess),
-                  SetOperation(redirect_origins_.back(), "set", "will",
-                               std::nullopt, OperationResult::kSet)));
+  EXPECT_EQ(observer_->header_results().back(), redirect_origins_.back());
+  EXPECT_EQ(observer_->operations().size(), 2u);
+
+  std::vector<MethodWithOptionsPtr> methods_with_options1;
+  methods_with_options1.push_back(MojomClearMethod());
+  methods_with_options1.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                 /*value=*/u"world",
+                                                 /*ignore_if_present=*/true));
+  methods_with_options1.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options1)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options2;
+  methods_with_options2.push_back(MojomDeleteMethod(/*key=*/u"a"));
+  methods_with_options2.push_back(MojomSetMethod(/*key=*/u"set",
+                                                 /*value=*/u"will",
+                                                 /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations()[1],
+            HeaderOperationSuccess(redirect_origins_.back(),
+                                   std::move(methods_with_options2)));
 
   // Create another iframe that's same-origin to the original iframe URL.
   FrameTreeNode* iframe_node2 =
@@ -11604,21 +11262,23 @@ IN_PROC_BROWSER_TEST_F(
   // There won't be additional operations invoked from the redirect, just the
   // original 3.
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomClearMethod());
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                /*value=*/u"world",
+                                                /*ignore_if_present=*/true));
+  methods_with_options.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 
   // Create an iframe that's same-origin to the original iframe URL.
   FrameTreeNode* iframe_node1 =
@@ -11648,7 +11308,7 @@ IN_PROC_BROWSER_TEST_F(
 
   EXPECT_THAT(result.error,
               testing::HasSubstr("The \"shared-storage\" Permissions Policy "
-                                 "denied the method on window.sharedStorage."));
+                                 "denied the method"));
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -11675,21 +11335,23 @@ IN_PROC_BROWSER_TEST_F(
        "append;key=hello;value=there"});
 
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(3);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options1;
+  methods_with_options1.push_back(MojomClearMethod());
+  methods_with_options1.push_back(MojomSetMethod(/*key=*/u"hello",
+                                                 /*value=*/u"world",
+                                                 /*ignore_if_present=*/true));
+  methods_with_options1.push_back(
+      MojomAppendMethod(/*key=*/u"hello", /*value=*/u"there"));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options1)));
 
   WaitForRedirectRequestAndSendResponse(
       /*expect_writable_header=*/false,
@@ -11708,26 +11370,22 @@ IN_PROC_BROWSER_TEST_F(
        "Shared-Storage-Write: delete;key=a, set;value=will;key=set"},
       /*redirect_index=*/1);
 
-  // There will now have been a total of 5 operations (3 previous, 2 current).
+  // There will now have been a total of 2 operations (1 previous, 1 current).
   ASSERT_TRUE(observer_);
-  observer_->WaitForOperations(5);
+  observer_->WaitForOperations(2);
 
   EXPECT_EQ(observer_->header_results().size(), 2u);
-  EXPECT_EQ(observer_->header_results().back().first, redirect_origins_.back());
-  EXPECT_THAT(observer_->header_results().back().second,
-              testing::ElementsAre(true, true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(
-                  ClearOperation(subresource_or_subframe_origin_,
-                                 OperationResult::kSuccess),
-                  SetOperation(subresource_or_subframe_origin_, "hello",
-                               "world", true, OperationResult::kSet),
-                  AppendOperation(subresource_or_subframe_origin_, "hello",
-                                  "there", OperationResult::kSet),
-                  DeleteOperation(redirect_origins_.back(), "a",
-                                  OperationResult::kSuccess),
-                  SetOperation(redirect_origins_.back(), "set", "will",
-                               std::nullopt, OperationResult::kSet)));
+  EXPECT_EQ(observer_->header_results().back(), redirect_origins_.back());
+
+  std::vector<MethodWithOptionsPtr> methods_with_options2;
+  methods_with_options2.push_back(MojomDeleteMethod(/*key=*/u"a"));
+  methods_with_options2.push_back(MojomSetMethod(/*key=*/u"set",
+                                                 /*value=*/u"will",
+                                                 /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 2u);
+  EXPECT_EQ(observer_->operations()[1],
+            HeaderOperationSuccess(redirect_origins_.back(),
+                                   std::move(methods_with_options2)));
 
   // Create an iframe that's same-origin to the original iframe URL.
   FrameTreeNode* iframe_node2 =
@@ -11763,7 +11421,7 @@ IN_PROC_BROWSER_TEST_F(
   // c.test does not have permission to use shared storage.
   EXPECT_THAT(result.error,
               testing::HasSubstr("The \"shared-storage\" Permissions Policy "
-                                 "denied the method on window.sharedStorage."));
+                                 "denied the method"));
 
   // Create an iframe that's same-origin to the second redirect URL.
   FrameTreeNode* iframe_node4 =
@@ -11817,19 +11475,20 @@ IN_PROC_BROWSER_TEST_F(
       {"Access-Control-Allow-Origin: *",
        "Shared-Storage-Write: delete;key=a, set;value=will;key=set"});
 
-  observer_->WaitForOperations(2);
+  observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
-            redirect_origins_.back());
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true, true));
-  EXPECT_THAT(
-      observer_->operations(),
-      testing::ElementsAre(DeleteOperation(redirect_origins_.back(), "a",
-                                           OperationResult::kSuccess),
-                           SetOperation(redirect_origins_.back(), "set", "will",
-                                        std::nullopt, OperationResult::kSet)));
+  EXPECT_EQ(observer_->header_results().front(), redirect_origins_.back());
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomDeleteMethod(/*key=*/u"a"));
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"set",
+                                                /*value=*/u"will",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(redirect_origins_.back(),
+                                   std::move(methods_with_options)));
 
   WebContentsConsoleObserver console_observer(shell()->web_contents());
 
@@ -11843,7 +11502,7 @@ IN_PROC_BROWSER_TEST_F(
 
   EXPECT_THAT(result.error,
               testing::HasSubstr("The \"shared-storage\" Permissions Policy "
-                                 "denied the method on window.sharedStorage."));
+                                 "denied the method"));
 
   // Create an iframe that's same-origin to the redirect URL.
   FrameTreeNode* iframe_node3 =
@@ -11891,14 +11550,16 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   observer_->WaitForOperations(1);
 
   EXPECT_EQ(observer_->header_results().size(), 1u);
-  EXPECT_EQ(observer_->header_results().front().first,
+  EXPECT_EQ(observer_->header_results().front(),
             subresource_or_subframe_origin_);
-  EXPECT_THAT(observer_->header_results().front().second,
-              testing::ElementsAre(true));
-  EXPECT_THAT(observer_->operations(),
-              testing::ElementsAre(SetOperation(subresource_or_subframe_origin_,
-                                                "a", "b", std::nullopt,
-                                                OperationResult::kSet)));
+
+  std::vector<MethodWithOptionsPtr> methods_with_options;
+  methods_with_options.push_back(MojomSetMethod(/*key=*/u"a", /*value=*/u"b",
+                                                /*ignore_if_present=*/false));
+  EXPECT_EQ(observer_->operations().size(), 1u);
+  EXPECT_EQ(observer_->operations()[0],
+            HeaderOperationSuccess(subresource_or_subframe_origin_,
+                                   std::move(methods_with_options)));
 }
 
 IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
@@ -11933,72 +11594,417 @@ IN_PROC_BROWSER_TEST_F(SharedStorageHeaderObserverBrowserTest,
   EXPECT_TRUE(observer_->operations().empty());
 }
 
-class SharedStorageOriginTrialBrowserTest : public ContentBrowserTest {
+class SharedStorageCreateWorkletCustomDataOriginBrowserTest
+    : public SharedStorageBrowserTest {
  public:
-  SharedStorageOriginTrialBrowserTest() {
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{blink::features::kPrivacySandboxAdsAPIs,
-                              blink::features::kSharedStorageAPI},
-        /*disabled_features=*/{features::kPrivacySandboxAdsAPIsM1Override});
+  ~SharedStorageCreateWorkletCustomDataOriginBrowserTest() override = default;
+
+  std::vector<base::Value> BuildWellKnownTrustedOriginsLists() override {
+    std::vector<base::Value> trusted_origins_lists;
+    // We expect failure for script with origin "https://b.test:{{port}}" and
+    // context origin "https://a.test:{{port}}" when one of the following values
+    // is served.
+    trusted_origins_lists.push_back(static_cast<base::Value>(
+        base::Value::Dict()
+            .Set("scriptOrigin", "https://b.test:{{port}}")
+            .Set("contextOrigin", "https://a.test:{{port}}")));
+    trusted_origins_lists.push_back(
+        static_cast<base::Value>(base::Value::List()));
+    trusted_origins_lists.push_back(static_cast<base::Value>(
+        base::Value::List().Append(base::Value::List()
+                                       .Append("https://b.test:{{port}}")
+                                       .Append("https://a.test:{{port}}"))));
+    trusted_origins_lists.push_back(static_cast<base::Value>(
+        base::Value::List().Append(base::Value::Dict().Set(
+            "contextOrigin", "https://a.test:{{port}}"))));
+    trusted_origins_lists.push_back(
+        static_cast<base::Value>(base::Value::List().Append(
+            base::Value::Dict()
+                .Set("scriptOrigin", base::Value::List())
+                .Set("contextOrigin", "https://a.test:{{port}}"))));
+    trusted_origins_lists.push_back(static_cast<base::Value>(
+        base::Value::List().Append(base::Value::Dict().Set(
+            "scriptOrigin", "https://b.test:{{port}}"))));
+    trusted_origins_lists.push_back(
+        static_cast<base::Value>(base::Value::List().Append(
+            base::Value::Dict()
+                .Set("scriptOrigin", "https://b.test:{{port}}")
+                .Set("contextOrigin", base::Value::List()))));
+    trusted_origins_lists.push_back(static_cast<base::Value>(
+        base::Value::List()
+            .Append(base::Value::Dict()
+                        .Set("scriptOrigin", "https://a.test:{{port}}")
+                        .Set("contextOrigin", "*"))
+            .Append(base::Value::Dict()
+                        .Set("scriptOrigin", "*")
+                        .Set("contextOrigin", "https://b.test:{{port}}"))));
+    // We expect success for script with origin "https://b.test:{{port}}" and
+    // context origin "https://a.test:{{port}}" when one of the following values
+    // is served.
+    trusted_origins_lists.push_back(
+        static_cast<base::Value>(base::Value::List().Append(
+            base::Value::Dict()
+                .Set("scriptOrigin", "https://b.test:{{port}}")
+                .Set("contextOrigin", "https://a.test:{{port}}"))));
+    trusted_origins_lists.push_back(
+        static_cast<base::Value>(base::Value::List().Append(
+            base::Value::Dict()
+                .Set("scriptOrigin", "https://b.test:{{port}}")
+                .Set("contextOrigin", "*"))));
+    trusted_origins_lists.push_back(
+        static_cast<base::Value>(base::Value::List().Append(
+            base::Value::Dict()
+                .Set("scriptOrigin", "*")
+                .Set("contextOrigin", "https://a.test:{{port}}"))));
+    trusted_origins_lists.push_back(
+        static_cast<base::Value>(base::Value::List().Append(
+            base::Value::Dict()
+                .Set("scriptOrigin", base::Value::List()
+                                         .Append("https://x.test:{{port}}")
+                                         .Append("https://b.test:{{port}}"))
+                .Set("contextOrigin",
+                     base::Value::List()
+                         .Append("https://a.test:{{port}}")
+                         .Append("https://y.test:{{port}}")))));
+    trusted_origins_lists.push_back(
+        static_cast<base::Value>(base::Value::List().Append(
+            base::Value::Dict()
+                .Set("scriptOrigin", base::Value::List()
+                                         .Append("https://b.test:{{port}}")
+                                         .Append("https://y.test:{{port}}")
+                                         .Append("https://x.test:{{port}}"))
+                .Set("contextOrigin",
+                     base::Value::List()
+                         .Append("https://y.test:{{port}}")
+                         .Append("*")
+                         .Append("https://z.test:{{port}}")))));
+    trusted_origins_lists.push_back(
+        static_cast<base::Value>(base::Value::List().Append(
+            base::Value::Dict()
+                .Set("scriptOrigin", base::Value::List()
+                                         .Append("https://x.test:{{port}}")
+                                         .Append("https://y.test:{{port}}")
+                                         .Append("*"))
+                .Set("contextOrigin",
+                     base::Value::List()
+                         .Append("https://y.test:{{port}}")
+                         .Append("https://a.test:{{port}}")))));
+    return trusted_origins_lists;
   }
-
-  void SetUpOnMainThread() override {
-    ContentBrowserTest::SetUpOnMainThread();
-
-    // We use a URLLoaderInterceptor, rather than the EmbeddedTestServer, since
-    // the origin trial token in the response is associated with a fixed
-    // origin, whereas EmbeddedTestServer serves content on a random port.
-    url_loader_interceptor_ =
-        std::make_unique<URLLoaderInterceptor>(base::BindLambdaForTesting(
-            [](URLLoaderInterceptor::RequestParams* params) -> bool {
-              base::ScopedAllowBlockingForTesting allow_blocking;
-
-              base::FilePath test_data_dir;
-              CHECK(base::PathService::Get(DIR_TEST_DATA, &test_data_dir));
-
-              std::string relative_path =
-                  params->url_request.url.path().substr(1);
-
-              base::FilePath file_path =
-                  test_data_dir.AppendASCII(relative_path);
-
-              URLLoaderInterceptor::WriteResponse(file_path,
-                                                  params->client.get());
-
-              return true;
-            }));
-  }
-
-  void TearDownOnMainThread() override {
-    // Resetting `URLLoaderInterceptor` needs a single-threaded context. Thus,
-    // reset it here instead of during destruction of `this`.
-    url_loader_interceptor_.reset();
-  }
-
- private:
-  std::unique_ptr<URLLoaderInterceptor> url_loader_interceptor_;
-
-  base::test::ScopedFeatureList feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(SharedStorageOriginTrialBrowserTest,
-                       OriginTrialEnabled_SharedStorageClassExposedInWorklet) {
-  EXPECT_TRUE(
-      NavigateToURL(shell(), GURL("https://example.test/attribution_reporting/"
-                                  "page_with_ads_apis_ot.html")));
+INSTANTIATE_TEST_SUITE_P(All,
+                         SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+                         testing::Bool(),
+                         describe_param);
 
-  EXPECT_TRUE(ExecJs(shell(), R"(
-      // Try accessing the `SharedStorage` interface which is gated by
-      // [RuntimeEnabled=SharedStorageAPI] which has an associated Origin Trial
-      // feature. If the OT features are correctly propagated to the worklet
-      // environment, the module script should execute successfully.
-      let module_content = `
-        SharedStorage;
-      `;
+IN_PROC_BROWSER_TEST_P(SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+                       CrossOriginScript_Failure_ServerError) {
+  set_force_server_error(true);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
 
-      let blob = new Blob([module_content], {type: 'text/javascript'});
-      sharedStorage.worklet.addModule(URL.createObjectURL(blob));
-    )"));
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EvalJsResult result = EvalJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize()));
+
+  EXPECT_THAT(
+      result.error,
+      testing::HasSubstr(
+          "no response, an invalid response, or an unexpected mime type"));
+}
+
+IN_PROC_BROWSER_TEST_P(SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+                       CrossOriginScript_Failure_NotAList) {
+  set_trusted_origins_list_index(0);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EvalJsResult result = EvalJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize()));
+
+  EXPECT_THAT(
+      result.error,
+      testing::HasSubstr(
+          "because there was no parse result or the result was not a list"));
+}
+
+IN_PROC_BROWSER_TEST_P(SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+                       CrossOriginScript_Failure_EmptyList) {
+  set_trusted_origins_list_index(1);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EvalJsResult result = EvalJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize()));
+
+  EXPECT_THAT(result.error, testing::HasSubstr("is an empty list"));
+}
+
+IN_PROC_BROWSER_TEST_P(SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+                       CrossOriginScript_Failure_NonDictItem) {
+  set_trusted_origins_list_index(2);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EvalJsResult result = EvalJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize()));
+
+  EXPECT_THAT(result.error,
+              testing::HasSubstr("non-dictionary item was encountered"));
+}
+
+IN_PROC_BROWSER_TEST_P(SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+                       CrossOriginScript_Failure_ScriptOriginKeyNotFound) {
+  set_trusted_origins_list_index(3);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EvalJsResult result = EvalJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize()));
+
+  EXPECT_THAT(
+      result.error,
+      testing::HasSubstr("dictionary item's `scriptOrigin` key was not found"));
+}
+
+IN_PROC_BROWSER_TEST_P(SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+                       CrossOriginScript_Failure_ScriptOriginValueEmptyList) {
+  set_trusted_origins_list_index(4);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EvalJsResult result = EvalJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize()));
+
+  EXPECT_THAT(
+      result.error,
+      testing::HasSubstr(
+          "`scriptOrigin` key was not found, or its value was an empty list"));
+}
+
+IN_PROC_BROWSER_TEST_P(SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+                       CrossOriginScript_Failure_ContextOriginKeyNotFound) {
+  set_trusted_origins_list_index(5);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EvalJsResult result = EvalJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize()));
+
+  EXPECT_THAT(result.error,
+              testing::HasSubstr(
+                  "dictionary item's `contextOrigin` key was not found"));
+}
+
+IN_PROC_BROWSER_TEST_P(SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+                       CrossOriginScript_Failure_ContextOriginValueEmptyList) {
+  set_trusted_origins_list_index(6);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EvalJsResult result = EvalJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize()));
+
+  EXPECT_THAT(
+      result.error,
+      testing::HasSubstr(
+          "`contextOrigin` key was not found, or its value was an empty list"));
+}
+
+IN_PROC_BROWSER_TEST_P(SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+                       CrossOriginScript_Failure_NotAllowed) {
+  set_trusted_origins_list_index(7);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EvalJsResult result = EvalJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize()));
+
+  EXPECT_THAT(result.error, testing::HasSubstr("has not been allowed"));
+}
+
+IN_PROC_BROWSER_TEST_P(SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+                       CrossOriginScript_Success_FullySpecified) {
+  set_trusted_origins_list_index(8);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize())));
+}
+
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+    CrossOriginScript_Success_SpecifiedScriptOrigin_WildcardContextOrigin) {
+  set_trusted_origins_list_index(9);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize())));
+}
+
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+    CrossOriginScript_Success_WildcardScriptOrigin_SpecifiedContextOrigin) {
+  set_trusted_origins_list_index(10);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize())));
+}
+
+IN_PROC_BROWSER_TEST_P(SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+                       CrossOriginScript_Success_Lists_FullySpecified) {
+  set_trusted_origins_list_index(11);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize())));
+}
+
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+    CrossOriginScript_Success_Lists_SpecifiedScriptOrigin_WildcardContextOrigin) {
+  set_trusted_origins_list_index(12);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize())));
+}
+
+IN_PROC_BROWSER_TEST_P(
+    SharedStorageCreateWorkletCustomDataOriginBrowserTest,
+    CrossOriginScript_Success_Lists_WildcardScriptOrigin_SpecifiedContextOrigin) {
+  set_trusted_origins_list_index(13);
+  GURL url = https_server()->GetURL("a.test", kSimplePagePath);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  GURL module_script_url = https_server()->GetURL(
+      "b.test", "/shared_storage/module_with_cors_header.js");
+
+  url::Origin custom_data_origin =
+      url::Origin::Create(https_server()->GetURL("c.test", kSimplePagePath));
+
+  EXPECT_TRUE(ExecJs(
+      shell(),
+      JsReplace("sharedStorage.createWorklet($1, {dataOrigin: $2})",
+                module_script_url.spec(), custom_data_origin.Serialize())));
 }
 
 }  // namespace content

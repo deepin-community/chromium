@@ -83,7 +83,7 @@ declare_args() {
 # internal:generate_metrics_key_header must be a deps when
 # USE_OFFICIAL_GOOGLE_API_KEYS` is defined. Use this variable for both.
 # On iOS, Chrome branding had been overriding use_official_google_api_keys.
-# TODO(crbug.com/1362160): Fix this logic on iOS. Can this variable be replaced
+# TODO(crbug.com/40864074): Fix this logic on iOS. Can this variable be replaced
 # with just use_official_google_api_keys?
 _use_official_google_keys_and_generate_metrics_key_header =
     use_official_google_api_keys || (is_ios && is_chrome_branded)
@@ -113,8 +113,12 @@ config("key_defines") {
 
 component("google_apis") {
   sources = [
+    "api_key_cache.cc",
+    "api_key_cache.h",
     "credentials_mode.cc",
     "credentials_mode.h",
+    "default_api_keys-inc.cc",
+    "default_api_keys.h",
     "gaia/core_account_id.cc",
     "gaia/core_account_id.h",
     "gaia/gaia_access_token_fetcher.cc",
@@ -129,6 +133,10 @@ component("google_apis") {
     "gaia/gaia_config.h",
     "gaia/gaia_constants.cc",
     "gaia/gaia_constants.h",
+    "gaia/gaia_features.cc",
+    "gaia/gaia_features.h",
+    "gaia/gaia_id.cc",
+    "gaia/gaia_id.h",
     "gaia/gaia_oauth_client.cc",
     "gaia/gaia_oauth_client.h",
     "gaia/gaia_switches.cc",
@@ -157,8 +165,7 @@ component("google_apis") {
     "gaia/oauth2_mint_token_flow.h",
     "gaia/oauth_multilogin_result.cc",
     "gaia/oauth_multilogin_result.h",
-    "gaia/oauth_request_signer.cc",
-    "gaia/oauth_request_signer.h",
+    "gaia/token_binding_response_encryption_error.h",
     "google_api_keys.cc",
     "google_api_keys.h",
   ]
@@ -177,7 +184,7 @@ component("google_apis") {
 
   deps = [
     ":proto",
-    "//base/third_party/dynamic_annotations",
+    "//base/version_info:channel",
     "//build:branding_buildflags",
     "//build:chromeos_buildflags",
     "//crypto",
@@ -196,6 +203,10 @@ component("google_apis") {
       "google_api_keys_mac.mm",
     ]
 
+    if (is_ios) {
+      sources += [ "gaia/gaia_id_ios.mm" ]
+    }
+
     frameworks = [ "Foundation.framework" ]
   }
 
@@ -205,6 +216,7 @@ component("google_apis") {
 proto_library("proto") {
   sources = [
     "gaia/bound_oauth_token.proto",
+    "gaia/list_accounts_response.proto",
     "gaia/oauth2_mint_token_consent_result.proto",
   ]
 }
@@ -261,7 +273,6 @@ test("google_apis_unittests") {
     "gaia/oauth2_mint_access_token_fetcher_adapter_unittest.cc",
     "gaia/oauth2_mint_token_flow_unittest.cc",
     "gaia/oauth_multilogin_result_unittest.cc",
-    "gaia/oauth_request_signer_unittest.cc",
     "google_api_keys_unittest.cc",
     "google_api_keys_unittest.h",
   ]
@@ -275,12 +286,14 @@ test("google_apis_unittests") {
     ":test_support",
     "//base",
     "//base/test:test_support",
+    "//base/version_info:channel",
     "//build:branding_buildflags",
     "//build:chromeos_buildflags",
     "//google_apis/calendar:calendar_unittests",
     "//google_apis/common:common_unittests",
     "//testing/gmock",
     "//testing/gtest",
+    "//third_party/protobuf:protobuf_lite",
   ]
 
   if (is_ios) {
@@ -311,7 +324,9 @@ test("google_apis_unittests") {
   if (is_chromeos) {
     deps += [
       "//google_apis/classroom:classroom_unittests",
+      "//google_apis/people:people_unittest_sources",
       "//google_apis/tasks:tasks_unittests",
+      "//google_apis/youtube_music:youtube_music_unittests",
     ]
   }
 }

@@ -7,19 +7,15 @@
 #include <memory>
 
 #include "components/autofill/content/browser/content_autofill_driver.h"
-#include "components/autofill/core/browser/browser_autofill_manager.h"
-#include "components/autofill/core/browser/test_browser_autofill_manager.h"
+#include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
+#include "components/autofill/core/browser/foundations/test_browser_autofill_manager.h"
 
 namespace autofill {
 
 std::unique_ptr<AutofillManager> TestContentAutofillClient::CreateManager(
     base::PassKey<ContentAutofillDriver> pass_key,
     ContentAutofillDriver& driver) {
-  return std::make_unique<BrowserAutofillManager>(&driver, this, "en-US");
+  return std::make_unique<BrowserAutofillManager>(&driver);
 }
-
-void TestContentAutofillClient::InitAgent(
-    base::PassKey<ContentAutofillDriverFactory> pass_key,
-    const mojo::AssociatedRemote<mojom::AutofillAgent>& agent) {}
 
 }  // namespace autofill

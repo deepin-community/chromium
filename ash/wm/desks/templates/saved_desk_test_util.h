@@ -21,11 +21,6 @@ namespace app_restore {
 struct AppRestoreData;
 }  // namespace app_restore
 
-namespace views {
-class Button;
-class Label;
-}  // namespace views
-
 namespace ash {
 
 class IconButton;
@@ -71,9 +66,15 @@ class SavedDeskLibraryViewTestApi {
   SavedDeskLibraryViewTestApi& operator=(SavedDeskLibraryViewTestApi&) = delete;
   ~SavedDeskLibraryViewTestApi() = default;
 
-  const views::ScrollView* scroll_view() { return library_view_->scroll_view_; }
+  const SavedDeskGridView* coral_grid_view() const {
+    return library_view_->coral_grid_view_;
+  }
 
-  const views::Label* no_items_label() {
+  const views::ScrollView* scroll_view() const {
+    return library_view_->scroll_view_;
+  }
+
+  const views::Label* no_items_label() const {
     return library_view_->no_items_label_;
   }
 
@@ -199,6 +200,10 @@ const views::Button* GetSavedDeskDialogAcceptButton();
 // update, which sends callbacks via posting tasks. Call `WaitForSavedDeskUI()`
 // if testing a piece of the UI which calls into the desk model.
 void WaitForSavedDeskUI();
+
+// Waits until the library button is visible. Returns false if the library
+// button doesn't become visible within a timeout.
+bool WaitForLibraryButtonVisible();
 
 // Retrieves the AppRestoreData (if any) from a template. For both `app_id` and
 // `window_id`: if not set - the first occurrence is used. Returns nullptr if

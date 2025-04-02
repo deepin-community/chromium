@@ -2,14 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "components/segmentation_platform/embedder/default_model/database_api_clients.h"
 
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 
 #include "base/logging.h"
 #include "base/metrics/metrics_hashes.h"
+#include "base/notreached.h"
 #include "base/strings/stringprintf.h"
 #include "components/segmentation_platform/internal/database/ukm_types.h"
 #include "components/segmentation_platform/internal/metadata/metadata_writer.h"
@@ -129,7 +136,7 @@ void DatabaseApiClients::AddSumGroupQuery(
 
 // static
 void DatabaseApiClients::AddSumQuery(MetadataWriter& writer,
-                                     base::StringPiece metric_name,
+                                     std::string_view metric_name,
                                      int days) {
   std::string query = base::StringPrintf(
       "SELECT SUM(metric_value) FROM metrics WHERE metric_hash = '%" PRIX64
@@ -168,7 +175,7 @@ void DatabaseApiClients::ExecuteModelWithInput(
     const ModelProvider::Request& inputs,
     ExecutionCallback callback) {
   // This model should not be executed, only used for tracking custom metrics.
-  CHECK(0);
+  NOTREACHED();
 }
 
 }  // namespace segmentation_platform

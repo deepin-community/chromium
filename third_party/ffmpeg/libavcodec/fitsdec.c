@@ -301,9 +301,6 @@ static int fits_decode_frame(AVCodecContext *avctx, AVFrame *p,
         }
     }
 
-    p->flags |= AV_FRAME_FLAG_KEY;
-    p->pict_type = AV_PICTURE_TYPE_I;
-
     *got_frame = 1;
 
     return avpkt->size;
@@ -316,6 +313,7 @@ static const AVOption fits_options[] = {
 
 static const AVClass fits_decoder_class = {
     .class_name = "FITS decoder",
+    .item_name  = av_default_item_name,
     .option     = fits_options,
     .version    = LIBAVUTIL_VERSION_INT,
     .category   = AV_CLASS_CATEGORY_DECODER,

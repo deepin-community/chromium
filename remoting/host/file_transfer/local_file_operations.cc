@@ -5,8 +5,8 @@
 #include "remoting/host/file_transfer/local_file_operations.h"
 
 #include <cstdint>
-
 #include <optional>
+
 #include "base/files/file_path.h"
 #include "base/files/file_proxy.h"
 #include "base/files/file_util.h"
@@ -277,7 +277,6 @@ void LocalFileReader::SetState(FileOperations::State state) {
   switch (state) {
     case FileOperations::kCreated:
       NOTREACHED();  // Can never return to initial state.
-      break;
     case FileOperations::kReady:
       DCHECK_EQ(FileOperations::kBusy, state_);
       break;
@@ -328,7 +327,7 @@ void LocalFileWriter::WriteChunk(std::vector<std::uint8_t> data,
   //               given that callback is moved into the task and not returned
   //               on error?
   // Ensure span is obtained before data is moved.
-  auto data_span = base::make_span(data);
+  auto data_span = base::span(data);
   file_proxy_->Write(bytes_written_, data_span,
                      base::BindOnce(&LocalFileWriter::OnWriteResult,
                                     weak_ptr_factory_.GetWeakPtr(),
@@ -525,7 +524,6 @@ void LocalFileWriter::SetState(FileOperations::State state) {
   switch (state) {
     case FileOperations::kCreated:
       NOTREACHED();  // Can never return to initial state.
-      break;
     case FileOperations::kReady:
       DCHECK(state_ == FileOperations::kBusy);
       break;

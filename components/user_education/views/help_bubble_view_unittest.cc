@@ -12,10 +12,10 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/mock_callback.h"
-#include "components/user_education/common/events.h"
-#include "components/user_education/common/feature_promo_specification.h"
-#include "components/user_education/common/help_bubble.h"
-#include "components/user_education/common/help_bubble_params.h"
+#include "components/user_education/common/feature_promo/feature_promo_specification.h"
+#include "components/user_education/common/help_bubble/help_bubble.h"
+#include "components/user_education/common/help_bubble/help_bubble_params.h"
+#include "components/user_education/common/user_education_events.h"
 #include "components/user_education/views/help_bubble_delegate.h"
 #include "components/user_education/views/help_bubble_factory_views.h"
 #include "components/user_education/views/help_bubble_views_test_util.h"
@@ -28,12 +28,14 @@
 #include "ui/base/interaction/interaction_test_util.h"
 #include "ui/base/theme_provider.h"
 #include "ui/gfx/geometry/vector2d.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/interaction/interaction_test_util_views.h"
 #include "ui/views/layout/flex_layout_view.h"
 #include "ui/views/layout/layout_types.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/test/views_test_utils.h"
+#include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
 
@@ -107,6 +109,46 @@ class HelpBubbleViewTest : public views::ViewsTestBase {
   raw_ptr<views::View, DanglingUntriaged> view_;
   std::unique_ptr<views::Widget> widget_;
 };
+
+TEST_F(HelpBubbleViewTest, DefaultMaxWidth) {
+  HelpBubbleParams params;
+
+  // Choose body text that will wrap.
+  params.body_text =
+      u"The quick brown fox jumped over the lazy dogs. How now brown cow.";
+  HelpBubbleButtonParams button1;
+  button1.is_default = true;
+  button1.text = u"button1";
+  params.buttons.emplace_back(std::move(button1));
+  HelpBubbleButtonParams button2;
+  button2.is_default = false;
+  button2.text = u"button2";
+  params.buttons.emplace_back(std::move(button2));
+
+  HelpBubbleView* const bubble = CreateHelpBubbleView(std::move(params));
+  EXPECT_EQ(HelpBubbleView::kMaxWidthDip, bubble->GetPreferredSize().width());
+  bubble->GetWidget()->Close();
+}
+
+TEST_F(HelpBubbleViewTest, ExpandedMaxWidth) {
+  HelpBubbleParams params;
+
+  // Choose body text that will wrap.
+  params.body_text =
+      u"The quick brown fox jumped over the lazy dogs. How now brown cow.";
+  HelpBubbleButtonParams button1;
+  button1.is_default = true;
+  button1.text = u"Lorem ipsum dolor sit amet, consectetur adipiscing elit";
+  params.buttons.emplace_back(std::move(button1));
+  HelpBubbleButtonParams button2;
+  button2.is_default = false;
+  button2.text = u"button2";
+  params.buttons.emplace_back(std::move(button2));
+
+  HelpBubbleView* const bubble = CreateHelpBubbleView(std::move(params));
+  EXPECT_GT(bubble->GetPreferredSize().width(), HelpBubbleView::kMaxWidthDip);
+  bubble->GetWidget()->Close();
+}
 
 TEST_F(HelpBubbleViewTest, CallButtonCallback_Mouse) {
   UNCALLED_MOCK_CALLBACK(base::RepeatingClosure, mock_callback);
@@ -446,5 +488,26 @@ TEST_F(HelpBubbleViewsTest, MoveAnchorWidget) {
   expected.Offset(kOffset);
   EXPECT_EQ(expected, help_bubble_->GetBoundsInScreen());
 }
+
+TEST_F(HelpBubbleViewsTest, RootViewAccessibleName) {
+  ui::AXNodeData root_view_data;
+  help_bubble_->bubble_view()
+      ->GetWidget()
+      ->GetRootView()
+      ->GetViewAccessibility()
+      .GetAccessibleNodeData(&root_view_data);
+  EXPECT_EQ(
+      root_view_data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+      help_bubble_->bubble_view()->GetAccessibleWindowTitle());
+}
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+TEST_F(HelpBubbleViewsTest, MinimizeAnchorWidget) {
+  views::test::WidgetDestroyedWaiter waiter(
+      help_bubble_->bubble_view()->GetWidget());
+  widget_->Minimize();
+  waiter.Wait();
+}
+#endif
 
 }  // namespace user_education

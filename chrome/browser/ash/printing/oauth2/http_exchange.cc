@@ -37,7 +37,6 @@ std::string ToString(ContentFormat format) {
     default:
       NOTREACHED();
   }
-  return "";
 }
 
 }  // namespace
@@ -46,7 +45,7 @@ HttpExchange::HttpExchange(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
     : url_loader_factory_(url_loader_factory) {}
 
-HttpExchange::~HttpExchange() {}
+HttpExchange::~HttpExchange() = default;
 
 void HttpExchange::Clear() {
   content_.clear();

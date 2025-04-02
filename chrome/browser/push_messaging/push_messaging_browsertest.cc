@@ -36,10 +36,12 @@
 #include "chrome/browser/push_messaging/push_messaging_features.h"
 #include "chrome/browser/push_messaging/push_messaging_service_factory.h"
 #include "chrome/browser/push_messaging/push_messaging_service_impl.h"
+#include "chrome/browser/push_messaging/push_messaging_utils.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/buildflags.h"
+#include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -120,9 +122,8 @@ std::string GetTestApplicationServerKey(bool base64_url_encoded = false) {
                           base::Base64UrlEncodePolicy::OMIT_PADDING,
                           &application_server_key);
   } else {
-    application_server_key =
-        std::string(kApplicationServerKey,
-                    kApplicationServerKey + std::size(kApplicationServerKey));
+    application_server_key = std::string(std::begin(kApplicationServerKey),
+                                         std::end(kApplicationServerKey));
   }
 
   return application_server_key;
@@ -534,8 +535,13 @@ void PushMessagingBrowserTestBase::EndpointToToken(const std::string& endpoint,
                                                    bool standard_protocol,
                                                    std::string* out_token) {
   size_t last_slash = endpoint.rfind('/');
+  ASSERT_NE(last_slash, std::string::npos);
 
-  ASSERT_EQ(kPushMessagingGcmEndpoint, endpoint.substr(0, last_slash + 1));
+  ASSERT_EQ(base::FeatureList::IsEnabled(
+                features::kPushMessagingGcmEndpointEnvironment)
+                ? push_messaging::GetGcmEndpointForChannel(chrome::GetChannel())
+                : kPushMessagingGcmEndpoint,
+            endpoint.substr(0, last_slash + 1));
 
   ASSERT_LT(last_slash + 1, endpoint.length());  // Token must not be empty.
 
@@ -1692,18 +1698,7 @@ IN_PROC_BROWSER_TEST_F(
       static_cast<int>(blink::mojom::PushEventStatus::SUCCESS), 1);
 }
 
-class PushMessagingBrowserTestWithNotificationTriggersEnabled
-    : public PushMessagingBrowserTestBase {
- public:
-  PushMessagingBrowserTestWithNotificationTriggersEnabled() {
-    feature_list_.InitAndEnableFeature(features::kNotificationTriggers);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTestWithNotificationTriggersEnabled,
+IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTestBase,
                        PushEventIgnoresScheduledNotificationsForEnforcement) {
   ASSERT_NO_FATAL_FAILURE(SubscribeSuccessfully());
   PushMessagingAppIdentifier app_identifier =
@@ -2642,7 +2637,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingIncognitoBrowserTest, WarningToCorrectRFH) {
   EXPECT_EQ(1u, console_observer.messages().size());
 }
 
-// TODO(https://crbug.com/1268294): This test hits the issue. Re-enable after it
+// TODO(crbug.com/40204670): This test hits the issue. Re-enable after it
 // is fixed.
 IN_PROC_BROWSER_TEST_F(PushMessagingIncognitoBrowserTest,
                        DISABLED_WarningToCorrectRFH_Prerender) {
@@ -2662,11 +2657,11 @@ IN_PROC_BROWSER_TEST_F(PushMessagingIncognitoBrowserTest,
   // Start a prerender with the push messaging test URL.
   const GURL prerendering_url(
       https_server()->GetURL(GetTestURL() + "?prerendering"));
-  int host_id = prerender_helper_.AddPrerender(prerendering_url);
+  content::FrameTreeNodeId host_id =
+      prerender_helper_.AddPrerender(prerendering_url);
   content::test::PrerenderHostObserver prerender_observer(*web_contents(),
                                                           host_id);
-  ASSERT_NE(prerender_helper_.GetHostForUrl(prerendering_url),
-            content::RenderFrameHost::kNoFrameTreeNodeId);
+  ASSERT_TRUE(prerender_helper_.GetHostForUrl(prerendering_url));
 
   content::WebContentsConsoleObserver console_observer(web_contents());
   console_observer.SetPattern(kIncognitoWarningPattern);
@@ -2882,11 +2877,6 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventTest,
   EXPECT_EQ(old_endpoint.spec(), RunScript("resultQueue.pop()"));
   // Compare new subscription
   EXPECT_EQ(new_endpoint.spec(), RunScript("resultQueue.pop()"));
-
-  // Check that we record this case in UMA.
-  histogram_tester_.ExpectUniqueSample(
-      "PushMessaging.PushSubscriptionChangeStatus",
-      blink::mojom::PushEventStatus::SUCCESS, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventTest,
@@ -2923,11 +2913,6 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventTest,
   // |new_subscription| is null
   EXPECT_EQ(old_subscription->endpoint.spec(), RunScript("resultQueue.pop()"));
   EXPECT_EQ("null", RunScript("resultQueue.pop()"));
-
-  // Check that we record this case in UMA.
-  histogram_tester_.ExpectUniqueSample(
-      "PushMessaging.PushSubscriptionChangeStatus",
-      blink::mojom::PushEventStatus::SUCCESS, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventTest, OnInvalidation) {
@@ -2966,9 +2951,4 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventTest, OnInvalidation) {
   // Expect `pushsubscriptionchange` event that is not null
   EXPECT_NE("null", RunScript("resultQueue.pop()"));
   EXPECT_NE("null", RunScript("resultQueue.pop()"));
-
-  // Check that we record this case in UMA.
-  histogram_tester_.ExpectUniqueSample(
-      "PushMessaging.PushSubscriptionChangeStatus",
-      blink::mojom::PushEventStatus::SUCCESS, 1);
 }

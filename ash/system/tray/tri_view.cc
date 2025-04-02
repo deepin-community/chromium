@@ -28,7 +28,6 @@ views::BoxLayout::Orientation GetOrientation(TriView::Orientation orientation) {
   }
   // Required for some compilers.
   NOTREACHED();
-  return views::BoxLayout::Orientation::kHorizontal;
 }
 
 }  // namespace
@@ -168,7 +167,6 @@ SizeRangeLayout* TriView::GetLayoutManager(Container container) {
   }
   // Required for some compilers.
   NOTREACHED();
-  return nullptr;
 }
 
 BEGIN_METADATA(TriView)

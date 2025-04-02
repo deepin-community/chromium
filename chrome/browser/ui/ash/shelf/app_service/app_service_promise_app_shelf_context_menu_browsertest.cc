@@ -21,8 +21,8 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/services/app_service/public/cpp/package_id.h"
 #include "content/public/test/browser_test.h"
-#include "ui/base/models/simple_menu_model.h"
 #include "ui/display/display.h"
+#include "ui/menus/simple_menu_model.h"
 
 class AppServicePromiseAppShelfContextMenuBrowserTest
     : public InProcessBrowserTest {
@@ -47,7 +47,7 @@ class AppServicePromiseAppShelfContextMenuBrowserTest
 
 IN_PROC_BROWSER_TEST_F(AppServicePromiseAppShelfContextMenuBrowserTest,
                        MenuOnlyHasPin) {
-  apps::PackageId package_id(apps::AppType::kArc, "com.example.test");
+  apps::PackageId package_id(apps::PackageType::kArc, "com.example.test");
   AddTestPromiseApp(package_id);
 
   ash::ShelfModel* shelf_model = ash::ShelfModel::Get();

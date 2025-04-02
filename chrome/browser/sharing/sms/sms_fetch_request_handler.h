@@ -13,8 +13,8 @@
 #include "base/functional/bind.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/sharing/proto/sharing_message.pb.h"
-#include "chrome/browser/sharing/sharing_message_handler.h"
+#include "components/sharing_message/proto/sharing_message.pb.h"
+#include "components/sharing_message/sharing_message_handler.h"
 #include "content/public/browser/sms_fetcher.h"
 #include "url/origin.h"
 
@@ -38,13 +38,17 @@ class SmsFetchRequestHandler : public SharingMessageHandler {
   ~SmsFetchRequestHandler() override;
 
   // SharingMessageHandler
-  void OnMessage(chrome_browser_sharing::SharingMessage message,
+  void OnMessage(components_sharing_message::SharingMessage message,
                  SharingMessageHandler::DoneCallback done_callback) override;
   virtual void AskUserPermission(const content::OriginList&,
                                  const std::string& one_time_code,
                                  const std::string& client_name);
-  virtual void OnConfirm(JNIEnv*, jstring top_origin, jstring embedded_origin);
-  virtual void OnDismiss(JNIEnv*, jstring top_origin, jstring embedded_origin);
+  virtual void OnConfirm(JNIEnv*,
+                         std::u16string top_origin,
+                         jstring embedded_origin);
+  virtual void OnDismiss(JNIEnv*,
+                         std::u16string top_origin,
+                         jstring embedded_origin);
 
  private:
   FRIEND_TEST_ALL_PREFIXES(SmsFetchRequestHandlerTest, Basic);
@@ -53,8 +57,6 @@ class SmsFetchRequestHandler : public SharingMessageHandler {
                            SendSuccessMessageOnConfirm);
   FRIEND_TEST_ALL_PREFIXES(SmsFetchRequestHandlerTest,
                            SendFailureMessageOnDismiss);
-  FRIEND_TEST_ALL_PREFIXES(SmsFetchRequestHandlerTest, DefaultDeviceName);
-  FRIEND_TEST_ALL_PREFIXES(SmsFetchRequestHandlerTest, EmptyDeviceName);
   // Request represents an incoming request from a remote WebOTPService.
   // It manages subscribing and unsubscribing for SMSes in SmsFetcher and
   // responding to the callback.

@@ -9,16 +9,14 @@
 #include <string>
 #include <utility>
 
+#include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/autofill_type.h"
-#include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/autofill_structured_address_format_provider.h"
 #include "components/autofill/core/browser/data_model/autofill_structured_address_utils.h"
@@ -100,12 +98,6 @@ FieldType AddressComponent::GetStorageType() const {
   return storage_type_;
 }
 
-FieldType AddressComponent::GetFallbackType(FieldType field_type) const {
-  CHECK(IsSupportedType(field_type));
-  // TODO(crbug.com/1464568): Add logic for i18n fallback types.
-  return field_type;
-}
-
 std::string AddressComponent::GetStorageTypeName() const {
   return FieldTypeToString(storage_type_);
 }
@@ -145,8 +137,6 @@ bool AddressComponent::SameAs(const AddressComponent& other) const {
   }
 
   if (subcomponents_.size() != other.subcomponents_.size()) {
-    CHECK(base::FeatureList::IsEnabled(features::kAutofillUseI18nAddressModel))
-        << GetStorageTypeName();
     return false;
   }
   for (size_t i = 0; i < other.subcomponents_.size(); i++) {
@@ -165,20 +155,24 @@ bool AddressComponent::IsValueValid() const {
   return true;
 }
 
-std::u16string AddressComponent::GetCommonCountry(
+AddressCountryCode AddressComponent::GetCommonCountry(
     const AddressComponent& other) const {
-  const std::u16string country_a =
-      GetRootNode().GetValueForType(ADDRESS_HOME_COUNTRY);
-  const std::u16string country_b =
-      other.GetRootNode().GetValueForType(ADDRESS_HOME_COUNTRY);
-  if (country_a.empty()) {
+  const AddressCountryCode country_a = GetCountryCode();
+  const AddressCountryCode country_b = other.GetCountryCode();
+  if (country_a->empty()) {
     return country_b;
   }
-  if (country_b.empty()) {
+  if (country_b->empty()) {
     return country_a;
   }
-  return base::EqualsCaseInsensitiveASCII(country_a, country_b) ? country_a
-                                                                : u"";
+  return base::EqualsCaseInsensitiveASCII(country_a.value(), country_b.value())
+             ? country_a
+             : AddressCountryCode("");
+}
+
+AddressCountryCode AddressComponent::GetCountryCode() const {
+  return AddressCountryCode(
+      base::UTF16ToUTF8(GetRootNode().GetValueForType(ADDRESS_HOME_COUNTRY)));
 }
 
 bool AddressComponent::IsValueForTypeValid(FieldType field_type,
@@ -211,6 +205,12 @@ const std::u16string& AddressComponent::GetValue() const {
   if (value_.has_value())
     return value_.value();
   return base::EmptyString16();
+}
+
+std::u16string AddressComponent::GetValueForComparison(
+    const std::u16string& value,
+    const AddressComponent& other) const {
+  return NormalizeValue(value);
 }
 
 std::optional<std::u16string> AddressComponent::GetCanonicalizedValue() const {
@@ -296,11 +296,8 @@ std::u16string AddressComponent::GetValueForOtherSupportedType(
 }
 
 std::u16string AddressComponent::GetFormatString() const {
-  const std::string country_code =
-      base::UTF16ToUTF8(GetRootNode().GetValueForType(ADDRESS_HOME_COUNTRY));
-
   std::u16string result = i18n_model_definition::GetFormattingExpression(
-      GetStorageType(), AddressCountryCode(country_code));
+      GetStorageType(), GetCountryCode());
   if (!result.empty()) {
     return result;
   }
@@ -322,12 +319,9 @@ std::u16string AddressComponent::GetFormatString() const {
 }
 
 std::vector<FieldType> AddressComponent::GetSubcomponentTypes() const {
-  std::vector<FieldType> subcomponent_types;
-  subcomponent_types.reserve(subcomponents_.size());
-  for (const AddressComponent* subcomponent : subcomponents_) {
-    subcomponent_types.emplace_back(subcomponent->GetStorageType());
-  }
-  return subcomponent_types;
+  return base::ToVector(subcomponents_, [](const AddressComponent* c) {
+    return c->GetStorageType();
+  });
 }
 
 bool AddressComponent::SetValueForType(
@@ -377,7 +371,7 @@ void AddressComponent::FillTreeGaps() {
     return;
   }
 
-  bool has_empty_child = base::ranges::any_of(
+  bool has_empty_child = std::ranges::any_of(
       Subcomponents(),
       [](const AddressComponent* c) { return c->GetValue().empty(); });
 
@@ -461,12 +455,6 @@ VerificationStatus AddressComponent::GetVerificationStatusForType(
                        : VerificationStatus::kNoStatus;
 }
 
-FieldType AddressComponent::GetFallbackTypeForType(FieldType field_type) const {
-  const AddressComponent* node_for_type = GetNodeForType(field_type);
-  return node_for_type ? node_for_type->GetFallbackType(field_type)
-                       : field_type;
-}
-
 bool AddressComponent::UnsetValueForTypeIfSupported(FieldType field_type) {
   AddressComponent* node_for_type = GetNodeForType(field_type);
   if (!node_for_type || field_type != node_for_type->GetStorageType()) {
@@ -489,8 +477,7 @@ void AddressComponent::ParseValueAndAssignSubcomponents() {
   }
 
   bool parsing_successful =
-      base::FeatureList::IsEnabled(features::kAutofillUseI18nAddressModel) &&
-              GroupTypeOfFieldType(GetStorageType()) == FieldTypeGroup::kAddress
+      GroupTypeOfFieldType(GetStorageType()) == FieldTypeGroup::kAddress
           ? ParseValueAndAssignSubcomponentsByI18nParsingRules()
           : ParseValueAndAssignSubcomponentsByRegularExpressions();
 
@@ -503,13 +490,9 @@ void AddressComponent::ParseValueAndAssignSubcomponents() {
 }
 
 bool AddressComponent::ParseValueAndAssignSubcomponentsByI18nParsingRules() {
-  const AddressCountryCode country_code = AddressCountryCode(
-      base::UTF16ToUTF8(GetRootNode().GetValueForType(ADDRESS_HOME_COUNTRY)));
-
   i18n_model_definition::ValueParsingResults results =
       i18n_model_definition::ParseValueByI18nRegularExpression(
-          base::UTF16ToUTF8(GetValue()), GetStorageType(),
-          AddressCountryCode(country_code));
+          base::UTF16ToUTF8(GetValue()), GetStorageType(), GetCountryCode());
 
   if (results) {
     AssignParsedValuesToSubcomponents(std::move(results));
@@ -531,15 +514,10 @@ bool AddressComponent::ParseValueAndAssignSubcomponentsByRegularExpressions() {
 
 void AddressComponent::
     TryParseValueAndAssignSubcomponentsRespectingSetValues() {
-  if (base::FeatureList::IsEnabled(features::kAutofillUseI18nAddressModel) &&
-      GroupTypeOfFieldType(GetStorageType()) == FieldTypeGroup::kAddress) {
-    const AddressCountryCode country_code = AddressCountryCode(
-        base::UTF16ToUTF8(GetRootNode().GetValueForType(ADDRESS_HOME_COUNTRY)));
-
+  if (GroupTypeOfFieldType(GetStorageType()) == FieldTypeGroup::kAddress) {
     i18n_model_definition::ValueParsingResults results =
         i18n_model_definition::ParseValueByI18nRegularExpression(
-            base::UTF16ToUTF8(GetValue()), GetStorageType(),
-            AddressCountryCode(country_code));
+            base::UTF16ToUTF8(GetValue()), GetStorageType(), GetCountryCode());
 
     AssignParsedValuesToSubcomponentsRespectingSetValues(std::move(results));
     return;
@@ -574,7 +552,7 @@ bool AddressComponent::IsValueCompatibleWithDescendants(
     return AreStringTokenCompatible(GetValue(), value);
   }
 
-  return base::ranges::all_of(
+  return std::ranges::all_of(
       Subcomponents(), [value](const AddressComponent* c) {
         return c->IsValueCompatibleWithDescendants(value);
       });
@@ -682,7 +660,7 @@ bool AddressComponent::AssignParsedValuesToSubcomponentsRespectingSetValues(
 }
 
 bool AddressComponent::AllDescendantsAreEmpty() const {
-  return base::ranges::all_of(Subcomponents(), [](const AddressComponent* c) {
+  return std::ranges::all_of(Subcomponents(), [](const AddressComponent* c) {
     return c->GetValue().empty() && c->AllDescendantsAreEmpty();
   });
 }
@@ -710,7 +688,7 @@ bool AddressComponent::IsStructureValid() const {
   // overlapping portion of the unstructured string, but it guarantees that all
   // information in the components is contained in the unstructured
   // representation.
-  return base::ranges::all_of(
+  return std::ranges::all_of(
       Subcomponents(), [this](const AddressComponent* c) {
         return AreStringTokenCompatible(c->GetValue(), GetValue());
       });
@@ -895,9 +873,13 @@ int AddressComponent::
             ->MaximumNumberOfAssignedAddressComponentsOnNodeToLeafPaths());
   }
 
-  // Only count non-empty nodes.
-  if (!GetValue().empty())
+  // Only count non-empty nodes, unless they were user verified.
+  if (!GetValue().empty() ||
+      (base::FeatureList::IsEnabled(
+           features::kAutofillSupportPhoneticNameForJP) &&
+       GetVerificationStatus() == VerificationStatus::kUserVerified)) {
     ++result;
+  }
 
   return result;
 }
@@ -970,7 +952,6 @@ bool AddressComponent::IsMergeableWithComponent(
       GetValueForComparison(newer_component);
   const std::u16string newer_comparison_value =
       newer_component.GetValueForComparison(*this);
-
   // If both components are the same, there is nothing to do.
   if (SameAs(newer_component))
     return true;
@@ -1067,9 +1048,6 @@ bool AddressComponent::IsMergeableWithComponent(
     bool is_mergeable = true;
 
     if (subcomponents_.size() != newer_component.subcomponents_.size()) {
-      CHECK(
-          base::FeatureList::IsEnabled(features::kAutofillUseI18nAddressModel))
-          << GetStorageTypeName();
       return false;
     }
     for (size_t i = 0; i < newer_component.subcomponents_.size(); i++) {
@@ -1564,12 +1542,6 @@ std::u16string AddressComponent::GetNormalizedValue() const {
 std::u16string AddressComponent::GetValueForComparison(
     const AddressComponent& other) const {
   return GetValueForComparison(GetValue(), other);
-}
-
-std::u16string AddressComponent::GetValueForComparison(
-    const std::u16string& value,
-    const AddressComponent& other) const {
-  return NormalizeValue(value);
 }
 
 }  // namespace autofill

@@ -17,10 +17,10 @@
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
-#include "build/chromeos_buildflags.h"
 #include "components/content_settings/core/browser/content_settings_observer.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/signin/core/browser/account_reconcilor_delegate.h"
 #include "components/signin/core/browser/account_reconcilor_throttler.h"
 #include "components/signin/core/browser/signin_header_helper.h"
@@ -33,14 +33,11 @@
 #include "components/account_manager_core/account_manager_facade.h"
 #endif
 
+class PrefRegistrySimple;
+
 namespace signin {
 class AccountReconcilorDelegate;
 enum class SetAccountsInCookieResult;
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-class ConsistencyCookieManager;
-class ConsistencyCookieManagerTest;
-#endif
 }  // namespace signin
 
 class SigninClient;
@@ -127,6 +124,8 @@ class AccountReconcilor
 
   ~AccountReconcilor() override;
 
+  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
+
   // Initializes the account reconcilor. Should be called once after
   // construction.
   void Initialize(bool start_reconcile_if_tokens_available);
@@ -165,12 +164,6 @@ class AccountReconcilor
   // `GoogleServiceAuthError::State::NONE`.
   GoogleServiceAuthError GetReconcileError() const;
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Gets the ConsistencyCookieManager, which updates the
-  // "CHROME_ID_CONSISTENCY_STATE" cookie.
-  signin::ConsistencyCookieManager* GetConsistencyCookieManager();
-#endif
-
  protected:
   void OnSetAccountsInCookieCompleted(
       const std::vector<CoreAccountId>& accounts_to_send,
@@ -183,10 +176,6 @@ class AccountReconcilor
   friend class AccountReconcilorThrottlerTest;
   friend class BaseAccountReconcilorTestTable;
   friend class DiceBrowserTest;
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  friend class signin::ConsistencyCookieManagerTest;
-#endif
 
 #if BUILDFLAG(ENABLE_MIRROR)
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorTest,
@@ -243,6 +232,8 @@ class AccountReconcilor
                            DeleteCookieForSignedInUser);
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorDiceTestWithUnoDesktop,
                            DeleteCookieForSyncingUser);
+  FRIEND_TEST_ALL_PREFIXES(AccountReconcilorDiceTestWithUnoDesktop,
+                           PendingStateThenClearPrimaryAccount);
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorMirrorTest, TokensNotLoaded);
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorMirrorTest,
                            StartReconcileCookiesDisabled);
@@ -309,6 +300,10 @@ class AccountReconcilor
                            TableRowTestMultilogin);
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorTest, ReconcileAfterShutdown);
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorTest, UnlockAfterShutdown);
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  FRIEND_TEST_ALL_PREFIXES(AccountReconcilorTest,
+                           OnAccountsInCookieUpdatedLogoutInProgress);
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorThrottlerTest, RefillOneRequest);
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorThrottlerTest, RefillFiveRequests);
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorThrottlerTest,
@@ -330,6 +325,8 @@ class AccountReconcilor
   // Event triggering a call to StartReconcile().
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
+  //
+  // LINT.IfChange(Trigger)
   enum class Trigger {
     kInitialized = 0,
     kTokensLoaded = 1,
@@ -340,9 +337,11 @@ class AccountReconcilor
     kCookieChange = 6,
     kCookieSettingChange = 7,
     kForcedReconcile = 8,
+    kPrimaryAccountChanged = 9,
 
-    kMaxValue = kForcedReconcile
+    kMaxValue = kPrimaryAccountChanged
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:SigninReconcilerTrigger)
 
   void set_timer_for_testing(std::unique_ptr<base::OneShotTimer> timer);
 
@@ -402,11 +401,15 @@ class AccountReconcilor
       ContentSettingsTypeSet content_type_set) override;
 
   // Overridden from signin::IdentityManager::Observer.
+  void OnPrimaryAccountChanged(
+      const signin::PrimaryAccountChangeEvent& event_details) override;
   void OnEndBatchOfRefreshTokenStateChanges() override;
   void OnRefreshTokensLoaded() override;
   void OnErrorStateOfRefreshTokenUpdatedForAccount(
       const CoreAccountInfo& account_info,
-      const GoogleServiceAuthError& error) override;
+      const GoogleServiceAuthError& error,
+      signin_metrics::SourceForRefreshTokenOperation token_operation_source)
+      override;
   void OnAccountsInCookieUpdated(
       const signin::AccountsInCookieJarInfo& accounts_in_cookie_jar_info,
       const GoogleServiceAuthError& error) override;
@@ -466,6 +469,10 @@ class AccountReconcilor
   // The SigninClient associated with this reconcilor.
   raw_ptr<SigninClient> client_;
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  PrefChangeRegistrar pref_observer_;
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+
 #if BUILDFLAG(IS_CHROMEOS)
   // On Ash, this is a pointer to `AccountManagerFacadeImpl`.
   // Note: On Lacros too, this is a pointer to `AccountManagerFacadeImpl`, and
@@ -507,8 +514,8 @@ class AccountReconcilor
   bool reconcile_is_noop_ = true;
 
   // Used during reconcile action.
-  bool set_accounts_in_progress_ = false;     // Progress of SetAccounts calls.
-  bool log_out_in_progress_ = false;          // Progress of LogOut calls.
+  bool set_accounts_in_progress_ = false;  // Progress of SetAccounts calls.
+  bool log_out_in_progress_ = false;       // Progress of LogOut calls.
   bool chrome_accounts_changed_ = false;
 
   // Used for the Lock.
@@ -543,10 +550,6 @@ class AccountReconcilor
 
   // Set to true when Shutdown() is called.
   bool was_shut_down_ = false;
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  std::unique_ptr<signin::ConsistencyCookieManager> consistency_cookie_manager_;
-#endif
 
   base::WeakPtrFactory<AccountReconcilor> weak_factory_{this};
 };

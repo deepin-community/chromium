@@ -5,6 +5,7 @@
 import("../../../scripts/build/ninja/devtools_entrypoint.gni")
 import("../../../scripts/build/ninja/devtools_module.gni")
 import("../../../scripts/build/ninja/generate_css.gni")
+import("../../../scripts/build/typescript/typescript.gni")
 import("../visibility.gni")
 
 generate_css("css_files") {
@@ -40,9 +41,8 @@ devtools_module("application") {
     "CookieItemsView.ts",
     "DOMStorageItemsView.ts",
     "DOMStorageModel.ts",
-    "DatabaseModel.ts",
-    "DatabaseQueryView.ts",
-    "DatabaseTableView.ts",
+    "ExtensionStorageItemsView.ts",
+    "ExtensionStorageModel.ts",
     "IndexedDBModel.ts",
     "IndexedDBViews.ts",
     "InterestGroupStorageModel.ts",
@@ -87,7 +87,8 @@ devtools_module("application") {
     "../../panels/mobile_throttling:bundle",
     "../../panels/network:bundle",
     "../../panels/network/forward:bundle",
-    "../../ui/components/data_grid:bundle",
+    "../../third_party/json5:bundle",
+    "../../ui/components/buttons:bundle",
     "../../ui/components/expandable_list:bundle",
     "../../ui/components/legacy_wrapper:bundle",
     "../../ui/components/report_view:bundle",
@@ -116,8 +117,6 @@ devtools_entrypoint("bundle") {
 
   visibility = [
     ":*",
-    "../../../test/unittests/front_end/entrypoints/missing_entrypoints/*",
-    "../../../test/unittests/front_end/panels/application/*",
     "../../entrypoints/*",
   ]
 
@@ -137,4 +136,43 @@ devtools_entrypoint("meta") {
   ]
 
   visibility = [ "../../entrypoints/*" ]
+}
+
+ts_library("unittests") {
+  testonly = true
+
+  sources = [
+    "AppManifestView.test.ts",
+    "ApplicationPanelSidebar.test.ts",
+    "BackgroundServiceView.test.ts",
+    "DOMStorageModel.test.ts",
+    "ExtensionStorageItemsView.test.ts",
+    "ExtensionStorageModel.test.ts",
+    "IndexedDBModel.test.ts",
+    "IndexedDBViews.test.ts",
+    "InterestGroupStorageView.test.ts",
+    "InterestGroupTreeElement.test.ts",
+    "PreloadingTreeElement.test.ts",
+    "ReportingApiReportsView.test.ts",
+    "ReportingApiView.test.ts",
+    "ServiceWorkerUpdateCycleView.test.ts",
+    "ServiceWorkersView.test.ts",
+    "SharedStorageEventsView.test.ts",
+    "SharedStorageItemsView.test.ts",
+    "SharedStorageListTreeElement.test.ts",
+    "SharedStorageModel.test.ts",
+    "SharedStorageTreeElement.test.ts",
+    "StorageBucketsTreeElement.test.ts",
+    "StorageView.test.ts",
+    "preloading/PreloadingView.test.ts",
+  ]
+
+  deps = [
+    ":bundle",
+    "../../core/sdk:bundle",
+    "../../testing",
+    "../../ui/components/render_coordinator:bundle",
+    "./components",
+    "./preloading/components",
+  ]
 }

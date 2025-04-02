@@ -28,7 +28,9 @@
 #include "dawn/wire/client/ShaderModule.h"
 
 #include <memory>
+#include <utility>
 
+#include "dawn/common/StringViewUtils.h"
 #include "dawn/wire/client/Client.h"
 #include "partition_alloc/pointers/raw_ptr.h"
 
@@ -38,16 +40,15 @@ class ShaderModule::CompilationInfoEvent final : public TrackedEvent {
   public:
     static constexpr EventType kType = EventType::CompilationInfo;
 
-    CompilationInfoEvent(const WGPUCompilationInfoCallbackInfo& callbackInfo, ShaderModule* shader)
+    CompilationInfoEvent(const WGPUCompilationInfoCallbackInfo& callbackInfo,
+                         Ref<ShaderModule> shader)
         : TrackedEvent(callbackInfo.mode),
           mCallback(callbackInfo.callback),
-          mUserdata(callbackInfo.userdata),
-          mShader(shader) {
+          mUserdata1(callbackInfo.userdata1),
+          mUserdata2(callbackInfo.userdata2),
+          mShader(std::move(shader)) {
         DAWN_ASSERT(mShader != nullptr);
-        mShader->Reference();
     }
-
-    ~CompilationInfoEvent() override { mShader->Release(); }
 
     EventType GetType() override { return kType; }
 
@@ -62,16 +63,18 @@ class ShaderModule::CompilationInfoEvent final : public TrackedEvent {
         }
 
         mStatus = status;
+
+        // Deep copy the WGPUCompilationInfo
         mShader->mMessageStrings.reserve(info->messageCount);
         mShader->mMessages.reserve(info->messageCount);
         for (size_t i = 0; i < info->messageCount; i++) {
-            mShader->mMessageStrings.push_back(info->messages[i].message);
+            DAWN_ASSERT(info->messages[i].length != WGPU_STRLEN);
+            mShader->mMessageStrings.push_back(ToString(info->messages[i].message));
             mShader->mMessages.push_back(info->messages[i]);
-            mShader->mMessages[i].message = mShader->mMessageStrings[i].c_str();
+            mShader->mMessages[i].message = ToOutputStringView(mShader->mMessageStrings[i]);
         }
         mShader->mCompilationInfo = {nullptr, mShader->mMessages.size(), mShader->mMessages.data()};
 
-        mCompilationInfo = &*mShader->mCompilationInfo;
         return WireResult::Success;
     }
 
@@ -80,46 +83,41 @@ class ShaderModule::CompilationInfoEvent final : public TrackedEvent {
         // from a previous GetCompilationInfo call).
         DAWN_ASSERT(mShader->mCompilationInfo);
         mStatus = WGPUCompilationInfoRequestStatus_Success;
-        mCompilationInfo = &(*mShader->mCompilationInfo);
         return WireResult::Success;
     }
 
   private:
     void CompleteImpl(FutureID futureID, EventCompletionType completionType) override {
+        WGPUCompilationInfo* compilationInfo = nullptr;
         if (completionType == EventCompletionType::Shutdown) {
             mStatus = WGPUCompilationInfoRequestStatus_InstanceDropped;
-            mCompilationInfo = nullptr;
+        } else {
+            compilationInfo = &(*mShader->mCompilationInfo);
         }
+
+        void* userdata1 = mUserdata1.ExtractAsDangling();
+        void* userdata2 = mUserdata2.ExtractAsDangling();
         if (mCallback) {
-            mCallback(mStatus, mCompilationInfo, mUserdata);
+            mCallback(mStatus, compilationInfo, userdata1, userdata2);
         }
     }
 
     WGPUCompilationInfoCallback mCallback;
-    // TODO(https://crbug.com/dawn/2345): Investigate `DanglingUntriaged` in dawn/wire.
-    raw_ptr<void, DanglingUntriaged> mUserdata;
+    raw_ptr<void> mUserdata1;
+    raw_ptr<void> mUserdata2;
 
     WGPUCompilationInfoRequestStatus mStatus;
-    const WGPUCompilationInfo* mCompilationInfo = nullptr;
 
-    // Strong reference to the buffer so that when we call the callback we can pass the buffer.
-    // TODO(https://crbug.com/dawn/2345): Investigate `DanglingUntriaged` in dawn/wire.
-    const raw_ptr<ShaderModule, DanglingUntriaged> mShader;
+    // Strong reference to the shader so that when we call the callback we can pass the
+    // compilation info from `mShader`.
+    Ref<ShaderModule> mShader;
 };
 
 ObjectType ShaderModule::GetObjectType() const {
     return ObjectType::ShaderModule;
 }
 
-void ShaderModule::GetCompilationInfo(WGPUCompilationInfoCallback callback, void* userdata) {
-    WGPUCompilationInfoCallbackInfo callbackInfo = {};
-    callbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
-    callbackInfo.callback = callback;
-    callbackInfo.userdata = userdata;
-    GetCompilationInfoF(callbackInfo);
-}
-
-WGPUFuture ShaderModule::GetCompilationInfoF(const WGPUCompilationInfoCallbackInfo& callbackInfo) {
+WGPUFuture ShaderModule::GetCompilationInfo(const WGPUCompilationInfoCallbackInfo& callbackInfo) {
     auto [futureIDInternal, tracked] =
         GetEventManager().TrackEvent(std::make_unique<CompilationInfoEvent>(callbackInfo, this));
     if (!tracked) {

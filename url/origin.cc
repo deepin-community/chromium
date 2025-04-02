@@ -2,11 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/350788890): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "url/origin.h"
 
 #include <stdint.h>
 
 #include <algorithm>
+#include <compare>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -27,6 +33,7 @@
 #include "url/gurl.h"
 #include "url/scheme_host_port.h"
 #include "url/url_constants.h"
+#include "url/url_features.h"
 #include "url/url_util.h"
 
 namespace url {
@@ -160,7 +167,7 @@ const base::UnguessableToken* Origin::GetNonceForSerialization() const {
 bool Origin::IsSameOriginWith(const Origin& other) const {
   // scheme/host/port must match, even for opaque origins where |tuple_| holds
   // the precursor origin.
-  return std::tie(tuple_, nonce_) == std::tie(other.tuple_, other.nonce_);
+  return *this == other;
 }
 
 bool Origin::IsSameOriginWith(const GURL& url) const {
@@ -203,8 +210,8 @@ bool Origin::CanBeDerivedFrom(const GURL& url) const {
   // origin can always create an opaque tuple origin.
   if (url.IsStandard()) {
     // Note: if extra copies of the scheme and host are undesirable, this check
-    // can be implemented using StringPiece comparisons, but it has to account
-    // explicitly checks on port numbers.
+    // can be implemented using std::string_view comparisons, but it has to
+    // account explicitly checks on port numbers.
     if (url.SchemeIsFileSystem()) {
       url_tuple = SchemeHostPort(*url.inner_url());
     } else {
@@ -245,16 +252,18 @@ bool Origin::CanBeDerivedFrom(const GURL& url) const {
   if (!tuple_.IsValid())
     return true;
 
-  // However, when there is precursor present, the schemes must match.
-  return url.scheme() == tuple_.scheme();
+  // However, when there is precursor present, that must match.
+  if (IsUsingStandardCompliantNonSpecialSchemeURLParsing()) {
+    return SchemeHostPort(url) == tuple_;
+  } else {
+    // Match only the scheme because host and port are unavailable for
+    // non-special URLs when the flag is disabled.
+    return url.scheme() == tuple_.scheme();
+  }
 }
 
 bool Origin::DomainIs(std::string_view canonical_domain) const {
   return !opaque() && url::DomainIs(tuple_.host(), canonical_domain);
-}
-
-bool Origin::operator<(const Origin& other) const {
-  return std::tie(tuple_, nonce_) < std::tie(other.tuple_, other.nonce_);
 }
 
 Origin Origin::DeriveNewOpaqueOrigin() const {
@@ -343,11 +352,13 @@ std::optional<std::string> Origin::SerializeWithNonceImpl() const {
 }
 
 // static
-std::optional<Origin> Origin::Deserialize(const std::string& value) {
+std::optional<Origin> Origin::Deserialize(std::string_view value) {
   std::string data;
   if (!base::Base64Decode(value, &data))
     return std::nullopt;
-  base::Pickle pickle(reinterpret_cast<char*>(&data[0]), data.size());
+
+  base::Pickle pickle =
+      base::Pickle::WithUnownedBuffer(base::as_byte_span(data));
   base::PickleIterator reader(pickle);
 
   std::string pickled_url;
@@ -457,10 +468,11 @@ Origin::Nonce& Origin::Nonce::operator=(Origin::Nonce&& other) noexcept {
   return *this;
 }
 
-bool Origin::Nonce::operator<(const Origin::Nonce& other) const {
+std::strong_ordering Origin::Nonce::operator<=>(
+    const Origin::Nonce& other) const {
   // When comparing, lazy-generation is required of both tokens, so that an
   // ordering is established.
-  return token() < other.token();
+  return token() <=> other.token();
 }
 
 bool Origin::Nonce::operator==(const Origin::Nonce& other) const {
@@ -468,10 +480,6 @@ bool Origin::Nonce::operator==(const Origin::Nonce& other) const {
   // If the tokens are both zero, equality only holds if they're the same
   // object.
   return (other.token_ == token_) && !(token_.is_empty() && (&other != this));
-}
-
-bool Origin::Nonce::operator!=(const Origin::Nonce& other) const {
-  return !(*this == other);
 }
 
 namespace debug {

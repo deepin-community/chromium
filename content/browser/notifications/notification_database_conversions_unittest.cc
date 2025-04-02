@@ -2,11 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/browser/notifications/notification_database_conversions.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <optional>
 
 #include "base/strings/string_number_conversions.h"
@@ -243,10 +249,10 @@ TEST(NotificationDatabaseConversionsTest, SerializeAndDeserializeActionTypes) {
 }
 
 TEST(NotificationDatabaseConversionsTest, SerializeAndDeserializeDirections) {
-  blink::mojom::NotificationDirection directions[] = {
-      blink::mojom::NotificationDirection::LEFT_TO_RIGHT,
-      blink::mojom::NotificationDirection::RIGHT_TO_LEFT,
-      blink::mojom::NotificationDirection::AUTO};
+  auto directions = std::to_array<blink::mojom::NotificationDirection>(
+      {blink::mojom::NotificationDirection::LEFT_TO_RIGHT,
+       blink::mojom::NotificationDirection::RIGHT_TO_LEFT,
+       blink::mojom::NotificationDirection::AUTO});
 
   for (size_t i = 0; i < std::size(directions); ++i) {
     blink::PlatformNotificationData notification_data;
@@ -269,10 +275,10 @@ TEST(NotificationDatabaseConversionsTest, SerializeAndDeserializeDirections) {
 
 TEST(NotificationDatabaseConversionsTest,
      SerializeAndDeserializeClosedReasons) {
-  NotificationDatabaseData::ClosedReason closed_reasons[] = {
-      NotificationDatabaseData::ClosedReason::USER,
-      NotificationDatabaseData::ClosedReason::DEVELOPER,
-      NotificationDatabaseData::ClosedReason::UNKNOWN};
+  auto closed_reasons = std::to_array<NotificationDatabaseData::ClosedReason>(
+      {NotificationDatabaseData::ClosedReason::USER,
+       NotificationDatabaseData::ClosedReason::DEVELOPER,
+       NotificationDatabaseData::ClosedReason::UNKNOWN});
 
   for (size_t i = 0; i < std::size(closed_reasons); ++i) {
     NotificationDatabaseData database_data;

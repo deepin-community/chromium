@@ -16,7 +16,7 @@ import {
   waitForFunction,
   withControlOrMetaKey,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
+import {reloadDevTools} from '../helpers/cross-tool-helper.js';
 import {getMenuItemAtPosition, getMenuItemTitleAtPosition, openFileQuickOpen} from '../helpers/quick_open-helpers.js';
 import {
   addBreakpointForLine,
@@ -26,7 +26,6 @@ import {
   isEqualOrAbbreviation,
   openSourceCodeEditorForFile,
   PAUSE_INDICATOR_SELECTOR,
-  refreshDevToolsAndRemoveBackendState,
   RESUME_BUTTON,
   retrieveTopCallFrameWithoutResuming,
 } from '../helpers/sources-helpers.js';
@@ -47,7 +46,7 @@ async function assertScriptLocation(expectedLocation: string) {
   assert.isTrue(isEqualOrAbbreviation(scriptLocation, expectedLocation));
 }
 
-describe('The Sources Tab', async function() {
+describe('The Sources Tab', function() {
   const CLICK_BREAKPOINT_SCRIPT = 'click-breakpoint.js';
   const CLICK_BREAKPOINT_HTML = 'click-breakpoint.html';
 
@@ -169,8 +168,8 @@ describe('The Sources Tab', async function() {
   });
 
   it('can hit a breakpoint on the main thread on a fresh DevTools', async () => {
-    await enableExperiment('instrumentationBreakpoints');
-    const {frontend, target} = getBrowserAndPages();
+    await enableExperiment('instrumentation-breakpoints');
+    const {frontend} = getBrowserAndPages();
 
     await step('navigate to a page and open the Sources tab', async () => {
       await openSourceCodeEditorForFile('breakpoint-hit-on-first-load.js', 'breakpoint-hit-on-first-load.html');
@@ -181,7 +180,7 @@ describe('The Sources Tab', async function() {
     });
 
     await step('Navigate to a different site to refresh devtools and remove back-end state', async () => {
-      await refreshDevToolsAndRemoveBackendState(target);
+      await reloadDevTools({removeBackendState: true, selectedPanel: {name: 'sources'}});
     });
 
     await step('Navigate back to test page', () => {
@@ -203,8 +202,8 @@ describe('The Sources Tab', async function() {
   it.skip(
       '[crbug.com/1229541] can hit a breakpoint in an inline script on the main thread on a fresh DevTools',
       async () => {
-        await enableExperiment('instrumentationBreakpoints');
-        const {frontend, target} = getBrowserAndPages();
+        await enableExperiment('instrumentation-breakpoints');
+        const {frontend} = getBrowserAndPages();
 
         await step('navigate to a page and open the Sources tab', async () => {
           await openSourceCodeEditorForFile('breakpoint-hit-on-first-load.html', 'breakpoint-hit-on-first-load.html');
@@ -215,7 +214,7 @@ describe('The Sources Tab', async function() {
         });
 
         await step('Navigate to a different site to refresh devtools and remove back-end state', async () => {
-          await refreshDevToolsAndRemoveBackendState(target);
+          await reloadDevTools({removeBackendState: true, selectedPanel: {name: 'sources'}});
         });
 
         await step('Navigate back to test page', () => {
@@ -234,8 +233,8 @@ describe('The Sources Tab', async function() {
 
   it('can hit a breakpoint in an inline script with sourceURL comment on the main thread on a fresh DevTools',
      async () => {
-       await enableExperiment('instrumentationBreakpoints');
-       const {frontend, target} = getBrowserAndPages();
+       await enableExperiment('instrumentation-breakpoints');
+       const {frontend} = getBrowserAndPages();
 
        await step('navigate to a page and open the Sources tab', async () => {
          await openSourceCodeEditorForFile('breakpoint-hit-on-first-load.html', 'breakpoint-hit-on-first-load.html');
@@ -256,7 +255,7 @@ describe('The Sources Tab', async function() {
        });
 
        await step('Navigate to a different site to refresh devtools and remove back-end state', async () => {
-         await refreshDevToolsAndRemoveBackendState(target);
+         await reloadDevTools({removeBackendState: true, selectedPanel: {name: 'sources'}});
        });
 
        await step('Navigate back to test page', () => {

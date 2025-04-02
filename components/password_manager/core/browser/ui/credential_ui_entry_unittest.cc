@@ -4,6 +4,7 @@
 
 #include "components/password_manager/core/browser/ui/credential_ui_entry.h"
 
+#include <array>
 #include <vector>
 
 #include "base/strings/utf_string_conversions.h"
@@ -189,7 +190,8 @@ TEST(CredentialUIEntryTest, TestGetAffiliatedDomainsEmptyAndroidForm) {
 TEST(CredentialUIEntryTest,
      CredentialUIEntryFromFormsVectorWithDifferentNotes) {
   std::vector<PasswordForm> forms;
-  const std::u16string kNotes[] = {u"Note", u"", u"Another note"};
+  const auto kNotes =
+      std::to_array<std::u16string>({u"Note", u"", u"Another note"});
 
   for (const auto& kNote : kNotes) {
     PasswordForm form;
@@ -257,6 +259,16 @@ TEST(CredentialUIEntryTest, TestGetAffiliatedDuplicatesWithDifferentUrls) {
   EXPECT_THAT(entry.GetAffiliatedDomains(),
               UnorderedElementsAre(ExpectDomain("g.com", form1.url),
                                    ExpectDomain("g.com", form2.url)));
+}
+
+TEST(CredentialUIEntryTest, TestGetInvalidAffiliatedDomains) {
+  PasswordForm form;
+  form.signon_realm = "htt://g.com/";
+  form.url = GURL("htt://g.com/login/");
+
+  CredentialUIEntry entry = CredentialUIEntry({form});
+  EXPECT_THAT(entry.GetAffiliatedDomains(),
+              ElementsAre(ExpectDomain("htt://g.com/login/", form.url)));
 }
 
 TEST(CredentialUIEntryTest, TestGetChangeURLAndroid) {

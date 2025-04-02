@@ -22,6 +22,7 @@
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
 #include "chromeos/ash/components/dbus/shill/shill_clients.h"
@@ -1958,42 +1959,6 @@ TEST_F(NetworkStateHandlerTest, DefaultServiceChanged) {
   EXPECT_EQ(2u, test_observer_->default_network_change_count());
 }
 
-TEST_F(NetworkStateHandlerTest, SetNetworkChromePortalState) {
-  RemoveEthernet();
-
-  base::HistogramTester histogram_tester;
-  service_test_->SetServiceProperty(kShillManagerClientStubDefaultWifi,
-                                    shill::kStateProperty,
-                                    base::Value(shill::kStatePortalSuspected));
-  base::RunLoop().RunUntilIdle();
-
-  const NetworkState* network = network_state_handler_->GetNetworkState(
-      kShillManagerClientStubDefaultWifi);
-  EXPECT_EQ(NetworkState::PortalState::kPortalSuspected,
-            network->GetPortalState());
-
-  network_state_handler_->SetNetworkChromePortalState(
-      kShillManagerClientStubDefaultWifi, NetworkState::PortalState::kPortal);
-  base::RunLoop().RunUntilIdle();
-  network = network_state_handler_->GetNetworkState(
-      kShillManagerClientStubDefaultWifi);
-  EXPECT_EQ(NetworkState::PortalState::kPortal, network->GetPortalState());
-
-  // Setting the chrome portal state to 'unknown' should cause GetPortalState
-  // to return portal-suspected again.
-  network_state_handler_->SetNetworkChromePortalState(
-      kShillManagerClientStubDefaultWifi, NetworkState::PortalState::kUnknown);
-  base::RunLoop().RunUntilIdle();
-  network = network_state_handler_->GetNetworkState(
-      kShillManagerClientStubDefaultWifi);
-  EXPECT_EQ(NetworkState::PortalState::kPortalSuspected,
-            network->GetPortalState());
-
-  EXPECT_THAT(histogram_tester.GetAllSamples("Network.CaptivePortalResult"),
-              ElementsAre(base::Bucket(
-                  NetworkState::PortalState::kPortalSuspected, 1)));
-}
-
 TEST_F(NetworkStateHandlerTest, PortalStateChanged) {
   RemoveEthernet();
   test_observer_->reset_change_counts();
@@ -2845,12 +2810,17 @@ TEST_F(NetworkStateHandlerTest, RequestPortalDetection) {
   RemoveEthernet();
   NetworkState* wifi1 =
       GetModifiableNetworkState(kShillManagerClientStubDefaultWifi);
-  EXPECT_EQ(wifi1->connection_state(), shill::kStateOnline);
+  service_test_->SetServiceProperty(kShillManagerClientStubDefaultWifi,
+                                    shill::kStateProperty,
+                                    base::Value(shill::kStatePortalSuspected));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(wifi1->connection_state(), shill::kStatePortalSuspected);
 
   test_observer_->reset_change_counts();
   service_test_->SetRequestPortalState(shill::kStateRedirectFound);
   network_state_handler_->RequestPortalDetection();
   base::RunLoop().RunUntilIdle();
+
   wifi1 = GetModifiableNetworkState(kShillManagerClientStubDefaultWifi);
   EXPECT_EQ(wifi1->connection_state(), shill::kStateRedirectFound);
   EXPECT_EQ(test_observer_->default_network_portal_state(),

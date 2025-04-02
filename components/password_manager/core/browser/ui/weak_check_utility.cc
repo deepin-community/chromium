@@ -5,10 +5,11 @@
 #include "components/password_manager/core/browser/ui/weak_check_utility.h"
 
 #include <functional>
+#include <string_view>
 
-#include "base/containers/cxx20_erase.h"
+#include "base/i18n/break_iterator.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/utf_string_conversion_utils.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "third_party/zxcvbn-cpp/native-src/zxcvbn/matching.hpp"
@@ -16,6 +17,25 @@
 #include "third_party/zxcvbn-cpp/native-src/zxcvbn/time_estimates.hpp"
 
 namespace password_manager {
+
+std::u16string_view SafeTruncateUTF16(std::u16string_view str,
+                                      size_t max_length) {
+  if (str.length() <= max_length) {
+    return str;
+  }
+
+  base::i18n::BreakIterator iter(str,
+                                 base::i18n::BreakIterator::BREAK_CHARACTER);
+  if (!iter.Init()) {
+    return str.substr(0, max_length);
+  }
+
+  size_t char_count = 0;
+  while (iter.Advance() && char_count < max_length) {
+    char_count++;
+  }
+  return str.substr(0, iter.prev());
+}
 
 namespace {
 
@@ -42,12 +62,12 @@ constexpr int kZxcvbnLengthCap = 40;
 constexpr int kLowSeverityScore = 2;
 
 // Returns the |password| score.
-int PasswordWeakCheck(base::StringPiece16 password16) {
+int PasswordWeakCheck(std::u16string_view password16) {
   base::TimeTicks start_time = base::TimeTicks::Now();
   // zxcvbn's computation time explodes for long passwords, so cap at that
   // number.
   std::string password =
-      base::UTF16ToUTF8(password16.substr(0, kZxcvbnLengthCap));
+      base::UTF16ToUTF8(SafeTruncateUTF16(password16, kZxcvbnLengthCap));
   std::vector<zxcvbn::Match> matches = zxcvbn::omnimatch(password);
   zxcvbn::ScoringResult result =
       zxcvbn::most_guessable_match_sequence(password, matches);
@@ -62,7 +82,7 @@ int PasswordWeakCheck(base::StringPiece16 password16) {
 
 }  // namespace
 
-IsWeakPassword IsWeak(base::StringPiece16 password) {
+IsWeakPassword IsWeak(std::u16string_view password) {
   return IsWeakPassword(PasswordWeakCheck(password) <= kLowSeverityScore);
 }
 

@@ -10,6 +10,7 @@
 #include "base/containers/span.h"
 #include "base/json/json_writer.h"
 #include "base/strings/escape.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/payments/local_card_migration_manager.h"
 
@@ -24,7 +25,7 @@ constexpr char kMigrateCardsRequestFormat[] =
 }  // namespace
 
 MigrateCardsRequest::MigrateCardsRequest(
-    const PaymentsNetworkInterface::MigrationRequestDetails& request_details,
+    const MigrationRequestDetails& request_details,
     base::span<const MigratableCreditCard> migratable_credit_cards,
     const bool full_sync_enabled,
     MigrateCardsCallback callback)
@@ -116,7 +117,7 @@ bool MigrateCardsRequest::IsResponseComplete() {
 }
 
 void MigrateCardsRequest::RespondToDelegate(
-    AutofillClient::PaymentsRpcResult result) {
+    PaymentsAutofillClient::PaymentsRpcResult result) {
   std::move(callback_).Run(result, std::move(save_result_), display_text_);
 }
 
@@ -129,7 +130,7 @@ std::string MigrateCardsRequest::GetAppendPan(
     const std::string& app_locale,
     const std::string& pan_field_name) {
   const std::u16string pan =
-      credit_card.GetInfo(AutofillType(CREDIT_CARD_NUMBER), app_locale);
+      credit_card.GetInfo(CREDIT_CARD_NUMBER, app_locale);
   std::string pan_str =
       base::EscapeUrlEncodedData(base::UTF16ToASCII(pan), true).c_str();
   std::string append_pan = "&" + pan_field_name + "=" + pan_str;

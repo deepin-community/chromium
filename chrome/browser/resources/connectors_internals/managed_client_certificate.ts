@@ -31,8 +31,8 @@ export class ManagedClientCertificateElement extends CustomElement {
     this.setValueToElement('#policy-enabled-levels', `${policyLevels}`);
   }
 
-  private get managedIdentitiesSection(): HTMLDivElement|undefined {
-    return this.$('#managed-identities') as HTMLDivElement;
+  private get managedIdentitiesSection(): HTMLElement|null {
+    return this.$('#managed-identities');
   }
 
   constructor() {
@@ -80,7 +80,7 @@ export class ManagedClientCertificateElement extends CustomElement {
   }
 
   private setValueToElement(elementId: string, stringValue: string) {
-    const htmlElement = (this.$(elementId) as HTMLElement);
+    const htmlElement = this.$<HTMLElement>(elementId);
     if (htmlElement) {
       htmlElement.innerText = stringValue;
     } else {
@@ -89,8 +89,8 @@ export class ManagedClientCertificateElement extends CustomElement {
   }
 
   private createManagedIdentityElement(
-      prefix: string, managedIdentity: ClientIdentity): HTMLDivElement {
-    const identityElement = document.createElement('div') as HTMLDivElement;
+      prefix: string, managedIdentity: ClientIdentity): HTMLElement {
+    const identityElement = document.createElement('div');
 
     let keyValuePairs =
         [{key: `${prefix} Identity Name`, value: managedIdentity.identityName}];
@@ -110,24 +110,28 @@ export class ManagedClientCertificateElement extends CustomElement {
           key: 'Public Key Hash',
           value: managedIdentity.loadedKeyInfo.encodedSpkiHash,
         },
-        {
-          key: 'Key Upload Response',
-          value: utils.keySyncCodeToString(
-              managedIdentity.loadedKeyInfo.syncKeyResponseCode),
-        },
       ]);
+
+      if (managedIdentity.loadedKeyInfo.keyUploadStatus) {
+        if (managedIdentity.loadedKeyInfo.keyUploadStatus.uploadClientError) {
+          keyValuePairs.push({
+            key: 'Key Upload Client Error',
+            value:
+                managedIdentity.loadedKeyInfo.keyUploadStatus.uploadClientError,
+          });
+        } else {
+          keyValuePairs.push({
+            key: 'Key Upload Response',
+            value: utils.keySyncCodeToString(
+                managedIdentity.loadedKeyInfo.keyUploadStatus
+                    .syncKeyResponseCode),
+          });
+        }
+      }
     }
 
     if (managedIdentity.certificateMetadata) {
       keyValuePairs = keyValuePairs.concat([
-        {
-          key: 'Thumbprint',
-          value: managedIdentity.certificateMetadata.thumbprint,
-        },
-        {
-          key: 'Expiration Date',
-          value: managedIdentity.certificateMetadata.expirationDateString,
-        },
         {
           key: 'Subject',
           value: managedIdentity.certificateMetadata.subjectDisplayName,
@@ -135,6 +139,22 @@ export class ManagedClientCertificateElement extends CustomElement {
         {
           key: 'Issuer',
           value: managedIdentity.certificateMetadata.issuerDisplayName,
+        },
+        {
+          key: 'Serial Number',
+          value: managedIdentity.certificateMetadata.serialNumber,
+        },
+        {
+          key: 'SHA-256 Fingerprint',
+          value: managedIdentity.certificateMetadata.fingerprint,
+        },
+        {
+          key: 'Creation Date',
+          value: managedIdentity.certificateMetadata.creationDateString,
+        },
+        {
+          key: 'Expiration Date',
+          value: managedIdentity.certificateMetadata.expirationDateString,
         },
       ]);
     }
@@ -148,11 +168,11 @@ export class ManagedClientCertificateElement extends CustomElement {
   }
 
   private createLabelledValueElement(label: string, text: string): HTMLElement {
-    const nameSpan = document.createElement('span') as HTMLSpanElement;
+    const nameSpan = document.createElement('span');
     nameSpan.classList.add('bold');
     nameSpan.textContent = text;
 
-    const containerElement = document.createElement('div') as HTMLDivElement;
+    const containerElement = document.createElement('div');
     containerElement.appendChild(document.createTextNode(`${label}: `));
     containerElement.appendChild(nameSpan);
     return containerElement;

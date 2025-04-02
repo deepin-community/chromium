@@ -2,18 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/credential_provider/gaiacp/password_recovery_manager.h"
 
 #include <windows.h>
 #include <winternl.h>
 
-#include <lm.h>  // Needed for LSA_UNICODE_STRING
+#include <lm.h>
 #include <process.h>
 
-#define _NTDEF_  // Prevent redefition errors, must come after <winternl.h>
-#include <ntsecapi.h>  // For POLICY_ALL_ACCESS types
-
 #include <algorithm>
+#include <string_view>
 
 #include "base/base64.h"
 #include "base/containers/span.h"
@@ -23,6 +26,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/win/ntsecapi_shim.h"
 #include "chrome/credential_provider/common/gcp_strings.h"
 #include "chrome/credential_provider/gaiacp/gcp_utils.h"
 #include "chrome/credential_provider/gaiacp/logging.h"
@@ -98,7 +102,7 @@ bool Base64DecodeCryptographicKey(const std::string& cryptographic_key,
 
 // Callback to log password encryption/decryption errors.
 static int LogBoringSSLError(const char* str, size_t len, void* ctx) {
-  LOGFN(ERROR) << base::StringPiece(str, len);
+  LOGFN(ERROR) << std::string_view(str, len);
   return 1;
 }
 
@@ -191,9 +195,9 @@ std::optional<std::vector<uint8_t>> PublicKeyEncrypt(
   crypto::Aead aead(crypto::Aead::AES_256_GCM);
   aead.Init(&session_key);
   aead.Seal(secret,
-            base::StringPiece(reinterpret_cast<const char*>(
-                                  &session_key_with_nonce[kSessionKeyLength]),
-                              kNonceLength),
+            std::string_view(reinterpret_cast<const char*>(
+                                 &session_key_with_nonce[kSessionKeyLength]),
+                             kNonceLength),
             /*ad=*/"", &sealed_secret);
 
   ciphertext.insert(ciphertext.end(), sealed_secret.data(),
@@ -244,11 +248,11 @@ std::optional<std::string> PrivateKeyDecrypt(
   crypto::Aead aead(crypto::Aead::AES_256_GCM);
   aead.Init(&session_key);
   aead.Open(
-      base::StringPiece(reinterpret_cast<const char*>(&ciphertext[rsa_size]),
-                        ciphertext.size() - rsa_size),
-      base::StringPiece(reinterpret_cast<const char*>(
-                            &session_key_with_nonce[kSessionKeyLength]),
-                        kNonceLength),
+      std::string_view(reinterpret_cast<const char*>(&ciphertext[rsa_size]),
+                       ciphertext.size() - rsa_size),
+      std::string_view(reinterpret_cast<const char*>(
+                           &session_key_with_nonce[kSessionKeyLength]),
+                       kNonceLength),
       /*ad=*/"", &plaintext);
 
   return plaintext;
@@ -390,9 +394,8 @@ HRESULT DecryptUserPasswordUsingEscrowService(
     return E_FAIL;
   }
 
-  auto decrypted_secret =
-      PrivateKeyDecrypt(decoded_private_key,
-                        base::as_bytes(base::make_span(decoded_cipher_text)));
+  auto decrypted_secret = PrivateKeyDecrypt(
+      decoded_private_key, base::as_byte_span(decoded_cipher_text));
 
   if (decrypted_secret == std::nullopt) {
     return E_FAIL;

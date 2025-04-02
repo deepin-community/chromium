@@ -31,7 +31,7 @@ struct TextDiffRange;
 class CORE_EXPORT InlineNode : public LayoutInputNode {
  public:
   explicit InlineNode(LayoutBlockFlow*);
-  explicit InlineNode(std::nullptr_t) : LayoutInputNode(nullptr) {}
+  InlineNode(std::nullptr_t) : LayoutInputNode(nullptr) {}
 
   LayoutBlockFlow* GetLayoutBlockFlow() const {
     return To<LayoutBlockFlow>(box_.Get());
@@ -162,8 +162,8 @@ class CORE_EXPORT InlineNode : public LayoutInputNode {
                       InlineNodeData* previous_data = nullptr) const;
   const SvgTextChunkOffsets* FindSvgTextChunks(LayoutBlockFlow& block,
                                                InlineNodeData& data) const;
-  void SegmentText(InlineNodeData*) const;
-  void SegmentScriptRuns(InlineNodeData*) const;
+  void SegmentText(InlineNodeData*, InlineNodeData* previous_data) const;
+  void SegmentScriptRuns(InlineNodeData*, InlineNodeData* previous_data) const;
   void SegmentFontOrientation(InlineNodeData*) const;
   void SegmentBidiRuns(InlineNodeData*) const;
   void ShapeText(InlineItemsData*,
@@ -205,11 +205,14 @@ class CORE_EXPORT InlineNode : public LayoutInputNode {
 };
 
 inline bool InlineNode::IsStickyImagesQuirkForContentSize() const {
-  if (UNLIKELY(GetDocument().InQuirksMode())) {
+  // See https://quirks.spec.whatwg.org/#the-table-cell-width-calculation-quirk
+  if (GetDocument().InQuirksMode()) [[unlikely]] {
     const ComputedStyle& style = Style();
-    if (UNLIKELY(style.Display() == EDisplay::kTableCell &&
-                 !style.LogicalWidth().IsSpecified()))
-      return true;
+    if (style.Display() == EDisplay::kTableCell) [[unlikely]] {
+      if (style.LogicalWidth().IsAuto()) {
+        return true;
+      }
+    }
   }
   return false;
 }

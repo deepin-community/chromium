@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/browser/ash/arc/input_overlay/ui/action_label.h"
 
 #include <set>
@@ -26,8 +31,10 @@
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/highlight_path_generator.h"
+#include "ui/views/view_utils.h"
 
 namespace arc::input_overlay {
 namespace {
@@ -93,7 +100,7 @@ class ActionLabelTap : public ActionLabel {
 
   void UpdateBounds() override {
     SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, kSideInset)));
-    const auto label_size = CalculatePreferredSize();
+    const auto label_size = CalculatePreferredSize({});
     SetSize(label_size);
     // Label position is not set yet.
     if (label_position_ == TapLabelPosition::kNone) {
@@ -198,7 +205,7 @@ class ActionLabelMove : public ActionLabel {
 
   void UpdateBounds() override {
     SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, 0)));
-    auto label_size = CalculatePreferredSize();
+    auto label_size = CalculatePreferredSize({});
     SetSize(label_size);
     // TODO(b/241966781): Mouse is not supported yet.
     DCHECK_EQ(mouse_action_, MouseAction::NONE);
@@ -269,7 +276,6 @@ std::vector<raw_ptr<ActionLabel, VectorExperimental>> ActionLabel::Show(
 
     default:
       NOTREACHED();
-      break;
   }
 
   for (arc::input_overlay::ActionLabel* label : labels) {
@@ -284,19 +290,17 @@ void ActionLabel::Init() {
   SetRequestFocusOnPress(true);
   SetHorizontalAlignment(gfx::ALIGN_CENTER);
   SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, kSideInset)));
-  SetAccessibilityProperties(ax::mojom::Role::kLabelText,
-                             CalculateAccessibleName());
+  GetViewAccessibility().SetRole(ax::mojom::Role::kLabelText);
+  GetViewAccessibility().SetName(CalculateAccessibleName());
 }
 
 ActionLabel::ActionLabel(MouseAction mouse_action)
     : mouse_action_(mouse_action) {}
 
 ActionLabel::ActionLabel(const std::u16string& text, size_t index)
-    : views::LabelButton(
-          IsBeta() ? base::BindRepeating(&ActionLabel::OnButtonPressed,
-                                         base::Unretained(this))
-                   : views::Button::PressedCallback(),
-          text),
+    : views::LabelButton(base::BindRepeating(&ActionLabel::OnButtonPressed,
+                                             base::Unretained(this)),
+                         text),
       index_(index) {
   DCHECK(index_ >= 0 && index_ < kActionMoveKeysSize);
 }
@@ -305,11 +309,7 @@ ActionLabel::~ActionLabel() = default;
 
 void ActionLabel::SetTextActionLabel(const std::u16string& text) {
   label()->SetText(text);
-  SetAccessibleName(CalculateAccessibleName());
-
-  if (!IsBeta()) {
-    return;
-  }
+  GetViewAccessibility().SetName(CalculateAccessibleName());
 
   if (text == kUnknownBind && !GetParent()->action()->is_new()) {
     SetToEditUnbindInput();
@@ -320,7 +320,7 @@ void ActionLabel::SetTextActionLabel(const std::u16string& text) {
 
 void ActionLabel::SetImageActionLabel(MouseAction mouse_action) {
   set_mouse_action(mouse_action);
-  SetAccessibleName(CalculateAccessibleName());
+  GetViewAccessibility().SetName(CalculateAccessibleName());
 }
 
 void ActionLabel::SetDisplayMode(DisplayMode mode) {
@@ -336,15 +336,7 @@ void ActionLabel::SetDisplayMode(DisplayMode mode) {
       break;
     case DisplayMode::kEdit:
       SetToEditMode();
-      if (IsBeta()) {
-        SetFocusBehavior(FocusBehavior::ACCESSIBLE_ONLY);
-      } else {
-        SetFocusBehavior(FocusBehavior::ALWAYS);
-        GetParent()->ShowInfoMsg(
-            l10n_util::GetStringUTF8(
-                IDS_INPUT_OVERLAY_EDIT_INSTRUCTIONS_ALPHAV2),
-            this);
-      }
+      SetFocusBehavior(FocusBehavior::ACCESSIBLE_ONLY);
       break;
     case DisplayMode::kEditedSuccess:
       SetToEditFocus();
@@ -360,7 +352,6 @@ void ActionLabel::SetDisplayMode(DisplayMode mode) {
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 
@@ -395,13 +386,14 @@ void ActionLabel::OnSiblingUpdateFocus(bool sibling_focused) {
 }
 
 ActionView* ActionLabel::GetParent() {
-  auto* view = static_cast<ActionView*>(parent());
+  auto* view = views::AsViewClass<ActionView>(parent());
   DCHECK(view);
   return view;
 }
 
-gfx::Size ActionLabel::CalculatePreferredSize() const {
-  auto size = LabelButton::CalculatePreferredSize();
+gfx::Size ActionLabel::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  auto size = LabelButton::CalculatePreferredSize(available_size);
   size.SetToMax(kLabelSize);
   return size;
 }
@@ -414,13 +406,10 @@ void ActionLabel::ChildPreferredSizeChanged(View* child) {
 bool ActionLabel::OnKeyPressed(const ui::KeyEvent& event) {
   DCHECK(parent());
   auto code = event.code();
-  auto* parent_view = GetParent();
-  if (GetDisplayText(code) == GetText() ||
-      parent_view->ShouldShowErrorMsg(code)) {
-    return true;
+  if (auto* parent_view = GetParent();
+      !!parent_view && GetDisplayText(code) != GetText()) {
+    parent_view->OnKeyBindingChange(this, code);
   }
-
-  parent_view->OnKeyBindingChange(this, code);
   return true;
 }
 
@@ -440,26 +429,15 @@ void ActionLabel::OnFocus() {
   SetToEditFocus();
   LabelButton::OnFocus();
   GetParent()->OnChildLabelUpdateFocus(this, /*focus=*/true);
-
-  if (IsInputUnbound()) {
-    GetParent()->ShowErrorMsg(
-        l10n_util::GetStringUTF8(IDS_INPUT_OVERLAY_EDIT_MISSING_BINDING), this,
-        /*ax_annouce=*/false);
-  } else {
-    GetParent()->ShowFocusInfoMsg(
-        l10n_util::GetStringUTF8(IDS_INPUT_OVERLAY_EDIT_FOCUSED_KEY), this);
-  }
 }
 
 void ActionLabel::OnBlur() {
   SetToEditDefault();
   LabelButton::OnBlur();
   GetParent()->OnChildLabelUpdateFocus(this, /*focus=*/false);
-  GetParent()->RemoveMessage();
 }
 
 void ActionLabel::OnButtonPressed() {
-  DCHECK(IsBeta());
   GetParent()->ShowButtonOptionsMenu();
 }
 
@@ -485,7 +463,7 @@ void ActionLabel::SetToViewMode() {
 
   SetBackground(views::CreateRoundedRectBackground(kBackgroundColorDefault,
                                                    kCornerRadius));
-  SetPreferredSize(CalculatePreferredSize());
+  SetPreferredSize(CalculatePreferredSize({}));
 }
 
 void ActionLabel::SetToEditMode() {
@@ -542,7 +520,7 @@ void ActionLabel::SetToEditHover(bool hovered) {
 void ActionLabel::SetToEditFocus() {
   label()->SetFontList(gfx::FontList({kFontStyle}, gfx::Font::NORMAL, kFontSize,
                                      gfx::Font::Weight::BOLD));
-  SetPreferredSize(CalculatePreferredSize());
+  SetPreferredSize(CalculatePreferredSize({}));
   SetEnabledTextColors(kTextColorDefault);
   SetBackgroundForEdit();
   views::FocusRing::Get(this)->SetColorId(
@@ -556,7 +534,7 @@ void ActionLabel::SetToEditError() {
 }
 
 void ActionLabel::SetToEditUnbindInput() {
-  SetPreferredSize(CalculatePreferredSize());
+  SetPreferredSize(CalculatePreferredSize({}));
   SetBackground(
       views::CreateRoundedRectBackground(kEditedUnboundBgColor, kCornerRadius));
 }

@@ -27,6 +27,10 @@ class WebAppProvider;
 
 namespace apps {
 
+#if BUILDFLAG(IS_MAC)
+using MacAppInfo = std::optional<IntentPickerAppInfo>;
+#endif  // BUILDFLAG(IS_MAC)
+
 class WebAppsIntentPickerDelegate : public AppsIntentPickerDelegate {
  public:
   explicit WebAppsIntentPickerDelegate(Profile* profile);
@@ -38,6 +42,7 @@ class WebAppsIntentPickerDelegate : public AppsIntentPickerDelegate {
 
   bool ShouldShowIntentPickerWithApps() override;
   void FindAllAppsForUrl(const GURL& url,
+                         int icon_size_in_dep,
                          IntentPickerAppsCallback apps_callback) override;
   bool IsPreferredAppForSupportedLinks(const std::string& app_id) override;
   void LoadSingleAppIcon(PickerEntryType entry_type,
@@ -46,7 +51,8 @@ class WebAppsIntentPickerDelegate : public AppsIntentPickerDelegate {
                          IconLoadedCallback icon_loaded_callback) override;
   void RecordIntentPickerIconEvent(apps::IntentPickerIconEvent event) override;
   bool ShouldLaunchAppDirectly(const GURL& url,
-                               const std::string& app_id) override;
+                               const std::string& app_id,
+                               PickerEntryType entry_type) override;
   void RecordOutputMetrics(PickerEntryType entry_type,
                            IntentPickerCloseReason close_reason,
                            bool should_persist,
@@ -59,8 +65,20 @@ class WebAppsIntentPickerDelegate : public AppsIntentPickerDelegate {
                  PickerEntryType entry_type) override;
 
  private:
+#if BUILDFLAG(IS_MAC)
+  // If any app with universal links are found, cache that for reuse later (like
+  // getting icons) instead of going through the universal links API again.
+  void CacheMacAppInfoAndPostFinalCallback(
+      IntentPickerAppsCallback apps_callback,
+      std::vector<IntentPickerAppInfo> apps,
+      MacAppInfo mac_app_info);
+#endif  // BUILDFLAG(IS_MAC)
+
   raw_ref<Profile> profile_;
-  raw_ref<web_app::WebAppProvider> provider_;
+  raw_ptr<web_app::WebAppProvider> provider_;
+#if BUILDFLAG(IS_MAC)
+  MacAppInfo mac_app_info_;
+#endif  // BUILDFLAG(IS_MAC)
   base::WeakPtrFactory<WebAppsIntentPickerDelegate> weak_ptr_factory{this};
 };
 

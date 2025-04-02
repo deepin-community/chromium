@@ -4,6 +4,7 @@
 
 #include "ash/shell.h"
 
+#include <algorithm>
 #include <memory>
 #include <queue>
 #include <vector>
@@ -40,19 +41,20 @@
 #include "ash/wm/overview/overview_controller.h"
 #include "base/command_line.h"
 #include "base/containers/flat_set.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/account_id/account_id.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/display/scoped_display_for_new_windows.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/events/test/events_test_utils.h"
 #include "ui/events/test/test_event_handler.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/menu/menu_controller.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/widget/widget.h"
@@ -119,6 +121,8 @@ void ExpectAllContainers() {
   EXPECT_TRUE(Shell::GetContainer(root_window,
                                   kShellWindowId_LockSystemModalContainer));
   EXPECT_TRUE(Shell::GetContainer(root_window, kShellWindowId_MenuContainer));
+  EXPECT_TRUE(Shell::GetContainer(
+      root_window, kShellWindowId_CaptureModeSearchResultsPanel));
   EXPECT_TRUE(Shell::GetContainer(root_window,
                                   kShellWindowId_DragImageAndTooltipContainer));
   EXPECT_TRUE(
@@ -140,7 +144,7 @@ void ExpectAllContainers() {
 std::unique_ptr<views::WidgetDelegateView> CreateModalWidgetDelegate() {
   auto delegate = std::make_unique<views::WidgetDelegateView>();
   delegate->SetCanResize(true);
-  delegate->SetModalType(ui::MODAL_TYPE_SYSTEM);
+  delegate->SetModalType(ui::mojom::ModalType::kSystem);
   delegate->SetOwnedByWidget(true);
   delegate->SetTitle(u"Modal Window");
   return delegate;
@@ -236,16 +240,15 @@ TEST_F(ShellTest, CreateWindow) {
 }
 
 // Verifies that a window with a preferred size is created centered on the
-// default display for new windows. Mojo apps like shortcut_viewer rely on this
-// behavior.
+// default display for new windows.
 TEST_F(ShellTest, CreateWindowWithPreferredSize) {
   UpdateDisplay("1024x768,800x600");
 
   aura::Window* secondary_root = Shell::GetAllRootWindows()[1];
   display::ScopedDisplayForNewWindows scoped_display(secondary_root);
 
-  views::Widget::InitParams params;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   // Don't specify bounds, parent or context.
   {
     auto delegate = std::make_unique<views::WidgetDelegateView>();
@@ -399,7 +402,7 @@ TEST_F(ShellTest, LockScreenClosesActiveMenu) {
 
   menu_runner->RunMenuAt(widget, nullptr, gfx::Rect(),
                          views::MenuAnchorPosition::kTopLeft,
-                         ui::MENU_SOURCE_MOUSE);
+                         ui::mojom::MenuSourceType::kMouse);
   LockScreenAndVerifyMenuClosed();
 }
 
@@ -442,9 +445,9 @@ TEST_F(ShellTest, TestPreTargetHandlerOrder) {
 
   ui::EventHandlerList handlers = test_api.GetPreTargetHandlers();
   ui::EventHandlerList::const_iterator cursor_filter =
-      base::ranges::find(handlers, shell->mouse_cursor_filter());
+      std::ranges::find(handlers, shell->mouse_cursor_filter());
   ui::EventHandlerList::const_iterator drag_drop =
-      base::ranges::find(handlers, shell_test_api.drag_drop_controller());
+      std::ranges::find(handlers, shell_test_api.drag_drop_controller());
   EXPECT_NE(handlers.end(), cursor_filter);
   EXPECT_NE(handlers.end(), drag_drop);
   EXPECT_GT(drag_drop, cursor_filter);
@@ -459,9 +462,9 @@ TEST_F(ShellTest, AcceleratorPreTargetHandlerOrder) {
 
   ui::EventHandlerList handlers = test_api.GetPreTargetHandlers();
   ui::EventHandlerList::const_iterator accelerator_tracker =
-      base::ranges::find(handlers, shell->accelerator_tracker());
+      std::ranges::find(handlers, shell->accelerator_tracker());
   ui::EventHandlerList::const_iterator accelerator_filter =
-      base::ranges::find(handlers, shell->accelerator_filter());
+      std::ranges::find(handlers, shell->accelerator_filter());
   EXPECT_NE(handlers.end(), accelerator_tracker);
   EXPECT_NE(handlers.end(), accelerator_filter);
   EXPECT_GT(accelerator_filter, accelerator_tracker);
@@ -481,13 +484,13 @@ TEST_F(ShellTest, TestAccessibilityHandlerOrder) {
   ui::EventHandlerList handlers = test_api.GetPreTargetHandlers();
 
   ui::EventHandlerList::const_iterator cursor_filter =
-      base::ranges::find(handlers, shell->mouse_cursor_filter());
+      std::ranges::find(handlers, shell->mouse_cursor_filter());
   ui::EventHandlerList::const_iterator fullscreen_magnifier_filter =
-      base::ranges::find(handlers, shell->fullscreen_magnifier_controller());
+      std::ranges::find(handlers, shell->fullscreen_magnifier_controller());
   ui::EventHandlerList::const_iterator chromevox_filter =
-      base::ranges::find(handlers, shell->key_accessibility_enabler());
+      std::ranges::find(handlers, shell->key_accessibility_enabler());
   ui::EventHandlerList::const_iterator select_to_speak_filter =
-      base::ranges::find(handlers, &select_to_speak);
+      std::ranges::find(handlers, &select_to_speak);
   EXPECT_NE(handlers.end(), cursor_filter);
   EXPECT_NE(handlers.end(), fullscreen_magnifier_filter);
   EXPECT_NE(handlers.end(), chromevox_filter);
@@ -501,12 +504,12 @@ TEST_F(ShellTest, TestAccessibilityHandlerOrder) {
   shell->RemoveAccessibilityEventHandler(&select_to_speak);
 
   handlers = test_api.GetPreTargetHandlers();
-  cursor_filter = base::ranges::find(handlers, shell->mouse_cursor_filter());
+  cursor_filter = std::ranges::find(handlers, shell->mouse_cursor_filter());
   fullscreen_magnifier_filter =
-      base::ranges::find(handlers, shell->fullscreen_magnifier_controller());
+      std::ranges::find(handlers, shell->fullscreen_magnifier_controller());
   chromevox_filter =
-      base::ranges::find(handlers, shell->key_accessibility_enabler());
-  select_to_speak_filter = base::ranges::find(handlers, &select_to_speak);
+      std::ranges::find(handlers, shell->key_accessibility_enabler());
+  select_to_speak_filter = std::ranges::find(handlers, &select_to_speak);
   EXPECT_NE(handlers.end(), cursor_filter);
   EXPECT_NE(handlers.end(), fullscreen_magnifier_filter);
   EXPECT_NE(handlers.end(), chromevox_filter);
@@ -523,13 +526,13 @@ TEST_F(ShellTest, TestAccessibilityHandlerOrder) {
       AccessibilityEventHandlerManager::HandlerType::kDockedMagnifier);
 
   handlers = test_api.GetPreTargetHandlers();
-  cursor_filter = base::ranges::find(handlers, shell->mouse_cursor_filter());
+  cursor_filter = std::ranges::find(handlers, shell->mouse_cursor_filter());
   fullscreen_magnifier_filter =
-      base::ranges::find(handlers, shell->fullscreen_magnifier_controller());
+      std::ranges::find(handlers, shell->fullscreen_magnifier_controller());
   chromevox_filter =
-      base::ranges::find(handlers, shell->key_accessibility_enabler());
+      std::ranges::find(handlers, shell->key_accessibility_enabler());
   ui::EventHandlerList::const_iterator docked_magnifier_filter =
-      base::ranges::find(handlers, &docked_magnifier);
+      std::ranges::find(handlers, &docked_magnifier);
   EXPECT_NE(handlers.end(), cursor_filter);
   EXPECT_NE(handlers.end(), fullscreen_magnifier_filter);
   EXPECT_NE(handlers.end(), docked_magnifier_filter);
@@ -564,7 +567,8 @@ TEST_F(ShellTest, NoWindowTabFocus) {
   ShelfNavigationWidget* home_button = GetPrimaryShelf()->navigation_widget();
 
   // Create a normal window.  It is not maximized.
-  auto widget = CreateTestWidget();
+  auto widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
 
   // Hit tab with window open, and expect that focus is not on the navigation
   // widget or status widget.
@@ -593,21 +597,6 @@ TEST_F(ShellTest, NoWindowTabFocus) {
   // Hit shift tab and expect that focus is on status widget.
   PressAndReleaseKey(ui::VKEY_TAB, ui::EF_SHIFT_DOWN);
   EXPECT_TRUE(status_area_widget->GetNativeView()->HasFocus());
-}
-
-class ShellPickerDisabledTest : public AshTestBase {
- public:
-  ShellPickerDisabledTest() {
-    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-    command_line->AppendSwitchASCII(switches::kPickerFeatureKey, "hello");
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_{features::kPicker};
-};
-
-TEST_F(ShellPickerDisabledTest, NoPickerControllerIfFeatureKeyIsWrong) {
-  EXPECT_FALSE(Shell::Get()->picker_controller());
 }
 
 // This verifies WindowObservers are removed when a window is destroyed after

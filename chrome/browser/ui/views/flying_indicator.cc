@@ -9,6 +9,7 @@
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "ui/accessibility/ax_enums.mojom-shared.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/geometry/cubic_bezier.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -60,7 +61,7 @@ FlyingIndicator::FlyingIndicator(const gfx::VectorIcon& icon,
 
   // Set the bubble properties.
   bubble_view->SetAccessibleWindowRole(ax::mojom::Role::kNone);
-  bubble_view->SetButtons(ui::DIALOG_BUTTON_NONE);
+  bubble_view->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   bubble_view->set_margins(gfx::Insets());
   bubble_view->SetCanActivate(false);
   bubble_view->set_focus_traversable_from_anchor_view(false);
@@ -106,26 +107,31 @@ FlyingIndicator::~FlyingIndicator() {
   // Kill the callback before deleting the widget so we don't call it.
   done_callback_.Reset();
   scoped_observation_.Reset();
-  if (widget_)
+  if (widget_) {
     widget_->Close();
+  }
 }
 
 void FlyingIndicator::OnWidgetDestroyed(views::Widget* widget) {
-  if (widget != widget_)
+  if (widget != widget_) {
     return;
+  }
   DCHECK(scoped_observation_.IsObserving());
   scoped_observation_.Reset();
   widget_ = nullptr;
   animation_.Stop();
-  if (done_callback_)
+  if (done_callback_) {
     std::move(done_callback_).Run();
+  }
 }
 
 void FlyingIndicator::AnimationProgressed(const gfx::Animation* animation) {
-  if (!widget_)
+  if (!widget_) {
     return;
-  if (animation_.current_part_index() > 1U && done_callback_)
+  }
+  if (animation_.current_part_index() > 1U && done_callback_) {
     std::move(done_callback_).Run();
+  }
 
   // The steps of the animation are:
   // 0. Grow and fade the bubble in, centered on the originating point.
@@ -159,7 +165,7 @@ void FlyingIndicator::AnimationProgressed(const gfx::Animation* animation) {
       widget_->SetOpacity(opacity);
       break;
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
   gfx::Size bubble_size = bubble_size_;
   if (opacity < 1.0) {
@@ -174,8 +180,9 @@ void FlyingIndicator::AnimationProgressed(const gfx::Animation* animation) {
 void FlyingIndicator::AnimationEnded(const gfx::Animation* animation) {
   // We need to close the widget, but that can be an asynchronous event, so call
   // |done_callback_| and remove our listeners and reference to the widget.
-  if (done_callback_)
+  if (done_callback_) {
     std::move(done_callback_).Run();
+  }
   if (widget_) {
     DCHECK(scoped_observation_.IsObserving());
     scoped_observation_.Reset();

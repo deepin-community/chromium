@@ -5,6 +5,7 @@
 #ifndef UI_BASE_INTERACTION_ELEMENT_TRACKER_H_
 #define UI_BASE_INTERACTION_ELEMENT_TRACKER_H_
 
+#include <concepts>
 #include <list>
 #include <map>
 #include <memory>
@@ -256,7 +257,7 @@ class COMPONENT_EXPORT(UI_BASE) ElementTracker
   // notifications for; this allows us to zero out the reference in realtime if
   // the element is deleted. We use a list because the individual elements need
   // to be memory-stable.
-  std::list<TrackedElement*> notification_elements_;
+  std::list<raw_ptr<TrackedElement, CtnExperimental>> notification_elements_;
   std::map<LookupKey, ElementData> element_data_;
   base::RepeatingCallbackList<void(TrackedElement*)>
       any_element_shown_callbacks_;
@@ -271,6 +272,7 @@ class COMPONENT_EXPORT(UI_BASE) SafeElementReference {
   explicit SafeElementReference(TrackedElement* element);
   SafeElementReference(SafeElementReference&& other);
   SafeElementReference(const SafeElementReference& other);
+  SafeElementReference& operator=(TrackedElement* element);
   SafeElementReference& operator=(SafeElementReference&& other);
   SafeElementReference& operator=(const SafeElementReference& other);
   ~SafeElementReference();
@@ -291,6 +293,13 @@ class COMPONENT_EXPORT(UI_BASE) SafeElementReference {
     return element_ != other;
   }
 
+  // Gets the held element as type T if present, null if not present or not a T.
+  template <typename T>
+    requires std::derived_from<T, TrackedElement>
+  T* get_as() const {
+    return element_ ? element_->AsA<T>() : nullptr;
+  }
+
  private:
   void Subscribe();
   void OnElementHidden(TrackedElement* element);
@@ -305,12 +314,21 @@ class COMPONENT_EXPORT(UI_BASE) SafeElementReference {
 // your public header file and the DEFINE in corresponding .cc file. For local
 // values to be used in tests, use DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE()
 // defined below instead.
+//
+// Note: if you need to use the identifier outside the current component, use
+// DECLARE/DEFINE_EXPORTED_... below.
 #define DECLARE_CUSTOM_ELEMENT_EVENT_TYPE(EventName) \
   DECLARE_ELEMENT_IDENTIFIER_VALUE(EventName)
-#define DECLARE_EXPORTED_CUSTOM_ELEMENT_EVENT_TYPE(ExportName, EventName) \
-  DECLARE_EXPORTED_ELEMENT_IDENTIFIER_VALUE(ExportName, EventName)
 #define DEFINE_CUSTOM_ELEMENT_EVENT_TYPE(EventName) \
   DEFINE_ELEMENT_IDENTIFIER_VALUE(EventName)
+
+// Macros for declaring custom element event types that can be accessed in other
+// components. Put the DECLARE call in your public header file and the DEFINE
+// call in the corresponding .cc file.
+#define DECLARE_EXPORTED_CUSTOM_ELEMENT_EVENT_TYPE(ExportName, EventName) \
+  DECLARE_EXPORTED_ELEMENT_IDENTIFIER_VALUE(ExportName, EventName)
+#define DEFINE_EXPORTED_CUSTOM_ELEMENT_EVENT_TYPE(EventName) \
+  DEFINE_EXPORTED_ELEMENT_IDENTIFIER_VALUE(EventName)
 
 // Macros for declaring custom class element event type. Put the DECLARE call in
 // your .h file in your class declaration, and the DEFINE in the corresponding

@@ -2,6 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
+#include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -49,7 +55,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  DCHECK_NE(0, checksum);
+  CHECK_NE(0, checksum);
 
   if (!command_line.HasSwitch(kSwitchVersionOutput))
     return 0;

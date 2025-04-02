@@ -16,7 +16,6 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_util.h"
 #include "components/policy/core/common/cloud/dm_auth.h"
@@ -30,7 +29,7 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/ash/components/system/fake_statistics_provider.h"
 #endif
 
@@ -176,7 +175,7 @@ class ResponseValueBuilder {
 class EncryptedReportingJobConfigurationTest : public testing::Test {
  public:
   EncryptedReportingJobConfigurationTest()
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       : fake_serial_number_(&fake_statistics_provider_)
 #endif
   {
@@ -217,9 +216,9 @@ class EncryptedReportingJobConfigurationTest : public testing::Test {
         std::make_unique<StrictMock<MockUploadResponseCb>>();
     test_upload.configuration =
         std::make_unique<EncryptedReportingJobConfiguration>(
-            shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-            kServerUrl, RequestPayloadBuilder().AddRecord(record_value).Build(),
-            &client_,
+            shared_url_loader_factory_, kServerUrl,
+            RequestPayloadBuilder().AddRecord(record_value).Build(),
+            client_.dm_token(), client_.client_id(),
             base::BindOnce(
                 &MockUploadResponseCb::Call,
                 base::Unretained(test_upload.upload_response_cb.get())),
@@ -310,7 +309,7 @@ class EncryptedReportingJobConfigurationTest : public testing::Test {
 
   policy::MockCloudPolicyClient client_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ash::system::ScopedFakeStatisticsProvider fake_statistics_provider_;
   class ScopedFakeSerialNumber {
    public:
@@ -319,7 +318,7 @@ class EncryptedReportingJobConfigurationTest : public testing::Test {
       // The fake serial number must be set before |configuration| is
       // constructed below.
       fake_statistics_provider->SetMachineStatistic(
-          ash::system::kSerialNumberKeyForTest, "fake_serial_number");
+          ash::system::kSerialNumberKey, "fake_serial_number");
     }
   };
   ScopedFakeSerialNumber fake_serial_number_;
@@ -338,8 +337,8 @@ TEST_F(EncryptedReportingJobConfigurationTest, ValidatePayload) {
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, RequestPayloadBuilder().Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, RequestPayloadBuilder().Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
   auto* payload = GetPayload(&configuration);
@@ -380,8 +379,8 @@ TEST_F(EncryptedReportingJobConfigurationTest,
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
 
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::NoAuth(), kServerUrl,
-      RequestPayloadBuilder().Build(), /*cloud_policy_client=*/nullptr,
+      shared_url_loader_factory_, kServerUrl, RequestPayloadBuilder().Build(),
+      /*dm_token=*/"", /*client_id=*/"",
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
   auto* payload = GetPayload(&configuration);
@@ -430,9 +429,9 @@ TEST_F(EncryptedReportingJobConfigurationTest, CorrectlyAddEncryptedRecord) {
 
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, RequestPayloadBuilder().AddRecord(record_value).Build(),
-      &client_,
+      shared_url_loader_factory_, kServerUrl,
+      RequestPayloadBuilder().AddRecord(record_value).Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -462,8 +461,8 @@ TEST_F(EncryptedReportingJobConfigurationTest, CorrectlyAddsMultipleRecords) {
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -481,8 +480,8 @@ TEST_F(EncryptedReportingJobConfigurationTest,
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -506,8 +505,8 @@ TEST_F(EncryptedReportingJobConfigurationTest,
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -524,8 +523,8 @@ TEST_F(EncryptedReportingJobConfigurationTest,
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -542,8 +541,8 @@ TEST_F(EncryptedReportingJobConfigurationTest,
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -570,8 +569,8 @@ TEST_F(
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -589,8 +588,8 @@ TEST_F(EncryptedReportingJobConfigurationTest, AllowsSourceTastAlone) {
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -609,8 +608,8 @@ TEST_F(
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -639,8 +638,8 @@ TEST_F(
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -657,8 +656,8 @@ TEST_F(EncryptedReportingJobConfigurationTest, CorrectlyAddsAndUpdatesContext) {
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, RequestPayloadBuilder().Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, RequestPayloadBuilder().Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -735,8 +734,8 @@ TEST_F(EncryptedReportingJobConfigurationTest, OnURLLoadComplete_NetError) {
   EXPECT_CALL(upload_response_cb, Call(Eq(net::ERR_CONNECTION_RESET), _))
       .Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, RequestPayloadBuilder().Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, RequestPayloadBuilder().Build(),
+      client_.dm_token(), client_.client_id(),
       base::BindOnce(&MockUploadResponseCb::Call,
                      base::Unretained(&upload_response_cb)),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
@@ -746,8 +745,8 @@ TEST_F(EncryptedReportingJobConfigurationTest, OnURLLoadComplete_NetError) {
 TEST_F(EncryptedReportingJobConfigurationTest, ManagedDeviceUmaName) {
   // Non-null cloud policy client indicates device is unmanaged.
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, RequestPayloadBuilder().Build(), &client_, base::DoNothing(),
+      shared_url_loader_factory_, kServerUrl, RequestPayloadBuilder().Build(),
+      client_.dm_token(), client_.client_id(), base::DoNothing(),
       base::DoNothing());
 
   EXPECT_EQ(configuration.GetUmaName(),
@@ -757,9 +756,8 @@ TEST_F(EncryptedReportingJobConfigurationTest, ManagedDeviceUmaName) {
 TEST_F(EncryptedReportingJobConfigurationTest, UnmanagedDeviceUmaName) {
   // Null cloud policy client indicates device is unmanaged.
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, RequestPayloadBuilder().Build(),
-      /*cloud_policy_client=*/nullptr, base::DoNothing(), base::DoNothing());
+      shared_url_loader_factory_, kServerUrl, RequestPayloadBuilder().Build(),
+      /*dm_token=*/"", /*client_id=*/"", base::DoNothing(), base::DoNothing());
 
   EXPECT_EQ(configuration.GetUmaName(),
             "Browser.ERP.UnmanagedUploadEncryptedReport");
@@ -779,8 +777,8 @@ TEST_F(EncryptedReportingJobConfigurationTest, PayloadTopLevelFields) {
   request.Set(reporting::json_keys::kRequestId, "request-id");
 
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, std::move(request), &client_, base::DoNothing(),
+      shared_url_loader_factory_, kServerUrl, std::move(request),
+      client_.dm_token(), client_.client_id(), base::DoNothing(),
       base::DoNothing());
 
   std::optional<base::Value> payload =

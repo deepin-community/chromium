@@ -6,25 +6,31 @@
 
 #include "base/apple/foundation_util.h"
 #include "base/debug/dump_without_crashing.h"
+#include "base/feature_list.h"
 #include "base/functional/callback_forward.h"
+#import "components/remote_cocoa/app_shim/NSToolbar+Private.h"
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
+#import "components/remote_cocoa/app_shim/browser_native_widget_window_mac.h"
+#include "components/remote_cocoa/app_shim/features.h"
 
-// Access the private view that backs the toolbar.
-// TODO(http://crbug.com/40261565): Remove when FB12010731 is fixed in AppKit.
-@interface NSToolbar (ToolbarView)
-// The current usage of this property is readonly. Mark it as such here so we
-// don't invite other usages without a thoughtful change.
-@property(readonly) NSView* _toolbarView;
-@end
+namespace {
+void SetAlwaysShowTrafficLights(NSWindow* browser_window, bool always_show) {
+  [base::apple::ObjCCast<BrowserNativeWidgetWindow>(browser_window)
+      setAlwaysShowTrafficLights:YES];
+}
+}  // namespace
 
 namespace remote_cocoa {
 
 ImmersiveModeTabbedControllerCocoa::ImmersiveModeTabbedControllerCocoa(
-    NativeWidgetMacNSWindow* browser_window,
-    NativeWidgetMacNSWindow* overlay_window,
-    NativeWidgetMacNSWindow* tab_window)
+    BrowserNativeWidgetWindow* browser_window,
+    NativeWidgetMacOverlayNSWindow* overlay_window,
+    NativeWidgetMacOverlayNSWindow* tab_window)
     : ImmersiveModeControllerCocoa(browser_window, overlay_window) {
   tab_window_ = tab_window;
+#ifndef NDEBUG
+  tab_window_.title = @"tab overlay";
+#endif  // NDEBUG
 
   browser_window.titleVisibility = NSWindowTitleHidden;
 
@@ -36,9 +42,17 @@ ImmersiveModeTabbedControllerCocoa::ImmersiveModeTabbedControllerCocoa(
   // enough is able to paint underneath the traffic lights. This also works with
   // RTL setups.
   tab_titlebar_view_controller_.layoutAttribute = NSLayoutAttributeTrailing;
+
+  // During fullscreen restore or split screen restore tab window can be left
+  // without a parent, leading to the window being hidden which causes
+  // compositing to stop.
+  if (!tab_window.parentWindow) {
+    [overlay_window addChildWindow:tab_window ordered:NSWindowAbove];
+  }
 }
 
 ImmersiveModeTabbedControllerCocoa::~ImmersiveModeTabbedControllerCocoa() {
+  SetAlwaysShowTrafficLights(browser_window(), false);
   StopObservingChildWindows(tab_window_);
   browser_window().toolbar = nil;
   BridgedContentView* tab_content_view = tab_content_view_;
@@ -49,6 +63,8 @@ ImmersiveModeTabbedControllerCocoa::~ImmersiveModeTabbedControllerCocoa() {
 }
 
 void ImmersiveModeTabbedControllerCocoa::Init() {
+  SetAlwaysShowTrafficLights(browser_window(), true);
+
   ImmersiveModeControllerCocoa::Init();
   BridgedContentView* tab_content_view =
       base::apple::ObjCCastStrict<BridgedContentView>(tab_window_.contentView);
@@ -58,6 +74,10 @@ void ImmersiveModeTabbedControllerCocoa::Init() {
   // Use a placeholder view since the content has been moved to the
   // NSTitlebarAccessoryViewController.
   tab_window_.contentView = [[OpaqueView alloc] init];
+  if (base::FeatureList::IsEnabled(
+          remote_cocoa::features::kImmersiveFullscreenOverlayWindowDebug)) {
+    [tab_window_ debugWithColor:NSColor.redColor];
+  }
 
   // This will allow the NSToolbarFullScreenWindow to become key when
   // interacting with the tab strip.
@@ -116,7 +136,7 @@ void ImmersiveModeTabbedControllerCocoa::UpdateToolbarVisibility(
     return;
   }
 
-  // TODO(https://crbug.com/1426944): A NSTitlebarAccessoryViewController hosted
+  // TODO(crbug.com/40261565): A NSTitlebarAccessoryViewController hosted
   // in the titlebar, as opposed to above or below it, does not hide/show when
   // using the `hidden` property. Instead we must entirely remove the view
   // controller to make the view hide. Switch to using the `hidden` property
@@ -137,10 +157,7 @@ void ImmersiveModeTabbedControllerCocoa::UpdateToolbarVisibility(
   }
   ImmersiveModeControllerCocoa::UpdateToolbarVisibility(style);
 
-  // During fullscreen restore or split screen restore tab window can be left
-  // without a parent, leading to the window being hidden which causes
-  // compositing to stop. This call ensures that tab window is parented to
-  // overlay window and is in the correct z-order.
+  // Ensures that tab window is in the correct z-order.
   OrderTabWindowZOrderOnTop();
 
   // macOS 10.15 does not call `OnTitlebarFrameDidChange` as often as newer
@@ -207,8 +224,7 @@ void ImmersiveModeTabbedControllerCocoa::TitlebarReveal() {
   // and re-add the tab controller so its view is z-order above the toolbar
   // view. See http://crbug/40283902 for details.
   // TODO(http://crbug.com/40261565): Remove when FB12010731 is fixed in AppKit.
-  if ([toolbar respondsToSelector:@selector(_toolbarView)]) {
-    NSView* toolbar_view = toolbar._toolbarView;
+  if (NSView* toolbar_view = toolbar.privateToolbarView) {
     [toolbar_view.superview addSubview:toolbar_view
                             positioned:NSWindowBelow
                             relativeTo:nil];
@@ -268,7 +284,12 @@ void ImmersiveModeTabbedControllerCocoa::OrderTabWindowZOrderOnTop() {
   // window to always be z-order on top of overlay window children.
   // Practically this allows for the tab preview hover card to be z-order on top
   // of omnibox results popup.
-  if (overlay_window().childWindows.lastObject != tab_window_) {
+  // If the tab window does not have a parent or the parent is not the overlay
+  // window, do not perform the shuffle. Otherwise we could throw off the child
+  // window counts in NativeWidgetNSWindowBridge::NotifyVisibilityChangeDown
+  // during immersive fullscreen exit.
+  if (tab_window_.parentWindow == overlay_window() &&
+      overlay_window().childWindows.lastObject != tab_window_) {
     [overlay_window() removeChildWindow:tab_window_];
     [overlay_window() addChildWindow:tab_window_ ordered:NSWindowAbove];
   }

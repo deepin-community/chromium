@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/permissions/permission_prompt_bubble.h"
+
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
@@ -47,7 +48,8 @@ void PermissionPromptBubble::ShowBubble() {
       prompt_bubble->GetWidget()->GetPrimaryWindowWidget()->IsVisible();
 
   disallowed_custom_cursors_scope_ =
-      delegate()->GetAssociatedWebContents()->CreateDisallowCustomCursorScope();
+      delegate()->GetAssociatedWebContents()->CreateDisallowCustomCursorScope(
+          /*max_dimension_dips=*/0);
 }
 
 void PermissionPromptBubble::CleanUpPromptBubble() {
@@ -88,7 +90,7 @@ std::optional<gfx::Rect> PermissionPromptBubble::GetViewBoundsInScreen() const {
 
 bool PermissionPromptBubble::UpdateAnchor() {
   bool was_browser_changed = UpdateBrowser();
-  // TODO(crbug.com/1175231): Investigate why prompt_bubble_ can be null
+  // TODO(crbug.com/40747230): Investigate why prompt_bubble_ can be null
   // here. Early return is preventing the crash from happening but we still
   // don't know the reason why it is null here and cannot reproduce it.
   if (!GetPromptBubble()) {

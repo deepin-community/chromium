@@ -4,28 +4,28 @@
 
 #include "chrome/browser/ash/dbus/chrome_features_service_provider.h"
 
+#include <algorithm>
 #include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "ash/components/arc/arc_features.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/field_trial.h"
-#include "base/ranges/algorithm.h"
 #include "chrome/browser/ash/crostini/crostini_features.h"
 #include "chrome/browser/ash/crostini/crostini_pref_names.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_features.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_features.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
 #include "components/prefs/pref_service.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
@@ -41,7 +41,7 @@ namespace {
 // |base::Feature|s should be defined with this prefix.
 // A presubmit will enforce that no |base::Feature|s will be defined with this
 // prefix.
-// TODO(https://crbug.com/1263068): Add the aforementioned presubmit.
+// TODO(crbug.com/40202807): Add the aforementioned presubmit.
 constexpr char kCrOSLateBootFeaturePrefix[] = "CrOSLateBoot";
 
 void SendResponse(dbus::MethodCall* method_call,
@@ -167,9 +167,10 @@ void ChromeFeaturesServiceProvider::Start(
                           weak_ptr_factory_.GetWeakPtr()));
   exported_object->ExportMethod(
       chromeos::kChromeFeaturesServiceInterface,
-      chromeos::kChromeFeaturesServiceIsSuspendToDiskEnabledMethod,
-      base::BindRepeating(&ChromeFeaturesServiceProvider::IsSuspendToDiskEnabled,
-                          weak_ptr_factory_.GetWeakPtr()),
+      chromeos::kChromeFeaturesServiceIsRootNsDnsProxyEnabledMethod,
+      base::BindRepeating(
+          &ChromeFeaturesServiceProvider::IsRootNsDnsProxyEnabled,
+          weak_ptr_factory_.GetWeakPtr()),
       base::BindRepeating(&ChromeFeaturesServiceProvider::OnExported,
                           weak_ptr_factory_.GetWeakPtr()));
 }
@@ -189,11 +190,11 @@ void ChromeFeaturesServiceProvider::IsFeatureEnabled(
   static const base::Feature constexpr* kFeatureLookup[] = {
       &arc::kBootCompletedBroadcastFeature,
       &arc::kCustomTabsExperimentFeature,
-      &arc::kFilePickerExperimentFeature,
       &arc::kNativeBridgeToggleFeature,
       &features::kSessionManagerLongKillTimeout,
       &features::kSessionManagerLivenessCheck,
       &features::kBorealisProvision,
+      &features::kDeferConciergeStartup,
   };
 
   dbus::MessageReader reader(method_call);
@@ -208,7 +209,7 @@ void ChromeFeaturesServiceProvider::IsFeatureEnabled(
   }
 
   auto* const* it =
-      base::ranges::find(kFeatureLookup, feature_name, &base::Feature::name);
+      std::ranges::find(kFeatureLookup, feature_name, &base::Feature::name);
   if (it != std::end(kFeatureLookup)) {
     SendResponse(method_call, std::move(response_sender),
                  base::FeatureList::IsEnabled(**it));
@@ -221,7 +222,7 @@ void ChromeFeaturesServiceProvider::IsFeatureEnabled(
   // base.
   // Separately, a presubmit will enforce that no `base::Feature` definition
   // has a name starting with this prefix.
-  // TODO(https://crbug.com/1263068): Add the aforementioned presubmit.
+  // TODO(crbug.com/40202807): Add the aforementioned presubmit.
   base::FeatureList::OverrideState state =
       base::FeatureList::OVERRIDE_USE_DEFAULT;
   if (feature_name.find(kCrOSLateBootFeaturePrefix) == 0) {
@@ -448,11 +449,11 @@ void ChromeFeaturesServiceProvider::IsDnsProxyEnabled(
                !base::FeatureList::IsEnabled(features::kDisableDnsProxy));
 }
 
-void ChromeFeaturesServiceProvider::IsSuspendToDiskEnabled(
+void ChromeFeaturesServiceProvider::IsRootNsDnsProxyEnabled(
     dbus::MethodCall* method_call,
     dbus::ExportedObject::ResponseSender response_sender) {
   SendResponse(method_call, std::move(response_sender),
-               base::FeatureList::IsEnabled(features::kSuspendToDisk));
+               base::FeatureList::IsEnabled(features::kEnableRootNsDnsProxy));
 }
 
 }  // namespace ash

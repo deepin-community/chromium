@@ -51,7 +51,6 @@ CrosNetworkConfigTestHelper::CreateStandaloneNetworkProperties(
     case NetworkType::kMobile:
     case NetworkType::kWireless:
       NOTREACHED();
-      break;
     case NetworkType::kCellular: {
       auto cellular = mojom::CellularStateProperties::New();
       cellular->signal_strength = signal_strength;

@@ -11,6 +11,7 @@
 #include "components/invalidation/public/invalidation.h"
 #include "components/policy/core/common/cloud/enterprise_metrics.h"
 #include "components/policy/core/common/cloud/policy_invalidation_util.h"
+#include "components/policy/core/common/remote_commands/remote_commands_fetch_reason.h"
 #include "components/policy/core/common/remote_commands/remote_commands_service.h"
 
 namespace policy {
@@ -28,7 +29,6 @@ const char* GetInvalidationMetricName(PolicyInvalidationScope scope) {
     case PolicyInvalidationScope::kDeviceLocalAccount:
       NOTREACHED() << "Unexpected instance of remote commands invalidator with "
                       "device local account scope.";
-      return "";
   }
 }
 
@@ -43,7 +43,6 @@ std::string ComposeOwnerName(PolicyInvalidationScope scope) {
     case PolicyInvalidationScope::kDeviceLocalAccount:
       NOTREACHED() << "Unexpected instance of remote commands invalidator with "
                       "device local account scope.";
-      return "";
   }
 }
 
@@ -51,9 +50,9 @@ std::string ComposeOwnerName(PolicyInvalidationScope scope) {
 
 RemoteCommandsInvalidatorImpl::RemoteCommandsInvalidatorImpl(
     CloudPolicyCore* core,
-    base::Clock* clock,
+    const base::Clock* clock,
     PolicyInvalidationScope scope)
-    : RemoteCommandsInvalidator(ComposeOwnerName(scope)),
+    : RemoteCommandsInvalidator(ComposeOwnerName(scope), scope),
       core_(core),
       clock_(clock),
       scope_(scope) {
@@ -86,7 +85,15 @@ void RemoteCommandsInvalidatorImpl::DoRemoteCommandsFetch(
 
   RecordInvalidationMetric(invalidation);
 
-  core_->remote_commands_service()->FetchRemoteCommands();
+  core_->remote_commands_service()->FetchRemoteCommands(
+      RemoteCommandsFetchReason::kInvalidation);
+}
+
+void RemoteCommandsInvalidatorImpl::DoInitialRemoteCommandsFetch() {
+  CHECK(core_->remote_commands_service());
+
+  core_->remote_commands_service()->FetchRemoteCommands(
+      RemoteCommandsFetchReason::kStartup);
 }
 
 void RemoteCommandsInvalidatorImpl::OnCoreConnected(CloudPolicyCore* core) {}

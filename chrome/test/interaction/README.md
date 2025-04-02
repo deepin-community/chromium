@@ -9,8 +9,10 @@ The current API version is 2.0. All future 2.x versions are guaranteed to
 either be backwards-compatible with existing tests, or the authors will update
 the API calls for you.
 
-This page provides technical documentation. For a cookbook/FAQ/troubleshooting
-guide, see our [Kombucha Playbook](https://goto.google.com/kombucha-playbook).
+**This page provides a technical summary only.**
+
+**For a detailed guide, including cookbook, FAQ, and troubleshooting, see the
+[Kombucha Playbook](https://goto.google.com/kombucha-playbook).**
 
  - [Changelog](#changelog)
  - [Known Issues](#known-issues-and-incompatibilities)
@@ -39,6 +41,11 @@ present in `InteractiveTestApi`. If a method is introduced in
 `InteractiveViewsTestApi`, it will have **[Views]** next to it; if it's
 introduced in `InteractiveBrowserTestApi`, it will have **[Browser]** next to it
 instead.*
+
+There are also methods marked as **[Interactive]** - these are test actions that
+can only be used in a test which can control the mouse and things like window
+activation. Trying to use these actions in tests where these are not reliable
+will cause a CHECK() failure.
 
 ### Test Sequences
 
@@ -81,7 +88,8 @@ verbs, like `Check()` and `Do()` don't care about specific elements.
 Verbs fall into a number of different categories:
 - **Do** performs an action you specify.
 - **Log** prints its arguments to the output at log level `INFO`.
-  See [Logging](#logging) below.
+  See [Logging](#logging) below. **DumpElements** and **DumpElementsInContext**
+  are also covered in that section.
 - **Check** verbs ensure that some condition is true; if it is not, the test
   fails. Some *Check* verbs use `Matcher`s, some use callbacks, etc. Examples
   include:
@@ -127,27 +135,29 @@ Verbs fall into a number of different categories:
   environments where the test fixture is not running as the only process, so
   prefer to use those in interactive_ui_tests. Examples:
     - `PressButton()`
-    - `SelectMenuItem()`
+    - `SelectMenuItem()` [Interactive]
     - `SelectTab()`
-    - `SelectDropdownItem()`
+    - `SelectDropdownItem()` [Interactive] (with non-default input mode)
     - `EnterText()`
     - `SendAccelerator()`
     - `Confirm()`
     - `DoDefaultAction()`
-    - `ActivateSurface()`
+    - `ActivateSurface()` [Interactive]
       - ActivateSurface is not always reliable on Linux with the Wayland window
         manager; see [Handling Incompatibilities](#handling-incompatibilities)
         for how to correctly deal with this.
     - `ScrollIntoView()` [Views, Browser]
       - Recommended before doing anything that needs the screen coordinates of
         a UI or DOM element that is in a scrollable container.
+    - `ClickElement()` [Browser]
+      - For use with instrumented webcontents; see below.
 - **Mouse** verbs simulate mouse input to the entire application, and are
   therefore only reliable in test fixtures that run as exclusive processes (e.g.
   interactive_browser_tests). Examples include:
-    - `MoveMouseTo()` [Views]
-    - `DragMouseTo()` [Views]
-    - `ClickMouse()` [Views]
-    - `ReleaseMouseButton()` [Views]
+    - `MoveMouseTo()` [Views] [Interactive]
+    - `DragMouseTo()` [Views] [Interactive]
+    - `ClickMouse()` [Views] [Interactive]
+    - `ReleaseMouseButton()` [Views] [Interactive]
 - **Name** verbs assign a string name to some UI element which may not be known
   ahead of time, so that it can be referenced later in the test. Examples
   include:
@@ -169,7 +179,8 @@ Verbs fall into a number of different categories:
     - `NavigateWebContents()` [Browser]
     - `WaitForWebContentsReady()` [Browser]
     - `WaitForWebContentsNavigation()` [Browser]
-    - `FocusWebContents()` [Browser]
+    - `WaitForWebContentsPainted()` [Browser]
+    - `FocusWebContents()` [Browser] [Interactive]
     - `WaitForStateChange()` [Browser]
 - **Javascript** verbs execute javascript in an
   [instrumented WebContents](#webcontents-instrumentation), or verify a result
@@ -197,13 +208,18 @@ Verbs fall into a number of different categories:
    - `PollView()` [Views]
    - `StopObservingState()`
 - **Utility** verbs modify how the test sequence is executed.
-   - `FlushEvents()` ensures that the next step happens on a fresh
-     message loop rather than being able to chain successive steps.
+   - `WithoutDelay()` prevents step start callback and the trigger for the next
+     step being evaluated on a new call stack, after all pending events.
+     Instead, these will be evaluated as soon as possible, possibly all on the 
+     same call stack. This can be used to perform checks before an object is
+     destroyed or a resource is freed.
    - `SetOnIncompatibleAction()` changes what the sequence will do when faced
      with an action that cannot be executed on the current
      build, environment, or platform. See
      [Handling Incompatibilities](#handling-incompatibilities) for more
      information and best practices.
+   - `Screenshot()` and `ScreenshotSurface()` take Skia Gold screenshots of a
+     particular element or window.
 
 Example with mouse input:
 ```cpp
@@ -294,6 +310,14 @@ RunTestSequence(
       " square of current value: ", [&x](){ return x*x; }));
 ```
 
+#### Dumping the UI Element Tree
+
+Another way to inspect test state is with `DumpElements` and
+`DumpElementsInContext` which emit a tree of all UI elements or all elements
+within the current context (respectively) for debugging purposes.
+
+Note: this dump automatically happens when a test fails.
+
 ### Modifiers
 
 A modifier wraps around a step or steps and change their behavior.
@@ -323,6 +347,15 @@ RunTestSequence(
 
 - **InContext** allows the modified verb (or verbs) to execute in the specified context instead of
   the default context for the sequence. Example:
+
+- **InSameContextAs** allows the modified verb (or verbs) to find an element in the same context
+  as an element you specify, either by name, or by identifier. The element will be located in any
+  context and should be unique. Example:
+```cpp
+RunTestSequence(
+    InAnyContext(NameElementRelative(kBaseElementId, kNamedElement, &FindMyDialog)),
+    InSameContextAs(kNamedElement, PressButton(kMyButton)));
+```
 
 ```cpp
 Browser* const incognito = CreateIncognitoBrowser();
@@ -726,9 +759,9 @@ RunTestSequence(
 );
 ```
 
-For `PollElement()` and `PollView()`, the state value is an `absl::optional` and
+For `PollElement()` and `PollView()`, the state value is an `std::optional` and
 if the element or view is not present in the target context the value will be
-`absl::nullopt`.
+`std::nullopt`.
 
 Be aware that for transient or short-lived states, the correct value might be
 missed between polls, so polling should only be used for states that should
@@ -865,6 +898,20 @@ likely that Kombucha is missing some common verb that would cover your use case.
 Please reach out to us!
 
 ## Changelog
+
+### Q4 2024
+
+UI Element hierarchy now printed on test failure.
+ - Includes View and Widget hierarchy (for Views tests)
+ - Indicates activation and focus (when available)
+ - Indicates current active context in the test
+
+### Q2 2024
+
+Moved from synchronous to asynchronous execution of step callbacks by default.
+ - Eliminates the need for `FlushEvents()`
+ - Makes tests less likely to flake due to order-of-operations
+ - Makes tests more likely to uncover race conditions in systems under test
 
 ### March 2023
 

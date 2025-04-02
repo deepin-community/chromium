@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 #include "chrome/browser/safe_browsing/extension_telemetry/extension_telemetry_file_processor.h"
 
+#include <string_view>
+
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -42,11 +44,11 @@ void WriteExtensionFile(const base::FilePath& path,
 
 void WriteEmptyFile(const base::FilePath& path, const std::string& file_name) {
   base::FilePath file_path = path.AppendASCII(file_name);
-  base::WriteFile(file_path, base::StringPiece());
+  base::WriteFile(file_path, std::string_view());
 
-  int64_t file_size;
-  EXPECT_TRUE(base::GetFileSize(file_path, &file_size));
-  ASSERT_EQ(file_size, 0);
+  std::optional<int64_t> file_size = base::GetFileSize(file_path);
+  ASSERT_TRUE(file_size.has_value());
+  ASSERT_EQ(file_size.value(), 0);
 }
 
 class ExtensionTelemetryFileProcessorTest : public ::testing::Test {
@@ -336,10 +338,10 @@ TEST_F(ExtensionTelemetryFileProcessorTest, EnforcesMaxFileSizeLimit) {
       .Then(std::move(callback));
   task_environment_.RunUntilIdle();
 
-  int64_t file_size;
-  EXPECT_TRUE(base::GetFileSize(
-      extension_root_dir_.AppendASCII("over_sized_file.js"), &file_size));
-  ASSERT_GT(file_size, max_file_size);
+  std::optional<int64_t> file_size =
+      base::GetFileSize(extension_root_dir_.AppendASCII("over_sized_file.js"));
+  EXPECT_TRUE(file_size.has_value());
+  ASSERT_GT(file_size.value(), max_file_size);
 
   base::Value::Dict expected_dict;
   expected_dict.Set(kManifestFile, kManifestFile);

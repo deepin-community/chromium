@@ -2,24 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/aura/accessibility/automation_manager_aura.h"
+
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/aura/accessibility/automation_manager_aura.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/views/accessibility_checker.h"
-#include "content/public/browser/browser_accessibility_state.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/scoped_accessibility_mode_override.h"
 #include "extensions/browser/api/automation_internal/automation_event_router_interface.h"
 #include "ui/accessibility/ax_action_data.h"
+#include "ui/accessibility/ax_mode.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/views/accessibility/ax_aura_obj_wrapper.h"
 #include "ui/views/accessibility/ax_tree_source_views.h"
@@ -67,7 +69,7 @@ void FindAllHostsOfWebContentsWithAXTreeID(
 ui::AXTreeID GetAXTreeIDFromRenderFrameHost(content::RenderFrameHost* rfh) {
   auto* registry = ui::AXActionHandlerRegistry::GetInstance();
   return registry->GetAXTreeID(ui::AXActionHandlerRegistry::FrameID(
-      rfh->GetProcess()->GetID(), rfh->GetRoutingID()));
+      rfh->GetProcess()->GetDeprecatedID(), rfh->GetRoutingID()));
 }
 
 // A class that installs itself as the sink to handle automation event bundles
@@ -95,8 +97,9 @@ class AutomationEventWaiter
   // has ever been focused, otherwise spins a loop until that node is
   // focused.
   void WaitForNodeIdToBeFocused(ui::AXNodeID node_id) {
-    if (WasNodeIdFocused(node_id))
+    if (WasNodeIdFocused(node_id)) {
       return;
+    }
 
     node_id_to_wait_for_ = node_id;
     run_loop_->Run();
@@ -114,9 +117,11 @@ class AutomationEventWaiter
   }
 
   bool WasNodeIdFocused(int node_id) {
-    for (size_t i = 0; i < focused_node_ids_.size(); i++)
-      if (node_id == focused_node_ids_[i])
+    for (int focused_node_id : focused_node_ids_) {
+      if (node_id == focused_node_id) {
         return true;
+      }
+    }
     return false;
   }
 
@@ -124,10 +129,11 @@ class AutomationEventWaiter
 
  private:
   // extensions::AutomationEventRouterInterface:
-  void DispatchAccessibilityEvents(const ui::AXTreeID& tree_id,
-                                   std::vector<ui::AXTreeUpdate> updates,
-                                   const gfx::Point& mouse_location,
-                                   std::vector<ui::AXEvent> events) override {
+  void DispatchAccessibilityEvents(
+      const ui::AXTreeID& tree_id,
+      const std::vector<ui::AXTreeUpdate>& updates,
+      const gfx::Point& mouse_location,
+      const std::vector<ui::AXEvent>& events) override {
     for (const ui::AXTreeUpdate& update : updates) {
       if (!ax_tree_.Unserialize(update)) {
         LOG(ERROR) << ax_tree_.error();
@@ -144,8 +150,9 @@ class AutomationEventWaiter
       }
     }
 
-    if (event_type_to_wait_for_ == ax::mojom::Event::kNone)
+    if (event_type_to_wait_for_ == ax::mojom::Event::kNone) {
       return;
+    }
 
     for (const ui::AXEvent& event : events) {
       if (event.event_type == event_type_to_wait_for_ &&
@@ -158,12 +165,16 @@ class AutomationEventWaiter
     }
   }
   void DispatchAccessibilityLocationChange(
-      const content::AXLocationChangeNotificationDetails& details) override {}
+      const ui::AXTreeID& tree_id,
+      const ui::AXLocationChange& details) override {}
+  void DispatchAccessibilityScrollChange(
+      const ui::AXTreeID& tree_id,
+      const ui::AXScrollChange& details) override {}
   void DispatchTreeDestroyedEvent(ui::AXTreeID tree_id) override {}
-  void DispatchActionResult(
-      const ui::AXActionData& data,
-      bool result,
-      content::BrowserContext* browser_context = nullptr) override {}
+  void DispatchActionResult(const ui::AXActionData& data,
+                            bool result,
+                            content::BrowserContext* browser_context) override {
+  }
   void DispatchGetTextLocationDataResult(
       const ui::AXActionData& data,
       const std::optional<gfx::Rect>& rect) override {}
@@ -195,7 +206,7 @@ typedef InProcessBrowserTest AutomationManagerAuraBrowserTest;
 // This test makes sure that we don't hook up both simultaneously, leading
 // to the same web page appearing in the overall tree twice.
 IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest, WebAppearsOnce) {
-  content::BrowserAccessibilityState::GetInstance()->EnableAccessibility();
+  content::ScopedAccessibilityModeOverride mode_override(ui::kAXModeComplete);
 
   AutomationManagerAura* manager = AutomationManagerAura::GetInstance();
   manager->Enable();
@@ -224,9 +235,9 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest, WebAppearsOnce) {
     tree->SerializeNode(web_hosts[0], &node_data);
     EXPECT_EQ(ax::mojom::Role::kWebView, node_data.role);
   } else {
-    for (size_t i = 0; i < web_hosts.size(); i++) {
+    for (auto& web_host : web_hosts) {
       ui::AXNodeData node_data;
-      tree->SerializeNode(web_hosts[i], &node_data);
+      tree->SerializeNode(web_host, &node_data);
     }
   }
 }
@@ -242,7 +253,9 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest,
   AutomationEventWaiter waiter;
 
   views::Widget* widget = new views::Widget;
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.bounds = {0, 0, 200, 200};
   widget->Init(std::move(params));
   widget->Show();
@@ -252,19 +265,22 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest,
 
   views::View* view1 = new views::View();
   view1->GetViewAccessibility().SetRole(ax::mojom::Role::kDialog);
-  view1->GetViewAccessibility().OverrideName("view1");
+  view1->GetViewAccessibility().SetName("view1",
+                                        ax::mojom::NameFrom::kAttribute);
   view1->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
   widget->GetRootView()->AddChildView(view1);
   views::AXAuraObjWrapper* wrapper1 = cache_ptr->GetOrCreate(view1);
   views::View* view2 = new views::View();
   view2->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
   view2->GetViewAccessibility().SetRole(ax::mojom::Role::kDialog);
-  view2->GetViewAccessibility().OverrideName("view2");
+  view2->GetViewAccessibility().SetName("view2",
+                                        ax::mojom::NameFrom::kAttribute);
   widget->GetRootView()->AddChildView(view2);
   views::AXAuraObjWrapper* wrapper2 = cache_ptr->GetOrCreate(view2);
   views::View* view3 = new views::View();
   view3->GetViewAccessibility().SetRole(ax::mojom::Role::kDialog);
-  view3->GetViewAccessibility().OverrideName("view3");
+  view3->GetViewAccessibility().SetName("view3",
+                                        ax::mojom::NameFrom::kAttribute);
   view3->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
   widget->GetRootView()->AddChildView(view3);
   views::AXAuraObjWrapper* wrapper3 = cache_ptr->GetOrCreate(view3);
@@ -293,7 +309,7 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest,
   RunAccessibilityChecks(widget);
 }
 
-// TODO(crbug.com/1202250): Crashes on Ozone.
+// TODO(crbug.com/40179066): Crashes on Ozone.
 #if BUILDFLAG(IS_OZONE)
 #define MAYBE_ScrollView DISABLED_ScrollView
 #else
@@ -312,6 +328,7 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest, MAYBE_ScrollView) {
   // Create a widget with size 200, 200.
   views::Widget* widget = new views::Widget;
   views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   params.bounds = {0, 0, 200, 200};
   widget->Init(std::move(params));
@@ -397,7 +414,7 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest, MAYBE_ScrollView) {
 
 // Ensure that TableView accessibility works at the level of the
 // serialized accessibility tree generated by AutomationManagerAura.
-// TODO(crbug.com/1202250): Crashes on Ozone.
+// TODO(crbug.com/40179066): Crashes on Ozone.
 #if BUILDFLAG(IS_OZONE)
 #define MAYBE_TableView DISABLED_TableView
 #else
@@ -421,6 +438,7 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest, MAYBE_TableView) {
   // various accessibility nodes is correct.
   views::Widget* widget = new views::Widget;
   views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   constexpr int kLeft = 100;
   constexpr int kTop = 500;
@@ -478,13 +496,14 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest, MAYBE_TableView) {
     ui::AXNode* cell =
         waiter.ax_tree()->GetFromId(ax_cell_0_0_wrapper->GetUniqueId());
     ASSERT_TRUE(cell);
-    EXPECT_EQ(ax::mojom::Role::kCell, cell->GetRole());
+    EXPECT_EQ(ax::mojom::Role::kGridCell, cell->GetRole());
     gfx::RectF cell_bounds = waiter.ax_tree()->GetTreeBounds(cell);
     SCOPED_TRACE("Cell: " + cell_bounds.ToString());
 
     ui::AXNode* window = cell->parent();
-    while (window && window->GetRole() != ax::mojom::Role::kWindow)
+    while (window && window->GetRole() != ax::mojom::Role::kWindow) {
       window = window->parent();
+    }
     ASSERT_TRUE(window);
 
     gfx::RectF window_bounds = waiter.ax_tree()->GetTreeBounds(window);
@@ -517,7 +536,9 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest, EventFromAction) {
   AutomationEventWaiter waiter;
 
   views::Widget* widget = new views::Widget;
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.bounds = {0, 0, 200, 200};
   widget->Init(std::move(params));
   widget->Show();
@@ -527,13 +548,15 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest, EventFromAction) {
 
   views::View* view1 = new views::View();
   view1->GetViewAccessibility().SetRole(ax::mojom::Role::kDialog);
-  view1->GetViewAccessibility().OverrideName("view1");
+  view1->GetViewAccessibility().SetName("view1",
+                                        ax::mojom::NameFrom::kAttribute);
   view1->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
   widget->GetRootView()->AddChildView(view1);
   views::View* view2 = new views::View();
   view2->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
   view2->GetViewAccessibility().SetRole(ax::mojom::Role::kDialog);
-  view2->GetViewAccessibility().OverrideName("view2");
+  view2->GetViewAccessibility().SetName("view2",
+                                        ax::mojom::NameFrom::kAttribute);
   widget->GetRootView()->AddChildView(view2);
   views::AXAuraObjWrapper* wrapper2 = cache_ptr->GetOrCreate(view2);
 
@@ -571,7 +594,9 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest,
   manager->Enable();
 
   views::Widget* widget = new views::Widget;
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.bounds = {0, 0, 200, 200};
   widget->Init(std::move(params));
   widget->Show();
@@ -609,7 +634,9 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest,
 IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest, GetFocusOnChildTree) {
   views::AXAuraObjCache cache;
   views::Widget* widget = new views::Widget;
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.bounds = {0, 0, 200, 200};
   widget->Init(std::move(params));
   widget->Show();
@@ -629,7 +656,7 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest, GetFocusOnChildTree) {
   EXPECT_EQ(cache.GetOrCreate(widget->GetRootView()), cache.GetFocus());
 
   // Now, there's a tree id.
-  child->GetViewAccessibility().OverrideChildTreeID(
+  child->GetViewAccessibility().SetChildTreeID(
       ui::AXTreeID::CreateNewAXTreeID());
   EXPECT_EQ(cache.GetOrCreate(child), cache.GetFocus());
 

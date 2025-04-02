@@ -23,28 +23,97 @@
 #include "third_party/blink/renderer/platform/media/web_content_decryption_module_impl.h"
 
 namespace blink {
+
 namespace {
 
 // Used to name UMAs in Reporter.
 const char kKeySystemSupportUMAPrefix[] =
     "Media.EME.RequestMediaKeySystemAccess.";
 
+std::string ConvertCreateCdmStatusToString(media::CreateCdmStatus status) {
+  switch (status) {
+    case media::CreateCdmStatus::kSuccess:
+      return "Succeeded.";
+    case media::CreateCdmStatus::kUnknownError:
+      return "Unknown error.";
+    case media::CreateCdmStatus::kCdmCreationAborted:
+      return "CDM creation aborted.";
+    case media::CreateCdmStatus::kCreateCdmFuncNotAvailable:
+      return "CreateCdmFunc not available.";
+    case media::CreateCdmStatus::kCdmHelperCreationFailed:
+      return "CDM helper creation failed.";
+    case media::CreateCdmStatus::kGetCdmPrefDataFailed:
+      return "Failed to get the CDM preference data.";
+    case media::CreateCdmStatus::kGetCdmOriginIdFailed:
+      return "Failed to get the CDM origin ID.";
+    case media::CreateCdmStatus::kInitCdmFailed:
+      return "Failed to initialize CDM.";
+    case media::CreateCdmStatus::kCdmFactoryCreationFailed:
+      return "CDM Factory creation failed.";
+    case media::CreateCdmStatus::kCdmNotSupported:
+      return "CDM not supported.";
+    case media::CreateCdmStatus::kInvalidCdmConfig:
+      return "Invalid CdmConfig.";
+    case media::CreateCdmStatus::kUnsupportedKeySystem:
+      return "Unsupported key system.";
+    case media::CreateCdmStatus::kDisconnectionError:
+      return "Disconnection error.";
+    case media::CreateCdmStatus::kNotAllowedOnUniqueOrigin:
+      return "EME use is not allowed on unique origins.";
+#if BUILDFLAG(IS_ANDROID)
+    case media::CreateCdmStatus::kMediaDrmBridgeCreationFailed:
+      return "MediaDrmBridge creation failed.";
+    case media::CreateCdmStatus::kMediaCryptoNotAvailable:
+      return "MediaCrypto not available.";
+    case media::CreateCdmStatus::kAndroidMediaDrmIllegalArgument:
+      return "Illegal argument passed to MediaDrm.";
+    case media::CreateCdmStatus::kAndroidMediaDrmIllegalState:
+      return "MediaDrm not initialized properly.";
+    case media::CreateCdmStatus::kAndroidFailedL1SecurityLevel:
+      return "Unable to set L1 security level.";
+    case media::CreateCdmStatus::kAndroidFailedL3SecurityLevel:
+      return "Unable to set L3 security level.";
+    case media::CreateCdmStatus::kAndroidFailedSecurityOrigin:
+      return "Unable to set origin.";
+    case media::CreateCdmStatus::kAndroidFailedMediaCryptoSession:
+      return "Unable to create MediaCrypto session.";
+    case media::CreateCdmStatus::kAndroidFailedToStartProvisioning:
+      return "Unable to create MediaCrypto session.";
+    case media::CreateCdmStatus::kAndroidFailedMediaCryptoCreate:
+      return "Unable to create MediaCrypto object.";
+    case media::CreateCdmStatus::kAndroidUnsupportedMediaCryptoScheme:
+      return "Crypto scheme not supported.";
+#elif BUILDFLAG(IS_CHROMEOS)
+    case media::CreateCdmStatus::kNoMoreInstances:
+      return "Only one instance allowed.";
+    case media::CreateCdmStatus::kInsufficientGpuResources:
+      return "Insufficient GPU memory available.";
+    case media::CreateCdmStatus::kCrOsVerifiedAccessDisabled:
+      return "Verified Access is disabled.";
+    case media::CreateCdmStatus::kCrOsRemoteFactoryCreationFailed:
+      return "Remote factory creation failed.";
+#endif  // BUILDFLAG(IS_ANDROID)
+    default:
+      return base::ToString(status);
+  }
+}
+
 // A helper function to complete WebContentDecryptionModuleResult. Used
 // to convert WebContentDecryptionModuleResult to a callback.
 void CompleteWebContentDecryptionModuleResult(
     std::unique_ptr<WebContentDecryptionModuleResult> result,
-    WebContentDecryptionModule* cdm,
-    const std::string& error_message) {
+    std::unique_ptr<WebContentDecryptionModule> cdm,
+    media::CreateCdmStatus status) {
   DCHECK(result);
 
   if (!cdm) {
     result->CompleteWithError(
         kWebContentDecryptionModuleExceptionNotSupportedError, 0,
-        WebString::FromUTF8(error_message));
+        WebString::FromASCII(ConvertCreateCdmStatusToString(status)));
     return;
   }
 
-  result->CompleteWithContentDecryptionModule(cdm);
+  result->CompleteWithContentDecryptionModule(std::move(cdm));
 }
 
 }  // namespace
@@ -176,12 +245,13 @@ class WebEncryptedMediaClientImpl::Reporter {
 };
 
 WebEncryptedMediaClientImpl::WebEncryptedMediaClientImpl(
+    media::KeySystems* key_systems,
     media::CdmFactory* cdm_factory,
     media::MediaPermission* media_permission,
     std::unique_ptr<KeySystemConfigSelector::WebLocalFrameDelegate>
         web_frame_delegate)
-    : cdm_factory_(cdm_factory),
-      key_systems_(media::KeySystems::GetInstance()),
+    : key_systems_(key_systems),
+      cdm_factory_(cdm_factory),
       key_system_config_selector_(key_systems_,
                                   media_permission,
                                   std::move(web_frame_delegate)) {
@@ -207,7 +277,7 @@ void WebEncryptedMediaClientImpl::CreateCdm(
     const media::CdmConfig& cdm_config,
     std::unique_ptr<WebContentDecryptionModuleResult> result) {
   WebContentDecryptionModuleImpl::Create(
-      cdm_factory_, security_origin, cdm_config,
+      cdm_factory_, key_systems_, security_origin, cdm_config,
       base::BindOnce(&CompleteWebContentDecryptionModuleResult,
                      std::move(result)));
 }

@@ -24,6 +24,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_IMAGE_DECODERS_IMAGE_FRAME_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_IMAGE_DECODERS_IMAGE_FRAME_H_
 
@@ -218,7 +223,7 @@ class PLATFORM_EXPORT ImageFrame final {
     if (premultiply_alpha_) {
       SetRGBAPremultiply(dest, r, g, b, a);
     } else {
-      *dest = SkPackARGB32NoCheck(a, r, g, b);
+      *dest = SkPackARGB32(a, r, g, b);
     }
   }
 
@@ -236,7 +241,7 @@ class PLATFORM_EXPORT ImageFrame final {
       b = (b * alpha + kRoundFractionControl) >> 16;
     }
 
-    *dest = SkPackARGB32NoCheck(a, r, g, b);
+    *dest = SkPackARGB32(a, r, g, b);
   }
 
   static inline void SetRGBARaw(PixelData* dest,
@@ -244,7 +249,7 @@ class PLATFORM_EXPORT ImageFrame final {
                                 unsigned g,
                                 unsigned b,
                                 unsigned a) {
-    *dest = SkPackARGB32NoCheck(a, r, g, b);
+    *dest = SkPackARGB32(a, r, g, b);
   }
 
   // Blend the RGBA pixel provided by |red|, |green|, |blue| and |alpha| over

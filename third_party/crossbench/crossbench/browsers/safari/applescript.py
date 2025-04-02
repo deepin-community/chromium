@@ -4,13 +4,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-from ..applescript import AppleScriptBrowser
-from .safari import Safari
-
-if TYPE_CHECKING:
-  from crossbench.runner.runner import Runner
+from crossbench.browsers.applescript import AppleScriptBrowser
+from crossbench.browsers.attributes import BrowserAttributes
+from crossbench.browsers.safari.safari import Safari
 
 
 class SafariAppleScript(Safari, AppleScriptBrowser):
@@ -42,12 +38,17 @@ class SafariAppleScript(Safari, AppleScriptBrowser):
     else:
       bounds = (f"{self.viewport.x},{self.viewport.y},"
                 f"{self.viewport.width},{self.viewport.height}")
-      self._exec_apple_script(f"set the bounds of the first window to {bounds}")
+      self._exec_apple_script("set the bounds of the first window to {%s}" %
+                              bounds)
 
-  def quit(self, runner: Runner) -> None:
-    super().quit(runner)
+  def quit(self) -> None:
+    super().quit()
     # Safari doesn't react to "quit" when using the full app path.
     self.platform.exec_apple_script(f"""
         tell application "{self.bundle_name}"
           quit
         end tell""")
+
+  @property
+  def attributes(self) -> BrowserAttributes:
+    return BrowserAttributes.SAFARI | BrowserAttributes.APPLESCRIPT

@@ -50,7 +50,6 @@ constexpr const char* ToString(BluetoothDevice::ConnectErrorCode error_code) {
       return "ERROR_UNSUPPORTED_DEVICE";
     default:
       NOTREACHED();
-      return "";
   }
 }
 
@@ -74,7 +73,6 @@ constexpr const char* ToString(BluetoothGattService::GattErrorCode error_code) {
       return "GATT_ERROR_NOT_SUPPORTED";
     default:
       NOTREACHED();
-      return "";
   }
 }
 
@@ -90,7 +88,6 @@ std::ostream& operator<<(std::ostream& os,
   }
 
   NOTREACHED();
-  return os;
 }
 
 void OnWriteRemoteCharacteristic(FidoBleConnection::WriteCallback callback) {
@@ -386,7 +383,7 @@ void FidoBleConnection::OnReadServiceRevisions(
   // characteristic. Note that this information is currently not used in another
   // way, as we will still attempt a CTAP GetInfo() command, even if only U2F is
   // supported.
-  // TODO(https://crbug.com/780078): Consider short circuiting to the
+  // TODO(crbug.com/40547449): Consider short circuiting to the
   // U2F logic if FIDO2 is not supported.
   DCHECK_EQ(
       *std::min_element(service_revisions.begin(), service_revisions.end()),
@@ -409,7 +406,7 @@ void FidoBleConnection::WriteServiceRevision(ServiceRevision service_revision) {
   DCHECK(service_revision_bitfield_id_);
   fido_service->GetCharacteristic(*service_revision_bitfield_id_)
       ->WriteRemoteCharacteristic(
-          {static_cast<uint8_t>(service_revision)},
+          base::byte_span_from_ref(static_cast<uint8_t>(service_revision)),
           BluetoothRemoteGattCharacteristic::WriteType::kWithResponse,
           base::BindOnce(OnWriteRemoteCharacteristic,
                          std::move(split_callback.first)),

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include <string.h>
 
 #include "services/network/public/cpp/hash_value_mojom_traits.h"
@@ -16,7 +21,7 @@ bool StructTraits<
   mojo::ArrayDataView<uint8_t> bytes;
   in.GetDataDataView(&bytes);
   if (bytes.size() != 32) {
-    // TODO(crbug.com/1394542): Mojo should validate this array size. We can
+    // TODO(crbug.com/40061960): Mojo should validate this array size. We can
     // CHECK it instead when it does.
     return false;
   }

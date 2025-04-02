@@ -15,7 +15,6 @@
 #include "extensions/common/mojom/host_id.mojom.h"
 #include "extensions/common/permissions/api_permission.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "extensions/common/script_constants.h"
 #include "extensions/renderer/injection_host.h"
 #include "extensions/renderer/renderer_extension_registry.h"
 #include "extensions/renderer/script_context.h"
@@ -47,6 +46,11 @@ blink::mojom::UserActivationOption ProgrammaticScriptInjector::IsUserGesture()
 mojom::ExecutionWorld ProgrammaticScriptInjector::GetExecutionWorld() const {
   DCHECK(params_->injection->is_js());
   return params_->injection->get_js()->world;
+}
+
+const std::optional<std::string>&
+ProgrammaticScriptInjector::GetExecutionWorldId() const {
+  return params_->injection->get_js()->world_id;
 }
 
 mojom::CSSOrigin ProgrammaticScriptInjector::GetCssOrigin() const {
@@ -99,9 +103,7 @@ PermissionsData::PageAccess ProgrammaticScriptInjector::CanExecuteOnFrame(
   GURL effective_document_url =
       ScriptContext::GetEffectiveDocumentURLForInjection(
           frame, frame->GetDocument().Url(),
-          params_->match_about_blank
-              ? MatchOriginAsFallbackBehavior::kMatchForAboutSchemeAndClimbTree
-              : MatchOriginAsFallbackBehavior::kNever);
+          params_->match_origin_as_fallback_behavior);
   if (params_->is_web_view) {
     if (!frame->IsOutermostMainFrame()) {
       // This is a subframe inside <webview>, so allow it.

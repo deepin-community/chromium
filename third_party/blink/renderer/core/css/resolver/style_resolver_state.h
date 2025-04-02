@@ -40,6 +40,7 @@
 
 namespace blink {
 
+class AnchorEvaluator;
 class ComputedStyle;
 class FontDescription;
 class PseudoElement;
@@ -78,6 +79,9 @@ class CORE_EXPORT StyleResolverState {
   Element* GetStyledElement() const { return styled_element_; }
   // These are all just pass-through methods to ElementResolveContext.
   Element& GetElement() const { return element_context_.GetElement(); }
+  Element& GetUltimateOriginatingElementOrSelf() const {
+    return element_context_.GetUltimateOriginatingElementOrSelf();
+  }
   const Element* ParentElement() const {
     return element_context_.ParentElement();
   }
@@ -100,6 +104,10 @@ class CORE_EXPORT StyleResolverState {
     style_builder_.emplace(style);
     UpdateLengthConversionData();
   }
+
+  // Initialize the style builder. source_for_noninherited holds initial values
+  // to use for non-inherited properties. inherit_parent is simply the style to
+  // inherit from (either implicitly or explicitly).
   void CreateNewStyle(
       const ComputedStyle& source_for_noninherited,
       const ComputedStyle& inherit_parent,
@@ -146,6 +154,7 @@ class CORE_EXPORT StyleResolverState {
   PseudoElement* GetPseudoElement() const;
 
   void SetParentStyle(const ComputedStyle*);
+  void EnsureParentStyle();
   const ComputedStyle* ParentStyle() const { return parent_style_; }
 
   void SetLayoutParentStyle(const ComputedStyle*);
@@ -181,7 +190,10 @@ class CORE_EXPORT StyleResolverState {
   void SetZoom(float);
   void SetEffectiveZoom(float);
   void SetWritingMode(WritingMode);
+  void SetTextSizeAdjust(TextSizeAdjust);
   void SetTextOrientation(ETextOrientation);
+  void SetPositionAnchor(ScopedCSSName*);
+  void SetPositionAreaOffsets(const std::optional<PositionAreaOffsets>&);
 
   CSSParserMode GetParserMode() const;
 
@@ -237,13 +249,6 @@ class CORE_EXPORT StyleResolverState {
 
   void UpdateLengthConversionData();
 
-  void SetIsResolvingPositionFallbackStyle(bool is_resolving = true) {
-    is_resolving_position_fallback_style_ = is_resolving;
-  }
-  bool IsResolvingPositionFallbackStyle() const {
-    return is_resolving_position_fallback_style_;
-  }
-
   float TextAutosizingMultiplier() const {
     const ComputedStyle* old_style = GetElement().GetComputedStyle();
     if (element_type_ != ElementType::kPseudoElement && old_style) {
@@ -255,6 +260,13 @@ class CORE_EXPORT StyleResolverState {
 
   void SetHasTreeScopedReference() { has_tree_scoped_reference_ = true; }
   bool HasTreeScopedReference() const { return has_tree_scoped_reference_; }
+
+  void SetHasUnsupportedGuaranteedInvalid() {
+    has_unsupported_guaranteed_invalid_ = true;
+  }
+  bool HasUnsupportedGuaranteedInvalid() const {
+    return has_unsupported_guaranteed_invalid_;
+  }
 
  private:
   CSSToLengthConversionData UnzoomedLengthConversionData(const FontSizeStyle&);
@@ -293,6 +305,9 @@ class CORE_EXPORT StyleResolverState {
   ElementStyleResources element_style_resources_;
   ElementType element_type_;
   Element* container_unit_context_;
+
+  // See StyleRecalcContext::anchor_evaluator_.
+  AnchorEvaluator* anchor_evaluator_ = nullptr;
 
   // Whether this element is inside a link or not. Note that this is different
   // from ElementLinkState() if the element is not a link itself but is inside
@@ -338,12 +353,12 @@ class CORE_EXPORT StyleResolverState {
   // flag.
   bool rejected_legacy_overlapping_ = false;
 
-  // True if we are currently resolving a position fallback style by applying
-  // rules in a `@try` block.
-  bool is_resolving_position_fallback_style_ = false;
-
   // True if the resolved ComputedStyle depends on tree-scoped references.
   bool has_tree_scoped_reference_ = false;
+
+  // Tried to apply a guaranteed-invalid value to a custom property that doesn't
+  // support it.
+  bool has_unsupported_guaranteed_invalid_ = false;
 };
 
 }  // namespace blink

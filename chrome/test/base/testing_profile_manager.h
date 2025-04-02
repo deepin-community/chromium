@@ -15,6 +15,7 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/test/scoped_path_override.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_profile.h"
@@ -56,8 +57,21 @@ class TestingProfileManager : public ProfileObserver {
   // |profiles_dir| is the path in which new directories would be placed.
   // If empty, one will be created (and deleted upon destruction of |this|).
   // If not empty, it will be used, but ownership is maintained by the caller.
+  // If `profile_manager` is supplied, then it will be set as |profile_manager|
+  // of this TestingProfileManager, instead of creating a new one in
+  // SetUpInternal().
   [[nodiscard]] bool SetUp(
-      const base::FilePath& profiles_path = base::FilePath());
+      const base::FilePath& profiles_path = base::FilePath(),
+      std::unique_ptr<ProfileManager> profile_manager = nullptr);
+
+#if BUILDFLAG(IS_CHROMEOS)
+  using OnProfileCreatedCallback =
+      base::RepeatingCallback<void(const std::string&, Profile*)>;
+  void set_on_profile_created_callback(OnProfileCreatedCallback callback) {
+    callback_ = callback;
+  }
+  OnProfileCreatedCallback callback_;
+#endif
 
   // Creates a new TestingProfile whose data lives in a directory related to
   // profile_name, which is a non-user-visible key for the test environment.
@@ -81,7 +95,6 @@ class TestingProfileManager : public ProfileObserver {
       bool is_main_profile = false,
       scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory =
           nullptr);
-
   // Small helpers for creating testing profiles. Just forward to above.
   TestingProfile* CreateTestingProfile(
       const std::string& name,
@@ -96,11 +109,13 @@ class TestingProfileManager : public ProfileObserver {
           nullptr);
 
   // Creates a new guest TestingProfile whose data lives in the guest profile
-  // test environment directory, as specified by the profile manager.
-  // This profile will not be added to the ProfileAttributesStorage. This will
-  // register the TestingProfile with the profile subsystem as well.
-  // The subsystem owns the Profile and returns a weak pointer.
-  TestingProfile* CreateGuestProfile();
+  // test environment directory, as specified by the profile manager. If the
+  // builder is given, it will be used to create a guest profile.  This profile
+  // will not be added to the ProfileAttributesStorage. This will register the
+  // TestingProfile with the profile subsystem as well.  The subsystem owns the
+  // Profile and returns a weak pointer.
+  TestingProfile* CreateGuestProfile(
+      std::optional<TestingProfile::Builder> builder = std::nullopt);
 
 #if !BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_ANDROID)
   // Creates a new system TestingProfile whose data lives in the system profile
@@ -130,8 +145,8 @@ class TestingProfileManager : public ProfileObserver {
   // is properly persisting data.
   void DeleteProfileAttributesStorage();
 
-  // Sets the last used profile; also sets the active time to now.
-  void UpdateLastUser(Profile* last_active);
+  // Get the full profile path from the profile name.
+  base::FilePath GetProfilePath(const std::string& profile_name);
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
   void SetAccountProfileMapper(std::unique_ptr<AccountProfileMapper> mapper);
@@ -150,12 +165,14 @@ class TestingProfileManager : public ProfileObserver {
   friend class ProfileAttributesStorageTest;
   friend class ProfileNameVerifierObserver;
 
-  typedef std::map<std::string, TestingProfile*> TestingProfilesMap;
+  typedef std::map<std::string, raw_ptr<TestingProfile, CtnExperimental>>
+      TestingProfilesMap;
 
   // Does the actual ASSERT-checked SetUp work. This function cannot have a
   // return value, so it sets the |called_set_up_| flag on success and that is
   // returned in the public SetUp.
-  void SetUpInternal(const base::FilePath& profiles_path);
+  void SetUpInternal(const base::FilePath& profiles_path,
+                     std::unique_ptr<ProfileManager> profile_manager);
 
   // Whether SetUp() was called to put the object in a valid state.
   bool called_set_up_;

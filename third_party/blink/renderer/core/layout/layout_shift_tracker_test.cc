@@ -326,7 +326,9 @@ void LayoutShiftTrackerNavigationTest::RunTest(bool is_browser_initiated) {
       /*has_transient_user_activation=*/false, /*initiator_origin=*/nullptr,
       /*is_synchronously_committed=*/false, /*source_element=*/nullptr,
       mojom::blink::TriggeringEventInfo::kNotFromEvent, is_browser_initiated,
-      /*soft_navigation_heuristics_task_id=*/std::nullopt);
+      /*has_ua_visual_transition,=*/false,
+      /*soft_navigation_heuristics_task_id=*/std::nullopt,
+      /*should_skip_screenshot=*/false);
 
   Compositor().BeginFrame();
   test::RunPendingTasks();
@@ -861,10 +863,11 @@ TEST_F(LayoutShiftTrackerTest, StableCompositingChanges) {
     // - add/remove a cc::Layer when there is already a PaintLayer
     // - add/remove a cc::Layer and a PaintLayer together
 
-    static const char* states[] = {"", "pl", "pl tr", "pl", "", "tr", ""};
+    static const std::array<const char*, 7> states = {"", "pl", "pl tr", "pl",
+                                                      "", "tr", ""};
     element->setAttribute(html_names::kClassAttr, AtomicString(states[state]));
     UpdateAllLifecyclePhasesForTest();
-    return ++state < sizeof states / sizeof *states;
+    return ++state < states.size();
   };
   while (advance()) {
   }

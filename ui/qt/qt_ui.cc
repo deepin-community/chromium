@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 // IMPORTANT NOTE: All QtUi members that use `shim_` must be decorated
 // with DISABLE_CFI_VCALL.
 
@@ -106,7 +111,6 @@ int Qt5WeightToCssWeight(int weight) {
     }
   }
   NOTREACHED();
-  return kMapping[std::size(kMapping) - 1].css_weight;
 }
 
 gfx::FontRenderParams::Hinting QtHintingToGfxHinting(
@@ -226,7 +230,12 @@ bool QtUi::Initialize() {
   // SESSION_MANAGER to prevent creating an ICE connection.  See [1] and [2].
   // [1] https://crbug.com/1450759
   // [2] https://bugreports.qt.io/browse/QTBUG-38599
-  base::ScopedEnvironmentVariableOverride env_override("SESSION_MANAGER");
+  base::ScopedEnvironmentVariableOverride session_manager("SESSION_MANAGER");
+
+  // Disable QT input device handling since it's not needed and may result in
+  // crashes on certain device changes. See [3].
+  // [3] https://crbug.com/396193145
+  base::ScopedEnvironmentVariableOverride qt_xcb_no_xi2("QT_XCB_NO_XI2", "1");
 
   auto cmd_line = *base::CommandLine::ForCurrentProcess();
   if (auto* delegate = ui::LinuxUiDelegate::GetInstance()) {
@@ -397,6 +406,12 @@ void QtUi::SetDarkTheme(bool dark) {
 }
 
 DISABLE_CFI_VCALL
+void QtUi::SetAccentColor(std::optional<SkColor> accent_color) {
+  accent_color_ = accent_color;
+  ThemeChanged();
+}
+
+DISABLE_CFI_VCALL
 bool QtUi::AnimationsEnabled() const {
   return shim_->GetAnimationDurationMs() > 0;
 }
@@ -500,14 +515,10 @@ void QtUi::AddNativeColorMixer(ui::ColorProvider* provider,
     ColorState state = ColorState::kNormal;
   } const kMaps[] = {
       // Core colors
-      {ui::kColorAccent, ColorType::kHighlightBg},
       {ui::kColorDisabledForeground, ColorType::kWindowFg,
        ColorState::kDisabled},
       {ui::kColorEndpointBackground, ColorType::kEntryBg},
       {ui::kColorEndpointForeground, ColorType::kEntryFg},
-      {ui::kColorItemHighlight, ColorType::kHighlightBg},
-      {ui::kColorItemSelectionBackground, ColorType::kHighlightBg},
-      {ui::kColorMenuSelectionBackground, ColorType::kHighlightBg},
       {ui::kColorMidground, ColorType::kMidground},
       {ui::kColorPrimaryBackground, ColorType::kWindowBg},
       {ui::kColorPrimaryForeground, ColorType::kWindowFg},
@@ -515,16 +526,15 @@ void QtUi::AddNativeColorMixer(ui::ColorProvider* provider,
        ColorState::kDisabled},
       {ui::kColorSubtleAccent, ColorType::kHighlightBg, ColorState::kInactive},
       {ui::kColorSubtleEmphasisBackground, ColorType::kWindowBg},
-      {ui::kColorTextSelectionBackground, ColorType::kHighlightBg},
-      {ui::kColorTextSelectionForeground, ColorType::kHighlightFg},
 
       // UI element colors
       {ui::kColorMenuBackground, ColorType::kEntryBg},
-      {ui::kColorMenuItemBackgroundHighlighted, ColorType::kHighlightBg},
-      {ui::kColorMenuItemBackgroundSelected, ColorType::kHighlightBg},
       {ui::kColorMenuItemForeground, ColorType::kEntryFg},
       {ui::kColorMenuItemForegroundHighlighted, ColorType::kHighlightFg},
       {ui::kColorMenuItemForegroundSelected, ColorType::kHighlightFg},
+      {ui::kColorBubbleBackground, ColorType::kEntryBg},
+      {ui::kColorBubbleFooterBackground, ColorType::kWindowBg},
+      {ui::kColorTextSelectionForeground, ColorType::kHighlightFg},
 
       // Platform-specific UI elements
       {ui::kColorNativeButtonBorder, ColorType::kMidground},
@@ -541,6 +551,21 @@ void QtUi::AddNativeColorMixer(ui::ColorProvider* provider,
   };
   for (const auto& map : kMaps) {
     mixer[map.id] = {shim_->GetColor(map.role, map.state)};
+  }
+
+  const ui::ColorId kAccentIds[] = {
+      ui::kColorAccent,
+      ui::kColorItemHighlight,
+      ui::kColorItemSelectionBackground,
+      ui::kColorMenuSelectionBackground,
+      ui::kColorTextSelectionBackground,
+      ui::kColorMenuItemBackgroundHighlighted,
+      ui::kColorMenuItemBackgroundSelected,
+  };
+  const SkColor accent = accent_color_.value_or(
+      shim_->GetColor(ColorType::kHighlightBg, ColorState::kNormal));
+  for (ui::ColorId accent_id : kAccentIds) {
+    mixer[accent_id] = {accent};
   }
 
   const bool use_custom_frame =
@@ -641,10 +666,8 @@ void QtUi::ScaleFactorMaybeChangedImpl() {
   }
   if (display_config() != new_config) {
     display_config() = std::move(new_config);
-    for (ui::DeviceScaleFactorObserver& observer :
-         device_scale_factor_observer_list()) {
-      observer.OnDeviceScaleFactorChanged();
-    }
+    device_scale_factor_observer_list().Notify(
+        &ui::DeviceScaleFactorObserver::OnDeviceScaleFactorChanged);
   }
 }
 

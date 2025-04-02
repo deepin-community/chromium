@@ -5,6 +5,7 @@
 #include "ash/shelf/home_button.h"
 
 #include <math.h>  // std::ceil
+
 #include <memory>
 
 #include "ash/app_list/app_list_controller_impl.h"
@@ -39,12 +40,15 @@
 #include "base/time/time.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
+#include "home_button.h"
 #include "ui/aura/window.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
+#include "ui/events/ash/keyboard_capability.h"
+#include "ui/events/devices/device_data_manager.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/transform_util.h"
 #include "ui/gfx/scoped_canvas.h"
@@ -192,9 +196,6 @@ class HomeButton::ButtonImageView : public views::View {
 
   void OnThemeChanged() override {
     views::View::OnThemeChanged();
-    if (!chromeos::features::IsJellyEnabled()) {
-      UpdateBackground();
-    }
     if (image_model_) {
       image_ = image_model_->Rasterize(GetColorProvider());
     }
@@ -232,34 +233,19 @@ class HomeButton::ButtonImageView : public views::View {
       return;
     }
 
-    const bool is_jelly_enabled = chromeos::features::IsJellyEnabled();
-    if (!is_jelly_enabled) {
-      if (GetWidget()) {
-        SetBackground(views::CreateRoundedRectBackground(
-            shelf_config->GetShelfControlButtonColor(GetWidget()),
-            shelf_config->control_border_radius()));
-      }
-    } else {
-      SetBackground(views::CreateThemedRoundedRectBackground(
-          GetBackgroundColorId(), shelf_config->control_border_radius()));
-    }
+    SetBackground(views::CreateThemedRoundedRectBackground(
+        GetBackgroundColorId(), shelf_config->control_border_radius()));
 
     if (shelf_config->in_tablet_mode() && !shelf_config->is_in_app()) {
       SetBorder(std::make_unique<views::HighlightBorder>(
           shelf_config->control_border_radius(),
-          is_jelly_enabled
-              ? views::HighlightBorder::Type::kHighlightBorderOnShadow
-              : views::HighlightBorder::Type::kHighlightBorder2));
+          views::HighlightBorder::Type::kHighlightBorderOnShadow));
     } else {
       SetBorder(nullptr);
     }
   }
 
   ui::ColorId GetIconColorId() {
-    if (!chromeos::features::IsJellyEnabled()) {
-      return kColorAshButtonIconColor;
-    }
-
     return toggled_ && !ShelfConfig::Get()->in_tablet_mode()
                ? cros_tokens::kCrosSysSystemOnPrimaryContainer
                : cros_tokens::kCrosSysOnSurface;
@@ -278,24 +264,28 @@ class HomeButton::ButtonImageView : public views::View {
     const std::string campbell_config = base::GetFieldTrialParamValueByFeature(
         features::kCampbellGlyph, "icon");
 
-    if (campbell_config.empty() || !switches::IsCampbellSecretKeyMatched()) {
+    if (!campbell_config.empty() && switches::IsCampbellSecretKeyMatched()) {
+      if (campbell_config == "hero") {
+        image_model_ =
+            ui::ImageModel::FromVectorIcon(kCampbellHeroIcon, GetIconColorId());
+      } else if (campbell_config == "action") {
+        image_model_ = ui::ImageModel::FromVectorIcon(kCampbellActionIcon,
+                                                      GetIconColorId());
+      } else if (campbell_config == "text") {
+        image_model_ =
+            ui::ImageModel::FromVectorIcon(kCampbellTextIcon, GetIconColorId());
+      } else if (campbell_config == "9dot") {
+        image_model_ =
+            ui::ImageModel::FromVectorIcon(kCampbell9dotIcon, GetIconColorId());
+      }
+    } else if (Shell::Get()->keyboard_capability()->GetMetaKeyToDisplay() ==
+               ui::mojom::MetaKey::kLauncherRefresh) {
+      image_model_ =
+          ui::ImageModel::FromVectorIcon(kCampbellHeroIcon, GetIconColorId());
+    } else {
       image_model_ = std::nullopt;
       image_ = gfx::ImageSkia();
       return;
-    }
-
-    if (campbell_config == "hero") {
-      image_model_ =
-          ui::ImageModel::FromVectorIcon(kCampbellHeroIcon, GetIconColorId());
-    } else if (campbell_config == "action") {
-      image_model_ =
-          ui::ImageModel::FromVectorIcon(kCampbellActionIcon, GetIconColorId());
-    } else if (campbell_config == "text") {
-      image_model_ =
-          ui::ImageModel::FromVectorIcon(kCampbellTextIcon, GetIconColorId());
-    } else if (campbell_config == "9dot") {
-      image_model_ =
-          ui::ImageModel::FromVectorIcon(kCampbell9dotIcon, GetIconColorId());
     }
 
     if (image_model_ && GetColorProvider()) {
@@ -336,10 +326,9 @@ HomeButton::ScopedNoClipRect::~ScopedNoClipRect() {
 
 HomeButton::HomeButton(Shelf* shelf)
     : ShelfControlButton(shelf, this),
-      jelly_enabled_(chromeos::features::IsJellyEnabled()),
       shelf_(shelf),
       controller_(this) {
-  SetAccessibleName(
+  GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_ASH_SHELF_APP_LIST_LAUNCHER_TITLE));
   button_controller()->set_notify_action(
       views::ButtonController::NotifyAction::kOnPress);
@@ -348,12 +337,7 @@ HomeButton::HomeButton(Shelf* shelf)
   // drop from the home button controller. Given that the controller manages ink
   // drop on gesture events itself, disable the default on-gesture ink drop
   // behavior.
-  views::InkDrop::Get(this)->SetMode(
-      jelly_enabled_ ? views::InkDropHost::InkDropMode::ON
-                     : views::InkDropHost::InkDropMode::ON_NO_GESTURE_HANDLER);
-  if (!jelly_enabled_) {
-    SetHasInkDropActionOnClick(false);
-  }
+  views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::ON);
 
   SetEventTargeter(std::make_unique<views::ViewTargeter>(this));
   layer()->SetName("shelf/Homebutton");
@@ -384,16 +368,19 @@ HomeButton::HomeButton(Shelf* shelf)
   }
   SetProperty(views::kElementIdentifierKey, kHomeButtonElementId);
 
+  ui::DeviceDataManager::GetInstance()->AddObserver(this);
   ShelfConfig::Get()->AddObserver(this);
 }
 
 HomeButton::~HomeButton() {
+  ui::DeviceDataManager::GetInstance()->RemoveObserver(this);
   ShelfConfig::Get()->RemoveObserver(this);
 }
 
-gfx::Size HomeButton::CalculatePreferredSize() const {
+gfx::Size HomeButton::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   const gfx::Size control_button_size =
-      ShelfControlButton::CalculatePreferredSize();
+      ShelfControlButton::CalculatePreferredSize(available_size);
 
   // Take the preferred size of the expandable container into consideration when
   // it is visible. Note that the button width is already included in the label
@@ -412,7 +399,7 @@ void HomeButton::Layout(PassKey) {
   LayoutSuperclass<ShelfControlButton>(this);
 
   button_image_view_->SetBoundsRect(
-      gfx::Rect(ShelfControlButton::CalculatePreferredSize()));
+      gfx::Rect(ShelfControlButton::CalculatePreferredSize({})));
 
   if (expandable_container_) {
     if (shelf_->IsHorizontalAlignment()) {
@@ -428,13 +415,13 @@ void HomeButton::Layout(PassKey) {
         expandable_container_->SetBorder(
             views::CreateEmptyBorder(gfx::Insets::TLBR(
                 0,
-                ShelfControlButton::CalculatePreferredSize().width() +
+                ShelfControlButton::CalculatePreferredSize({}).width() +
                     kQuickAppStartMargin,
                 0, 0)));
       } else {
         expandable_container_->SetBorder(
             views::CreateEmptyBorder(gfx::Insets::TLBR(
-                ShelfControlButton::CalculatePreferredSize().height() +
+                ShelfControlButton::CalculatePreferredSize({}).height() +
                     kQuickAppStartMargin,
                 0, 0, 0)));
       }
@@ -444,14 +431,13 @@ void HomeButton::Layout(PassKey) {
   }
 }
 
+void HomeButton::AddedToWidget() {
+  UpdateTooltipText();
+}
+
 void HomeButton::OnGestureEvent(ui::GestureEvent* event) {
   if (!controller_.MaybeHandleGestureEvent(event))
     Button::OnGestureEvent(event);
-}
-
-std::u16string HomeButton::GetTooltipText(const gfx::Point& p) const {
-  // Don't show a tooltip if we're already showing the app list.
-  return IsShowingAppList() ? std::u16string() : GetAccessibleName();
 }
 
 void HomeButton::OnShelfButtonAboutToRequestFocusFromTabTraversal(
@@ -505,7 +491,7 @@ void HomeButton::ButtonPressed(views::Button* sender,
     }
 
     if (label_nudge_timer_.IsRunning())
-      label_nudge_timer_.AbandonAndStop();
+      label_nudge_timer_.Stop();
     AnimateNudgeLabelFadeOut();
   }
 }
@@ -529,9 +515,10 @@ bool HomeButton::IsShowingAppList() const {
 }
 
 void HomeButton::HandleLocaleChange() {
-  SetAccessibleName(
+  GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_ASH_SHELF_APP_LIST_LAUNCHER_TITLE));
   TooltipTextChanged();
+  UpdateTooltipText();
   // Reset the bounds rect so the child layer bounds get updated on next shelf
   // layout if the RTL changed.
   SetBoundsRect(gfx::Rect());
@@ -661,21 +648,17 @@ void HomeButton::OnThemeChanged() {
 
   if (ripple_layer_delegate_) {
     ripple_layer_delegate_->set_color(GetColorProvider()->GetColor(
-        jelly_enabled_ ? static_cast<ui::ColorId>(
-                             cros_tokens::kCrosSysRippleNeutralOnSubtle)
-                       : kColorAshInkDropOpaqueColor));
+        cros_tokens::kCrosSysRippleNeutralOnSubtle));
   }
   if (expandable_container_) {
-    expandable_container_->layer()->SetColor(GetColorProvider()->GetColor(
-        jelly_enabled_
-            ? static_cast<ui::ColorId>(cros_tokens::kCrosSysSystemOnBase)
-            : kColorAshControlBackgroundColorInactive));
+    expandable_container_->layer()->SetColor(
+        GetColorProvider()->GetColor(cros_tokens::kCrosSysSystemOnBase));
   }
 }
 
 void HomeButton::CreateExpandableContainer() {
   const int home_button_width =
-      ShelfControlButton::CalculatePreferredSize().width();
+      ShelfControlButton::CalculatePreferredSize({}).width();
 
   // Add container at 0 index so it's stacked under other views (e.g.
   // `button_image_view_`, and focus ring).
@@ -685,14 +668,18 @@ void HomeButton::CreateExpandableContainer() {
   expandable_container_->SetPaintToLayer(ui::LAYER_SOLID_COLOR);
   expandable_container_->layer()->SetMasksToBounds(true);
   if (GetColorProvider()) {
-    expandable_container_->layer()->SetColor(GetColorProvider()->GetColor(
-        jelly_enabled_
-            ? static_cast<ui::ColorId>(cros_tokens::kCrosSysSystemOnBase)
-            : kColorAshControlBackgroundColorInactive));
+    expandable_container_->layer()->SetColor(
+        GetColorProvider()->GetColor(cros_tokens::kCrosSysSystemOnBase));
   }
   expandable_container_->layer()->SetRoundedCornerRadius(
       gfx::RoundedCornersF(home_button_width / 2.f));
   expandable_container_->layer()->SetName("NudgeLabelContainer");
+}
+
+void HomeButton::UpdateTooltipText() {
+  // Don't show a tooltip if we're already showing the app list.
+  SetTooltipText(IsShowingAppList() ? std::u16string()
+                                    : GetViewAccessibility().GetCachedName());
 }
 
 void HomeButton::CreateNudgeLabel() {
@@ -700,7 +687,7 @@ void HomeButton::CreateNudgeLabel() {
 
   CreateExpandableContainer();
   expandable_container_->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(
-      0, ShelfControlButton::CalculatePreferredSize().width(), 0, 16)));
+      0, ShelfControlButton::CalculatePreferredSize({}).width(), 0, 16)));
 
   // Create a view to clip the `nudge_label_` to the area right of the home
   // button during nudge label animation.
@@ -720,13 +707,9 @@ void HomeButton::CreateNudgeLabel() {
   nudge_label_->layer()->SetFillsBoundsOpaquely(false);
   nudge_label_->SetTextContext(CONTEXT_LAUNCHER_NUDGE_LABEL);
   nudge_label_->SetTextStyle(views::style::STYLE_EMPHASIZED);
-  nudge_label_->SetEnabledColorId(
-      jelly_enabled_ ? static_cast<ui::ColorId>(cros_tokens::kCrosSysOnSurface)
-                     : kColorAshTextColorPrimary);
-  if (jelly_enabled_) {
-    TypographyProvider::Get()->StyleLabel(TypographyToken::kCrosButton2,
-                                          *nudge_label_);
-  }
+  nudge_label_->SetEnabledColorId(cros_tokens::kCrosSysOnSurface);
+  TypographyProvider::Get()->StyleLabel(TypographyToken::kCrosButton2,
+                                        *nudge_label_);
   expandable_container_->SetVisible(false);
   DeprecatedLayoutImmediately();
 }
@@ -734,14 +717,14 @@ void HomeButton::CreateNudgeLabel() {
 void HomeButton::CreateQuickAppButton() {
   CreateExpandableContainer();
   if (shelf_->IsHorizontalAlignment()) {
-    expandable_container_->SetBorder(views::CreateEmptyBorder(
-        gfx::Insets::TLBR(0,
-                          ShelfControlButton::CalculatePreferredSize().width() +
-                              kQuickAppStartMargin,
-                          0, 0)));
+    expandable_container_->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(
+        0,
+        ShelfControlButton::CalculatePreferredSize({}).width() +
+            kQuickAppStartMargin,
+        0, 0)));
   } else {
     expandable_container_->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(
-        ShelfControlButton::CalculatePreferredSize().height() +
+        ShelfControlButton::CalculatePreferredSize({}).height() +
             kQuickAppStartMargin,
         0, 0, 0)));
   }
@@ -749,10 +732,11 @@ void HomeButton::CreateQuickAppButton() {
   quick_app_button_ = expandable_container_->AddChildView(
       std::make_unique<views::ImageButton>(base::BindRepeating(
           &HomeButton::QuickAppButtonPressed, base::Unretained(this))));
-  quick_app_button_->SetAccessibleName(
+  quick_app_button_->GetViewAccessibility().SetName(
       AppListModelProvider::Get()->quick_app_access_model()->GetAppName());
 
-  const int control_size = ShelfControlButton::CalculatePreferredSize().width();
+  const int control_size =
+      ShelfControlButton::CalculatePreferredSize({}).width();
 
   const gfx::Size preferred_size = gfx::Size(control_size, control_size);
 
@@ -778,7 +762,8 @@ void HomeButton::CreateQuickAppButton() {
 void HomeButton::QuickAppButtonPressed() {
   ash::Shell::Get()->app_list_controller()->ActivateItem(
       AppListModelProvider::Get()->quick_app_access_model()->quick_app_id(),
-      /*event_flags=*/0, ash::AppListLaunchedFrom::kLaunchedFromQuickAppAccess);
+      /*event_flags=*/0, ash::AppListLaunchedFrom::kLaunchedFromQuickAppAccess,
+      /*is_above_the_fold=*/false);
   AppListModelProvider::Get()->quick_app_access_model()->SetQuickAppActivated();
 }
 
@@ -787,11 +772,12 @@ void HomeButton::AnimateNudgeRipple(views::AnimationBuilder& builder) {
   nudge_ripple_layer_.Reset(std::make_unique<ui::Layer>());
   ui::Layer* ripple_layer = nudge_ripple_layer_.layer();
 
-  float ripple_diameter = ShelfControlButton::CalculatePreferredSize().width();
+  float ripple_diameter =
+      ShelfControlButton::CalculatePreferredSize({}).width();
   auto* color_provider = GetColorProvider();
   DCHECK(color_provider);
   ripple_layer_delegate_ = std::make_unique<views::CircleLayerDelegate>(
-      color_provider->GetColor(kColorAshInkDropOpaqueColor),
+      color_provider->GetColor(cros_tokens::kCrosSysRippleNeutralOnSubtle),
       /*radius=*/ripple_diameter / 2);
 
   // The bounds are set with respect to |shelf_container_layer| stated below.
@@ -1018,6 +1004,16 @@ bool HomeButton::DoesIntersectRect(const views::View* target,
   return button_bounds.Intersects(rect);
 }
 
+void HomeButton::OnInputDeviceConfigurationChanged(uint8_t input_device_types) {
+  if (input_device_types & InputDeviceEventObserver::kKeyboard) {
+    button_image_view_->UpdateForShelfConfigChange();
+  }
+}
+
+void HomeButton::OnDeviceListsComplete() {
+  button_image_view_->UpdateForShelfConfigChange();
+}
+
 void HomeButton::OnShellDestroying() {
   shell_observation_.Reset();
   app_list_model_observation_.Reset();
@@ -1050,7 +1046,8 @@ void HomeButton::OnQuickAppIconChanged() {
     return;
   }
 
-  const int control_size = ShelfControlButton::CalculatePreferredSize().width();
+  const int control_size =
+      ShelfControlButton::CalculatePreferredSize({}).width();
   quick_app_button_->SetImageModel(
       views::Button::STATE_NORMAL,
       ui::ImageModel::FromImageSkia(
@@ -1127,7 +1124,7 @@ void HomeButton::OnQuickAppButtonSlideOutDone() {
 
 gfx::Transform HomeButton::GetTransformForContainerChildBehindHomeButton() {
   const int home_button_width =
-      ShelfControlButton::CalculatePreferredSize().width();
+      ShelfControlButton::CalculatePreferredSize({}).width();
 
   const int container_visible_width =
       expandable_container_->width() - home_button_width;
@@ -1146,7 +1143,7 @@ gfx::Transform HomeButton::GetTransformForContainerChildBehindHomeButton() {
 
 gfx::Rect HomeButton::GetExpandableContainerClipRectToHomeButton() {
   const int home_button_width =
-      ShelfControlButton::CalculatePreferredSize().width();
+      ShelfControlButton::CalculatePreferredSize({}).width();
   const int container_visible_width =
       expandable_container_->width() - home_button_width;
 

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "base/message_loop/message_pump_kqueue.h"
 
 #include <sys/errno.h>
@@ -23,15 +28,14 @@ namespace base {
 
 namespace {
 
-// Under this feature a simplified version of the Run() function is used. It
-// improves legibility and avoids some calls to kevent64(). Remove once
-// crbug.com/1200141 is resolved.
-BASE_FEATURE(kUseSimplifiedMessagePumpKqueueLoop,
-             "UseSimplifiedMessagePumpKqueueLoop",
+// Under this feature native work is batched. Remove it once crbug.com/1200141
+// is resolved.
+BASE_FEATURE(kBatchNativeEventsInMessagePumpKqueue,
+             "BatchNativeEventsInMessagePumpKqueue",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Caches the state of the "UseSimplifiedMessagePumpKqueueLoop".
-std::atomic_bool g_use_simplified_version = false;
+// Caches the state of the "BatchNativeEventsInMessagePumpKqueue".
+std::atomic_bool g_use_batched_version = false;
 
 // Caches the state of the "TimerSlackMac" feature for efficiency.
 std::atomic_bool g_timer_slack = false;
@@ -67,8 +71,9 @@ MessagePumpKqueue::FdWatchController::~FdWatchController() {
 }
 
 bool MessagePumpKqueue::FdWatchController::StopWatchingFileDescriptor() {
-  if (!pump_)
+  if (!pump_) {
     return true;
+  }
   return pump_->StopWatchingFileDescriptor(this);
 }
 
@@ -102,8 +107,9 @@ MessagePumpKqueue::MachPortWatchController::~MachPortWatchController() {
 }
 
 bool MessagePumpKqueue::MachPortWatchController::StopWatchingMachPort() {
-  if (!pump_)
+  if (!pump_) {
     return true;
+  }
   return pump_->StopWatchingMachPort(this);
 }
 
@@ -151,11 +157,11 @@ MessagePumpKqueue::MessagePumpKqueue()
   PCHECK(rv == 0) << "kevent64";
 }
 
-MessagePumpKqueue::~MessagePumpKqueue() {}
+MessagePumpKqueue::~MessagePumpKqueue() = default;
 
 void MessagePumpKqueue::InitializeFeatures() {
-  g_use_simplified_version.store(
-      base::FeatureList::IsEnabled(kUseSimplifiedMessagePumpKqueueLoop),
+  g_use_batched_version.store(
+      base::FeatureList::IsEnabled(kBatchNativeEventsInMessagePumpKqueue),
       std::memory_order_relaxed);
   g_timer_slack.store(FeatureList::IsEnabled(kTimerSlackMac),
                       std::memory_order_relaxed);
@@ -164,37 +170,38 @@ void MessagePumpKqueue::InitializeFeatures() {
 void MessagePumpKqueue::Run(Delegate* delegate) {
   AutoReset<bool> reset_keep_running(&keep_running_, true);
 
-  if (g_use_simplified_version.load(std::memory_order_relaxed)) {
-    RunSimplified(delegate);
+  if (g_use_batched_version.load(std::memory_order_relaxed)) {
+    RunBatched(delegate);
   } else {
     while (keep_running_) {
       apple::ScopedNSAutoreleasePool pool;
 
       bool do_more_work = DoInternalWork(delegate, nullptr);
-      if (!keep_running_)
+      if (!keep_running_) {
         break;
+      }
 
       Delegate::NextWorkInfo next_work_info = delegate->DoWork();
       do_more_work |= next_work_info.is_immediate();
-      if (!keep_running_)
+      if (!keep_running_) {
         break;
+      }
 
-      if (do_more_work)
+      if (do_more_work) {
         continue;
+      }
 
-      do_more_work |= delegate->DoIdleWork();
-      if (!keep_running_)
+      delegate->DoIdleWork();
+      if (!keep_running_) {
         break;
-
-      if (do_more_work)
-        continue;
+      }
 
       DoInternalWork(delegate, &next_work_info);
     }
   }
 }
 
-void MessagePumpKqueue::RunSimplified(Delegate* delegate) {
+void MessagePumpKqueue::RunBatched(Delegate* delegate) {
   // Look for native work once before the loop starts. Without this call the
   // loop would break without checking native work even once in cases where
   // QuitWhenIdle was used. This is sometimes the case in tests.
@@ -204,16 +211,31 @@ void MessagePumpKqueue::RunSimplified(Delegate* delegate) {
     apple::ScopedNSAutoreleasePool pool;
 
     Delegate::NextWorkInfo next_work_info = delegate->DoWork();
-    if (!keep_running_)
+    if (!keep_running_) {
       break;
+    }
 
     if (!next_work_info.is_immediate()) {
       delegate->DoIdleWork();
     }
-    if (!keep_running_)
+    if (!keep_running_) {
       break;
+    }
 
-    DoInternalWork(delegate, &next_work_info);
+    int batch_size = 0;
+    if (DoInternalWork(delegate, &next_work_info)) {
+      // More than one call can be necessary to fully dispatch all available
+      // internal work. Making an effort to dispatch more than the minimum
+      // before moving on to application tasks reduces the overhead of going
+      // through the whole loop. It also more closely mirrors the behavior of
+      // application task execution where tasks are batched. A value of 16 was
+      // chosen via local experimentation showing that is was sufficient to
+      // dispatch all work in roughly 95% of cases.
+      constexpr int kMaxAttempts = 16;
+      while (DoInternalWork(delegate, nullptr) && batch_size < kMaxAttempts) {
+        ++batch_size;
+      }
+    }
   }
 }
 
@@ -280,7 +302,8 @@ bool MessagePumpKqueue::WatchMachReceivePort(
 TimeTicks MessagePumpKqueue::AdjustDelayedRunTime(TimeTicks earliest_time,
                                                   TimeTicks run_time,
                                                   TimeTicks latest_time) {
-  if (g_timer_slack.load(std::memory_order_relaxed)) {
+  if (GetAlignWakeUpsEnabled() &&
+      g_timer_slack.load(std::memory_order_relaxed)) {
     return earliest_time;
   }
   return MessagePump::AdjustDelayedRunTime(earliest_time, run_time,
@@ -394,8 +417,9 @@ bool MessagePumpKqueue::StopWatchingFileDescriptor(
   int mode = controller->mode();
   controller->Reset();
 
-  if (fd < 0)
+  if (fd < 0) {
     return true;
+  }
 
   std::vector<kevent64_s> events;
 
@@ -485,14 +509,16 @@ bool MessagePumpKqueue::ProcessEvents(Delegate* delegate, size_t count) {
         --event_count_;
       }
 
-      auto scoped_do_work_item = delegate->BeginWorkItem();
-      // WatchFileDescriptor() originally upcasts event->ident from an int.
-      if (event->filter == EVFILT_READ) {
-        fd_watcher->OnFileCanReadWithoutBlocking(
-            static_cast<int>(event->ident));
-      } else if (event->filter == EVFILT_WRITE) {
-        fd_watcher->OnFileCanWriteWithoutBlocking(
-            static_cast<int>(event->ident));
+      if (fd_watcher) {
+        auto scoped_do_work_item = delegate->BeginWorkItem();
+        // WatchFileDescriptor() originally upcasts event->ident from an int.
+        if (event->filter == EVFILT_READ) {
+          fd_watcher->OnFileCanReadWithoutBlocking(
+              static_cast<int>(event->ident));
+        } else if (event->filter == EVFILT_WRITE) {
+          fd_watcher->OnFileCanWriteWithoutBlocking(
+              static_cast<int>(event->ident));
+        }
       }
     } else if (event->filter == EVFILT_MACHPORT) {
       // WatchMachReceivePort() originally sets event->ident from a mach_port_t.
@@ -565,8 +591,9 @@ void MessagePumpKqueue::MaybeUpdateWakeupTimer(
     PCHECK(rv == 0) << "kevent64, set timer";
 
     // Bump the event count if we just added the timer.
-    if (scheduled_wakeup_time_ == base::TimeTicks::Max())
+    if (scheduled_wakeup_time_ == base::TimeTicks::Max()) {
       ++event_count_;
+    }
   }
 
   scheduled_wakeup_time_ = wakeup_time;

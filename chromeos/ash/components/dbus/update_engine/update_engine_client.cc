@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -16,7 +17,6 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chromeos/ash/components/dbus/update_engine/fake_update_engine_client.h"
@@ -308,8 +308,8 @@ class UpdateEngineClientImpl : public UpdateEngineClient {
   }
 
   void GetUpdateEngineStatus() {
-    // TODO(crbug.com/977320): Rename the method call back to GetStatus() after
-    // the interface changed.
+    // TODO(crbug.com/40633112): Rename the method call back to GetStatus()
+    // after the interface changed.
     dbus::MethodCall method_call(update_engine::kUpdateEngineInterface,
                                  update_engine::kGetStatusAdvanced);
     update_engine_proxy_->CallMethodWithErrorCallback(
@@ -464,12 +464,21 @@ class UpdateEngineClientImpl : public UpdateEngineClient {
     }
 
     VLOG(1) << "Eol date received: " << status.eol_date();
+    VLOG(1) << "Extended date received: " << status.extended_date();
+    VLOG(1) << "Extended opt in received: "
+            << status.extended_opt_in_required();
 
     EolInfo eol_info;
     if (status.eol_date() > 0) {
       eol_info.eol_date =
           base::Time::UnixEpoch() + base::Days(status.eol_date());
     }
+    if (status.extended_date() > 0) {
+      eol_info.extended_date =
+          base::Time::UnixEpoch() + base::Days(status.extended_date());
+    }
+    eol_info.extended_opt_in_required = status.extended_opt_in_required();
+
     std::move(callback).Run(eol_info);
   }
 
@@ -756,7 +765,7 @@ class UpdateEngineClientDesktopFake : public UpdateEngineClient {
     }
   }
 
-  base::ObserverList<Observer>::Unchecked observers_;
+  base::ObserverList<Observer>::UncheckedAndDanglingUntriaged observers_;
 
   std::string current_channel_;
   std::string target_channel_;

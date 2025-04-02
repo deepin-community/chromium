@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "device/bluetooth/floss/floss_adapter_client.h"
 
 #include <utility>
@@ -170,7 +175,7 @@ class FlossAdapterClientTest : public testing::Test {
     // Exported callback methods that we don't need to invoke.  This will need
     // to be updated once new callbacks are added.
     // TODO(b/233124093): Reduce this count by 2 when SDP tests are added.
-    EXPECT_CALL(*exported_callbacks_.get(), ExportMethod).Times(13);
+    EXPECT_CALL(*exported_callbacks_.get(), ExportMethod).Times(14);
 
     // Save the method handlers of exported callbacks that we need to invoke in
     // test.

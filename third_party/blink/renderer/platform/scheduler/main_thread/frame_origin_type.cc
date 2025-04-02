@@ -32,7 +32,6 @@ const char* FrameOriginTypeToString(FrameOriginType origin) {
       return "cross-origin-to-main-frame";
   }
   NOTREACHED();
-  return nullptr;
 }
 
 }  // namespace scheduler

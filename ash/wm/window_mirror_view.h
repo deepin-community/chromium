@@ -33,7 +33,7 @@ class ASH_EXPORT WindowMirrorView : public views::View,
  public:
   explicit WindowMirrorView(aura::Window* source,
                             bool show_non_client_view = false,
-                            bool sync_bounds = false);
+                            bool sync_bounds = true);
 
   WindowMirrorView(const WindowMirrorView&) = delete;
   WindowMirrorView& operator=(const WindowMirrorView&) = delete;
@@ -50,7 +50,8 @@ class ASH_EXPORT WindowMirrorView : public views::View,
   void OnWindowDestroying(aura::Window* window) override;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void Layout(PassKey) override;
   bool GetNeedsNotificationWhenVisibleBoundsChange() const override;
   void OnVisibleBoundsChanged() override;

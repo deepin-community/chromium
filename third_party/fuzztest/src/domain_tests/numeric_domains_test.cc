@@ -32,7 +32,6 @@
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/substitute.h"
-#include "absl/types/span.h"
 #include "./fuzztest/domain_core.h"
 #include "./domain_tests/domain_testing.h"
 #include "./fuzztest/internal/serialization.h"
@@ -40,6 +39,7 @@
 namespace fuzztest {
 namespace {
 
+using ::fuzztest::internal::IRObject;
 using ::testing::AllOf;
 using ::testing::Contains;
 using ::testing::Each;
@@ -217,6 +217,22 @@ TYPED_TEST(NumericTest, InRangeValidationRejectsInvalidRange) {
       IsInvalid(testing::MatchesRegex(R"(The value .+ is not InRange\(.+\))")));
 }
 
+TYPED_TEST(NumericTest, InRangeGeneratesSpecialValues) {
+  using T = TypeParam;
+  auto domain = InRange<T>(T{0}, T{127});
+
+  absl::flat_hash_set<T> values;
+  absl::BitGen prng;
+  for (int i = 0;
+       !(values.contains(T{0}) && values.contains(T{1})) &&
+       i < IterationsToHitAll(/*num_cases=*/2, /*hit_probability=*/1.0 / 4);
+       ++i) {
+    values.insert(domain.GetRandomValue(prng));
+  }
+
+  EXPECT_THAT(values, AllOf(Contains(T{0}), Contains(T{1})));
+}
+
 TYPED_TEST(NumericTest, InRangeValueIsParsedCorrectly) {
   using T = TypeParam;
   const T min = std::numeric_limits<T>::is_signed ? -100 : 10;
@@ -230,17 +246,15 @@ TYPED_TEST(NumericTest, InRangeValueIsParsedCorrectly) {
       : is_at_most_64_bit_integer      ? "i: $0"
                                        : R"(sub { i: 0 } sub { i: $0 })";
 
-  auto corpus_value =
-      domain.ParseCorpus(*internal::IRObject::FromString(absl::StrCat(
-          "FUZZTESTv1 ",
-          absl::Substitute(serialized_format, static_cast<int32_t>(max)))));
+  auto corpus_value = domain.ParseCorpus(*IRObject::FromString(absl::StrCat(
+      "FUZZTESTv1 ",
+      absl::Substitute(serialized_format, static_cast<int32_t>(max)))));
   ASSERT_TRUE(corpus_value.has_value());
   EXPECT_OK(domain.ValidateCorpusValue(*corpus_value));
 
-  corpus_value =
-      domain.ParseCorpus(*internal::IRObject::FromString(absl::StrCat(
-          "FUZZTESTv1 ",
-          absl::Substitute(serialized_format, static_cast<int32_t>(max) + 1))));
+  corpus_value = domain.ParseCorpus(*IRObject::FromString(absl::StrCat(
+      "FUZZTESTv1 ",
+      absl::Substitute(serialized_format, static_cast<int32_t>(max) + 1))));
   // Greater than max should be parsed, but rejected by validation.
   ASSERT_TRUE(corpus_value.has_value());
   EXPECT_THAT(
@@ -303,9 +317,7 @@ TEST(InRange, InitGeneratesSeeds) {
 TEST(InRange, InitGeneratesSeedsFromSeedProvider) {
   auto domain =
       InRange(std::numeric_limits<int>::min(), std::numeric_limits<int>::max())
-          .WithSeeds([]() -> std::vector<int> {
-            return {7, 42};
-          });
+          .WithSeeds([]() -> std::vector<int> { return {7, 42}; });
 
   EXPECT_THAT(GenerateInitialValues(domain, 1000),
               AllOf(Contains(Value(domain, 7)), Contains(Value(domain, 42))));
@@ -340,7 +352,7 @@ TEST(InRange, SupportsSingletonRange) {
   auto domain = InRange(10, 10);
   absl::BitGen bitgen;
   auto val = Value(domain, bitgen);
-  val.Mutate(domain, bitgen, /*only_shrink=*/false);
+  val.Mutate(domain, bitgen, {}, false);
 
   EXPECT_EQ(val.user_value, 10);
 }
@@ -367,11 +379,11 @@ TEST(IllegalInputs, Numeric) {
   const std::vector<int> values{-10, -1, 0, 1};
   auto restricted_domain = Positive<int>();
   for (int value : values) {
-    restricted_domain.Mutate(value, bitgen, false);
+    restricted_domain.Mutate(value, bitgen, {}, false);
     ASSERT_GT(value, 0);
   }
   for (int value : values) {
-    restricted_domain.Mutate(value, bitgen, true);
+    restricted_domain.Mutate(value, bitgen, {}, true);
     ASSERT_GT(value, 0);
   }
 }

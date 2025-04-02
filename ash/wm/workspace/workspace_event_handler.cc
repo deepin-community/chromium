@@ -37,7 +37,8 @@ WorkspaceEventHandler::~WorkspaceEventHandler() {
 
 void WorkspaceEventHandler::OnMouseEvent(ui::MouseEvent* event) {
   aura::Window* target = static_cast<aura::Window*>(event->target());
-  if (event->type() == ui::ET_MOUSE_PRESSED && event->IsOnlyLeftMouseButton() &&
+  if (event->type() == ui::EventType::kMousePressed &&
+      event->IsOnlyLeftMouseButton() &&
       ((event->flags() & (ui::EF_IS_DOUBLE_CLICK | ui::EF_IS_TRIPLE_CLICK)) ==
        0)) {
     click_component_ =
@@ -48,7 +49,7 @@ void WorkspaceEventHandler::OnMouseEvent(ui::MouseEvent* event) {
     return;
 
   switch (event->type()) {
-    case ui::ET_MOUSE_MOVED: {
+    case ui::EventType::kMouseMoved: {
       if (multi_window_resize_controller_) {
         const int component =
             window_util::GetNonClientComponent(target, event->location());
@@ -57,12 +58,12 @@ void WorkspaceEventHandler::OnMouseEvent(ui::MouseEvent* event) {
       }
       break;
     }
-    case ui::ET_MOUSE_ENTERED:
+    case ui::EventType::kMouseEntered:
       break;
-    case ui::ET_MOUSE_CAPTURE_CHANGED:
-    case ui::ET_MOUSE_EXITED:
+    case ui::EventType::kMouseCaptureChanged:
+    case ui::EventType::kMouseExited:
       break;
-    case ui::ET_MOUSE_PRESSED: {
+    case ui::EventType::kMousePressed: {
       WindowState* target_state = WindowState::Get(target->GetToplevelWindow());
       // No action for windows that aren't managed by WindowState.
       if (!target_state)
@@ -94,8 +95,9 @@ void WorkspaceEventHandler::OnMouseEvent(ui::MouseEvent* event) {
 }
 
 void WorkspaceEventHandler::OnGestureEvent(ui::GestureEvent* event) {
-  if (event->handled() || event->type() != ui::ET_GESTURE_TAP)
+  if (event->handled() || event->type() != ui::EventType::kGestureTap) {
     return;
+  }
 
   aura::Window* target = static_cast<aura::Window*>(event->target());
   int previous_target_component = click_component_;
@@ -149,7 +151,9 @@ void WorkspaceEventHandler::HandleResizeDoubleClick(WindowState* target_state,
         // it would be rather inappropriate to end overview as below, and of
         // course it would be blatantly inappropriate to make the following call
         // to |OverviewSession::SetWindowListNotAnimatedWhenExiting|.
-        DCHECK_EQ(gfx::Size(), target->delegate()->GetMaximumSize());
+        std::optional<gfx::Size> max_size =
+            target->delegate()->GetMaximumSize();
+        DCHECK(!max_size.has_value() || max_size.value() == gfx::Size());
         overview_controller->overview_session()
             ->SetWindowListNotAnimatedWhenExiting(target->GetRootWindow());
         overview_controller->EndOverview(OverviewEndAction::kSplitView);

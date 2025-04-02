@@ -34,6 +34,7 @@ export const HeapSnapshotProgressEvent = {
 };
 
 export const baseSystemDistance = 100000000;
+export const baseUnreachableDistance = baseSystemDistance * 2;
 
 export class AllocationNodeCallers {
   nodesWithSingleCaller: SerializedAllocationNode[];
@@ -99,6 +100,7 @@ export class Node {
   canBeQueried: boolean;
   detachedDOMTreeNode: boolean;
   isAddedNotRemoved: boolean|null;
+  ignored: boolean;
   constructor(
       id: number, name: string, distance: number, nodeIndex: number, retainedSize: number, selfSize: number,
       type: string) {
@@ -113,6 +115,7 @@ export class Node {
     this.canBeQueried = false;
     this.detachedDOMTreeNode = false;
     this.isAddedNotRemoved = null;
+    this.ignored = false;
   }
 }
 
@@ -136,7 +139,6 @@ export class Aggregate {
   distance!: number;
   self!: number;
   maxRet!: number;
-  type!: number;
   name!: string;
   idxs!: number[];
   constructor() {
@@ -144,10 +146,12 @@ export class Aggregate {
 }
 
 export class AggregateForDiff {
+  name: string;
   indexes: number[];
   ids: number[];
   selfSizes: number[];
   constructor() {
+    this.name = '';
     this.indexes = [];
     this.ids = [];
     this.selfSizes = [];
@@ -155,6 +159,7 @@ export class AggregateForDiff {
 }
 
 export class Diff {
+  name: string;
   addedCount: number;
   removedCount: number;
   addedSize: number;
@@ -163,7 +168,8 @@ export class Diff {
   addedIndexes: number[];
   countDelta!: number;
   sizeDelta!: number;
-  constructor() {
+  constructor(name: string) {
+    this.name = name;
     this.addedCount = 0;
     this.removedCount = 0;
     this.addedSize = 0;
@@ -174,6 +180,7 @@ export class Diff {
 }
 
 export class DiffForClass {
+  name!: string;
   addedCount!: number;
   removedCount!: number;
   addedSize!: number;
@@ -239,22 +246,17 @@ export class StaticData {
   }
 }
 
-export class Statistics {
-  total!: number;
-  v8heap!: number;
-  native!: number;
-  code!: number;
-  jsArrays!: number;
-  strings!: number;
-  system!: number;
-  constructor() {
-  }
+export interface Statistics {
+  total: number;
+  native: {total: number, typedArrays: number};
+  v8heap: {total: number, code: number, jsArrays: number, strings: number, system: number};
 }
 
 export class NodeFilter {
   minNodeId: number|undefined;
   maxNodeId: number|undefined;
   allocationNodeId!: number|undefined;
+  filterName: string|undefined;
   constructor(minNodeId?: number, maxNodeId?: number) {
     this.minNodeId = minNodeId;
     this.maxNodeId = maxNodeId;
@@ -262,7 +264,7 @@ export class NodeFilter {
 
   equals(o: NodeFilter): boolean {
     return this.minNodeId === o.minNodeId && this.maxNodeId === o.maxNodeId &&
-        this.allocationNodeId === o.allocationNodeId;
+        this.allocationNodeId === o.allocationNodeId && this.filterName === o.filterName;
   }
 }
 
@@ -305,8 +307,4 @@ export class Location {
     this.lineNumber = lineNumber;
     this.columnNumber = columnNumber;
   }
-}
-
-export interface HeapSnapshotOptions {
-  heapSnapshotTreatBackingStoreAsContainingObject: boolean;
 }

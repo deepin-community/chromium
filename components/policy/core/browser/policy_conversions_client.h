@@ -13,7 +13,6 @@
 #include "base/values.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/policy/core/browser/policy_conversions.h"
 #include "components/policy/core/common/schema.h"
 #include "components/policy/policy_export.h"
@@ -61,6 +60,11 @@ class POLICY_EXPORT PolicyConversionsClient {
   // Set to drop the policies of which value is a default one set by the policy
   // provider. Disabled by default.
   void SetDropDefaultValues(bool enabled);
+  // Set to show policy values set by machine scope sources including CBCM or
+  // GPO. When set to false, policies are still included, but values and errors
+  // will be hidden. Used when caller don't have permission to view those
+  // values. Enabled by default.
+  void EnableShowMachineValues(bool enabled);
 
 #if BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
   base::Value::Dict ConvertUpdaterPolicies(
@@ -92,7 +96,7 @@ class POLICY_EXPORT PolicyConversionsClient {
   virtual base::Value::List GetExtensionPolicies(
       PolicyDomain policy_domain) = 0;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Returns policies for ChromeOS device.
   virtual base::Value::List GetDeviceLocalAccountPolicies() = 0;
   // Returns device specific information if this device is enterprise managed.
@@ -122,7 +126,8 @@ class POLICY_EXPORT PolicyConversionsClient {
   // |convert_values_enabled_|), converts some values to a representation that
   // i18n_template.js will display.
   base::Value CopyAndMaybeConvert(const base::Value& value,
-                                  const std::optional<Schema>& schema) const;
+                                  const std::optional<Schema>& schema,
+                                  PolicyScope scope) const;
 
   // Creates a description of the policy |policy_name| using |policy| and the
   // optional errors in |errors| to determine the status of each policy.
@@ -173,6 +178,13 @@ class POLICY_EXPORT PolicyConversionsClient {
   std::string GetPolicyScope(const std::string& policy_name,
                              const PolicyScope& policy_scope) const;
 
+  std::u16string GetPolicyMessage(
+      const std::string& policy_name,
+      const PolicyMap::Entry& policy,
+      PolicyMap::MessageType message_type,
+      PolicyErrorMap* errors,
+      std::optional<Schema> known_policy_schema) const;
+
   bool convert_types_enabled_ = true;
   bool convert_values_enabled_ = false;
   bool device_local_account_policies_enabled_ = false;
@@ -180,11 +192,7 @@ class POLICY_EXPORT PolicyConversionsClient {
   bool pretty_print_enabled_ = true;
   bool user_policies_enabled_ = true;
   bool drop_default_values_enabled_ = false;
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  void PopulatePerProfileMap();
-  std::unique_ptr<std::map<std::string, bool>> per_profile_map_;
-#endif
+  bool show_machine_values_ = true;
 };
 
 }  // namespace policy

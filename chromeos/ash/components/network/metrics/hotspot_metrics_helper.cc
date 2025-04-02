@@ -144,6 +144,14 @@ HotspotMetricsHelper::GetSetEnabledMetricsResult(
       return HotspotMetricsSetEnabledResult::kAlreadyFulfilled;
     case HotspotControlResult::kAborted:
       return HotspotMetricsSetEnabledResult::kAborted;
+    case HotspotControlResult::kInvalid:
+      return HotspotMetricsSetEnabledResult::kInvalid;
+    case HotspotControlResult::kBusy:
+      return HotspotMetricsSetEnabledResult::kBusy;
+    case HotspotControlResult::kConcurrencyNotSupported:
+      return HotspotMetricsSetEnabledResult::kConcurrencyNotSupported;
+    case HotspotControlResult::kOperationFailure:
+      return HotspotMetricsSetEnabledResult::kOperationFailure;
     default:
       return HotspotMetricsSetEnabledResult::kUnknownFailure;
   }
@@ -237,6 +245,14 @@ HotspotMetricsHelper::GetMetricsDisableReason(
       return HotspotMetricsDisableReason::kDownstreamLinkDisconnect;
     case DisableReason::kDownstreamNetworkDisconnect:
       return HotspotMetricsDisableReason::kDownstreamNetworkDisconnect;
+    case DisableReason::kStartTimeout:
+      return HotspotMetricsDisableReason::kStartTimeout;
+    case DisableReason::kUpstreamNotAvailable:
+      return HotspotMetricsDisableReason::kUpstreamNotAvailable;
+    case DisableReason::kResourceBusy:
+      return HotspotMetricsDisableReason::kResourceBusy;
+    case DisableReason::kUnknownError:
+      return HotspotMetricsDisableReason::kUnknownError;
   }
   NOTREACHED() << "Unknown hotspot disable reason.";
 }

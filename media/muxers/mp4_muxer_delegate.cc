@@ -2,13 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/muxers/mp4_muxer_delegate.h"
 
 #include "base/logging.h"
+#include "base/notreached.h"
 #include "components/version_info/version_info.h"
 #include "media/base/audio_parameters.h"
+#include "media/base/decoder_buffer.h"
+#include "media/base/video_codecs.h"
 #include "media/formats/mp4/avc.h"
 #include "media/formats/mp4/box_definitions.h"
+#include "media/formats/mp4/fourccs.h"
+#include "media/formats/mp4/mp4_status.h"
 #include "media/muxers/box_byte_stream.h"
 #include "media/muxers/mp4_box_writer.h"
 #include "media/muxers/mp4_fragment_box_writer.h"
@@ -16,9 +26,15 @@
 #include "media/muxers/mp4_muxer_delegate_fragment.h"
 #include "media/muxers/mp4_type_conversion.h"
 #include "media/muxers/output_position_tracker.h"
+#include "third_party/libgav1/src/src/obu_parser.h"
 
-#if BUILDFLAG(USE_PROPRIETARY_CODECS)
-#include "media/formats/mp4/h264_annex_b_to_avc_bitstream_converter.h"
+#if BUILDFLAG(USE_PROPRIETARY_CODECS) || \
+    BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+#include "media/formats/mp4/h26x_annex_b_to_bitstream_converter.h"
+#endif
+
+#if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+#include "media/formats/mp4/hevc.h"
 #endif
 
 namespace media {
@@ -44,11 +60,10 @@ void BuildTrack(
     const mp4::writable_boxes::SampleDescription& sample_description) {
   mp4::writable_boxes::Track& track = moov.tracks[track_index];
   // `tkhd`.
-  track.header.flags = BuildFlags<TrackHeaderFlags>(
+  mp4::writable_boxes::TrackHeader track_header(track_index + 1, is_audio);
+  track_header.flags = BuildFlags<TrackHeaderFlags>(
       {TrackHeaderFlags::kTrackEnabled, TrackHeaderFlags::kTrackInMovie});
-
-  track.header.track_id = track_index + 1;
-  track.header.is_audio = is_audio;
+  track.header = std::move(track_header);
 
   // `mdhd`
   track.media.header.timescale = timescale;
@@ -66,7 +81,7 @@ void BuildTrack(
       moov.extends.track_extends[track_index];
   audio_extends.track_id = track_index + 1;
 
-  // TODO(crbug.com/1464063): Various MP4 samples doesn't need
+  // TODO(crbug.com/40275472): Various MP4 samples doesn't need
   // default_sample_duration, default_sample_size, default_sample_flags. We need
   // to investigate it further though whether we need to set these fields.
   audio_extends.default_sample_description_index = 1;
@@ -75,8 +90,8 @@ void BuildTrack(
   audio_extends.default_sample_flags = 0;
 
   // `stbl`, `stco`, `stsz`, `stts`, `stsc'.
-  mp4::writable_boxes::SampleTable sample_table = {};
-  sample_table.sample_to_chunk = mp4::writable_boxes::SampleToChunk{};
+  mp4::writable_boxes::SampleTable sample_table;
+  sample_table.sample_to_chunk = mp4::writable_boxes::SampleToChunk();
   sample_table.decoding_time_to_sample =
       mp4::writable_boxes::DecodingTimeToSample();
   sample_table.sample_size = mp4::writable_boxes::SampleSize();
@@ -102,25 +117,38 @@ void CopyCreationTimeAndDuration(mp4::writable_boxes::Track& track,
 
 }  // namespace
 
-Mp4MuxerDelegate::Mp4MuxerDelegate(Muxer::WriteDataCB write_callback,
-                                   size_t audio_sample_count_per_fragment)
+Mp4MuxerDelegate::Mp4MuxerDelegate(
+    AudioCodec audio_codec,
+    VideoCodec video_codec,
+    std::optional<VideoCodecProfile> video_profile,
+    std::optional<VideoCodecLevel> video_level,
+    bool add_parameter_sets_in_bitstream,
+    Muxer::WriteDataCB write_callback,
+    size_t audio_sample_count_per_fragment)
     : write_callback_(std::move(write_callback)),
+      audio_codec_(audio_codec),
+      video_codec_(video_codec),
+      video_profile_(std::move(video_profile)),
+      video_level_(std::move(video_level)),
+      add_parameter_sets_in_bitstream_(add_parameter_sets_in_bitstream),
       audio_sample_count_per_fragment_(audio_sample_count_per_fragment) {}
 
 Mp4MuxerDelegate::~Mp4MuxerDelegate() = default;
 
 void Mp4MuxerDelegate::AddVideoFrame(
     const Muxer::VideoParameters& params,
-    std::string encoded_data,
+    scoped_refptr<DecoderBuffer> encoded_data,
     std::optional<VideoEncoder::CodecDescription> codec_description,
-    base::TimeTicks timestamp,
-    bool is_key_frame) {
-  if (!video_track_index_.has_value()) {
-    DVLOG(1) << __func__ << ", " << params.AsHumanReadableString();
+    base::TimeTicks timestamp) {
+  DVLOG(1) << __func__ << ", " << params.AsHumanReadableString();
 
-    CHECK(codec_description.has_value());
-    CHECK(is_key_frame);
+  if (!video_track_index_.has_value()) {
+    CHECK(codec_description.has_value() || (params.codec != VideoCodec::kH264 &&
+                                            params.codec != VideoCodec::kHEVC));
+    CHECK(encoded_data->is_key_frame());
     CHECK(start_video_time_.is_null());
+    CHECK_NE(params.codec, VideoCodec::kUnknown);
+    CHECK_EQ(params.codec, video_codec_);
 
     EnsureInitialized();
     last_video_time_ = start_video_time_ = timestamp;
@@ -134,39 +162,103 @@ void Mp4MuxerDelegate::AddVideoFrame(
     context_->SetVideoTrack({video_track_index_.value(), timescale});
     DVLOG(1) << __func__ << ", video track timescale:" << timescale;
 
-    BuildMovieVideoTrack(params, encoded_data, codec_description.value());
+    BuildMovieVideoTrack(params, *encoded_data, std::move(codec_description));
   }
   last_video_time_ = timestamp;
 
-  AddDataToVideoFragment(encoded_data, is_key_frame);
+  AddDataToVideoFragment(std::move(encoded_data));
 }
 
 void Mp4MuxerDelegate::BuildMovieVideoTrack(
     const Muxer::VideoParameters& params,
-    std::string encoded_data,
-    VideoEncoder::CodecDescription codec_description) {
+    const DecoderBuffer& encoded_data,
+    std::optional<VideoEncoder::CodecDescription> codec_description) {
   DCHECK(video_track_index_.has_value());
 
   // `stsd`, `avc1`, `avcC`.
-  mp4::writable_boxes::SampleDescription description = {};
+  mp4::writable_boxes::SampleDescription description;
+  mp4::writable_boxes::VisualSampleEntry visual_sample_entry(video_codec_);
 
+  visual_sample_entry.coded_size = params.visible_rect_size;
+  visual_sample_entry.pixel_aspect_ratio =
+      mp4::writable_boxes::PixelAspectRatioBox();
+
+  if (video_codec_ == VideoCodec::kH264) {
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
-  mp4::writable_boxes::VisualSampleEntry visual_entry = {};
+    visual_sample_entry.compressor_name =
+        add_parameter_sets_in_bitstream_ ? "AVC3 Coding" : "AVC1 Coding";
 
-  visual_entry.coded_size = params.visible_rect_size;
+    mp4::writable_boxes::AVCDecoderConfiguration avc_config;
+    mp4::AVCDecoderConfigurationRecord avc_config_record;
+    bool result = avc_config_record.Parse(codec_description.value().data(),
+                                          codec_description.value().size());
+    DCHECK(result);
 
-  visual_entry.compressor_name = version_info::GetProductName();
-
-  mp4::AVCDecoderConfigurationRecord avc_config;
-  bool result =
-      avc_config.Parse(codec_description.data(), codec_description.size());
-  DCHECK(result);
-
-  visual_entry.avc_decoder_configuration.avc_config_record =
-      std::move(avc_config);
-  visual_entry.pixel_aspect_ratio = mp4::writable_boxes::PixelAspectRatioBox();
-  description.visual_sample_entry = std::move(visual_entry);
+    avc_config.avc_config_record = std::move(avc_config_record);
+    avc_config.add_parameter_sets_in_bitstream =
+        add_parameter_sets_in_bitstream_;
+    visual_sample_entry.avc_decoder_configuration = std::move(avc_config);
+#else
+    NOTREACHED();
 #endif
+  } else if (video_codec_ == VideoCodec::kHEVC) {
+#if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+    visual_sample_entry.compressor_name =
+        add_parameter_sets_in_bitstream_ ? "HEV1 Coding" : "HVC1 Coding";
+
+    mp4::writable_boxes::HEVCDecoderConfiguration hevc_config;
+    mp4::HEVCDecoderConfigurationRecord hevc_config_record;
+    bool result = hevc_config_record.Parse(codec_description.value().data(),
+                                           codec_description.value().size());
+    DCHECK(result);
+
+    hevc_config.hevc_config_record = std::move(hevc_config_record);
+    hevc_config.add_parameter_sets_in_bitstream =
+        add_parameter_sets_in_bitstream_;
+    visual_sample_entry.hevc_decoder_configuration = std::move(hevc_config);
+#else
+    NOTREACHED();
+#endif
+  } else if (video_codec_ == VideoCodec::kVP9) {
+    visual_sample_entry.compressor_name = "VPC Coding";
+
+    gfx::ColorSpace color_space;
+    if (params.color_space) {
+      color_space = *params.color_space;
+    }
+
+    // DefaultCodecProfile() returns VP9PROFILE_PROFILE0(VP9PROFILE_MIN).
+    mp4::writable_boxes::VPCodecConfiguration vp_config(
+        video_profile_.value_or(VP9PROFILE_PROFILE0), video_level_.value_or(0),
+        color_space);
+    visual_sample_entry.vp_decoder_configuration = std::move(vp_config);
+  } else if (video_codec_ == VideoCodec::kAV1) {
+    CHECK(!codec_description.has_value());
+
+    visual_sample_entry.compressor_name = "AV1 Coding";
+
+    mp4::writable_boxes::AV1CodecConfiguration av1_config;
+    size_t config_size = 0;
+    auto codec_descriptions = libgav1::ObuParser::GetAV1CodecConfigurationBox(
+        encoded_data.data(), encoded_data.size(), &config_size);
+    CHECK(codec_descriptions);
+    CHECK_GT(config_size, 0u);
+
+    av1_config.av1_decoder_configuration_data.assign(
+        &codec_descriptions[0], &codec_descriptions[config_size]);
+    visual_sample_entry.av1_decoder_configuration = std::move(av1_config);
+  } else {
+    NOTREACHED();
+  }
+
+  // `colr`
+  if (params.color_space && params.color_space->IsValid()) {
+    visual_sample_entry.color_information =
+        mp4::writable_boxes::ColorInformation(
+            VideoColorSpace::FromGfxColorSpace(*params.color_space));
+  }
+
+  description.video_sample_entry = std::move(visual_sample_entry);
   description.entry_count = 1;
 
   BuildTrack(*moov_, video_track_index_.value(), false,
@@ -179,22 +271,23 @@ void Mp4MuxerDelegate::BuildMovieVideoTrack(
   video_track.header.natural_size = params.visible_rect_size;
 
   // `hdlr`
-  video_track.media.handler.handler_type = media::mp4::FOURCC_VIDE;
-  video_track.media.handler.name = kVideoHandlerName;
+  mp4::writable_boxes::MediaHandler media_handler(/*is_audio=*/false);
+  media_handler.name = kVideoHandlerName;
+  video_track.media.handler = std::move(media_handler);
 
   // `minf`
 
   // `vmhd`
-  mp4::writable_boxes::VideoMediaHeader video_header = {};
+  mp4::writable_boxes::VideoMediaHeader video_header;
   video_track.media.information.video_header = std::move(video_header);
 
   DVLOG(1) << __func__ << ", video track created";
 }
 
-void Mp4MuxerDelegate::AddDataToVideoFragment(std::string encoded_data,
-                                              bool is_key_frame) {
+void Mp4MuxerDelegate::AddDataToVideoFragment(
+    scoped_refptr<DecoderBuffer> encoded_data) {
   DCHECK(video_track_index_.has_value());
-  CreateFragmentIfNeeded(false, is_key_frame);
+  CreateFragmentIfNeeded(false, encoded_data->is_key_frame());
 
   Mp4MuxerDelegateFragment* fragment = fragments_.back().get();
   if (!fragment) {
@@ -202,19 +295,31 @@ void Mp4MuxerDelegate::AddDataToVideoFragment(std::string encoded_data,
     return;
   }
 
-  fragment->AddVideoData(encoded_data, last_video_time_);
+#if BUILDFLAG(USE_PROPRIETARY_CODECS)
+  if (video_codec_ == VideoCodec::kH264
+#if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+      || video_codec_ == VideoCodec::kHEVC
+#endif
+  ) {
+    // Convert Annex-B to AVC/HEVC bitstream.
+    encoded_data = ConvertNALUData(std::move(encoded_data));
+  }
+#endif
+
+  fragment->AddVideoData(std::move(encoded_data), last_video_time_);
+
   MaybeFlushFileTypeBoxForStartup();
 }
 
 void Mp4MuxerDelegate::AddAudioFrame(
     const AudioParameters& params,
-    std::string encoded_data,
+    scoped_refptr<DecoderBuffer> encoded_data,
     std::optional<AudioEncoder::CodecDescription> codec_description,
     base::TimeTicks timestamp) {
   if (!audio_track_index_.has_value()) {
     DVLOG(1) << __func__ << ", " << params.AsHumanReadableString();
 
-    CHECK(codec_description.has_value());
+    CHECK(codec_description.has_value() || (audio_codec_ == AudioCodec::kOpus));
     CHECK(start_audio_time_.is_null());
 
     EnsureInitialized();
@@ -227,28 +332,46 @@ void Mp4MuxerDelegate::AddAudioFrame(
     context_->SetAudioTrack({audio_track_index_.value(),
                              static_cast<uint32_t>(audio_sample_rate_)});
 
-    BuildMovieAudioTrack(params, encoded_data, codec_description.value());
+    BuildMovieAudioTrack(params, *encoded_data, std::move(codec_description));
   }
   last_audio_time_ = timestamp;
 
-  AddDataToAudioFragment(encoded_data);
+  AddDataToAudioFragment(std::move(encoded_data));
 }
 
 void Mp4MuxerDelegate::BuildMovieAudioTrack(
     const AudioParameters& params,
-    std::string encoded_data,
-    AudioEncoder::CodecDescription codec_description) {
+    const DecoderBuffer& encoded_data,
+    std::optional<AudioEncoder::CodecDescription> codec_description) {
   DCHECK(audio_track_index_.has_value());
+  DCHECK(codec_description.has_value() || (audio_codec_ == AudioCodec::kOpus));
 
-  // `stsd`, `mp4a`, `esds`.
-  mp4::writable_boxes::SampleDescription description = {};
+  // `stsd`, `mp4a`, `esds`, 'opus', 'dops'.
+  mp4::writable_boxes::SampleDescription description;
+  mp4::writable_boxes::AudioSampleEntry audio_sample_entry(
+      audio_codec_, audio_sample_rate_, params.channels());
+
+  if (audio_codec_ == AudioCodec::kAAC) {
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
-  mp4::writable_boxes::AudioSampleEntry audio_entry = {};
-  audio_entry.sample_rate = audio_sample_rate_;
-  audio_entry.elementary_stream_descriptor.aac_codec_description =
-      std::move(codec_description);
-  description.audio_sample_entry = std::move(audio_entry);
+    mp4::writable_boxes::ElementaryStreamDescriptor
+        elementary_stream_descriptor;
+    elementary_stream_descriptor.aac_codec_description =
+        std::move(codec_description.value());
+    audio_sample_entry.elementary_stream_descriptor =
+        std::move(elementary_stream_descriptor);
+#else
+    NOTREACHED();
 #endif
+  } else {
+    // TODO(crbug.com/40281463): Ensure the below OpusSpecificBox is correct.
+    CHECK_EQ(audio_codec_, AudioCodec::kOpus);
+    mp4::writable_boxes::OpusSpecificBox opus_specific_box;
+    opus_specific_box.channel_count = audio_sample_entry.channel_count;
+    opus_specific_box.sample_rate = audio_sample_entry.sample_rate;
+    audio_sample_entry.opus_specific_box = std::move(opus_specific_box);
+  }
+
+  description.audio_sample_entry = std::move(audio_sample_entry);
   description.entry_count = 1;
 
   BuildTrack(*moov_, audio_track_index_.value(), true,
@@ -258,18 +381,19 @@ void Mp4MuxerDelegate::BuildMovieAudioTrack(
       moov_->tracks[audio_track_index_.value()];
 
   // `hdlr`
-  audio_track.media.handler.handler_type = media::mp4::FOURCC_SOUN;
-  audio_track.media.handler.name = kAudioHandlerName;
-
+  mp4::writable_boxes::MediaHandler media_handler(/*is_audio=*/true);
+  media_handler.name = kAudioHandlerName;
+  audio_track.media.handler = std::move(media_handler);
   // `minf`
 
   // `smhd`
-  mp4::writable_boxes::SoundMediaHeader sound_header = {};
+  mp4::writable_boxes::SoundMediaHeader sound_header;
   audio_track.media.information.sound_header = std::move(sound_header);
   DVLOG(1) << __func__ << ", audio track created";
 }
 
-void Mp4MuxerDelegate::AddDataToAudioFragment(std::string encoded_data) {
+void Mp4MuxerDelegate::AddDataToAudioFragment(
+    scoped_refptr<DecoderBuffer> encoded_data) {
   DCHECK(audio_track_index_.has_value());
   CreateFragmentIfNeeded(true, false);
 
@@ -279,8 +403,24 @@ void Mp4MuxerDelegate::AddDataToAudioFragment(std::string encoded_data) {
     return;
   }
 
-  fragment->AddAudioData(encoded_data, last_audio_time_);
+  fragment->AddAudioData(std::move(encoded_data), last_audio_time_);
   MaybeFlushFileTypeBoxForStartup();
+}
+
+bool Mp4MuxerDelegate::FlushFragment() {
+  // `live_mode_` is set to true regardless of `Flush()` failure as
+  // `FlushFragment()` is called only when it is a live mode and it
+  // will be referenced inside `Flush()` for the `mfra` box.
+  live_mode_ = true;
+
+  if (!Flush()) {
+    DVLOG(1) << __func__
+             << "flush fragment failed, it could be the first video frame";
+    return false;
+  }
+
+  fragments_.clear();
+  return true;
 }
 
 bool Mp4MuxerDelegate::Flush() {
@@ -306,7 +446,8 @@ size_t Mp4MuxerDelegate::MaybeFlushFileTypeBoxForStartup() {
   }
 
   // Build and write `FTYP` box.
-  mp4::writable_boxes::FileType mp4_file_type_box;
+  mp4::writable_boxes::FileType mp4_file_type_box(
+      /*major_brand=*/mp4::FOURCC_ISOM, 512);
   BuildFileTypeBox(mp4_file_type_box);
   Mp4FileTypeBoxWriter file_type_box_writer(*context_, mp4_file_type_box);
   written_file_type_box_size_ = file_type_box_writer.WriteAndFlush();
@@ -348,7 +489,7 @@ void Mp4MuxerDelegate::MaybeFlushMoofAndMfraBoxes(size_t written_offset) {
 
   mp4::writable_boxes::TrackFragmentRandomAccess video_track_random_access;
   for (auto& fragment : fragments_) {
-    if (video_track_index_.has_value()) {
+    if (video_track_index_.has_value() && !live_mode_) {
       base::TimeTicks start_timestamp = fragment->GetVideoStartTimestamp();
       if (start_timestamp.is_null()) {
         start_timestamp = start_video_time_;
@@ -372,17 +513,26 @@ void Mp4MuxerDelegate::MaybeFlushMoofAndMfraBoxes(size_t written_offset) {
     written_offset += mdat_box_writer.WriteAndFlush(box_byte_stream);
   }
 
+  if (live_mode_) {
+    // live mode can not have `mfra` box.
+    return;
+  }
+
   // Write `mfra` box as a last box for mp4 file.
   if (video_track_index_.has_value()) {
+    video_track_random_access.track_id = video_track_index_.value() + 1;
+
     mp4::writable_boxes::FragmentRandomAccess fragment_random_access;
-    // Add empty audio random access by its index position.
     mp4::writable_boxes::TrackFragmentRandomAccess audio_random_access;
 
+    // Add audio random access first as it is 0 index by default.
     fragment_random_access.tracks.emplace_back(std::move(audio_random_access));
-
-    video_track_random_access.track_id = video_track_index_.value() + 1;
     fragment_random_access.tracks.emplace_back(
         std::move(video_track_random_access));
+    if (video_track_index_.value() == 0) {
+      std::swap(fragment_random_access.tracks[kDefaultAudioIndex],
+                fragment_random_access.tracks[kDefaultVideoIndex]);
+    }
 
     // Flush at requested.
     Mp4FragmentRandomAccessBoxWriter fragment_random_access_box_writer(
@@ -395,10 +545,31 @@ void Mp4MuxerDelegate::MaybeFlushMoofAndMfraBoxes(size_t written_offset) {
 
 void Mp4MuxerDelegate::BuildFileTypeBox(
     mp4::writable_boxes::FileType& mp4_file_type_box) {
-  mp4_file_type_box.major_brand = mp4::FOURCC_MP41;
-  mp4_file_type_box.minor_version = 0;
   mp4_file_type_box.compatible_brands.emplace_back(mp4::FOURCC_ISOM);
-  mp4_file_type_box.compatible_brands.emplace_back(mp4::FOURCC_AVC1);
+  mp4_file_type_box.compatible_brands.emplace_back(mp4::FOURCC_ISO6);
+  mp4_file_type_box.compatible_brands.emplace_back(mp4::FOURCC_ISO2);
+  switch (video_codec_) {
+    case VideoCodec::kVP9:
+      mp4_file_type_box.compatible_brands.emplace_back(mp4::FOURCC_VP09);
+      break;
+    case VideoCodec::kAV1:
+      mp4_file_type_box.compatible_brands.emplace_back(mp4::FOURCC_AV01);
+      break;
+#if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+    case VideoCodec::kHEVC:
+      mp4_file_type_box.compatible_brands.emplace_back(
+          add_parameter_sets_in_bitstream_ ? mp4::FOURCC_HEV1
+                                           : mp4::FOURCC_HVC1);
+      break;
+#endif
+    case VideoCodec::kH264:
+    default:
+      mp4_file_type_box.compatible_brands.emplace_back(
+          add_parameter_sets_in_bitstream_ ? mp4::FOURCC_AVC3
+                                           : mp4::FOURCC_AVC1);
+      break;
+  }
+  mp4_file_type_box.compatible_brands.emplace_back(mp4::FOURCC_MP41);
 }
 
 void Mp4MuxerDelegate::BuildMovieBox() {
@@ -435,6 +606,11 @@ void Mp4MuxerDelegate::BuildMovieBox() {
         last_audio_time_include_last_sample - start_audio_time_;
     CopyCreationTimeAndDuration(moov_->tracks[audio_track_index_.value()],
                                 moov_->header, audio_track_duration);
+  }
+
+  if (live_mode_) {
+    // live should not have duration.
+    return;
   }
 
   // Update the track's duration that the longest duration on the track
@@ -512,14 +688,32 @@ void Mp4MuxerDelegate::EnsureInitialized() {
 
   moov_ = std::make_unique<mp4::writable_boxes::Movie>();
 
-  moov_->tracks.emplace_back(mp4::writable_boxes::Track());
-  moov_->tracks.emplace_back(mp4::writable_boxes::Track());
+  // We add two tracks to the moov box, one for video and one for audio, but
+  // we don't know which is which yet. The correct fields will be filled in
+  // when the first video or audio frame is added.
+  moov_->tracks.emplace_back(0, false);
+  moov_->tracks.emplace_back(0, false);
 
   moov_->extends.track_extends.emplace_back(
       mp4::writable_boxes::TrackExtends());
   moov_->extends.track_extends.emplace_back(
       mp4::writable_boxes::TrackExtends());
 }
+
+#if BUILDFLAG(USE_PROPRIETARY_CODECS) || \
+    BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+scoped_refptr<DecoderBuffer> Mp4MuxerDelegate::ConvertNALUData(
+    scoped_refptr<DecoderBuffer> encoded_data) {
+  CHECK(video_codec_ == VideoCodec::kH264 || video_codec_ == VideoCodec::kHEVC);
+  if (!h26x_converter_) {
+    h26x_converter_ = std::make_unique<H26xAnnexBToBitstreamConverter>(
+        video_codec_, add_parameter_sets_in_bitstream_);
+  }
+
+  return h26x_converter_->Convert(encoded_data->AsSpan());
+}
+#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS) ||
+        // BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
 
 int Mp4MuxerDelegate::GetNextTrackIndex() {
   return next_track_index_++;

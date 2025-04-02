@@ -5,12 +5,16 @@
 #include "third_party/blink/renderer/platform/fonts/font.h"
 
 #include "cc/paint/paint_flags.h"
-#include "third_party/blink/renderer/platform/fonts/text_run_paint_info.h"
+#include "third_party/blink/renderer/platform/fonts/font_variant_emoji.h"
+#include "third_party/blink/renderer/platform/fonts/shaping/harfbuzz_shaper.h"
+#include "third_party/blink/renderer/platform/fonts/shaping/shape_result_view.h"
+#include "third_party/blink/renderer/platform/fonts/text_fragment_paint_info.h"
 #include "third_party/blink/renderer/platform/testing/font_test_base.h"
 #include "third_party/blink/renderer/platform/testing/font_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/text/tab_size.h"
-#include "third_party/blink/renderer/platform/text/text_run.h"
+#include "third_party/blink/renderer/platform/text/text_direction.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 
 using blink::test::CreateTestFont;
 
@@ -23,7 +27,7 @@ Font CreateVerticalUprightTestFont(const AtomicString& family_name,
                                    float size) {
   return CreateTestFont(
       family_name, font_path, size, /* ligatures */ nullptr,
-      [](FontDescription* font_description) {
+      kNormalVariantEmoji, [](FontDescription* font_description) {
         font_description->SetOrientation(FontOrientation::kVerticalUpright);
       });
 }
@@ -63,6 +67,18 @@ TEST_F(FontTest, FonteMetricsCapHeight) {
   EXPECT_FLOAT_EQ(
       142.1875f, cap_height_of("third_party/Roboto/roboto-regular.woff2", 200));
 #endif
+}
+
+TEST_F(FontTest, ConvertBaseline) {
+  Font font = test::CreateAhemFont(100);
+  const SimpleFontData* font_data = font.PrimaryFont();
+  const FontMetrics& metrics = font_data->GetFontMetrics();
+  EXPECT_EQ(metrics.FixedAscent(), 80);
+  EXPECT_EQ(metrics.FixedDescent(), 20);
+  EXPECT_EQ(metrics.FixedAlphabetic(FontBaseline::kAlphabeticBaseline), 0);
+  EXPECT_EQ(metrics.FixedAlphabetic(FontBaseline::kCentralBaseline), -30);
+  EXPECT_EQ(metrics.FixedCapHeight(FontBaseline::kAlphabeticBaseline), 80);
+  EXPECT_EQ(metrics.FixedCapHeight(FontBaseline::kCentralBaseline), 50);
 }
 
 TEST_F(FontTest, IdeographicFullWidthAhem) {
@@ -137,15 +153,20 @@ TEST_F(FontTest, TextIntercepts) {
   // are rectangles below the baseline.
   UChar ahem_above_below_baseline_string[] = {0xc9, 0x70, 0xc9, 0x70, 0xc9,
                                               0x70, 0xc9, 0x70, 0xc9};
-  TextRun ahem_above_below_baseline(ahem_above_below_baseline_string, 9);
-  TextRunPaintInfo text_run_paint_info(ahem_above_below_baseline);
+  String ahem_above_below_baseline{
+      base::span(ahem_above_below_baseline_string)};
+  ShapeResult* shape_result = HarfBuzzShaper(ahem_above_below_baseline)
+                                  .Shape(&font, TextDirection::kLtr);
+  TextFragmentPaintInfo text_paint_info{ahem_above_below_baseline, 0,
+                                        ahem_above_below_baseline.length(),
+                                        ShapeResultView::Create(shape_result)};
   cc::PaintFlags default_paint;
 
   std::tuple<float, float> below_baseline_bounds = std::make_tuple(2, 4);
   Vector<Font::TextIntercept> text_intercepts;
   // 4 intercept ranges for below baseline p glyphs in the test string
-  font.GetTextIntercepts(text_run_paint_info, default_paint,
-                         below_baseline_bounds, text_intercepts);
+  font.GetTextIntercepts(text_paint_info, default_paint, below_baseline_bounds,
+                         text_intercepts);
   EXPECT_EQ(text_intercepts.size(), 4u);
   for (auto text_intercept : text_intercepts) {
     EXPECT_GT(text_intercept.end_, text_intercept.begin_);
@@ -153,8 +174,8 @@ TEST_F(FontTest, TextIntercepts) {
 
   std::tuple<float, float> above_baseline_bounds = std::make_tuple(-4, -2);
   // 5 intercept ranges for the above baseline E ACUTE glyphs
-  font.GetTextIntercepts(text_run_paint_info, default_paint,
-                         above_baseline_bounds, text_intercepts);
+  font.GetTextIntercepts(text_paint_info, default_paint, above_baseline_bounds,
+                         text_intercepts);
   EXPECT_EQ(text_intercepts.size(), 5u);
   for (auto text_intercept : text_intercepts) {
     EXPECT_GT(text_intercept.end_, text_intercept.begin_);

@@ -24,10 +24,6 @@ namespace prefs {
 inline constexpr char kLiveCaptionBubbleExpanded[] =
     "accessibility.captions.live_caption_bubble_expanded";
 
-// Whether the Live Caption bubble is pinned.
-inline constexpr char kLiveCaptionBubblePinned[] =
-    "accessibility.captions.live_caption_bubble_pinned";
-
 // Whether the Live Caption feature is enabled.
 inline constexpr char kLiveCaptionEnabled[] =
     "accessibility.captions.live_caption_enabled";
@@ -45,6 +41,24 @@ inline constexpr char kLiveCaptionMaskOffensiveWords[] =
 inline constexpr char kLiveCaptionMediaFoundationRendererErrorSilenced[] =
     "accessibility.captions.live_caption_media_foundation_renderer_error_"
     "silenced";
+
+// This may be removed in the future but for now these preferences are ash only.
+#if BUILDFLAG(IS_CHROMEOS)
+
+// Enables Captioning from microphone input.
+inline constexpr char kLiveCaptionUserMicrophoneEnabled[] =
+    "accessibility.captions.user_microphone_captioning_enabled";
+
+// Describes the language code of the current locale for microphone input
+// live captions.
+inline constexpr char kUserMicrophoneCaptionLanguageCode[] =
+    "accessibility.captions.user_microphone_language_code";
+
+const std::string GetUserMicrophoneCaptionLanguage(PrefService* profile_prefs);
+bool IsLanguageCodeForMicrophoneCaption(speech::LanguageCode language_code,
+                                        PrefService* profile_prefs);
+
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 const std::string GetLiveCaptionLanguageCode(PrefService* profile_prefs);
 bool IsLanguageCodeForLiveCaption(speech::LanguageCode language_code,

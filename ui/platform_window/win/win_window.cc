@@ -110,7 +110,6 @@ void WinWindow::SetBoundsInDIP(const gfx::Rect& bounds) {
 gfx::Rect WinWindow::GetBoundsInDIP() const {
   // GetBounds should not be used on Windows tests.
   NOTREACHED();
-  return GetBoundsInPixels();
 }
 
 void WinWindow::SetTitle(const std::u16string& title) {

@@ -12,6 +12,7 @@
 #include "ash/wm/window_util.h"
 #include "base/auto_reset.h"
 #include "base/barrier_closure.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
@@ -34,7 +35,6 @@
 #include "ui/base/clipboard/clipboard_monitor.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
-#include "ui/base/data_transfer_policy/data_transfer_endpoint_serializer.h"
 #include "ui/display/screen.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event_utils.h"
@@ -55,8 +55,9 @@ using CustomizableButton = ash::mojom::CustomizableButton;
 std::optional<CustomizableButton> GetMouseButtonFromNativeEvent(
     const ui::PlatformEvent& platform_event) {
   auto event = ui::EventFromNative(platform_event);
-  if (!event->IsMouseEvent() || (event->type() != ui::ET_MOUSE_RELEASED &&
-                                 event->type() != ui::ET_MOUSE_PRESSED)) {
+  if (!event->IsMouseEvent() ||
+      (event->type() != ui::EventType::kMouseReleased &&
+       event->type() != ui::EventType::kMousePressed)) {
     return std::nullopt;
   }
 
@@ -93,7 +94,7 @@ std::optional<CustomizableButton> GetMouseButtonFromNativeEvent(
       return CustomizableButton::kExtra;
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 bool IsPhysicalCodeEmpty(const PhysicalCode& code) {
@@ -234,23 +235,10 @@ void Seat::SetSelection(DataSource* source) {
 
   size_t num_data_read_callbacks = DataSource::kMaxDataTypes;
 
-  // Lacros sends additional metadata, in a custom MIME type, to sync clipboard
-  // source metadata,
-  if (endpoint_type == ui::EndpointType::kLacros)
-    ++num_data_read_callbacks;
-
   base::RepeatingClosure data_read_callback = base::BarrierClosure(
       num_data_read_callbacks,
       base::BindOnce(&Seat::OnAllReadsFinished, weak_ptr_factory_.GetWeakPtr(),
                      writer));
-
-  if (endpoint_type == ui::EndpointType::kLacros) {
-    source->ReadDataTransferEndpoint(
-        base::BindOnce(&Seat::OnDataTransferEndpointRead,
-                       weak_ptr_factory_.GetWeakPtr(), writer,
-                       data_read_callback),
-        data_read_callback);
-  }
 
   source->GetDataForPreferredMimeTypes(
       base::BindOnce(&Seat::OnTextRead, weak_ptr_factory_.GetWeakPtr(), writer,
@@ -282,18 +270,6 @@ class Seat::RefCountedScopedClipboardWriter
   friend class base::RefCounted<RefCountedScopedClipboardWriter>;
   virtual ~RefCountedScopedClipboardWriter() = default;
 };
-
-void Seat::OnDataTransferEndpointRead(
-    scoped_refptr<RefCountedScopedClipboardWriter> writer,
-    base::OnceClosure callback,
-    const std::string& mime_type,
-    std::u16string data) {
-  std::string utf8_json = base::UTF16ToUTF8(data);
-  auto clipboard_source = ui::ConvertJsonToDataTransferEndpoint(utf8_json);
-
-  writer->SetDataSource(std::move(clipboard_source));
-  std::move(callback).Run();
-}
 
 void Seat::OnTextRead(scoped_refptr<RefCountedScopedClipboardWriter> writer,
                       base::OnceClosure callback,
@@ -345,9 +321,11 @@ void Seat::OnFilenamesRead(
     base::OnceClosure callback,
     const std::string& mime_type,
     const std::vector<uint8_t>& data) {
-  std::vector<ui::FileInfo> filenames =
-      data_exchange_delegate_->GetFilenames(source, data);
-  writer->WriteFilenames(ui::FileInfosToURIList(filenames));
+  if (selection_source_) {
+    std::vector<ui::FileInfo> filenames =
+        selection_source_->get()->GetFilenames(source, data);
+    writer->WriteFilenames(ui::FileInfosToURIList(filenames));
+  }
   std::move(callback).Run();
 }
 
@@ -356,9 +334,9 @@ void Seat::OnWebCustomDataRead(
     base::OnceClosure callback,
     const std::string& mime_type,
     const std::vector<uint8_t>& data) {
-  base::Pickle pickle(reinterpret_cast<const char*>(data.data()), data.size());
+  base::Pickle pickle = base::Pickle::WithUnownedBuffer(data);
   writer->WritePickledData(pickle,
-                           ui::ClipboardFormatType::WebCustomDataType());
+                           ui::ClipboardFormatType::DataTransferCustomType());
   std::move(callback).Run();
 }
 
@@ -401,12 +379,12 @@ void Seat::OnWindowFocused(aura::Window* gained_focus,
 
 void Seat::WillProcessEvent(const ui::PlatformEvent& event) {
   switch (ui::EventTypeFromNative(event)) {
-    case ui::ET_KEY_PRESSED:
-    case ui::ET_KEY_RELEASED:
+    case ui::EventType::kKeyPressed:
+    case ui::EventType::kKeyReleased:
       physical_code_for_currently_processing_event_ = ui::CodeFromNative(event);
       break;
-    case ui::ET_MOUSE_PRESSED:
-    case ui::ET_MOUSE_RELEASED:
+    case ui::EventType::kMousePressed:
+    case ui::EventType::kMouseReleased:
       if (auto button = GetMouseButtonFromNativeEvent(event); button) {
         physical_code_for_currently_processing_event_ = *button;
       }
@@ -418,12 +396,12 @@ void Seat::WillProcessEvent(const ui::PlatformEvent& event) {
 
 void Seat::DidProcessEvent(const ui::PlatformEvent& event) {
   switch (ui::EventTypeFromNative(event)) {
-    case ui::ET_KEY_PRESSED:
-    case ui::ET_MOUSE_PRESSED:
+    case ui::EventType::kKeyPressed:
+    case ui::EventType::kMousePressed:
       physical_code_for_currently_processing_event_ = ui::DomCode::NONE;
       break;
-    case ui::ET_KEY_RELEASED:
-    case ui::ET_MOUSE_RELEASED: {
+    case ui::EventType::kKeyReleased:
+    case ui::EventType::kMouseReleased: {
       // Remove this from the pressed key map because when IME is active we can
       // end up getting the DidProcessEvent call before we get the OnKeyEvent
       // callback and then the key will end up being stuck pressed.
@@ -447,7 +425,7 @@ void Seat::OnKeyEvent(ui::KeyEvent* event) {
 
   if (!IsPhysicalCodeEmpty(physical_code_for_currently_processing_event_)) {
     switch (event->type()) {
-      case ui::ET_KEY_PRESSED: {
+      case ui::EventType::kKeyPressed: {
         auto& key_state_set =
             pressed_keys_[physical_code_for_currently_processing_event_];
         // Do not insert the additional events unless the event is a customized
@@ -459,12 +437,11 @@ void Seat::OnKeyEvent(ui::KeyEvent* event) {
         key_state_set.emplace(event->code(), /*consumed_by_ime=*/false,
                               event->key_code());
       } break;
-      case ui::ET_KEY_RELEASED:
+      case ui::EventType::kKeyReleased:
         pressed_keys_.erase(physical_code_for_currently_processing_event_);
         break;
       default:
         NOTREACHED();
-        break;
     }
   }
 
@@ -490,7 +467,7 @@ UILockController* Seat::GetUILockControllerForTesting() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// ash::ImeControllerImpl::Observer overrides:
+// ash::ImeController::Observer overrides:
 
 void Seat::OnCapsLockChanged(bool enabled) {}
 

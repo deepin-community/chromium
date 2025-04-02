@@ -54,7 +54,8 @@ void OverlayScrollBar::Thumb::Init() {
   layer()->SetAnimator(ui::LayerAnimator::CreateImplicitAnimator());
 }
 
-gfx::Size OverlayScrollBar::Thumb::CalculatePreferredSize() const {
+gfx::Size OverlayScrollBar::Thumb::CalculatePreferredSize(
+    const SizeBounds& /*available_size*/) const {
   // The visual size of the thumb is kThumbThickness, but it slides back and
   // forth by kThumbHoverOffset. To make event targetting work well, expand the
   // width of the thumb such that it's always taking up the full width of the
@@ -112,8 +113,9 @@ void OverlayScrollBar::Thumb::OnBoundsChanged(
     const gfx::Rect& previous_bounds) {
   scroll_bar_->Show();
   // Don't start the hide countdown if the thumb is still hovered or pressed.
-  if (GetState() == Button::STATE_NORMAL)
+  if (GetState() == Button::STATE_NORMAL) {
     scroll_bar_->StartHideCountdown();
+  }
 }
 
 void OverlayScrollBar::Thumb::OnStateChanged() {
@@ -125,8 +127,9 @@ void OverlayScrollBar::Thumb::OnStateChanged() {
                       IsHorizontal() ? kThumbHoverOffset : 0));
     layer()->SetTransform(translation);
 
-    if (GetWidget())
+    if (GetWidget()) {
       scroll_bar_->StartHideCountdown();
+    }
   } else {
     layer()->SetTransform(gfx::Transform());
   }
@@ -192,8 +195,9 @@ void OverlayScrollBar::Hide() {
 }
 
 void OverlayScrollBar::StartHideCountdown() {
-  if (IsMouseHovered())
+  if (IsMouseHovered()) {
     return;
+  }
   hide_timer_.Start(
       FROM_HERE, ui::kOverlayScrollbarFadeDelay,
       base::BindOnce(&OverlayScrollBar::Hide, base::Unretained(this)));

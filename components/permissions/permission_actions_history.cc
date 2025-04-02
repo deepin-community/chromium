@@ -3,13 +3,13 @@
 // found in the LICENSE file.
 #include "components/permissions/permission_actions_history.h"
 
+#include <algorithm>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/adapters.h"
 #include "base/json/values_util.h"
-#include "base/ranges/algorithm.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
@@ -63,7 +63,7 @@ PermissionActionsHistory::GetHistory(const base::Time& begin,
                             permission_actions.end());
   }
 
-  base::ranges::sort(
+  std::ranges::sort(
       matching_actions, {},
       [](const PermissionActionsHistory::Entry& entry) { return entry.time; });
   return matching_actions;
@@ -84,7 +84,7 @@ void PermissionActionsHistory::RecordAction(
   ScopedDictPrefUpdate update(pref_service_, prefs::kPermissionActions);
   base::Value::Dict& update_dict = update.Get();
 
-  const base::StringPiece permission_path(PermissionKeyForRequestType(type));
+  const std::string_view permission_path(PermissionKeyForRequestType(type));
 
   if (!update_dict.FindListByDottedPath(permission_path)) {
     update_dict.SetByDottedPath(permission_path, base::Value::List());

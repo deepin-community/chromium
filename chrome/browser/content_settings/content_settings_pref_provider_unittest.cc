@@ -426,7 +426,7 @@ TEST_F(PrefProviderTest, IncognitoInheritsValueMap) {
 
   {
     ContentSettingConstraints constraints;
-    constraints.set_session_model(SessionModel::UserSession);
+    constraints.set_session_model(mojom::SessionModel::USER_SESSION);
 
     normal_provider.SetWebsiteSetting(
         pattern_1, wildcard, ContentSettingsType::COOKIES,
@@ -441,7 +441,7 @@ TEST_F(PrefProviderTest, IncognitoInheritsValueMap) {
     // Durable and not expired
     ContentSettingConstraints constraints;
     constraints.set_lifetime(base::Days(1));
-    constraints.set_session_model(SessionModel::Durable);
+    constraints.set_session_model(mojom::SessionModel::DURABLE);
     normal_provider.SetWebsiteSetting(
         pattern_4, pattern_4, ContentSettingsType::COOKIES,
         base::Value(CONTENT_SETTING_BLOCK), constraints,
@@ -451,7 +451,7 @@ TEST_F(PrefProviderTest, IncognitoInheritsValueMap) {
     // Durable but expired
     ContentSettingConstraints constraints(base::Time::Now() - base::Days(2));
     constraints.set_lifetime(base::Days(1));
-    constraints.set_session_model(SessionModel::Durable);
+    constraints.set_session_model(mojom::SessionModel::DURABLE);
     normal_provider.SetWebsiteSetting(
         pattern_5, pattern_5, ContentSettingsType::COOKIES,
         base::Value(CONTENT_SETTING_BLOCK), constraints,
@@ -688,7 +688,7 @@ TEST_F(PrefProviderTest, SessionScopeSettingsDontPersist) {
                                    ContentSettingsType::STORAGE_ACCESS, false));
 
   ContentSettingConstraints constraints;
-  constraints.set_session_model(SessionModel::UserSession);
+  constraints.set_session_model(mojom::SessionModel::USER_SESSION);
 
   provider.SetWebsiteSetting(
       primary_pattern, primary_pattern, ContentSettingsType::STORAGE_ACCESS,
@@ -740,7 +740,7 @@ TEST_F(PrefProviderTest, SessionScopeSettingsRestoreSession) {
                                    ContentSettingsType::STORAGE_ACCESS, false));
 
   ContentSettingConstraints constraints;
-  constraints.set_session_model(SessionModel::UserSession);
+  constraints.set_session_model(mojom::SessionModel::USER_SESSION);
 
   provider.SetWebsiteSetting(
       primary_pattern, primary_pattern, ContentSettingsType::STORAGE_ACCESS,
@@ -771,55 +771,6 @@ TEST_F(PrefProviderTest, SessionScopeSettingsRestoreSession) {
   provider2.ShutdownOnUIThread();
 }
 
-// If a setting is constrained to a non-restorable session scope and a provider
-// is made with the `restore_Session` flag, the setting should be cleared.
-TEST_F(PrefProviderTest, SessionScopeSettingsRestoreSessionNonRestorable) {
-  TestingProfile testing_profile;
-  PrefProvider provider(testing_profile.GetPrefs(), /*off_the_record=*/false,
-                        /*store_last_modified=*/true,
-                        /*restore_session=*/false);
-
-  GURL primary_url("http://example.com/");
-  ContentSettingsPattern primary_pattern =
-      ContentSettingsPattern::FromString("[*.]example.com");
-
-  EXPECT_EQ(
-      CONTENT_SETTING_DEFAULT,
-      TestUtils::GetContentSetting(&provider, primary_url, primary_url,
-                                   ContentSettingsType::STORAGE_ACCESS, false));
-
-  ContentSettingConstraints constraints;
-  constraints.set_session_model(SessionModel::NonRestorableUserSession);
-
-  provider.SetWebsiteSetting(
-      primary_pattern, primary_pattern, ContentSettingsType::STORAGE_ACCESS,
-      base::Value(CONTENT_SETTING_BLOCK), constraints,
-      content_settings::PartitionKey::GetDefaultForTesting());
-  EXPECT_EQ(
-      CONTENT_SETTING_BLOCK,
-      TestUtils::GetContentSetting(&provider, primary_url, primary_url,
-                                   ContentSettingsType::STORAGE_ACCESS, false));
-  base::Value value(TestUtils::GetContentSettingValue(
-      &provider, primary_url, primary_url, ContentSettingsType::STORAGE_ACCESS,
-      false));
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            IntToContentSetting(value.GetIfInt().value_or(-1)));
-
-  // Now if we create a new provider, it should not be able to read our setting
-  // back even with `restore_session` is true.
-  provider.ShutdownOnUIThread();
-
-  PrefProvider provider2(testing_profile.GetPrefs(), /*off_the_record=*/false,
-                         /*store_last_modified=*/true,
-                         /*restore_session=*/true);
-
-  EXPECT_EQ(
-      CONTENT_SETTING_DEFAULT,
-      TestUtils::GetContentSetting(&provider2, primary_url, primary_url,
-                                   ContentSettingsType::STORAGE_ACCESS, false));
-  provider2.ShutdownOnUIThread();
-}
-
 // Validate our settings will properly store our expiry time if specified.
 TEST_F(PrefProviderTest, GetContentSettingsExpiry) {
   TestingProfile testing_profile;
@@ -832,7 +783,7 @@ TEST_F(PrefProviderTest, GetContentSettingsExpiry) {
       ContentSettingsPattern::FromString("[*.]example.com");
   ContentSettingConstraints constraints;
   constraints.set_lifetime(base::Seconds(123));
-  constraints.set_session_model(SessionModel::Durable);
+  constraints.set_session_model(mojom::SessionModel::DURABLE);
 
   provider.SetWebsiteSetting(
       primary_pattern, primary_pattern, ContentSettingsType::STORAGE_ACCESS,
@@ -874,7 +825,7 @@ TEST_F(PrefProviderTest, GetContentSettingsExpiryPersists) {
       ContentSettingsPattern::FromString("[*.]example.com");
   ContentSettingConstraints constraints;
   constraints.set_lifetime(base::Seconds(123));
-  constraints.set_session_model(SessionModel::Durable);
+  constraints.set_session_model(mojom::SessionModel::DURABLE);
 
   provider.SetWebsiteSetting(
       primary_pattern, primary_pattern, ContentSettingsType::STORAGE_ACCESS,
@@ -927,7 +878,7 @@ TEST_F(PrefProviderTest, GetContentSettingsExpiryAfterRestore) {
       ContentSettingsPattern::FromString("[*.]example.com");
   ContentSettingConstraints constraints;
   constraints.set_lifetime(base::Seconds(123));
-  constraints.set_session_model(SessionModel::Durable);
+  constraints.set_session_model(mojom::SessionModel::DURABLE);
 
   provider.SetWebsiteSetting(
       primary_pattern, primary_pattern, ContentSettingsType::STORAGE_ACCESS,
@@ -974,7 +925,7 @@ TEST_F(PrefProviderTest, ScopeSessionToDurablePersists) {
   ContentSettingsPattern primary_pattern =
       ContentSettingsPattern::FromString("[*.]example.com");
   ContentSettingConstraints constraints;
-  constraints.set_session_model(SessionModel::UserSession);
+  constraints.set_session_model(mojom::SessionModel::USER_SESSION);
 
   provider.SetWebsiteSetting(
       primary_pattern, primary_pattern, ContentSettingsType::STORAGE_ACCESS,
@@ -986,7 +937,7 @@ TEST_F(PrefProviderTest, ScopeSessionToDurablePersists) {
                                    ContentSettingsType::STORAGE_ACCESS, false));
 
   // Update to Durable and expect that the setting is still there.
-  constraints.set_session_model(SessionModel::Durable);
+  constraints.set_session_model(mojom::SessionModel::DURABLE);
   provider.SetWebsiteSetting(
       primary_pattern, primary_pattern, ContentSettingsType::STORAGE_ACCESS,
       base::Value(CONTENT_SETTING_BLOCK), constraints,
@@ -1021,7 +972,7 @@ TEST_F(PrefProviderTest, ScopeDurableToSessionDrops) {
   ContentSettingsPattern primary_pattern =
       ContentSettingsPattern::FromString("[*.]example.com");
   ContentSettingConstraints constraints;
-  constraints.set_session_model(SessionModel::Durable);
+  constraints.set_session_model(mojom::SessionModel::DURABLE);
 
   provider.SetWebsiteSetting(
       primary_pattern, primary_pattern, ContentSettingsType::STORAGE_ACCESS,
@@ -1033,7 +984,7 @@ TEST_F(PrefProviderTest, ScopeDurableToSessionDrops) {
                                    ContentSettingsType::STORAGE_ACCESS, false));
 
   // Update to Durable and expect that the setting is still there.
-  constraints.set_session_model(SessionModel::UserSession);
+  constraints.set_session_model(mojom::SessionModel::USER_SESSION);
   provider.SetWebsiteSetting(
       primary_pattern, primary_pattern, ContentSettingsType::STORAGE_ACCESS,
       base::Value(CONTENT_SETTING_BLOCK), constraints,

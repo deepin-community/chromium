@@ -19,7 +19,12 @@
 
 namespace {
 class WebAppNonClientFrameViewChromeOSTest;
-}
+class LocationBarViewQuietNotificationInteractiveUITest;
+}  // namespace
+
+namespace page_actions {
+class PageActionView;
+}  // namespace page_actions
 
 namespace views {
 class View;
@@ -74,13 +79,15 @@ class WebAppFrameToolbarView : public views::AccessiblePaneView,
   gfx::Size GetToolbarButtonSize() const override;
   views::View* GetDefaultExtensionDialogAnchorView() override;
   PageActionIconView* GetPageActionIconView(PageActionIconType type) override;
+  page_actions::PageActionView* GetPageActionView(
+      actions::ActionId action_id) override;
   AppMenuButton* GetAppMenuButton() override;
   gfx::Rect GetFindBarBoundingBox(int contents_bottom) override;
   void FocusToolbar() override;
   views::AccessiblePaneView* GetAsAccessiblePaneView() override;
-  views::View* GetAnchorView(PageActionIconType type) override;
+  views::View* GetAnchorView(
+      std::optional<actions::ActionId> action_id) override;
   void ZoomChangedForActiveTab(bool can_show_bubble) override;
-  SidePanelToolbarButton* GetSidePanelButton() override;
   AvatarToolbarButton* GetAvatarToolbarButton() override;
   ToolbarButton* GetBackButton() override;
   ReloadButton* GetReloadButton() override;
@@ -112,6 +119,7 @@ class WebAppFrameToolbarView : public views::AccessiblePaneView,
   friend class ImmersiveModeControllerChromeosWebAppBrowserTest;
   friend class WebAppAshInteractiveUITest;
   friend class WebAppNonClientFrameViewChromeOSTest;
+  friend class LocationBarViewQuietNotificationInteractiveUITest;
 
   views::View* GetContentSettingContainerForTesting();
 

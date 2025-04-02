@@ -110,7 +110,7 @@ bool ValidateProgramResourceProperty(const Context *context,
         case GL_REFERENCED_BY_TESS_CONTROL_SHADER_EXT:
         case GL_REFERENCED_BY_TESS_EVALUATION_SHADER_EXT:
         case GL_IS_PER_PATCH_EXT:
-            return context->getExtensions().tessellationShaderEXT ||
+            return context->getExtensions().tessellationShaderAny() ||
                    context->getClientVersion() >= ES_3_2;
 
         case GL_LOCATION_INDEX_EXT:
@@ -1520,6 +1520,17 @@ bool ValidateBindImageTexture(const Context *context,
                                    kTextureIsNeitherImmutableNorTextureBuffer);
             return false;
         }
+
+        if (context->getExtensions().textureStorageCompressionEXT &&
+            tex->getType() != gl::TextureType::Buffer)
+        {
+            if (tex->getImageCompressionRate(context) != GL_SURFACE_COMPRESSION_FIXED_RATE_NONE_EXT)
+            {
+                ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE,
+                                       kTextureFixedCompressedNotSupportBindImageTexture);
+                return false;
+            }
+        }
     }
 
     return true;
@@ -1741,7 +1752,7 @@ bool ValidateUseProgramStagesBase(const Context *context,
         knownShaderBits |= GL_GEOMETRY_SHADER_BIT;
     }
 
-    if (context->getClientVersion() >= ES_3_2 || context->getExtensions().tessellationShaderEXT)
+    if (context->getClientVersion() >= ES_3_2 || context->getExtensions().tessellationShaderAny())
     {
         knownShaderBits |= GL_TESS_CONTROL_SHADER_BIT;
         knownShaderBits |= GL_TESS_EVALUATION_SHADER_BIT;
@@ -1865,7 +1876,7 @@ bool ValidateCreateShaderProgramvBase(const Context *context,
             break;
         case ShaderType::TessControl:
         case ShaderType::TessEvaluation:
-            if (!context->getExtensions().tessellationShaderEXT &&
+            if (!context->getExtensions().tessellationShaderAny() &&
                 context->getClientVersion() < ES_3_2)
             {
                 ANGLE_VALIDATION_ERROR(GL_INVALID_ENUM, kInvalidShaderType);
@@ -1928,7 +1939,7 @@ bool ValidateGetProgramPipelineivBase(const Context *context,
                    context->getClientVersion() >= ES_3_2;
         case GL_TESS_CONTROL_SHADER:
         case GL_TESS_EVALUATION_SHADER:
-            return context->getExtensions().tessellationShaderEXT ||
+            return context->getExtensions().tessellationShaderAny() ||
                    context->getClientVersion() >= ES_3_2;
 
         default:
@@ -2819,23 +2830,11 @@ bool ValidateFramebufferTextureCommon(const Context *context,
             return false;
         }
 
-        // GLES spec 3.1, Section 9.2.8 "Attaching Texture Images to a Framebuffer"
-        // If textarget is TEXTURE_2D_MULTISAMPLE, then level must be zero.
-        if (tex->getType() == TextureType::_2DMultisample && level != 0)
-        {
-            ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kLevelNotZero);
-            return false;
-        }
-
-        // [OES_texture_storage_multisample_2d_array] Section 9.2.2 "Attaching Images to Framebuffer
-        // Objects"
-        // If texture is a two-dimensional multisample array texture, then level must be zero.
-        if (context->getExtensions().textureStorageMultisample2dArrayOES &&
-            tex->getType() == TextureType::_2DMultisampleArray && level != 0)
-        {
-            ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kLevelNotZero);
-            return false;
-        }
+        // GLES spec 3.2, Section 9.2.8 "Attaching Texture Images to a Framebuffer"
+        // * If textarget is TEXTURE_2D_MULTISAMPLE, then level must be zero.
+        // * If texture is a two-dimensional multisample array texture, then level must be zero.
+        // Already validated in ValidMipLevel.
+        ASSERT(level == 0 || !IsMultisampled(tex->getType()));
     }
 
     if (!ValidateFramebufferTextureBase(context, entryPoint, target, attachment, texture, level))
@@ -2878,45 +2877,6 @@ bool ValidateFramebufferTextureOES(const Context *context,
 
     return ValidateFramebufferTextureCommon(context, entryPoint, target, attachment, texture,
                                             level);
-}
-
-// GL_OES_texture_storage_multisample_2d_array
-bool ValidateTexStorage3DMultisampleOES(const Context *context,
-                                        angle::EntryPoint entryPoint,
-                                        TextureType target,
-                                        GLsizei samples,
-                                        GLenum sizedinternalformat,
-                                        GLsizei width,
-                                        GLsizei height,
-                                        GLsizei depth,
-                                        GLboolean fixedsamplelocations)
-{
-    if (!context->getExtensions().textureStorageMultisample2dArrayOES)
-    {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_ENUM, kMultisampleArrayExtensionRequired);
-        return false;
-    }
-
-    if (target != TextureType::_2DMultisampleArray)
-    {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_ENUM, kTargetMustBeTexture2DMultisampleArrayOES);
-        return false;
-    }
-
-    if (width < 1 || height < 1 || depth < 1)
-    {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kNegativeSize);
-        return false;
-    }
-
-    if (depth > context->getCaps().maxArrayTextureLayers)
-    {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kTextureDepthOutOfRange);
-        return false;
-    }
-
-    return ValidateTexStorageMultisample(context, entryPoint, target, samples, sizedinternalformat,
-                                         width, height);
 }
 
 bool ValidateTexStorageMem3DMultisampleEXT(const Context *context,
@@ -3088,6 +3048,17 @@ bool ValidateTexBufferBase(const Context *context,
         case GL_RGBA16UI:
         case GL_RGBA32UI:
             break;
+        case GL_R16_EXT:
+        case GL_RG16_EXT:
+        case GL_RGBA16_EXT:
+        {
+            if (!context->getExtensions().textureNorm16EXT)
+            {
+                ANGLE_VALIDATION_ERROR(GL_INVALID_ENUM, kTextureBufferInternalFormat);
+                return false;
+            }
+            break;
+        }
 
         default:
             ANGLE_VALIDATION_ERROR(GL_INVALID_ENUM, kTextureBufferInternalFormat);
@@ -3141,6 +3112,39 @@ bool ValidateTexBufferRangeBase(const Context *context,
     }
 
     return ValidateTexBufferBase(context, entryPoint, target, internalformat, bufferPacked);
+}
+
+bool ValidatePatchParameteriBase(const PrivateState &state,
+                                 ErrorSet *errors,
+                                 angle::EntryPoint entryPoint,
+                                 GLenum pname,
+                                 GLint value)
+{
+    if (state.getClientVersion() < ES_3_1)
+    {
+        errors->validationError(entryPoint, GL_INVALID_OPERATION, kES31Required);
+        return false;
+    }
+
+    if (pname != GL_PATCH_VERTICES)
+    {
+        errors->validationError(entryPoint, GL_INVALID_ENUM, kInvalidPname);
+        return false;
+    }
+
+    if (value <= 0)
+    {
+        errors->validationError(entryPoint, GL_INVALID_VALUE, kInvalidValueNonPositive);
+        return false;
+    }
+
+    if (value > state.getCaps().maxPatchVertices)
+    {
+        errors->validationError(entryPoint, GL_INVALID_VALUE, kInvalidValueExceedsMaxPatchSize);
+        return false;
+    }
+
+    return true;
 }
 
 }  // namespace gl

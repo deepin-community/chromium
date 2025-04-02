@@ -30,19 +30,18 @@
 
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc.h"
+#include <algorithm>
+#include <cmath>
+
 #include "base/numerics/safe_conversions.h"
 #include "build/build_config.h"
 #include "cc/paint/paint_flags.h"
+#include "partition_alloc/partition_alloc.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
-#include "third_party/skia/include/effects/SkCornerPathEffect.h"
 #include "third_party/skia/modules/skcms/skcms.h"
 #include "ui/base/ui_base_features.h"
-
-#include <algorithm>
-#include <cmath>
 
 namespace blink {
 
@@ -81,7 +80,6 @@ SkBlendMode WebCoreCompositeToSkiaComposite(CompositeOperator op,
   }
 
   NOTREACHED();
-  return SkBlendMode::kSrcOver;
 }
 
 SkBlendMode WebCoreBlendModeToSkBlendMode(BlendMode blend_mode) {
@@ -123,7 +121,6 @@ SkBlendMode WebCoreBlendModeToSkBlendMode(BlendMode blend_mode) {
   }
 
   NOTREACHED();
-  return SkBlendMode::kSrcOver;
 }
 
 std::pair<CompositeOperator, BlendMode> CompositeAndBlendOpsFromSkBlendMode(
@@ -366,7 +363,7 @@ InterpolationQuality ComputeInterpolationQuality(float src_width,
     return kInterpolationLow;
 
   // Everything else gets resampled at default quality.
-  return kInterpolationDefault;
+  return GetDefaultInterpolationQuality();
 }
 
 SkColor ScaleAlpha(SkColor color, float alpha) {
@@ -390,7 +387,7 @@ bool ApproximatelyEqualSkColorSpaces(sk_sp<SkColorSpace> src_color_space,
   return skcms_ApproximatelyEqualProfiles(&src_profile, &dst_profile);
 }
 
-static cc::PaintFlags PaintFlagsForFocusRing(SkColor color, float width) {
+static cc::PaintFlags PaintFlagsForFocusRing(SkColor4f color, float width) {
   cc::PaintFlags flags;
   flags.setAntiAlias(true);
   flags.setStyle(cc::PaintFlags::kStroke_Style);
@@ -401,20 +398,19 @@ static cc::PaintFlags PaintFlagsForFocusRing(SkColor color, float width) {
 
 void DrawPlatformFocusRing(const SkRRect& rrect,
                            cc::PaintCanvas* canvas,
-                           SkColor color,
+                           SkColor4f color,
                            float width) {
   canvas->drawRRect(rrect, PaintFlagsForFocusRing(color, width));
 }
 
 void DrawPlatformFocusRing(const SkPath& path,
                            cc::PaintCanvas* canvas,
-                           SkColor color,
+                           SkColor4f color,
                            float width,
                            float corner_radius) {
   cc::PaintFlags path_flags = PaintFlagsForFocusRing(color, width);
   if (corner_radius) {
-    path_flags.setPathEffect(
-        SkCornerPathEffect::Make(SkFloatToScalar(corner_radius)));
+    path_flags.setPathEffect(cc::PathEffect::MakeCorner(corner_radius));
   }
   canvas->drawPath(path, path_flags);
 }

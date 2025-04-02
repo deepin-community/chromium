@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "google_apis/gcm/base/mcs_util.h"
 
 #include <stddef.h>
@@ -21,24 +26,24 @@ namespace {
 // Type names corresponding to MCSProtoTags. Useful for identifying what type
 // of MCS protobuf is contained within a google::protobuf::MessageLite object.
 // WARNING: must match the order in MCSProtoTag.
-const char* const kProtoNames[] = {
-  "mcs_proto.HeartbeatPing",
-  "mcs_proto.HeartbeatAck",
-  "mcs_proto.LoginRequest",
-  "mcs_proto.LoginResponse",
-  "mcs_proto.Close",
-  "mcs_proto.MessageStanza",
-  "mcs_proto.PresenceStanza",
-  "mcs_proto.IqStanza",
-  "mcs_proto.DataMessageStanza",
-  "mcs_proto.BatchPresenceStanza",
-  "mcs_proto.StreamErrorStanza",
-  "mcs_proto.HttpRequest",
-  "mcs_proto.HttpResponse",
-  "mcs_proto.BindAccountRequest",
-  "mcs_proto.BindAccountResponse",
-  "mcs_proto.TalkMetadata"
-};
+const auto kProtoNames = std::to_array<const char*>({
+    "mcs_proto.HeartbeatPing",
+    "mcs_proto.HeartbeatAck",
+    "mcs_proto.LoginRequest",
+    "mcs_proto.LoginResponse",
+    "mcs_proto.Close",
+    "mcs_proto.MessageStanza",
+    "mcs_proto.PresenceStanza",
+    "mcs_proto.IqStanza",
+    "mcs_proto.DataMessageStanza",
+    "mcs_proto.BatchPresenceStanza",
+    "mcs_proto.StreamErrorStanza",
+    "mcs_proto.HttpRequest",
+    "mcs_proto.HttpResponse",
+    "mcs_proto.BindAccountRequest",
+    "mcs_proto.BindAccountResponse",
+    "mcs_proto.TalkMetadata",
+});
 static_assert(std::size(kProtoNames) == kNumProtoTypes,
               "Proto Names Must Include All Tags");
 

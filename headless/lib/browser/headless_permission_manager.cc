@@ -5,7 +5,6 @@
 #include "headless/lib/browser/headless_permission_manager.h"
 
 #include "base/functional/callback.h"
-#include "content/public/browser/browser_context.h"
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/permission_result.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
@@ -14,9 +13,7 @@
 
 namespace headless {
 
-HeadlessPermissionManager::HeadlessPermissionManager(
-    content::BrowserContext* browser_context)
-    : browser_context_(browser_context) {}
+HeadlessPermissionManager::HeadlessPermissionManager() = default;
 
 HeadlessPermissionManager::~HeadlessPermissionManager() = default;
 
@@ -73,7 +70,8 @@ HeadlessPermissionManager::GetPermissionResultForOriginWithoutContext(
 blink::mojom::PermissionStatus
 HeadlessPermissionManager::GetPermissionStatusForCurrentDocument(
     blink::PermissionType permission,
-    content::RenderFrameHost* render_frame_host) {
+    content::RenderFrameHost* render_frame_host,
+    bool should_include_device_status) {
   return blink::mojom::PermissionStatus::ASK;
 }
 
@@ -92,18 +90,5 @@ HeadlessPermissionManager::GetPermissionStatusForEmbeddedRequester(
     const url::Origin& overridden_origin) {
   return blink::mojom::PermissionStatus::ASK;
 }
-
-HeadlessPermissionManager::SubscriptionId
-HeadlessPermissionManager::SubscribeToPermissionStatusChange(
-    blink::PermissionType permission,
-    content::RenderProcessHost* render_process_host,
-    content::RenderFrameHost* render_frame_host,
-    const GURL& requesting_origin,
-    base::RepeatingCallback<void(blink::mojom::PermissionStatus)> callback) {
-  return SubscriptionId();
-}
-
-void HeadlessPermissionManager::UnsubscribeFromPermissionStatusChange(
-    SubscriptionId subscription_id) {}
 
 }  // namespace headless

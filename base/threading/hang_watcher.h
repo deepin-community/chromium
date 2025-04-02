@@ -11,7 +11,6 @@
 #include <type_traits>
 #include <vector>
 
-#include "base/atomicops.h"
 #include "base/auto_reset.h"
 #include "base/base_export.h"
 #include "base/bits.h"
@@ -26,7 +25,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/template_util.h"
 #include "base/thread_annotations.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/simple_thread.h"
@@ -151,7 +149,6 @@ class BASE_EXPORT HangWatcher : public DelegateSimpleThread::Delegate {
   // Initializes HangWatcher. Must be called once on the main thread during
   // startup while single-threaded.
   static void InitializeOnMainThread(ProcessType process_type,
-                                     bool is_zygote_child,
                                      bool emit_crashes);
 
   // Returns the values that were set through InitializeOnMainThread() to their
@@ -193,6 +190,10 @@ class BASE_EXPORT HangWatcher : public DelegateSimpleThread::Delegate {
   // end of the WatchHangsInScope that was current at the time of invalidation.
   //
   static void InvalidateActiveExpectations();
+
+  // Marks the current process as "shutting down". This changes the histograms
+  // emitted every interval for all threads.
+  static void SetShuttingDown();
 
   // Sets up the calling thread to be monitored for threads. Returns a
   // ScopedClosureRunner that unregisters the thread. This closure has to be
@@ -289,7 +290,7 @@ class BASE_EXPORT HangWatcher : public DelegateSimpleThread::Delegate {
    public:
     struct WatchStateCopy {
       base::TimeTicks deadline;
-      base::PlatformThreadId thread_id;
+      uint64_t thread_id;
     };
 
     WatchStateSnapShot();
@@ -310,7 +311,8 @@ class BASE_EXPORT HangWatcher : public DelegateSimpleThread::Delegate {
     // This function cannot be called more than once without an associated call
     // to Clear().
     void Init(const HangWatchStates& watch_states,
-              base::TimeTicks deadline_ignore_threshold);
+              base::TimeTicks deadline_ignore_threshold,
+              base::TimeDelta monitoring_period);
 
     // Reset the snapshot object to be reused. Can only be called after Init().
     void Clear();
@@ -360,7 +362,7 @@ class BASE_EXPORT HangWatcher : public DelegateSimpleThread::Delegate {
   // set time interval.
   void Run() override;
 
-  base::TimeDelta monitor_period_;
+  base::TimeDelta monitoring_period_;
 
   // Use to make the HangWatcher thread wake or sleep to schedule the
   // appropriate monitoring frequency.
@@ -632,6 +634,7 @@ class BASE_EXPORT HangWatchState {
 #endif
 
   PlatformThreadId GetThreadID() const;
+  uint64_t GetSystemWideThreadID() const;
 
   // Retrieve the current hang watch deadline directly. For testing only.
   HangWatchDeadline* GetHangWatchDeadlineForTesting();
@@ -662,6 +665,14 @@ class BASE_EXPORT HangWatchState {
   // A unique ID of the thread under watch. Used for logging in crash reports
   // only.
   PlatformThreadId thread_id_;
+
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/40187449): Remove this once macOS uses system-wide ids.
+  // On macOS the thread ids used by CrashPad are not the same as the ones
+  // provided by PlatformThread. Make sure to use the same for correct
+  // attribution.
+  uint64_t system_wide_thread_id_;
+#endif
 
   // Number of active HangWatchScopeEnables on this thread.
   int nesting_level_ = 0;

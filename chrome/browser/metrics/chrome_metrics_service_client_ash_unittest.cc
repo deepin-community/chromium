@@ -32,6 +32,7 @@
 #include "components/metrics/test/test_enabled_state_provider.h"
 #include "components/metrics/unsent_log_store.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/sync/protocol/sync_enums.pb.h"
 #include "components/sync/test/test_sync_service.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/ukm/ukm_pref_names.h"
@@ -50,7 +51,7 @@ namespace {
 using TestEvent1 = ukm::builders::PageLoad;
 
 // Needed to fake System Profile which is provided when ukm report is generated.
-// TODO(crbug/1396482): Refactor to remove the classes needed to fake
+// TODO(crbug.com/40249492): Refactor to remove the classes needed to fake
 // SystemProfile.
 class FakeMultiDeviceSetupClientImplFactory
     : public ash::multidevice_setup::MultiDeviceSetupClientImpl::Factory {
@@ -96,6 +97,8 @@ class ChromeMetricsServiceClientTestWithoutUKMProviders
     return client;
   }
 
+  bool notified_not_idle() const { return notified_not_idle_; }
+
  private:
   explicit ChromeMetricsServiceClientTestWithoutUKMProviders(
       metrics::MetricsStateManager* state_manager,
@@ -103,12 +106,15 @@ class ChromeMetricsServiceClientTestWithoutUKMProviders
       : ChromeMetricsServiceClient(state_manager, synthetic_trial_registry) {}
 
   void RegisterUKMProviders() override {}
+  void NotifyApplicationNotIdle() override { notified_not_idle_ = true; }
+
+  bool notified_not_idle_ = false;
 };
 
 class MockSyncService : public syncer::TestSyncService {
  public:
   MockSyncService() {
-    SetTransportState(TransportState::INITIALIZING);
+    SetMaxTransportState(TransportState::INITIALIZING);
     SetLastCycleSnapshot(syncer::SyncCycleSnapshot());
   }
 
@@ -118,8 +124,8 @@ class MockSyncService : public syncer::TestSyncService {
   ~MockSyncService() override { Shutdown(); }
 
   void SetStatus(bool has_passphrase, bool history_enabled, bool active) {
-    SetTransportState(active ? TransportState::ACTIVE
-                             : TransportState::INITIALIZING);
+    SetMaxTransportState(active ? TransportState::ACTIVE
+                                : TransportState::INITIALIZING);
     SetIsUsingExplicitPassphrase(has_passphrase);
 
     GetUserSettings()->SetSelectedTypes(
@@ -238,13 +244,13 @@ class ChromeMetricsServiceClientTestIgnoredForAppMetrics
     profile_manager_.reset();
   }
 
-  std::unique_ptr<ChromeMetricsServiceClient> Init(
+  std::unique_ptr<ChromeMetricsServiceClientTestWithoutUKMProviders> Init(
       sync_preferences::TestingPrefServiceSyncable& prefs) {
     ChromeMetricsServiceClient::RegisterPrefs(prefs.registry());
     RegisterUrlKeyedAnonymizedDataCollectionPref(prefs);
     SetUrlKeyedAnonymizedDataCollectionEnabled(prefs, /*enabled=*/true);
 
-    std::unique_ptr<ChromeMetricsServiceClient> chrome_metrics_service_client =
+    auto chrome_metrics_service_client =
         ChromeMetricsServiceClientTestWithoutUKMProviders::Create(
             metrics_state_manager_.get(), synthetic_trial_registry_.get());
     chrome_metrics_service_client->StartObserving(&sync_service_, &prefs);
@@ -372,6 +378,16 @@ class ChromeMetricsServiceClientTestIgnoredForAppMetrics
   std::unique_ptr<FakeMultiDeviceSetupClientImplFactory>
       fake_multidevice_setup_client_impl_factory_;
 };
+
+TEST_P(ChromeMetricsServiceClientTestIgnoredForAppMetrics,
+       NotifyNotIdleOnUserActivity) {
+  sync_preferences::TestingPrefServiceSyncable prefs;
+  auto chrome_metrics_service_client = Init(prefs);
+  EXPECT_FALSE(chrome_metrics_service_client->notified_not_idle());
+
+  ui::UserActivityDetector::Get()->HandleExternalUserActivity();
+  EXPECT_TRUE(chrome_metrics_service_client->notified_not_idle());
+}
 
 TEST_P(ChromeMetricsServiceClientTestIgnoredForAppMetrics,
        VerifyPurgeOnConsentChange) {

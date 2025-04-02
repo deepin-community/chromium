@@ -68,7 +68,10 @@ enum class PasswordStoreOperation {
   // kRemoveLoginForAccount = 6,
 
   kRemoveLoginAsync = 7,
-  kRemoveLoginsByURLAndTimeAsync = 8,
+
+  // Obsolete
+  // kRemoveLoginsByURLAndTimeAsync = 8,
+
   kRemoveLoginsCreatedBetweenAsync = 9,
   kDisableAutoSignInForOriginsAsync = 10,
   // Deprecated
@@ -138,12 +141,6 @@ class PasswordStoreAndroidBackend
   void GetGroupedMatchingLoginsInternal(std::string account,
                                         const PasswordFormDigest& form_digest,
                                         LoginsOrErrorReply callback);
-  void RemoveLoginsByURLAndTimeInternal(
-      std::string account,
-      const base::RepeatingCallback<bool(const GURL&)>& url_filter,
-      base::Time delete_begin,
-      base::Time delete_end,
-      PasswordChangesOrErrorReply callback);
   void RemoveLoginsCreatedBetweenInternal(std::string account,
                                           base::Time delete_begin,
                                           base::Time delete_end,
@@ -166,19 +163,17 @@ class PasswordStoreAndroidBackend
   PrefService* prefs() { return prefs_; }
 
   // Subclasses can override this method
-  // to have a special handling for different errors. This function returns
-  // whether the error is recoverable or not.
-  virtual PasswordStoreBackendErrorRecoveryType RecoverOnErrorAndReturnResult(
-      AndroidBackendAPIErrorCode error) = 0;
+  // to have a special handling for different errors.
+  virtual void RecoverOnError(AndroidBackendAPIErrorCode error) = 0;
   // Subclasses can override this method to react when GMSCore responds
   // successfully.
   virtual void OnCallToGMSCoreSucceeded() = 0;
   // Subclasses have to provide an account which will be used for retries.
   virtual std::string GetAccountToRetryOperation() = 0;
-  // Subclasses have to provide a store type that is used for tracking metrics
-  // that are split for local and account.
+  // Subclasses have to provide a store backend type that is used for tracking
+  // metrics that are split for local and account.
   virtual PasswordStoreBackendMetricsRecorder::PasswordStoreAndroidBackendType
-  GetStoreType() = 0;
+  GetStorageType() = 0;
 
  private:
   SEQUENCE_CHECKER(main_sequence_checker_);
@@ -269,8 +264,7 @@ class PasswordStoreAndroidBackend
   using JobId = PasswordStoreAndroidBackendDispatcherBridge::JobId;
   // Using a small_map should ensure that we handle rare cases with many jobs
   // like a bulk deletion just as well as the normal, rather small job load.
-  using JobMap = base::small_map<
-      std::unordered_map<JobId, JobReturnHandler, JobId::Hasher>>;
+  using JobMap = base::small_map<std::unordered_map<JobId, JobReturnHandler>>;
 
   using DelayedRetryId = base::IdType32<CancellableRetryCallback>;
 

@@ -9,7 +9,6 @@
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
@@ -50,7 +49,7 @@ TEST_F(CSSComputedStyleDeclarationTest, CleanShadowAncestorsNoRecalc) {
   Element* host = GetDocument().getElementById(AtomicString("host"));
 
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
   shadow_root.setInnerHTML(R"HTML(
     <div id=target style='color:green'></div>
   )HTML");
@@ -163,7 +162,6 @@ TEST_F(CSSComputedStyleDeclarationTest, SVGInlineSizeLayoutDependent) {
 }
 
 TEST_F(CSSComputedStyleDeclarationTest, UseCountDurationZero) {
-  ScopedScrollTimelineForTest scroll_timeline_feature(false);
   GetDocument().body()->setInnerHTML(R"HTML(
     <style>
       div {

@@ -34,6 +34,7 @@
 #include "chrome/browser/unified_consent/unified_consent_service_factory.h"
 #include "components/metrics/demographics/demographic_metrics_provider.h"
 #include "components/metrics/demographics/demographic_metrics_test_utils.h"
+#include "components/metrics/metrics_pref_names.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -71,6 +72,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #else
+#include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/browser/flags/android/chrome_session_state.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
@@ -182,9 +184,11 @@ class TestTabModel : public TabModel {
   }
   TabAndroid* GetTabAt(int index) const override { return nullptr; }
   void SetActiveIndex(int index) override {}
+  void ForceCloseAllTabs() override {}
   void CloseTabAt(int index) override {}
   void CreateTab(TabAndroid* parent,
-                 content::WebContents* web_contents) override {}
+                 content::WebContents* web_contents,
+                 bool select) override {}
   void HandlePopupNavigation(TabAndroid* parent,
                              NavigateParams* params) override {}
   content::WebContents* CreateNewTabForDevTools(const GURL& url) override {
@@ -194,6 +198,13 @@ class TestTabModel : public TabModel {
   bool IsActiveModel() const override { return false; }
   void AddObserver(TabModelObserver* observer) override {}
   void RemoveObserver(TabModelObserver* observer) override {}
+  int GetTabCountNavigatedInTimeWindow(
+      const base::Time& begin_time,
+      const base::Time& end_time) const override {
+    return 0;
+  }
+  void CloseTabsNavigatedInTimeWindow(const base::Time& begin_time,
+                                      const base::Time& end_time) override {}
 
  private:
   // The WebContents associated with this tab's profile.
@@ -232,8 +243,6 @@ class MetricsConsentOverride {
 class UkmBrowserTestBase : public SyncTest {
  public:
   UkmBrowserTestBase() : SyncTest(SINGLE_CLIENT) {
-    // TODO(crbug.com/1068796): Replace kMetricsReportingFeature with a more
-    // apt name.
     // Explicitly enable UKM and disable metrics reporting. Disabling metrics
     // reporting should affect only UMA--not UKM.
     scoped_feature_list_.InitWithFeatures({ukm::kUkmFeature},
@@ -296,17 +305,6 @@ class UkmBrowserTestBase : public SyncTest {
     std::unique_ptr<SyncServiceImplHarness> harness =
         test::InitializeProfileForSync(profile, GetFakeServer()->AsWeakPtr());
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    // Apps sync is controlled by a dedicated preference on Lacros,
-    // corresponding to the Apps toggle in OS Sync settings.
-    if (base::FeatureList::IsEnabled(syncer::kSyncChromeOSAppsToggleSharing)) {
-      syncer::SyncUserSettings* user_settings =
-          harness->service()->GetUserSettings();
-      // Turn on App-sync in OS Sync.
-      user_settings->SetAppsSyncEnabledByOs(true);
-    }
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
     EXPECT_TRUE(harness->SetupSync());
 
     // If unified consent is enabled, then enable url-keyed-anonymized data
@@ -356,6 +354,7 @@ class UkmBrowserTest : public UkmBrowserTestBase {
     // would need to remove the pre-existing TabModel and add a new one.
     // Having an empty TabModelList allows us to simply add the appropriate
     // TabModel.
+    EXPECT_EQ(1U, TabModelList::models().size());
     TabModelList::RemoveTabModel(TabModelList::models()[0]);
     EXPECT_EQ(0U, TabModelList::models().size());
   }
@@ -467,10 +466,14 @@ class UkmBrowserTestWithDemographics
 };
 
 // Make sure that UKM is disabled while an incognito window is open.
-// Keep in sync with testRegularPlusIncognito in ios/chrome/browser/metrics/
-// ukm_egtest.mm and with RegularPlusIncognitoCheck in
-// weblayer/browser/ukm_browsertest.cc.
-IN_PROC_BROWSER_TEST_F(UkmBrowserTest, RegularPlusIncognitoCheck) {
+// LINT.IfChange(RegularPlusIncognitoCheck)
+// Disabled on Android due to flakiness. See crbug.com/355609356.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_RegularPlusIncognitoCheck DISABLED_RegularPlusIncognitoCheck
+#else
+#define MAYBE_RegularPlusIncognitoCheck RegularPlusIncognitoCheck
+#endif
+IN_PROC_BROWSER_TEST_F(UkmBrowserTest, MAYBE_RegularPlusIncognitoCheck) {
   ukm::UkmTestHelper ukm_test_helper(GetUkmService());
   MetricsConsentOverride metrics_consent(true);
 
@@ -509,11 +512,10 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTest, RegularPlusIncognitoCheck) {
 
   ClosePlatformBrowser(browser1);
 }
+// LINT.ThenChange(/ios/chrome/browser/metrics/ukm_egtest.mm:RegularPlusIncognitoCheck)
 
 // Make sure opening a real window after Incognito doesn't enable UKM.
-// Keep in sync with testIncognitoPlusRegular in ios/chrome/browser/metrics/
-// ukm_egtest.mm and with IncognitoPlusRegularCheck in
-// weblayer/browser/ukm_browsertest.cc.
+// LINT.IfChange(IncognitoPlusRegularCheck)
 IN_PROC_BROWSER_TEST_F(UkmBrowserTest, IncognitoPlusRegularCheck) {
   ukm::UkmTestHelper ukm_test_helper(GetUkmService());
   MetricsConsentOverride metrics_consent(true);
@@ -536,6 +538,7 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTest, IncognitoPlusRegularCheck) {
 
   ClosePlatformBrowser(browser);
 }
+// LINT.ThenChange(/ios/chrome/browser/metrics/ukm_egtest.mm:IncognitoPlusRegularCheck)
 
 // Make sure that UKM is disabled while a guest profile's window is open.
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
@@ -619,7 +622,7 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTest, OpenNonSyncCheck) {
   EXPECT_FALSE(ukm_test_helper.IsRecordingEnabled());
 
   CloseBrowserSynchronously(nonsync_browser);
-  // TODO(crbug/746076): UKM doesn't actually get re-enabled yet.
+  // TODO(crbug.com/40530708): UKM doesn't actually get re-enabled yet.
   // EXPECT_TRUE(ukm_test_helper.IsRecordingEnabled());
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
   // Client ID should not have been reset.
@@ -636,8 +639,7 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTest, OpenNonSyncCheck) {
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 // Make sure that UKM is disabled when metrics consent is revoked.
-// Keep in sync with testMetricsConsent in ios/chrome/browser/metrics/
-// ukm_egtest.mm.
+// LINT.IfChange(MetricsConsentCheck)
 IN_PROC_BROWSER_TEST_F(UkmBrowserTest, MetricsConsentCheck) {
   ukm::UkmTestHelper ukm_test_helper(GetUkmService());
   MetricsConsentOverride metrics_consent(true);
@@ -667,6 +669,7 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTest, MetricsConsentCheck) {
 
   ClosePlatformBrowser(browser);
 }
+// LINT.ThenChange(/ios/chrome/browser/metrics/ukm_egtest.mm:MetricsConsentCheck)
 
 #if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(UkmBrowserTest, LogProtoData) {
@@ -702,10 +705,7 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTest, LogProtoData) {
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-// TODO(crbug/1016118): Add the remaining test cases.
-// Keep this test in sync with testUKMDemographicsReportingWithFeatureEnabled
-// and testUKMDemographicsReportingWithFeatureDisabled in
-// ios/chrome/browser/metrics/demographics_egtest.mm.
+// LINT.IfChange(AddSyncedUserBirthYearAndGenderToProtoData)
 IN_PROC_BROWSER_TEST_P(UkmBrowserTestWithDemographics,
                        AddSyncedUserBirthYearAndGenderToProtoData) {
   ukm::UkmTestHelper ukm_test_helper(GetUkmService());
@@ -761,6 +761,8 @@ IN_PROC_BROWSER_TEST_P(UkmBrowserTestWithDemographics,
 #endif  // !BUILDFLAG(IS_CHROMEOS)
   ClosePlatformBrowser(browser);
 }
+// LINT.ThenChange(/ios/chrome/browser/metrics/demographics_egtest.mm:AddSyncedUserBirthYearAndGenderToProtoDataEnabled_ukmBrowsertest)
+// ThenChange(/ios/chrome/browser/metrics/demographics_egtest.mm:AddSyncedUserBirthYearAndGenderToProtoDataDisabled_ukmBrowsertest)
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 // Cannot test for the enabled feature on Chrome OS because there are always
@@ -823,16 +825,53 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTest, NetworkProviderPopulatesSystemProfile) {
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
+// Verifies that install date is attached.
+// Disabled on Android due to flakiness. See crbug.com/355609356.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_InstallDateProviderPopulatesSystemProfile \
+  DISABLED_InstallDateProviderPopulatesSystemProfile
+#else
+#define MAYBE_InstallDateProviderPopulatesSystemProfile \
+  InstallDateProviderPopulatesSystemProfile
+#endif
+IN_PROC_BROWSER_TEST_F(UkmBrowserTest,
+                       MAYBE_InstallDateProviderPopulatesSystemProfile) {
+  PrefService* local_state = g_browser_process->local_state();
+  local_state->SetInt64(prefs::kInstallDate, 123456);
+
+  ukm::UkmTestHelper ukm_test_helper(GetUkmService());
+
+  MetricsConsentOverride metrics_consent(true);
+
+  Profile* profile = ProfileManager::GetLastUsedProfileIfLoaded();
+  std::unique_ptr<SyncServiceImplHarness> harness =
+      EnableSyncForProfile(profile);
+
+  PlatformBrowser browser = CreatePlatformBrowser(profile);
+  EXPECT_TRUE(ukm_test_helper.IsRecordingEnabled());
+  uint64_t original_client_id = ukm_test_helper.GetClientId();
+  EXPECT_NE(0U, original_client_id);
+
+  // Make sure there is a persistent log.
+  ukm_test_helper.BuildAndStoreLog();
+  EXPECT_TRUE(ukm_test_helper.HasUnsentLogs());
+  // Check log contents.
+  std::unique_ptr<ukm::Report> report = ukm_test_helper.GetUkmReport();
+
+  // Rounded from the 123456 we set earlier, to nearest hour.
+  EXPECT_EQ(122400, report->system_profile().install_date());
+
+  ClosePlatformBrowser(browser);
+}
+
 // Make sure that providing consent doesn't enable UKM when sync is disabled.
-// Keep in sync with testConsentAddedButNoSync in ios/chrome/browser/metrics/
-// ukm_egtest.mm and consentAddedButNoSyncCheck in chrome/android/javatests/src/
-// org/chromium/chrome/browser/sync/UkmTest.java.
 // Flaky on Android crbug.com/1096400
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_ConsentAddedButNoSyncCheck DISABLED_ConsentAddedButNoSyncCheck
 #else
 #define MAYBE_ConsentAddedButNoSyncCheck ConsentAddedButNoSyncCheck
 #endif
+// LINT.IfChange(ConsentAddedButNoSyncCheck)
 IN_PROC_BROWSER_TEST_F(UkmBrowserTest, MAYBE_ConsentAddedButNoSyncCheck) {
   ukm::UkmTestHelper ukm_test_helper(GetUkmService());
   MetricsConsentOverride metrics_consent(false);
@@ -851,6 +890,8 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTest, MAYBE_ConsentAddedButNoSyncCheck) {
 
   ClosePlatformBrowser(browser);
 }
+// LINT.ThenChange(/chrome/android/javatests/src/org/chromium/chrome/browser/sync/UkmTest.java:ConsentAddedButNoSyncCheck)
+// ThenChange(/ios/chrome/browser/metrics/model/ukm_egtest.mm:ConsentAddedButNoSyncCheck)
 
 // Make sure that extension URLs are disabled when an open sync window
 // disables it.
@@ -1069,9 +1110,7 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTest, LogsOpenerSource) {
 // Flaky on Android: https://crbug.com/1096047.
 //
 // Make sure that UKM is disabled when the profile signs out of Sync.
-// Keep in sync with testSingleSyncSignout in ios/chrome/browser/metrics/
-// ukm_egtest.mm and singleSyncSignoutCheck in chrome/android/javatests/src/org/
-// chromium/chrome/browser/sync/UkmTest.java.
+// LINT.IfChange(SingleSyncSignoutCheck)
 #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(UkmBrowserTest, SingleSyncSignoutCheck) {
   ukm::UkmTestHelper ukm_test_helper(GetUkmService());
@@ -1093,6 +1132,8 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTest, SingleSyncSignoutCheck) {
   ClosePlatformBrowser(browser);
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
+// LINT.ThenChange(/chrome/android/javatests/src/org/chromium/chrome/browser/sync/UkmTest.java:SingleSyncSignoutCheck)
+// ThenChange(/ios/chrome/browser/metrics/model/ukm_egtest.mm:SingleSyncSignoutCheck)
 
 // ChromeOS doesn't have the concept of sign-out so this test doesn't make sense
 // there. Android doesn't have multiple profiles.
@@ -1173,11 +1214,7 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTest, MetricsReportingCheck) {
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 // Make sure that pending data is deleted when user deletes history.
-//
-// Keep in sync with testHistoryDelete in ios/chrome/browser/metrics/
-// ukm_egtest.mm and testHistoryDeleteCheck in chrome/android/javatests/src/org/
-// chromium/chrome/browser/metrics/UkmTest.java.
-//
+// LINT.IfChange(HistoryDeleteCheck)
 // Flaky on Android: https://crbug.com/1131541.
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_HistoryDeleteCheck DISABLED_HistoryDeleteCheck
@@ -1211,6 +1248,8 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTest, MAYBE_HistoryDeleteCheck) {
 
   ClosePlatformBrowser(browser);
 }
+// LINT.ThenChange(/chrome/android/javatests/src/org/chromium/chrome/browser/metrics/UkmTest.java:HistoryDeleteCheck)
+// ThenChange(/ios/chrome/browser/metrics/model/ukm_egtest.mm:HistoryDeleteCheck)
 
 // On ChromeOS, the test profile starts with a primary account already set, so
 // this test doesn't apply.
@@ -1603,6 +1642,7 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTestForAppConsent, MetricsClientEnablement) {
   EXPECT_FALSE(ukm_service->recording_enabled(ukm::APPS));
 }
 
+// LINT.IfChange(ClientIdResetWhenConsentRemoved)
 IN_PROC_BROWSER_TEST_F(UkmBrowserTestForAppConsent,
                        ClientIdResetWhenConsentRemoved) {
   ukm::UkmService* ukm_service = GetUkmService();
@@ -1644,6 +1684,7 @@ IN_PROC_BROWSER_TEST_F(UkmBrowserTestForAppConsent,
   const auto final_client_id = ukm_test_helper.GetClientId();
   EXPECT_NE(app_sync_client_id, final_client_id);
 }
+// LINT.ThenChange(/ios/chrome/browser/metrics/model/ukm_egtest.mm:ClientIdResetWhenConsentRemoved)
 
 IN_PROC_BROWSER_TEST_F(UkmBrowserTestForAppConsent,
                        EnsurePurgeOnConsentChange) {

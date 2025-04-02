@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {assert, assertInstanceof} from '../assert.js';
+import {assertExists, assertInstanceof} from '../assert.js';
 import {Intent} from '../intent.js';
-import * as Comlink from '../lib/comlink.js';
+import * as comlink from '../lib/comlink.js';
 import {
   MimeType,
   Resolution,
@@ -28,12 +28,12 @@ import {FileAccessEntry} from './file_system_access_entry.js';
 
 // This is used like a class constructor.
 // We don't initialize this immediately to avoid side effect on module import.
-const getFFMpegVideoProcessorConstructor = lazySingleton(async () => {
+const getFfmpegVideoProcessorConstructor = lazySingleton(async () => {
   const workerChannel = new MessageChannel();
   const videoProcessorHelper = await getVideoProcessorHelper();
   await videoProcessorHelper.connectToWorker(
-      Comlink.transfer(workerChannel.port2, [workerChannel.port2]));
-  return Comlink.wrap<VideoProcessorConstructor>(workerChannel.port1);
+      comlink.transfer(workerChannel.port2, [workerChannel.port2]));
+  return comlink.wrap<VideoProcessorConstructor>(workerChannel.port1);
 });
 
 
@@ -41,9 +41,9 @@ const getFFMpegVideoProcessorConstructor = lazySingleton(async () => {
  * Creates a VideoProcessor instance for recording video.
  */
 async function createVideoProcessor(output: AsyncWriter, videoRotation: number):
-    Promise<Comlink.Remote<VideoProcessor>> {
-  return new (await getFFMpegVideoProcessorConstructor())(
-      Comlink.proxy(output), createMp4Args(videoRotation, output.seekable()));
+    Promise<comlink.Remote<VideoProcessor>> {
+  return new (await getFfmpegVideoProcessorConstructor())(
+      comlink.proxy(output), createMp4Args(videoRotation, output.seekable()));
 }
 
 /**
@@ -51,9 +51,9 @@ async function createVideoProcessor(output: AsyncWriter, videoRotation: number):
  */
 async function createGifVideoProcessor(
     output: AsyncWriter,
-    resolution: Resolution): Promise<Comlink.Remote<VideoProcessor>> {
-  return new (await getFFMpegVideoProcessorConstructor())(
-      Comlink.proxy(output), createGifArgs(resolution));
+    resolution: Resolution): Promise<comlink.Remote<VideoProcessor>> {
+  return new (await getFfmpegVideoProcessorConstructor())(
+      comlink.proxy(output), createGifArgs(resolution));
 }
 
 /*
@@ -62,9 +62,9 @@ async function createGifVideoProcessor(
 async function createTimeLapseProcessor(
     output: AsyncWriter,
     {resolution, fps, videoRotation}: TimeLapseEncoderArgs):
-    Promise<Comlink.Remote<VideoProcessor>> {
-  return new (await getFFMpegVideoProcessorConstructor())(
-      Comlink.proxy(output),
+    Promise<comlink.Remote<VideoProcessor>> {
+  return new (await getFfmpegVideoProcessorConstructor())(
+      comlink.proxy(output),
       createTimeLapseArgs(resolution, fps, videoRotation));
 }
 
@@ -85,7 +85,7 @@ function createWriterForIntent(intent: Intent): AsyncWriter {
 export class VideoSaver {
   constructor(
       private readonly file: FileAccessEntry,
-      private readonly processor: Comlink.Remote<VideoProcessor>) {}
+      private readonly processor: comlink.Remote<VideoProcessor>) {}
 
   /**
    * Writes video data to result video.
@@ -143,7 +143,7 @@ export class VideoSaver {
 export class GifSaver {
   constructor(
       private readonly blobs: Blob[],
-      private readonly processor: Comlink.Remote<VideoProcessor>) {}
+      private readonly processor: comlink.Remote<VideoProcessor>) {}
 
   write(frame: Uint8ClampedArray): void {
     // processor.write does queuing internally.
@@ -190,7 +190,7 @@ class TimeLapseFixedSpeedSaver {
 
   constructor(
       readonly speed: number, readonly file: FileAccessEntry,
-      private readonly processor: Comlink.Remote<VideoProcessor>) {}
+      private readonly processor: comlink.Remote<VideoProcessor>) {}
 
   write(blob: Blob, frameNo: number): void {
     // processor.write does queuing internally.
@@ -252,10 +252,9 @@ export class TimeLapseSaver {
   private readonly encoder: VideoEncoder;
 
   /**
-   * Maps a frame's timestamp with frameNo, only storing frames being
-   * encoded.
+   * Queue containing frameNo of frames being encoded.
    */
-  private readonly frameNoMap = new Map<number, number>();
+  private readonly frameNoQueue: number[] = [];
 
   /**
    * Maps all encoded frames with their frame numbers.
@@ -347,13 +346,11 @@ export class TimeLapseSaver {
    * |chunk| to Blob and stores with its frame number.
    */
   onFrameEncoded(chunk: EncodedVideoChunk): void {
-    const frameNo = this.frameNoMap.get(chunk.timestamp);
-    assert(frameNo !== undefined);
+    const frameNo = assertExists(this.frameNoQueue.shift());
     const chunkData = new Uint8Array(chunk.byteLength);
     chunk.copyTo(chunkData);
     this.frames.set(frameNo, new Blob([chunkData]));
     this.maxFrameNo = frameNo;
-    this.frameNoMap.delete(chunk.timestamp);
   }
 
   /**
@@ -363,7 +360,7 @@ export class TimeLapseSaver {
     if (frame.timestamp === null || this.ended || this.canceled) {
       return;
     }
-    this.frameNoMap.set(frame.timestamp, frameNo);
+    this.frameNoQueue.push(frameNo);
     // Frames that are only in the initial speed video don't have to be encoded
     // as key frames because they'll be dropped soon.
     const keyFrame = frameNo % (this.initialSpeed * 2) === 0;

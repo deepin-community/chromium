@@ -4,12 +4,14 @@
 
 #include "chrome/browser/profiles/profile_manager_android.h"
 
-#include "chrome/browser/profiles/android/jni_headers/ProfileManager_jni.h"
-#include "chrome/browser/profiles/profile_android.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_destroyer.h"
 
-using base::android::JavaParamRef;
-using base::android::ScopedJavaLocalRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/profiles/android/jni_headers/ProfileManager_jni.h"
+
+using jni_zero::ScopedJavaLocalRef;
 
 ProfileManagerAndroid::ProfileManagerAndroid(ProfileManager* manager) {
   profile_manager_observation_.Observe(manager);
@@ -18,9 +20,8 @@ ProfileManagerAndroid::ProfileManagerAndroid(ProfileManager* manager) {
 ProfileManagerAndroid::~ProfileManagerAndroid() = default;
 
 void ProfileManagerAndroid::OnProfileAdded(Profile* profile) {
-  Java_ProfileManager_onProfileAdded(
-      jni_zero::AttachCurrentThread(),
-      ProfileAndroid::FromProfile(profile)->GetJavaObject());
+  Java_ProfileManager_onProfileAdded(jni_zero::AttachCurrentThread(),
+                                     profile->GetJavaObject());
 }
 
 void ProfileManagerAndroid::OnProfileMarkedForPermanentDeletion(
@@ -32,23 +33,25 @@ ScopedJavaLocalRef<jobject> JNI_ProfileManager_GetLastUsedRegularProfile(
   Profile* profile = ProfileManager::GetLastUsedProfile();
   if (!profile) {
     NOTREACHED() << "Profile not found.";
-    return ScopedJavaLocalRef<jobject>();
   }
-
-  ProfileAndroid* profile_android = ProfileAndroid::FromProfile(profile);
-  if (!profile_android) {
-    NOTREACHED() << "ProfileAndroid not found.";
-    return ScopedJavaLocalRef<jobject>();
-  }
-
-  return profile_android->GetJavaObject();
+  return profile->GetJavaObject();
 }
 
 // static
-void JNI_ProfileManager_DestroyWhenAppropriate(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj) {
-  Profile* profile = ProfileAndroid::FromProfileAndroid(obj);
+std::vector<Profile*> JNI_ProfileManager_GetLoadedProfiles(JNIEnv* env) {
+  return g_browser_process->profile_manager()->GetLoadedProfiles();
+}
+
+// static
+void JNI_ProfileManager_OnProfileActivated(JNIEnv* env, Profile* profile) {
+  if (!profile) {
+    return;
+  }
+  g_browser_process->profile_manager()->SetProfileAsLastUsed(profile);
+}
+
+// static
+void JNI_ProfileManager_DestroyWhenAppropriate(JNIEnv* env, Profile* profile) {
   CHECK(profile) << "Attempting to destroy a null profile.";
   CHECK(profile->IsOffTheRecord())
       << "Only OTR profiles can be destroyed from Java as regular profiles are "

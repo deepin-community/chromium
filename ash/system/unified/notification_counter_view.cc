@@ -4,6 +4,9 @@
 
 #include "ash/system/unified/notification_counter_view.h"
 
+#include <optional>
+#include <string>
+
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
@@ -119,6 +122,8 @@ class NumberIconImageSource : public gfx::CanvasImageSource {
 
 }  // namespace
 
+// NotificationCounterView -----------------------------------------------------
+
 NotificationCounterView::NotificationCounterView(
     Shelf* shelf,
     NotificationIconsController* controller)
@@ -160,16 +165,18 @@ void NotificationCounterView::Update() {
   int icon_id = std::min(notification_count, kTrayNotificationMaxCount + 1);
   if (icon_id != count_for_display_) {
     count_for_display_ = icon_id;
-    image_view()->SetImage(
+    image_view()->SetImage(ui::ImageModel::FromImageSkia(
         gfx::CanvasImageSource::MakeImageSkia<NumberIconImageSource>(this,
-                                                                     icon_id));
+                                                                     icon_id)));
     UpdateLabelOrImageViewColor(is_active());
   }
   SetVisible(true);
 }
 
-std::u16string NotificationCounterView::GetAccessibleNameString() const {
-  return GetVisible() ? image_view()->GetTooltipText() : std::u16string();
+std::optional<std::u16string> NotificationCounterView::GetAccessibleNameString()
+    const {
+  return GetVisible() ? std::optional(image_view()->GetTooltipText())
+                      : std::nullopt;
 }
 
 void NotificationCounterView::HandleLocaleChange() {
@@ -184,13 +191,15 @@ void NotificationCounterView::OnThemeChanged() {
 void NotificationCounterView::UpdateLabelOrImageViewColor(bool active) {
   TrayItemView::UpdateLabelOrImageViewColor(active);
 
-  image_view()->SetImage(
+  image_view()->SetImage(ui::ImageModel::FromImageSkia(
       gfx::CanvasImageSource::MakeImageSkia<NumberIconImageSource>(
-          this, count_for_display_));
+          this, count_for_display_)));
 }
 
 BEGIN_METADATA(NotificationCounterView)
 END_METADATA
+
+// QuietModeView ---------------------------------------------------------------
 
 QuietModeView::QuietModeView(Shelf* shelf) : TrayItemView(shelf) {
   CreateImageView();
@@ -200,6 +209,10 @@ QuietModeView::QuietModeView(Shelf* shelf) : TrayItemView(shelf) {
 }
 
 QuietModeView::~QuietModeView() = default;
+
+const std::u16string& QuietModeView::GetAccessibleNameString() const {
+  return image_view()->GetTooltipText();
+}
 
 void QuietModeView::Update() {
   if (message_center::MessageCenter::Get()->IsQuietMode() &&

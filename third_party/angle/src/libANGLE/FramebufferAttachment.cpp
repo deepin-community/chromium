@@ -236,6 +236,11 @@ bool FramebufferAttachment::isRenderToTexture() const
 
 GLsizei FramebufferAttachment::getRenderToTextureSamples() const
 {
+    if (!isRenderToTexture())
+    {
+        return 0;
+    }
+
     ASSERT(mRenderToTextureSamples == kDefaultRenderToTextureSamples || mType == GL_TEXTURE);
 
     if (mType == GL_RENDERBUFFER)
@@ -293,7 +298,7 @@ InitState FramebufferAttachment::initState() const
                      : InitState::Initialized;
 }
 
-angle::Result FramebufferAttachment::initializeContents(const Context *context)
+angle::Result FramebufferAttachment::initializeContents(const Context *context) const
 {
     ASSERT(mResource);
     ANGLE_TRY(mResource->initializeContents(context, mTarget.binding(), mTarget.textureIndex()));

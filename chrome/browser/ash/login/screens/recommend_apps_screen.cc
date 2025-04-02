@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ash/login/screens/recommend_apps_screen.h"
 
-#include "ash/components/arc/arc_prefs.h"
 #include "base/check_op.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/apps/app_discovery_service/app_discovery_service_factory.h"
@@ -16,6 +15,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/webui/ash/login/recommend_apps_screen_handler.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "components/user_manager/user_manager.h"
 
 namespace ash {
@@ -59,6 +59,7 @@ void RecordUmaScreenAction(RecommendAppsScreenAction action) {
 
 // static
 std::string RecommendAppsScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::kSelected:
       return "Selected";
@@ -69,6 +70,7 @@ std::string RecommendAppsScreen::GetResultString(Result result) {
     case Result::kNotApplicable:
       return BaseScreen::kNotApplicable;
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 RecommendAppsScreen::RecommendAppsScreen(

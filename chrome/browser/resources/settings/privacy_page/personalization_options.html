@@ -1,20 +1,59 @@
-    <style include="settings-shared">
+    <style include="settings-shared md-select">
       :host(.list-frame) settings-toggle-button {
         padding-inline-end: 0;
         padding-inline-start: 0;
-      }
-
-      :host(.list-frame) settings-toggle-button:first-of-type {
-        border-top: none;
       }
 
       :host(.list-frame) cr-link-row {
         padding-inline-end: 8px;
         padding-inline-start: 0;
       }
+
+      /* Removes the border of the first hr element.*/
+      .hr:not(.hr:not([hidden]) ~ *) {
+        border-top: 0;
+      }
+
+      #chromeSigninUserChoiceSetting {
+        padding: 10px 0px 10px;
+      }
+
+      #label-wrapper {
+        margin-inline-end: 20px;
+      }
+
     </style>
+
 <if expr="not is_chromeos">
-    <!-- Signout is not supported yet on lacros, https://crbug.com/1217645 -->
+    <div id="chromeSigninUserChoiceSetting" class="hr cr-row" role="group"
+        hidden="[[!chromeSigninUserChoiceInfo_.shouldShowSettings]]"
+        aria-label="$i18n{chromeSigninChoiceTitle}">
+      <div id="label-wrapper" class="flex">
+          <div>
+            $i18n{chromeSigninChoiceTitle}
+          </div>
+          <div id="chromeSigninChoiceDescription" class="secondary">
+            [[i18n('chromeSigninChoiceDescription',
+                chromeSigninUserChoiceInfo_.signedInEmail)]]
+          </div>
+      </div>
+      <select id="chromeSigninUserChoiceSelection" class="md-select"
+          on-change="onChromeSigninChoiceSelectionChanged_">
+          <option selected disabled hidden
+              value="[[chromeSigninUserChoiceEnum_.NO_CHOICE]]">
+            $i18n{chromeSigninChoiceSelectOptionPlaceholder}
+          </option>
+          <option value="[[chromeSigninUserChoiceEnum_.SIGNIN]]">
+            $i18n{chromeSigninChoiceSignin}
+          </option>
+          <option value="[[chromeSigninUserChoiceEnum_.DO_NOT_SIGNIN]]">
+            $i18n{chromeSigninChoiceDoNotSignin}
+          </option>
+          <option value="[[chromeSigninUserChoiceEnum_.ALWAYS_ASK]]">
+            $i18n{chromeSigninChoiceAlwaysAsk}
+          </option>
+      </select>
+    </div>
     <settings-toggle-button id="signinAllowedToggle"
         class="hr"
         hidden="[[!signinAvailable_]]"
@@ -25,7 +64,7 @@
         on-settings-boolean-control-change="onSigninAllowedChange_"
         no-set-pref>
     </settings-toggle-button>
-</if><!-- not chromeos and not lacros -->
+</if><!-- not chromeos -->
 <if expr="_google_chrome">
 <if expr="chromeos_ash">
     <!-- Ash Browser settings show a link to the OS settings instead. -->
@@ -57,14 +96,14 @@
         label="$i18n{urlKeyedAnonymizedDataCollection}"
         sub-label="$i18n{urlKeyedAnonymizedDataCollectionDesc}">
     </settings-toggle-button>
-    <template is="dom-if" if="[[enablePageContentSetting_]]">
-      <cr-link-row id="pageContentRow"
+    <template is="dom-if" if="[[shouldShowHistorySearchControl_(
+        showHistorySearchControl_, enableAiSettingsPageRefresh_)]]" restamp>
+      <cr-link-row id="historySearchRow"
           class="hr"
-          label="$i18n{pageContentToggleLabel}"
-          sub-label="[[computePageContentRowSublabel_(
-              prefs.page_content_collection.enabled.value)]]"
+          label="$i18n{historySearchSettingLabel}"
+          sub-label="$i18n{historySearchSettingSublabel}"
           role-description="$i18n{subpageArrowRoleDescription}"
-          on-click="onPageContentRowClick_">
+          on-click="onHistorySearchRowClick_">
       </cr-link-row>
     </template>
 <if expr="_google_chrome">
@@ -98,17 +137,9 @@
           sub-label="$i18n{searchSuggestPrefDesc}">
       </settings-toggle-button>
     </template>
-    <template is="dom-if" if="[[shouldShowDriveSuggest_(
-        syncStatus, syncStatus.signedIn, syncStatus.statusAction)]]" restamp>
-      <settings-toggle-button id="driveSuggestControl" class="hr"
-          pref="{{prefs.documentsuggest.enabled}}"
-          label="$i18n{driveSuggestPref}"
-          sub-label="$i18n{driveSuggestPrefDesc}">
-      </settings-toggle-button>
-    </template>
 
     <template is="dom-if" if="[[showPriceEmailNotificationsToggle_(
-        syncStatus, syncStatus.signedIn)]]" restamp>
+        syncStatus, syncStatus.signedInState)]]" restamp>
       <settings-toggle-button id="priceEmailNotificationsToggle"
           class="hr"
           label="$i18n{priceEmailNotificationsPref}"
@@ -133,4 +164,7 @@
       <relaunch-confirmation-dialog restart-type="[[restartTypeEnum.RESTART]]"
           on-close="onRelaunchDialogClose"></relaunch-confirmation-dialog>
     </template>
+    <cr-toast id="chromeSigninUserChoiceToast" duration="5000">
+      <div>$i18n{chromeSigninChoiceToast}</div>
+    </cr-toast>
 </if>

@@ -11,6 +11,7 @@
 #include "chrome/browser/google/google_brand.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
+#include "chrome/browser/signin/chrome_signin_pref_names.h"
 #include "chrome/browser/signin/signin_promo_util.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -39,10 +40,10 @@ const char kSignInPromoQueryKeyReason[] = "reason";
 GURL GetEmbeddedPromoURL(signin_metrics::AccessPoint access_point,
                          signin_metrics::Reason reason,
                          bool auto_close) {
-  CHECK_LT(static_cast<int>(access_point),
-           static_cast<int>(signin_metrics::AccessPoint::ACCESS_POINT_MAX));
+  CHECK_LE(static_cast<int>(access_point),
+           static_cast<int>(signin_metrics::AccessPoint::kMaxValue));
   CHECK_NE(static_cast<int>(access_point),
-           static_cast<int>(signin_metrics::AccessPoint::ACCESS_POINT_UNKNOWN));
+           static_cast<int>(signin_metrics::AccessPoint::kUnknown));
   CHECK_LE(static_cast<int>(reason),
            static_cast<int>(signin_metrics::Reason::kMaxValue));
   CHECK_NE(static_cast<int>(reason),
@@ -131,17 +132,15 @@ signin_metrics::AccessPoint GetAccessPointForEmbeddedPromoURL(const GURL& url) {
   std::string value;
   if (!net::GetValueForKeyInQuery(url, kSignInPromoQueryKeyAccessPoint,
                                   &value)) {
-    return signin_metrics::AccessPoint::ACCESS_POINT_UNKNOWN;
+    return signin_metrics::AccessPoint::kUnknown;
   }
 
   int access_point = -1;
   base::StringToInt(value, &access_point);
   if (access_point <
-          static_cast<int>(
-              signin_metrics::AccessPoint::ACCESS_POINT_START_PAGE) ||
-      access_point >=
-          static_cast<int>(signin_metrics::AccessPoint::ACCESS_POINT_MAX)) {
-    return signin_metrics::AccessPoint::ACCESS_POINT_UNKNOWN;
+          static_cast<int>(signin_metrics::AccessPoint::kStartPage) ||
+      access_point > static_cast<int>(signin_metrics::AccessPoint::kMaxValue)) {
+    return signin_metrics::AccessPoint::kUnknown;
   }
 
   return static_cast<signin_metrics::AccessPoint>(access_point);
@@ -166,6 +165,12 @@ signin_metrics::Reason GetSigninReasonForEmbeddedPromoURL(const GURL& url) {
 void RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterIntegerPref(prefs::kDiceSigninUserMenuPromoCount, 0);
+  registry->RegisterIntegerPref(
+      prefs::kAutofillSignInPromoDismissCountPerProfile, 0);
+  registry->RegisterIntegerPref(prefs::kPasswordSignInPromoShownCountPerProfile,
+                                0);
+  registry->RegisterIntegerPref(prefs::kAddressSignInPromoShownCountPerProfile,
+                                0);
 }
 
 }  // namespace signin

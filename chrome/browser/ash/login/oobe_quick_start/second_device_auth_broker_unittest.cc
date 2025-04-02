@@ -14,6 +14,7 @@
 #include "base/base64.h"
 #include "base/json/json_reader.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/test/gtest_util.h"
@@ -32,6 +33,7 @@
 #include "chromeos/ash/components/quick_start/quick_start_metrics.h"
 #include "chromeos/ash/components/quick_start/types.h"
 #include "components/account_id/account_id.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "net/http/http_status_code.h"
@@ -111,6 +113,7 @@ BQADQQA/ugzBrjjK9jcWnDVfGHlk3icNRq0oV7Ri32z/+HQX67aRfgZu7KWdI+Ju
 Wm7DCfrPNGVwFWUQOmsPue9rZBgO
 -----END CERTIFICATE-----
     })";
+constexpr char kFakeEmail[] = "fake-user@example.com";
 
 constexpr char kFidoCredentialIdBytes[] = "fake-fido-credential-id";
 constexpr char kFakeDeviceId[] = "fake-device-id";
@@ -271,6 +274,30 @@ class SecondDeviceAuthBrokerTest : public ::testing::Test {
                        const std::string& response,
                        net::HttpStatusCode status = net::HTTP_OK) {
     test_factory_.AddResponse(url, response, status);
+  }
+
+  void AddFakeRejectionResponse(const std::string& email,
+                                const std::string& rejection_reason) {
+    // clang-format off
+    AddFakeResponse(kStartSessionUrl, base::StringPrintf(R"(
+        {
+          "sessionStatus": "REJECTED",
+          "email": "%s",
+          "rejectionReason": "%s"
+        }
+      )", email.c_str(), rejection_reason.c_str()));
+    // clang-format on
+  }
+
+  void AddFakeRejectionResponse(const std::string& rejection_reason) {
+    // clang-format off
+    AddFakeResponse(kStartSessionUrl, base::StringPrintf(R"(
+        {
+          "sessionStatus": "REJECTED",
+          "rejectionReason": "%s"
+        }
+      )", rejection_reason.c_str()));
+    // clang-format on
   }
 
   // Sets an `interceptor`. Overwrites any other interceptor that may have been
@@ -769,15 +796,10 @@ TEST_F(SecondDeviceAuthBrokerTest,
 // they will consider it to be a "less_secure_device" and reject the request.
 TEST_F(SecondDeviceAuthBrokerTest,
        FetchAuthCodeReturnsRejectionResponseForLessSecureDevices) {
-  AddFakeResponse(kStartSessionUrl, std::string(R"(
-      {
-        "sessionStatus": "REJECTED",
-        "email": "fake-user@example.com",
-        "rejectionReason": "LESS_SECURE_DEVICE"
-      }
-    )"));
+  AddFakeRejectionResponse(kFakeEmail,
+                           /*rejection_reason=*/"LESS_SECURE_DEVICE");
   AuthCodeRejectionResponse expected_response;
-  expected_response.email = "fake-user@example.com";
+  expected_response.email = kFakeEmail;
   expected_response.reason =
       AuthCodeRejectionResponse::Reason::kLessSecureDevice;
   SecondDeviceAuthBroker::AuthCodeResponse response =
@@ -785,6 +807,67 @@ TEST_F(SecondDeviceAuthBrokerTest,
                     /*certificate=*/GetCertificate());
   EXPECT_THAT(response, VariantWith<AuthCodeRejectionResponse>(
                             AuthCodeRejectionResponseEq(expected_response)));
+}
+
+TEST_F(SecondDeviceAuthBrokerTest,
+       FetchAuthCodeReturnsRejectionResponseForFederatedEnterpriseAccounts) {
+  AddFakeRejectionResponse(
+      kFakeEmail,
+      /*rejection_reason=*/"ACCOUNT_NOT_SUPPORTED_FEDERATED_DASHER");
+  AuthCodeRejectionResponse expected_response;
+  expected_response.email = kFakeEmail;
+  expected_response.reason = AuthCodeRejectionResponse::Reason::
+      kFederatedEnterpriseAccountNotSupported;
+  SecondDeviceAuthBroker::AuthCodeResponse response =
+      FetchAuthCode(/*fido_assertion_info=*/FidoAssertionInfo{},
+                    /*certificate=*/GetCertificate());
+  EXPECT_THAT(response, VariantWith<AuthCodeRejectionResponse>(
+                            AuthCodeRejectionResponseEq(expected_response)));
+}
+
+// A Unicorn account was used for QuickStart when QuickStart is disallowed for
+// the account.
+TEST_F(SecondDeviceAuthBrokerTest,
+       FetchAuthCodeReturnsRejectionResponseForDisabledUnicornAccounts) {
+  AddFakeRejectionResponse(kFakeEmail,
+                           /*rejection_reason=*/"ACCOUNT_NOT_SUPPORTED_KID");
+  AuthCodeRejectionResponse expected_response;
+  expected_response.email = kFakeEmail;
+  expected_response.reason =
+      AuthCodeRejectionResponse::Reason::kUnicornAccountNotEnabled;
+  SecondDeviceAuthBroker::AuthCodeResponse response =
+      FetchAuthCode(/*fido_assertion_info=*/FidoAssertionInfo{},
+                    /*certificate=*/GetCertificate());
+  EXPECT_THAT(response, VariantWith<AuthCodeRejectionResponse>(
+                            AuthCodeRejectionResponseEq(expected_response)));
+}
+
+TEST_F(SecondDeviceAuthBrokerTest,
+       FetchAuthCodeReturnsRejectionResponseForAccountLookupErrors) {
+  AddFakeRejectionResponse(
+      kFakeEmail,
+      /*rejection_reason=*/"ACCOUNT_LOOKUP_ACCOUNT_NOT_FOUND");
+  AuthCodeRejectionResponse expected_response1;
+  expected_response1.email = kFakeEmail;
+  expected_response1.reason =
+      AuthCodeRejectionResponse::Reason::kAccountNotFound;
+  SecondDeviceAuthBroker::AuthCodeResponse response =
+      FetchAuthCode(/*fido_assertion_info=*/FidoAssertionInfo{},
+                    /*certificate=*/GetCertificate());
+  EXPECT_THAT(response, VariantWith<AuthCodeRejectionResponse>(
+                            AuthCodeRejectionResponseEq(expected_response1)));
+
+  AddFakeRejectionResponse(
+      kFakeEmail,
+      /*rejection_reason=*/"ACCOUNT_LOOKUP_CAPTCHA_REQUIRED");
+  AuthCodeRejectionResponse expected_response2;
+  expected_response2.email = kFakeEmail;
+  expected_response2.reason =
+      AuthCodeRejectionResponse::Reason::kCaptchaRequired;
+  response = FetchAuthCode(/*fido_assertion_info=*/FidoAssertionInfo{},
+                           /*certificate=*/GetCertificate());
+  EXPECT_THAT(response, VariantWith<AuthCodeRejectionResponse>(
+                            AuthCodeRejectionResponseEq(expected_response2)));
 }
 
 TEST_F(
@@ -808,12 +891,7 @@ TEST_F(
 TEST_F(
     SecondDeviceAuthBrokerTest,
     FetchAuthCodeReturnsRejectionResponseWithUnknownReasonForMalformedRejectionReason) {
-  AddFakeResponse(kStartSessionUrl, std::string(R"(
-      {
-        "sessionStatus": "REJECTED",
-        "rejectionReason": "Malformed rejection reason"
-      }
-    )"));
+  AddFakeRejectionResponse(/*rejection_reason=*/"Malformed rejection reason");
   AuthCodeRejectionResponse expected_response{
       .reason = AuthCodeRejectionResponse::Reason::kUnknownReason};
   SecondDeviceAuthBroker::AuthCodeResponse response =
@@ -910,7 +988,7 @@ TEST_F(SecondDeviceAuthBrokerTest, FetchAuthCodeReturnsAnAuthCode) {
   AuthCodeSuccessResponse expected_response;
   expected_response.email = "fake-user@example.com";
   expected_response.auth_code = "fake-auth-code";
-  expected_response.gaia_id = "fake-gaia-id";
+  expected_response.gaia_id = GaiaId("fake-gaia-id");
   SecondDeviceAuthBroker::AuthCodeResponse response =
       FetchAuthCode(/*fido_assertion_info=*/FidoAssertionInfo{},
                     /*certificate=*/GetCertificate());

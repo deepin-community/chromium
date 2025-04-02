@@ -123,7 +123,6 @@ bool Position::ParseFromJson(const base::Value::Dict& value) {
       return ParseDependentFromJson(value);
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -136,7 +135,6 @@ gfx::PointF Position::CalculatePosition(
       return CalculateDependentPosition(content_bounds);
     default:
       NOTREACHED();
-      return gfx::PointF();
   }
 }
 

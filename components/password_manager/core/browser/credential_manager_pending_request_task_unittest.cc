@@ -7,6 +7,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/task_environment.h"
+#include "components/password_manager/core/browser/credential_type_flags.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
@@ -25,6 +26,9 @@ namespace {
 
 using testing::_;
 using testing::Return;
+
+constexpr int kIncludePasswordsFlag =
+    static_cast<int>(CredentialTypeFlags::kPassword);
 
 PasswordFormDigest GetFormDigest() {
   PasswordFormDigest digest(PasswordForm::Scheme::kHtml,
@@ -155,7 +159,8 @@ TEST_F(CredentialManagerPendingRequestTaskTest, OnlyProfileStore) {
 
   CredentialManagerPendingRequestTask task(
       &delegate_mock_, /*callback=*/base::DoNothing(),
-      CredentialMediationRequirement::kOptional, /*include_passwords=*/true,
+      CredentialMediationRequirement::kOptional,
+      /*requested_credential_type_flags=*/kIncludePasswordsFlag,
       /*request_federations=*/{}, GetFormDigest());
   RunAllPendingTasks();
 }
@@ -184,7 +189,8 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
 
   CredentialManagerPendingRequestTask task(
       &delegate_mock_, /*callback=*/base::DoNothing(),
-      CredentialMediationRequirement::kOptional, /*include_passwords=*/true,
+      CredentialMediationRequirement::kOptional,
+      /*requested_credential_type_flags=*/kIncludePasswordsFlag,
       /*request_federations=*/{}, GetFormDigest());
   RunAllPendingTasks();
 }
@@ -203,14 +209,18 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
   RunAllPendingTasks();
 
   std::vector<std::unique_ptr<PasswordForm>> expected_forms;
-  expected_forms.push_back(std::make_unique<PasswordForm>(account_form));
+  PasswordForm expected_form = form_;
+  expected_form.in_store =
+      PasswordForm::Store::kProfileStore | PasswordForm::Store::kAccountStore;
+  expected_forms.push_back(std::make_unique<PasswordForm>(expected_form));
   EXPECT_CALL(*client(),
               PromptUserToChooseCredentials(
                   UnorderedPasswordFormElementsAre(&expected_forms), _, _));
 
   CredentialManagerPendingRequestTask task(
       &delegate_mock_, /*callback=*/base::DoNothing(),
-      CredentialMediationRequirement::kOptional, /*include_passwords=*/true,
+      CredentialMediationRequirement::kOptional,
+      /*requested_credential_type_flags=*/kIncludePasswordsFlag,
       /*request_federations=*/{}, GetFormDigest());
   RunAllPendingTasks();
 }
@@ -220,7 +230,7 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
   // This is testing that when two federated credentials have the same username
   // for the same origin, the account store version is passed to the UI.
   GURL federation_url("https://google.com/");
-  form_.federation_origin = url::Origin::Create(federation_url);
+  form_.federation_origin = url::SchemeHostPort(federation_url);
   form_.password_value = std::u16string();
   form_.signon_realm = "federation://www.example.com/google.com";
 
@@ -241,8 +251,8 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
 
   CredentialManagerPendingRequestTask task(
       &delegate_mock_, /*callback=*/base::DoNothing(),
-      CredentialMediationRequirement::kOptional, /*include_passwords=*/false,
-      {federation_url}, GetFormDigest());
+      CredentialMediationRequirement::kOptional,
+      /*requested_credential_type_flags=*/0, {federation_url}, GetFormDigest());
   RunAllPendingTasks();
 }
 
@@ -263,7 +273,8 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
 
   CredentialManagerPendingRequestTask task(
       &delegate_mock_, /*callback=*/base::DoNothing(),
-      CredentialMediationRequirement::kOptional, /*include_passwords=*/true,
+      CredentialMediationRequirement::kOptional,
+      /*requested_credential_type_flags=*/kIncludePasswordsFlag,
       /*request_federations=*/{}, GetFormDigest());
   RunAllPendingTasks();
 }
@@ -289,7 +300,8 @@ TEST_F(CredentialManagerPendingRequestTaskTest, NoAutosigninForPSLMatches) {
 
   CredentialManagerPendingRequestTask task(
       &delegate_mock_, /*callback=*/base::DoNothing(),
-      CredentialMediationRequirement::kOptional, /*include_passwords=*/true,
+      CredentialMediationRequirement::kOptional,
+      /*requested_credential_type_flags=*/kIncludePasswordsFlag,
       /*request_federations=*/{}, GetFormDigest());
   RunAllPendingTasks();
 }
@@ -318,7 +330,8 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
 
   CredentialManagerPendingRequestTask task(
       &delegate_mock_, /*callback=*/base::DoNothing(),
-      CredentialMediationRequirement::kOptional, /*include_passwords=*/true,
+      CredentialMediationRequirement::kOptional,
+      /*requested_credential_type_flags=*/kIncludePasswordsFlag,
       /*request_federations=*/{}, GetFormDigest());
   RunAllPendingTasks();
 }

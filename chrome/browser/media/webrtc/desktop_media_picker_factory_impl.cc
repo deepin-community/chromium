@@ -22,6 +22,7 @@
 #include "chrome/browser/media/webrtc/thumbnail_capturer_mac.h"
 #endif
 
+#if !BUILDFLAG(IS_ANDROID)
 namespace {
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
 std::unique_ptr<ThumbnailCapturer> MakeScreenCapturer() {
@@ -53,6 +54,7 @@ std::unique_ptr<ThumbnailCapturer> MakeWindowCapturer() {
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
 }  // namespace
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 DesktopMediaPickerFactoryImpl::DesktopMediaPickerFactoryImpl() = default;
 
@@ -66,10 +68,15 @@ DesktopMediaPickerFactoryImpl* DesktopMediaPickerFactoryImpl::GetInstance() {
 
 std::unique_ptr<DesktopMediaPicker> DesktopMediaPickerFactoryImpl::CreatePicker(
     const content::MediaStreamRequest* request) {
-// DesktopMediaPicker is implemented only for Windows, OSX and Aura Linux
-// builds.
+  // DesktopMediaPicker is implemented only for Windows, OSX, Aura Linux, and
+  // desktop Android builds.
 #if defined(TOOLKIT_VIEWS)
   return DesktopMediaPicker::Create(request);
+#elif BUILDFLAG(IS_DESKTOP_ANDROID)
+  if (base::FeatureList::IsEnabled(kAndroidMediaPicker)) {
+    return DesktopMediaPicker::Create(request);
+  }
+  return nullptr;
 #else
   return nullptr;
 #endif
@@ -80,6 +87,10 @@ DesktopMediaPickerFactoryImpl::CreateMediaList(
     const std::vector<DesktopMediaList::Type>& types,
     content::WebContents* web_contents,
     DesktopMediaList::WebContentsFilter includable_web_contents_filter) {
+#if BUILDFLAG(IS_ANDROID)
+  // We do not use DesktopMediaList on Android.
+  return {};
+#else
   // If we're supposed to include Tabs, but aren't including Windows (either
   // directly or indirectly), then we need to add Chrome App Windows back in.
   const bool add_chrome_app_windows =
@@ -91,6 +102,7 @@ DesktopMediaPickerFactoryImpl::CreateMediaList(
   bool have_window_list = false;
   bool have_tab_list = false;
   bool have_current_tab = false;
+
   for (auto source_type : types) {
     switch (source_type) {
       case DesktopMediaList::Type::kNone:
@@ -110,8 +122,15 @@ DesktopMediaPickerFactoryImpl::CreateMediaList(
         if (!capturer)
           continue;
 
+#if BUILDFLAG(IS_MAC)
+        const bool auto_show_delegated_source_list = false;
+#else
+        const bool auto_show_delegated_source_list = true;
+#endif  // BUILDFLAG(IS_MAC)
         screen_list = std::make_unique<NativeDesktopMediaList>(
-            DesktopMediaList::Type::kScreen, std::move(capturer));
+            DesktopMediaList::Type::kScreen, std::move(capturer),
+            /*add_current_process_windows=*/false,
+            auto_show_delegated_source_list);
 #endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
         have_screen_list = true;
         source_lists.push_back(std::move(screen_list));
@@ -134,11 +153,16 @@ DesktopMediaPickerFactoryImpl::CreateMediaList(
         // If the capturer is not going to enumerate current process windows
         // (to avoid a deadlock on Windows), then we have to find and add those
         // windows ourselves.
-        bool add_current_process_windows =
+        const bool add_current_process_windows =
             !content::desktop_capture::ShouldEnumerateCurrentProcessWindows();
+#if BUILDFLAG(IS_MAC)
+        const bool auto_show_delegated_source_list = false;
+#else
+        const bool auto_show_delegated_source_list = true;
+#endif  // BUILDFLAG(IS_MAC)
         window_list = std::make_unique<NativeDesktopMediaList>(
             DesktopMediaList::Type::kWindow, std::move(capturer),
-            add_current_process_windows);
+            add_current_process_windows, auto_show_delegated_source_list);
 #endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
         have_window_list = true;
         source_lists.push_back(std::move(window_list));
@@ -169,4 +193,5 @@ DesktopMediaPickerFactoryImpl::CreateMediaList(
     }
   }
   return source_lists;
+#endif  // !BUILDFLAG(IS_ANDROID)
 }

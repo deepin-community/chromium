@@ -32,8 +32,7 @@ InstallTracker::InstallTracker(content::BrowserContext* browser_context,
   }
 }
 
-InstallTracker::~InstallTracker() {
-}
+InstallTracker::~InstallTracker() = default;
 
 // static
 InstallTracker* InstallTracker::Get(content::BrowserContext* context) {
@@ -93,7 +92,7 @@ void InstallTracker::OnDownloadProgress(const std::string& extension_id,
   if (install_data != active_installs_.end()) {
     install_data->second.percent_downloaded = percent_downloaded;
   } else {
-    NOTREACHED();
+    DUMP_WILL_BE_NOTREACHED();
   }
 
   for (auto& observer : observers_) {

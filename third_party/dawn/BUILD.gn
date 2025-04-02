@@ -29,6 +29,11 @@ import("build/config/rust.gni")
 import("scripts/dawn_overrides_with_defaults.gni")
 import("scripts/tint_overrides_with_defaults.gni")
 
+if (!is_clang && is_win) {
+  # libc++ cannot currently build with MSVC. See https://anglebug.com/376074941
+  assert(!use_custom_libcxx, "MSVC build requires use_custom_libcxx=false")
+}
+
 group("benchmarks") {
   testonly = true
   deps = [ "src/tint:benchmarks" ]
@@ -62,16 +67,34 @@ group("cmds") {
     "src/dawn/samples",
     "src/tint:cmds",
   ]
-  if (target_cpu == "x64" && (is_win || is_linux || is_mac)) {
+  if ((target_cpu == "x64" && (is_win || is_linux || is_mac)) ||
+      (target_cpu == "arm64" && is_win)) {
     deps += [ "third_party/gn/dxc:dxc" ]
+  }
+}
+
+group("android") {
+  deps = [ "tools/android" ]
+}
+
+group("emdawnwebgpu") {
+  # Without a copy of Emscripten, we can only generate a few files.
+  deps = [
+    "src/emdawnwebgpu:emdawnwebgpu_headers_gen",
+    "src/emdawnwebgpu:emdawnwebgpu_js_gen",
+  ]
+  if (dawn_emscripten_dir != "") {
+    deps += [ "src/emdawnwebgpu:emdawnwebgpu" ]
   }
 }
 
 group("all") {
   testonly = true
   deps = [
+    ":android",
     ":benchmarks",
     ":cmds",
+    ":emdawnwebgpu",
     ":fuzzers",
     ":libs",
     ":tests",

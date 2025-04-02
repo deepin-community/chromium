@@ -2,34 +2,32 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/credential_provider/gaiacp/gcp_utils.h"
 
-#include <iphlpapi.h>
-#include <wincred.h>  // For <ntsecapi.h>
 #include <windows.h>
 #include <winsock2.h>
-#include <winternl.h>
 
-#include <string>
-#include <string_view>
-
-#include "base/values.h"
-
-#define _NTDEF_  // Prevent redefition errors, must come after <winternl.h>
+#include <iphlpapi.h>
 #include <malloc.h>
 #include <memory.h>
-#include <ntsecapi.h>  // For LsaLookupAuthenticationPackage()
-#include <sddl.h>      // For ConvertSidToStringSid()
-#include <security.h>  // For NEGOSSP_NAME_A
+#include <sddl.h>
+#include <security.h>
 #include <stdlib.h>
-#include <wbemidl.h>
 
 #include <algorithm>
 #include <iomanip>
 #include <memory>
+#include <string>
+#include <string_view>
 
 #include "base/base64.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
@@ -43,10 +41,14 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
 #include "base/win/atl.h"
 #include "base/win/current_module.h"
 #include "base/win/embedded_i18n/language_selector.h"
+#include "base/win/ntsecapi_shim.h"
+#include "base/win/wbemidl_shim.h"
 #include "base/win/win_util.h"
+#include "base/win/wincred_shim.h"
 #include "base/win/wmi.h"
 #include "build/branding_buildflags.h"
 #include "chrome/common/chrome_version.h"
@@ -365,9 +367,9 @@ void DeleteVersionsExcept(const base::FilePath& gcp_path,
 
 // StdParentHandles ///////////////////////////////////////////////////////////
 
-StdParentHandles::StdParentHandles() {}
+StdParentHandles::StdParentHandles() = default;
 
-StdParentHandles::~StdParentHandles() {}
+StdParentHandles::~StdParentHandles() = default;
 
 // ScopedStartupInfo //////////////////////////////////////////////////////////
 
@@ -908,7 +910,8 @@ bool WriteToStartupSentinel() {
 
     LOGFN(VERBOSE) << "Writing to sentinel. Current length="
                    << startup_sentinel.GetLength();
-    return startup_sentinel.WriteAtCurrentPos("0", 1) == 1;
+    return startup_sentinel.WriteAtCurrentPosAndCheck(
+        base::byte_span_from_cstring("0"));
   }
 
   return true;
@@ -990,7 +993,7 @@ void SecurelyClearBuffer(void* buffer, size_t length) {
 
 std::string SearchForKeyInStringDictUTF8(
     const std::string& json_string,
-    const std::initializer_list<base::StringPiece>& path) {
+    const std::initializer_list<std::string_view>& path) {
   DCHECK_GT(path.size(), 0UL);
 
   std::optional<base::Value::Dict> json_obj =
@@ -1019,7 +1022,7 @@ std::string GetDictStringUTF8(const base::Value::Dict& dict, const char* name) {
 HRESULT SearchForListInStringDictUTF8(
     const std::string& list_key,
     const std::string& json_string,
-    const std::initializer_list<base::StringPiece>& path,
+    const std::initializer_list<std::string_view>& path,
     std::vector<std::string>* output) {
   DCHECK_GT(path.size(), 0UL);
 
@@ -1301,9 +1304,9 @@ HRESULT GetGCPWDmToken(const std::wstring& sid, std::wstring* token) {
   return GetGCPWDmTokenInternal(sid, token, false);
 }
 
-FakesForTesting::FakesForTesting() {}
+FakesForTesting::FakesForTesting() = default;
 
-FakesForTesting::~FakesForTesting() {}
+FakesForTesting::~FakesForTesting() = default;
 
 GURL GetGcpwServiceUrl() {
   std::wstring dev = GetGlobalFlagOrDefault(kRegDeveloperMode, L"");

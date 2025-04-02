@@ -10,15 +10,10 @@
 #include <string>
 
 #include "base/containers/enum_set.h"
-#include "build/chromeos_buildflags.h"
-#include "components/sync/base/model_type.h"
+#include "components/sync/base/data_type.h"
 
 namespace syncer {
 
-// TODO(crbug.com/1286405): once it's impossible to launch Ash-browser only
-// UserSelectableOsType will be relevant for Ash, guard UserSelectableType with
-// #if !BUILDFLAG(IS_CHROMEOS_ASH) and remove lower level Ash-specific code.
-//
 // A Java counterpart will be generated for this enum.
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.sync
 //
@@ -38,7 +33,9 @@ enum class UserSelectableType {
   kSavedTabGroups,
   kPayments,
   kSharedTabGroupData,
-  kLastType = kSharedTabGroupData
+  kProductComparison,
+  kCookies,
+  kLastType = kCookies
 };
 
 using UserSelectableTypeSet = base::EnumSet<UserSelectableType,
@@ -50,15 +47,20 @@ const char* GetUserSelectableTypeName(UserSelectableType type);
 std::optional<UserSelectableType> GetUserSelectableTypeFromString(
     const std::string& type);
 std::string UserSelectableTypeSetToString(UserSelectableTypeSet types);
-ModelTypeSet UserSelectableTypeToAllModelTypes(UserSelectableType type);
+DataTypeSet UserSelectableTypeToAllDataTypes(UserSelectableType type);
 
-ModelType UserSelectableTypeToCanonicalModelType(UserSelectableType type);
+DataType UserSelectableTypeToCanonicalDataType(UserSelectableType type);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+// Do not use this function for data types which have multiple corresponding
+// user selectable types.
+std::optional<UserSelectableType> GetUserSelectableTypeFromDataType(
+    DataType data_type);
+
+#if BUILDFLAG(IS_CHROMEOS)
 // Chrome OS provides a separate UI with sync controls for OS data types. Note
 // that wallpaper is a special case due to its reliance on apps, so while it
 // appears in the UI, it is not included in this enum.
-// TODO(https://crbug.com/967987): Break this dependency.
+// TODO(crbug.com/40629581): Break this dependency.
 enum class UserSelectableOsType {
   kOsApps,
   kFirstType = kOsApps,
@@ -74,13 +76,13 @@ using UserSelectableOsTypeSet = base::EnumSet<UserSelectableOsType,
 
 const char* GetUserSelectableOsTypeName(UserSelectableOsType type);
 std::string UserSelectableOsTypeSetToString(UserSelectableOsTypeSet types);
-ModelTypeSet UserSelectableOsTypeToAllModelTypes(UserSelectableOsType type);
-ModelType UserSelectableOsTypeToCanonicalModelType(UserSelectableOsType type);
+DataTypeSet UserSelectableOsTypeToAllDataTypes(UserSelectableOsType type);
+DataType UserSelectableOsTypeToCanonicalDataType(UserSelectableOsType type);
 
 // Returns the type if the string matches a known OS type.
 std::optional<UserSelectableOsType> GetUserSelectableOsTypeFromString(
     const std::string& type);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // For GTest.
 std::ostream& operator<<(std::ostream& stream, const UserSelectableType& type);

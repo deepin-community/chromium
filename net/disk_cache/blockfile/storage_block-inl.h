@@ -60,7 +60,6 @@ template<typename T> bool StorageBlock<T>::LazyInit(MappedFile* file,
                                                     Addr address) {
   if (file_ || address_.is_initialized()) {
     NOTREACHED();
-    return false;
   }
   file_ = file;
   address_.set_value(address.value());
@@ -79,7 +78,6 @@ template<typename T> void  StorageBlock<T>::Discard() {
     return;
   if (!own_data_) {
     NOTREACHED();
-    return;
   }
   DeleteData();
   data_ = nullptr;

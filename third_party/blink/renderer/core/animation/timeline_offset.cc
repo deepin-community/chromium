@@ -10,7 +10,6 @@
 #include "third_party/blink/renderer/core/css/css_to_length_conversion_data.h"
 #include "third_party/blink/renderer/core/css/css_value_list.h"
 #include "third_party/blink/renderer/core/css/cssom/css_numeric_value.h"
-#include "third_party/blink/renderer/core/css/parser/css_parser_token_range.h"
 #include "third_party/blink/renderer/core/css/parser/css_tokenizer.h"
 #include "third_party/blink/renderer/core/css/properties/computed_style_utils.h"
 #include "third_party/blink/renderer/core/css/properties/css_parsing_utils.h"
@@ -91,16 +90,14 @@ std::optional<TimelineOffset> TimelineOffset::Create(
 
   Document& document = element->GetDocument();
 
-  CSSTokenizer tokenizer(css_text);
-  Vector<CSSParserToken, 32> tokens = tokenizer.TokenizeToEOF();
-  CSSParserTokenRange range(tokens);
-  range.ConsumeWhitespace();
+  CSSParserTokenStream stream(css_text);
+  stream.ConsumeWhitespace();
 
   const CSSValue* value = css_parsing_utils::ConsumeAnimationRange(
-      range, *document.ElementSheet().Contents()->ParserContext(),
+      stream, *document.ElementSheet().Contents()->ParserContext(),
       /* default_offset_percent */ default_percent);
 
-  if (!value || !range.AtEnd()) {
+  if (!value || !stream.AtEnd()) {
     ThrowExceptionForInvalidTimelineOffset(exception_state);
     return std::nullopt;
   }
@@ -159,7 +156,7 @@ std::optional<TimelineOffset> TimelineOffset::Create(
         DynamicTo<CSSPrimitiveValue>(offset->ToCSSValue());
 
     if (!css_value || (!css_value->IsPx() && !css_value->IsPercentage() &&
-                       !css_value->IsCalculatedPercentageWithLength())) {
+                       css_value->IsResolvableBeforeLayout())) {
       exception_state.ThrowTypeError(
           "CSSNumericValue must be a length or percentage for animation "
           "range.");
@@ -171,7 +168,7 @@ std::optional<TimelineOffset> TimelineOffset::Create(
     } else if (css_value->IsPercentage()) {
       parsed_offset = Length::Percent(css_value->GetDoubleValue());
     } else {
-      DCHECK(css_value->IsCalculatedPercentageWithLength());
+      DCHECK(!css_value->IsResolvableBeforeLayout());
       parsed_offset = TimelineOffset::ResolveLength(element, css_value);
       style_dependent_offset_str = css_value->CssText();
     }
@@ -202,12 +199,12 @@ bool TimelineOffset::IsStyleDependent(const CSSValue* value) {
 
 /* static */
 Length TimelineOffset::ResolveLength(Element* element, const CSSValue* value) {
-  if (auto* primitive_value = DynamicTo<CSSPrimitiveValue>(value)) {
-    if (primitive_value->IsPercentage()) {
-      return Length::Percent(primitive_value->GetDoubleValue());
+  if (auto* numeric_literal = DynamicTo<CSSNumericLiteralValue>(value)) {
+    if (numeric_literal->IsPercentage()) {
+      return Length::Percent(numeric_literal->ClampedDoubleValue());
     }
-    if (primitive_value->IsPx()) {
-      return Length::Fixed(primitive_value->GetDoubleValue());
+    if (numeric_literal->IsPx()) {
+      return Length::Fixed(numeric_literal->ClampedDoubleValue());
     }
   }
 
@@ -226,7 +223,7 @@ Length TimelineOffset::ResolveLength(Element* element, const CSSValue* value) {
       CSSToLengthConversionData::ViewportSize(document.GetLayoutView()),
       CSSToLengthConversionData::ContainerSizes(element),
       CSSToLengthConversionData::AnchorData(),
-      element->GetComputedStyle()->EffectiveZoom(), ignored_flags);
+      element->GetComputedStyle()->EffectiveZoom(), ignored_flags, element);
 
   return DynamicTo<CSSPrimitiveValue>(value)->ConvertToLength(
       length_conversion_data);
@@ -238,16 +235,14 @@ CSSValue* TimelineOffset::ParseOffset(Document* document, String css_text) {
     return nullptr;
   }
 
-  CSSTokenizer tokenizer(css_text);
-  Vector<CSSParserToken, 32> tokens = tokenizer.TokenizeToEOF();
-  CSSParserTokenRange range(tokens);
-  range.ConsumeWhitespace();
+  CSSParserTokenStream stream(css_text);
+  stream.ConsumeWhitespace();
 
   CSSValue* value = css_parsing_utils::ConsumeLengthOrPercent(
-      range, *document->ElementSheet().Contents()->ParserContext(),
+      stream, *document->ElementSheet().Contents()->ParserContext(),
       CSSPrimitiveValue::ValueRange::kAll);
 
-  if (!range.AtEnd()) {
+  if (!stream.AtEnd()) {
     return nullptr;
   }
 

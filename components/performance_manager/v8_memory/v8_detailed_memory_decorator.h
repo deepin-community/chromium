@@ -7,12 +7,11 @@
 
 #include <memory>
 
+#include "base/functional/bind_internal.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/function_ref.h"
-#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/types/pass_key.h"
-#include "components/performance_manager/public/graph/graph.h"
 #include "components/performance_manager/public/graph/graph_registered.h"
 #include "components/performance_manager/public/graph/node_data_describer.h"
 #include "components/performance_manager/public/graph/process_node.h"
@@ -23,6 +22,7 @@
 namespace performance_manager {
 
 class FrameNode;
+class Graph;
 
 namespace v8_memory {
 
@@ -33,9 +33,8 @@ class V8DetailedMemoryRequestQueue;
 // decorator is in
 // //components/performance_manager/public/v8_detailed_memory.h.
 class V8DetailedMemoryDecorator
-    : public GraphOwned,
-      public GraphRegisteredImpl<V8DetailedMemoryDecorator>,
-      public ProcessNode::ObserverDefaultImpl,
+    : public ProcessNodeObserver,
+      public GraphOwnedAndRegistered<V8DetailedMemoryDecorator>,
       public NodeDataDescriberDefaultImpl {
  public:
   V8DetailedMemoryDecorator();
@@ -106,8 +105,6 @@ class V8DetailedMemoryDecorator
       base::FunctionRef<void(V8DetailedMemoryRequestQueue*)> func) const;
 
   void UpdateProcessMeasurementSchedules() const;
-
-  raw_ptr<Graph> graph_ GUARDED_BY_CONTEXT(sequence_checker_) = nullptr;
 
   std::unique_ptr<V8DetailedMemoryRequestQueue> measurement_requests_
       GUARDED_BY_CONTEXT(sequence_checker_);

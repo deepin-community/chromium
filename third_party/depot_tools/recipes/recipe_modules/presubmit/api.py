@@ -75,27 +75,40 @@ class PresubmitApi(recipe_api.RecipeApi):
         no_fetch_tags=True,
         root_solution_revision=root_solution_revision)
 
-    abs_root = self.m.context.cwd.join(self._relative_root)
+    abs_root = self.m.context.cwd / self._relative_root
     if self.m.tryserver.is_tryserver:
       with self.m.context(cwd=abs_root):
         # TODO(unowned): Consider either:
         #  - extracting user name & email address from the issue, or
         #  - using a dedicated and clearly nonexistent name/email address
-        self.m.git('-c',
-                   'user.email=commit-bot@chromium.org',
-                   '-c',
-                   'user.name=The Commit Bot',
-                   '-c',
-                   'diff.ignoreSubmodules=all',
-                   'commit',
-                   '-a',
-                   '-m',
-                   'Committed patch',
-                   name='commit-git-patch',
-                   infra_step=False)
+        step_result = self.m.git(
+            '-c',
+            'user.email=commit-bot@chromium.org',
+            '-c',
+            'user.name=The Commit Bot',
+            '-c',
+            'diff.ignoreSubmodules=all',
+            'commit',
+            '-a',
+            '-m',
+            'Committed patch',
+            name='commit-git-patch',
+            raise_on_failure=False,
+            stdout=self.m.raw_io.output_text('stdout',
+                                             add_output_log='on_failure'),
+            infra_step=False,
+        )
+        if step_result.retcode:
+          failure_md_lines = ['Failed to apply patch.']
+          if step_result.stdout:
+            failure_md_lines += step_result.stdout.splitlines() + ['']
+            if 'nothing to commit' in step_result.stdout:
+              failure_md_lines.append(
+                  'Was an identical diff already submitted elsewhere?')
+          raise self.m.step.StepFailure('<br/>'.join(failure_md_lines))
 
     if self._runhooks:
-      with self.m.context(cwd=self.m.path['checkout']):
+      with self.m.context(cwd=self.m.path.checkout_dir):
         self.m.gclient.runhooks()
 
     return bot_update_step
@@ -110,14 +123,13 @@ class PresubmitApi(recipe_api.RecipeApi):
     Returns:
       a RawResult object, suitable for being returned from RunSteps.
     """
-    abs_root = self.m.context.cwd.join(self._relative_root)
+    abs_root = self.m.context.cwd / self._relative_root
     got_revision_properties = self.m.bot_update.get_project_revision_properties(
         # Replace path.sep with '/', since most recipes are written assuming '/'
         # as the delimiter. This breaks on windows otherwise.
         self._relative_root.replace(self.m.path.sep, '/'),
         self.m.gclient.c)
-    upstream = bot_update_step.json.output['properties'].get(
-        got_revision_properties[0])
+    upstream = bot_update_step.properties.get(got_revision_properties[0])
 
     presubmit_args = []
     if self.m.tryserver.is_tryserver:
@@ -141,7 +153,7 @@ class PresubmitApi(recipe_api.RecipeApi):
         '--verbose'
         ])
 
-    if self.m.cq.active and self.m.cq.run_mode == self.m.cq.DRY_RUN:
+    if self.m.cv.active and self.m.cv.run_mode == self.m.cv.DRY_RUN:
       presubmit_args.append('--dry_run')
 
     additionalArgs = ['--root', abs_root,'--commit']
@@ -274,10 +286,8 @@ def _createSummaryMarkdown(step_json):
   warning_count = len(step_json['warnings'])
   notif_count = len(step_json['notifications'])
   description = (
-    '#### There are %d error(s), %d warning(s),'
-    ' and %d notifications(s). Here are the errors:') % (
-      len(errors), warning_count, notif_count
-  )
+      f'#### There are {len(errors)} error(s), {warning_count} warning(s), '
+      f'and {notif_count} notifications(s).')
   error_messages = []
 
   for error in errors:

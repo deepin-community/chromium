@@ -8,8 +8,8 @@ build_webui("build") {
   grd_prefix = "private_aggregation_internals"
 
   static_files = [
-    "private_aggregation_internals.html",
     "private_aggregation_internals.css",
+    "private_aggregation_internals.html",
   ]
 
   non_web_component_files = [
@@ -23,6 +23,8 @@ build_webui("build") {
     "//ui/webui/resources/js:build_ts",
     "//ui/webui/resources/mojo:build_ts",
   ]
+
+  webui_context_type = "trusted"
 
   private_aggregation_content_folder = "content/browser/private_aggregation"
 

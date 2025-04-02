@@ -14,12 +14,13 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/visibility_timer_tab_helper.h"
+#include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_request_id.h"
 #include "content/public/browser/browser_thread.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -27,7 +28,7 @@
 #include "chrome/browser/android/flags/chrome_cached_flags.h"
 #include "chrome/browser/android/shortcut_helper.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
-#include "chrome/browser/installable/installed_webapp_bridge.h"
+#include "chrome/browser/webapps/installable/installed_webapp_bridge.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -62,12 +63,12 @@ void NotificationPermissionContext::UpdatePermission(
 
 NotificationPermissionContext::NotificationPermissionContext(
     content::BrowserContext* browser_context)
-    : PermissionContextBase(browser_context,
-                            ContentSettingsType::NOTIFICATIONS,
-                            blink::mojom::PermissionsPolicyFeature::kNotFound) {
-}
+    : PermissionContextBase(
+          browser_context,
+          ContentSettingsType::NOTIFICATIONS,
+          network::mojom::PermissionsPolicyFeature::kNotFound) {}
 
-NotificationPermissionContext::~NotificationPermissionContext() {}
+NotificationPermissionContext::~NotificationPermissionContext() = default;
 
 ContentSetting NotificationPermissionContext::GetPermissionStatusInternal(
     content::RenderFrameHost* render_frame_host,
@@ -85,6 +86,9 @@ ContentSetting NotificationPermissionContext::GetPermissionStatusInternal(
   ContentSetting setting =
       permissions::PermissionContextBase::GetPermissionStatusInternal(
           render_frame_host, requesting_origin, embedding_origin);
+
+  content_settings::PageSpecificContentSettings::NotificationsAccessed(
+      render_frame_host, /*blocked=*/setting != CONTENT_SETTING_ALLOW);
 
   if (requesting_origin != embedding_origin && setting == CONTENT_SETTING_ASK)
     return CONTENT_SETTING_BLOCK;
@@ -197,4 +201,22 @@ void NotificationPermissionContext::DecidePermission(
 
   permissions::PermissionContextBase::DecidePermission(std::move(request_data),
                                                        std::move(callback));
+}
+
+void NotificationPermissionContext::UpdateTabContext(
+    const permissions::PermissionRequestID& id,
+    const GURL& requesting_frame,
+    bool allowed) {
+  auto* content_settings =
+      content_settings::PageSpecificContentSettings::GetForFrame(
+          id.global_render_frame_host_id());
+  if (!content_settings) {
+    return;
+  }
+
+  if (allowed) {
+    content_settings->OnContentAllowed(ContentSettingsType::NOTIFICATIONS);
+  } else {
+    content_settings->OnContentBlocked(ContentSettingsType::NOTIFICATIONS);
+  }
 }

@@ -14,6 +14,7 @@
 #include "ash/app_list/model/app_list_item.h"
 #include "ash/app_list/model/app_list_test_model.h"
 #include "ash/app_list/model/search/test_search_result.h"
+#include "ash/app_list/views/app_list_bubble_apps_collections_page.h"
 #include "ash/app_list/views/app_list_bubble_apps_page.h"
 #include "ash/app_list/views/app_list_bubble_search_page.h"
 #include "ash/app_list/views/app_list_bubble_view.h"
@@ -64,6 +65,7 @@ AppListTestHelper::AppListTestHelper() {
   // Disable app list nudge as default.
   DisableAppListNudge(true);
   AppListNudgeController::SetPrivacyNoticeAcceptedForTest(true);
+  AppListControllerImpl::SetSunfishNudgeDisabledForTest(true);
 }
 
 AppListTestHelper::~AppListTestHelper() {
@@ -209,6 +211,22 @@ void AppListTestHelper::AddRecentApps(int num_apps) {
   }
 }
 
+void AppListTestHelper::AddAppListItemsWithCollection(
+    AppCollection collection_id,
+    int num_apps) {
+  AppListModel* model = AppListModelProvider::Get()->model();
+  for (int i = 0; i < num_apps; i++) {
+    const std::string id(test::AppListTestModel::GetItemName(i));
+    auto item = std::make_unique<AppListItem>(id);
+    item->SetAppCollectionId(collection_id);
+    AppListItem* item_ptr = model->AddItem(std::move(item));
+
+    // Give each item a name so that the accessibility paint checks pass.
+    // (Focusable items should have accessible names.)
+    model->SetItemName(item_ptr, item_ptr->id());
+  }
+}
+
 bool AppListTestHelper::IsInFolderView() {
   if (ShouldUseBubbleAppList())
     return GetBubbleView()->showing_folder_for_test();
@@ -239,7 +257,7 @@ AppListView* AppListTestHelper::GetAppListView() {
 
 SearchBoxView* AppListTestHelper::GetSearchBoxView() {
   if (ShouldUseBubbleAppList())
-    return GetBubbleView()->search_box_view_for_test();
+    return GetBubbleView()->search_box_view();
 
   return GetAppListView()->search_box_view();
 }
@@ -332,6 +350,10 @@ RecentAppsView* AppListTestHelper::GetBubbleRecentAppsView() {
 
 ScrollableAppsGridView* AppListTestHelper::GetScrollableAppsGridView() {
   return GetBubbleAppsPage()->scrollable_apps_grid_view_;
+}
+
+views::View* AppListTestHelper::GetAppCollectionsSectionsContainer() {
+  return GetBubbleAppsCollectionsPage()->sections_container_;
 }
 
 AppListBubbleSearchPage* AppListTestHelper::GetBubbleSearchPage() {

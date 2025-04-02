@@ -16,6 +16,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/values.h"
 #include "base/version.h"
 #include "chrome/browser/extensions/extension_install_prompt.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -23,7 +24,6 @@
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "components/sync/model/string_ordinal.h"
-#include "extensions/browser/api/declarative_net_request/ruleset_install_pref.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/install_flag.h"
 #include "extensions/browser/preload_check.h"
@@ -194,10 +194,11 @@ class CrxInstaller : public SandboxedUnpackerClient, public ProfileObserver {
     return (creation_flags_ & Extension::FROM_WEBSTORE) > 0;
   }
   void set_is_gallery_install(bool val) {
-    if (val)
+    if (val) {
       creation_flags_ |= Extension::FROM_WEBSTORE;
-    else
+    } else {
       creation_flags_ &= ~Extension::FROM_WEBSTORE;
+    }
   }
   void set_withhold_permissions();
 
@@ -254,7 +255,7 @@ class CrxInstaller : public SandboxedUnpackerClient, public ProfileObserver {
 
   Profile* profile() { return profile_; }
 
-  const Extension* extension() { return extension_.get(); }
+  const Extension* extension() const { return extension_.get(); }
 
   // The currently installed version of the extension, for updates. Will be
   // invalid if this isn't an update.
@@ -309,8 +310,7 @@ class CrxInstaller : public SandboxedUnpackerClient, public ProfileObserver {
                        std::unique_ptr<base::Value::Dict> original_manifest,
                        const Extension* extension,
                        const SkBitmap& install_icon,
-                       declarative_net_request::RulesetInstallPrefs
-                           ruleset_install_prefs) override;
+                       base::Value::Dict ruleset_install_prefs) override;
   void OnStageChanged(InstallationStage stage) override;
 
   // ProfileObserver
@@ -368,13 +368,14 @@ class CrxInstaller : public SandboxedUnpackerClient, public ProfileObserver {
       std::unique_ptr<base::Value::Dict> original_manifest,
       scoped_refptr<const Extension> extension,
       SkBitmap install_icon,
-      declarative_net_request::RulesetInstallPrefs ruleset_install_prefs);
+      base::Value::Dict ruleset_install_prefs);
 
   void set_install_flag(int flag, bool val) {
-    if (val)
+    if (val) {
       install_flags_ |= flag;
-    else
+    } else {
       install_flags_ &= ~flag;
+    }
   }
 
   // Returns |unpacker_task_runner_|. Initializes it if it's still nullptr.
@@ -494,7 +495,7 @@ class CrxInstaller : public SandboxedUnpackerClient, public ProfileObserver {
   bool grant_permissions_;
 
   // The value of the content type header sent with the CRX.
-  // Ignorred unless |require_extension_mime_type_| is true.
+  // Ignored unless |require_extension_mime_type_| is true.
   std::string original_mime_type_;
 
   // What caused this install?  Used only for histograms that report
@@ -541,7 +542,7 @@ class CrxInstaller : public SandboxedUnpackerClient, public ProfileObserver {
   int install_flags_;
 
   // Install prefs needed for the Declarative Net Request API.
-  declarative_net_request::RulesetInstallPrefs ruleset_install_prefs_;
+  base::Value::Dict ruleset_install_prefs_;
 
   // Checks that may run before installing the extension.
   std::unique_ptr<PreloadCheck> policy_check_;

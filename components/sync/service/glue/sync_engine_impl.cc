@@ -8,6 +8,7 @@
 
 #include "base/base64.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
@@ -19,6 +20,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
+#include "components/sync/base/features.h"
 #include "components/sync/engine/data_type_activation_response.h"
 #include "components/sync/engine/events/protocol_event.h"
 #include "components/sync/engine/nigori/nigori.h"
@@ -48,15 +50,11 @@ RestoreLocalTransportDataFromPrefs(const SyncTransportDataPrefs& prefs) {
   return result;
 }
 
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused. When adding values, be certain to also
-// update the corresponding definition in enums.xml.
 enum class SyncTransportDataStartupState {
-  kValidData = 0,
-  kEmptyCacheGuid = 1,
-  kEmptyBirthday = 2,
-  kGaiaIdMismatch = 3,
-  kMaxValue = kGaiaIdMismatch
+  kValidData,
+  kEmptyCacheGuid,
+  kEmptyBirthday,
+  kGaiaIdMismatch,
 };
 
 std::string GenerateCacheGUID() {
@@ -85,12 +83,16 @@ SyncTransportDataStartupState ValidateSyncTransportData(
     return SyncTransportDataStartupState::kEmptyBirthday;
   }
 
-  // Make sure the cached account information (gaia ID) is equal to the current
+  // Make sure the previously-syncing account (gaia ID) is equal to the current
   // one (otherwise the data may be corrupt). Note that, for local sync, the
   // authenticated account is always empty.
-  if (prefs.GetGaiaId() != core_account_info.gaia) {
-    DLOG(WARNING) << "Found mismatching gaia ID in sync preferences";
-    return SyncTransportDataStartupState::kGaiaIdMismatch;
+  if (prefs.GetCurrentSyncingGaiaId() != core_account_info.gaia) {
+    // Note that an empty last-syncing-GaiaID is fine and expected if the user
+    // signed out and back in again.
+    if (!prefs.GetCurrentSyncingGaiaId().empty()) {
+      DLOG(WARNING) << "Found mismatching gaia ID in sync preferences";
+      return SyncTransportDataStartupState::kGaiaIdMismatch;
+    }
   }
 
   // All good: local sync data looks initialized and valid.
@@ -105,12 +107,10 @@ SyncEngineImpl::SyncEngineImpl(
     std::unique_ptr<ActiveDevicesProvider> active_devices_provider,
     std::unique_ptr<SyncTransportDataPrefs> prefs,
     const base::FilePath& sync_data_folder,
-    scoped_refptr<base::SequencedTaskRunner> sync_task_runner,
-    const base::RepeatingClosure& sync_transport_data_cleared_cb)
+    scoped_refptr<base::SequencedTaskRunner> sync_task_runner)
     : sync_task_runner_(std::move(sync_task_runner)),
       name_(name),
       prefs_(std::move(prefs)),
-      sync_transport_data_cleared_cb_(sync_transport_data_cleared_cb),
       sync_invalidations_service_(sync_invalidations_service),
       active_devices_provider_(std::move(active_devices_provider)),
       engine_created_time_for_metrics_(base::TimeTicks::Now()) {
@@ -137,13 +137,17 @@ void SyncEngineImpl::Initialize(InitParams params) {
     // everything away and start from scratch with a new cache GUID, which also
     // cascades into datatypes throwing away their dangling sync metadata due to
     // cache GUID mismatches.
-    ClearLocalTransportDataAndNotify();
+    prefs_->ClearForCurrentAccount();
+
     prefs_->SetCacheGuid(GenerateCacheGUID());
-    prefs_->SetGaiaId(params.authenticated_account_info.gaia);
+    prefs_->SetCurrentSyncingGaiaId(params.authenticated_account_info.gaia);
   }
 
+  cached_cache_guid_ = prefs_->GetCacheGuid();
+  cached_birthday_ = prefs_->GetBirthday();
+
   // Clear host here to avoid holding a dangling pointer in case the task
-  // outlives the SyncEngineHost. It is safe to clear host here since because
+  // outlives the SyncEngineHost. It is safe to clear host here since
   // SyncEngineBackend doesn't actually need it.
   params.host = nullptr;
   sync_task_runner_->PostTask(
@@ -156,7 +160,7 @@ bool SyncEngineImpl::IsInitialized() const {
   return initialized_;
 }
 
-void SyncEngineImpl::TriggerRefresh(const ModelTypeSet& types) {
+void SyncEngineImpl::TriggerRefresh(const DataTypeSet& types) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   sync_task_runner_->PostTask(
       FROM_HERE,
@@ -176,11 +180,17 @@ void SyncEngineImpl::InvalidateCredentials() {
 }
 
 std::string SyncEngineImpl::GetCacheGuid() const {
-  return prefs_->GetCacheGuid();
+  // The cached cache GUID should usually be identical to the one stored in
+  // prefs, but in some cases (when an account got removed from the device) the
+  // one in prefs may have been cleared.
+  return cached_cache_guid_;
 }
 
 std::string SyncEngineImpl::GetBirthday() const {
-  return prefs_->GetBirthday();
+  // The cached birthday should usually be identical to the one stored in
+  // prefs, but in some cases (when an account got removed from the device) the
+  // one in prefs may have been cleared.
+  return cached_birthday_;
 }
 
 base::Time SyncEngineImpl::GetLastSyncedTimeForDebugging() const {
@@ -222,7 +232,7 @@ void SyncEngineImpl::StartHandlingInvalidations() {
   // UpdateStandaloneInvalidationsState() must be called after AddListener(),
   // the invalidations should not be considered as initialized until any
   // outstanding FCM messages are handled.
-  // TODO(crbug.com/1425026): this logic is quite fragile and should be
+  // TODO(crbug.com/40260679): this logic is quite fragile and should be
   // revisited.
   UpdateStandaloneInvalidationsState();
 }
@@ -268,7 +278,7 @@ void SyncEngineImpl::StopSyncingForShutdown() {
 }
 
 void SyncEngineImpl::Shutdown(ShutdownReason reason) {
-  // StopSyncingForShutdown() (which nulls out |host_|) should be
+  // StopSyncingForShutdown() (which nulls out `host_`) should be
   // called first.
   DCHECK(!host_);
 
@@ -284,45 +294,42 @@ void SyncEngineImpl::Shutdown(ShutdownReason reason) {
   active_devices_provider_->SetActiveDevicesChangedCallback(
       base::RepeatingClosure());
 
-  model_type_connector_.reset();
+  data_type_connector_.reset();
 
   // Shut down and destroy SyncManager.
   sync_task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&SyncEngineBackend::DoShutdown, backend_, reason));
 
-  // Ensure that |backend_| destroyed inside Sync sequence, not inside current
+  // Ensure that `backend_` destroyed inside Sync sequence, not inside current
   // one.
   sync_task_runner_->ReleaseSoon(FROM_HERE, std::move(backend_));
 
   if (reason == ShutdownReason::DISABLE_SYNC_AND_CLEAR_DATA) {
-    ClearLocalTransportDataAndNotify();
+    prefs_->ClearCurrentSyncingGaiaId();
   }
 }
 
 void SyncEngineImpl::ConfigureDataTypes(ConfigureParams params) {
-  DCHECK(Difference(params.to_download, ProtocolTypes()).Empty());
+  DCHECK(Difference(params.to_download, ProtocolTypes()).empty());
 
-  sync_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&SyncEngineBackend::DoPurgeDisabledTypes,
-                                backend_, params.to_purge));
   sync_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&SyncEngineBackend::DoConfigureSyncer, backend_,
                                 std::move(params)));
 }
 
 void SyncEngineImpl::ConnectDataType(
-    ModelType type,
+    DataType type,
     std::unique_ptr<DataTypeActivationResponse> activation_response) {
   DCHECK(ProtocolTypes().Has(type));
-  model_type_connector_->ConnectDataType(type, std::move(activation_response));
+  data_type_connector_->ConnectDataType(type, std::move(activation_response));
 }
 
-void SyncEngineImpl::DisconnectDataType(ModelType type) {
-  model_type_connector_->DisconnectDataType(type);
+void SyncEngineImpl::DisconnectDataType(DataType type) {
+  data_type_connector_->DisconnectDataType(type);
 }
 
-const SyncEngineImpl::Status& SyncEngineImpl::GetDetailedStatus() const {
+const SyncStatus& SyncEngineImpl::GetDetailedStatus() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(IsInitialized());
   return cached_status_;
@@ -337,26 +344,17 @@ void SyncEngineImpl::HasUnsyncedItemsForTest(
       std::move(cb));
 }
 
-void SyncEngineImpl::GetTypesWithUnsyncedData(
-    base::OnceCallback<void(ModelTypeSet)> cb) const {
-  DCHECK(IsInitialized());
-  sync_task_runner_->PostTaskAndReplyWithResult(
-      FROM_HERE,
-      base::BindOnce(&SyncEngineBackend::GetTypesWithUnsyncedData, backend_),
-      std::move(cb));
-}
-
 void SyncEngineImpl::GetThrottledDataTypesForTest(
-    base::OnceCallback<void(ModelTypeSet)> cb) const {
+    base::OnceCallback<void(DataTypeSet)> cb) const {
   DCHECK(IsInitialized());
-  // Instead of reading directly from |cached_status_.throttled_types|, issue
+  // Instead of reading directly from `cached_status_.throttled_types`, issue
   // a round trip to the backend sequence, in case there is an ongoing cycle
   // that could update the throttled types.
   sync_task_runner_->PostTaskAndReply(
       FROM_HERE, base::DoNothing(),
       base::BindOnce(
           [](base::WeakPtr<SyncEngineImpl> engine,
-             base::OnceCallback<void(ModelTypeSet)> cb) {
+             base::OnceCallback<void(DataTypeSet)> cb) {
             std::move(cb).Run(engine->cached_status_.throttled_types);
           },
           weak_ptr_factory_.GetMutableWeakPtr(), std::move(cb)));
@@ -378,7 +376,7 @@ void SyncEngineImpl::DisableProtocolEventForwarding() {
 }
 
 void SyncEngineImpl::FinishConfigureDataTypesOnFrontendLoop(
-    const ModelTypeSet enabled_types,
+    const DataTypeSet enabled_types,
     base::OnceClosure ready_task) {
   last_enabled_types_ = enabled_types;
 
@@ -386,14 +384,14 @@ void SyncEngineImpl::FinishConfigureDataTypesOnFrontendLoop(
 }
 
 void SyncEngineImpl::HandleInitializationSuccessOnFrontendLoop(
-    std::unique_ptr<ModelTypeConnector> model_type_connector,
+    std::unique_ptr<DataTypeConnector> data_type_connector,
     const std::string& birthday,
     const std::string& bag_of_chips) {
   TRACE_EVENT0("sync",
                "SyncEngineImpl::HandleInitializationSuccessOnFrontendLoop");
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  model_type_connector_ = std::move(model_type_connector);
+  data_type_connector_ = std::move(data_type_connector);
 
   initialized_ = true;
 
@@ -405,6 +403,7 @@ void SyncEngineImpl::HandleInitializationSuccessOnFrontendLoop(
 
   // Save initialization data to preferences.
   prefs_->SetBirthday(birthday);
+  cached_birthday_ = prefs_->GetBirthday();
   prefs_->SetBagOfChips(bag_of_chips);
 
   // The very first time the backend initializes is effectively the first time
@@ -413,7 +412,7 @@ void SyncEngineImpl::HandleInitializationSuccessOnFrontendLoop(
   bool is_first_time_sync_configure = false;
 
   // NOTE: Keep this logic consistent with how
-  // SyncApiComponentFactoryImpl::HasTransportDataIncludingFirstSync()
+  // SyncEngineFactoryImpl::HasTransportDataIncludingFirstSync()
   // determines whether transport data exists.
   if (prefs_->GetLastSyncedTime().is_null()) {
     is_first_time_sync_configure = true;
@@ -457,8 +456,7 @@ void SyncEngineImpl::HandleActionableProtocolErrorEventOnFrontendLoop(
   host_->OnActionableProtocolError(sync_error);
 }
 
-void SyncEngineImpl::HandleMigrationRequestedOnFrontendLoop(
-    ModelTypeSet types) {
+void SyncEngineImpl::HandleMigrationRequestedOnFrontendLoop(DataTypeSet types) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   host_->OnMigrationNeededForTypes(types);
 }
@@ -509,7 +507,7 @@ void SyncEngineImpl::HandleSyncStatusChanged(const SyncStatus& status) {
   if (has_new_invalidated_data_types) {
     // Notify about any new data types having pending invalidations. When there
     // are less such data types, this basically means that sync cycle has been
-    // finished, and |host_| will be notified via OnSyncCycleCompleted(), so
+    // finished, and `host_` will be notified via OnSyncCycleCompleted(), so
     // there is no point in duplicating it.
     host_->OnNewInvalidatedDataTypes();
   }
@@ -539,6 +537,15 @@ bool SyncEngineImpl::IsNextPollTimeInThePast() const {
   return now >= last_poll_time + poll_interval;
 }
 
+void SyncEngineImpl::ClearNigoriDataForMigration() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(backend_);
+  sync_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&SyncEngineBackend::DoClearNigoriDataForMigration,
+                     backend_));
+}
+
 void SyncEngineImpl::GetNigoriNodeForDebugging(AllNodesCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(backend_);
@@ -560,7 +567,7 @@ void SyncEngineImpl::RecordNigoriMemoryUsageAndCountsHistograms() {
 void SyncEngineImpl::OnInvalidationReceived(const std::string& payload) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  std::optional<ModelTypeSet> interested_data_types =
+  std::optional<DataTypeSet> interested_data_types =
       sync_invalidations_service_->GetInterestedDataTypes();
 
   // Interested data types must be initialized before handling invalidations to
@@ -602,11 +609,6 @@ void SyncEngineImpl::UpdateLastSyncedTime() {
   prefs_->SetLastSyncedTime(base::Time::Now());
 }
 
-void SyncEngineImpl::ClearLocalTransportDataAndNotify() {
-  prefs_->ClearAll();
-  sync_transport_data_cleared_cb_.Run();
-}
-
 void SyncEngineImpl::UpdateStandaloneInvalidationsState() {
   DCHECK(sync_invalidations_service_);
 
@@ -623,7 +625,7 @@ void SyncEngineImpl::UpdateStandaloneInvalidationsState() {
   // sync standalone invalidations are disabled).
   DCHECK_NE(sync_invalidations_service_->GetFCMRegistrationToken().value(), "");
 
-  // TODO(crbug.com/1442156): wait for FCM token to be committed before change
+  // TODO(crbug.com/40266819): wait for FCM token to be committed before change
   // the state to enabled.
   OnInvalidatorStateChange(/*enabled=*/true);
 }

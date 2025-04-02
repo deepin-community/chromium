@@ -58,7 +58,6 @@ PP_FileSystemType WebFileSystemTypeToPPAPI(blink::WebFileSystemType type) {
       return PP_FILESYSTEMTYPE_EXTERNAL;
     default:
       NOTREACHED();
-      return PP_FILESYSTEMTYPE_LOCALTEMPORARY;
   }
 }
 
@@ -292,7 +291,6 @@ bool ResourceConverterImpl::ToV8Value(const PP_Var& var,
   ResourceVar* resource = ResourceVar::FromPPVar(var);
   if (!resource) {
     NOTREACHED();
-    return false;
   }
   PP_Resource resource_id = resource->GetPPResource();
 
@@ -304,7 +302,6 @@ bool ResourceConverterImpl::ToV8Value(const PP_Var& var,
     // and should outlive instances associated with it. However, if it doesn't
     // for some reason, we do not want to crash.
     NOTREACHED();
-    return false;
   }
   ::ppapi::host::PpapiHost* ppapi_host = renderer_ppapi_host->GetPpapiHost();
   ::ppapi::host::ResourceHost* resource_host =

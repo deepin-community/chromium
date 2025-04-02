@@ -1,16 +1,16 @@
-/* Copyright (c) 2014, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2014 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #ifndef OPENSSL_HEADER_BYTESTRING_H
 #define OPENSSL_HEADER_BYTESTRING_H
@@ -45,9 +45,7 @@ struct cbs_st {
   // Allow implicit conversions to and from bssl::Span<const uint8_t>.
   cbs_st(bssl::Span<const uint8_t> span)
       : data(span.data()), len(span.size()) {}
-  operator bssl::Span<const uint8_t>() const {
-    return bssl::MakeConstSpan(data, len);
-  }
+  operator bssl::Span<const uint8_t>() const { return bssl::Span(data, len); }
 
   // Defining any constructors requires we explicitly default the others.
   cbs_st() = default;
@@ -58,17 +56,20 @@ struct cbs_st {
 
 // CBS_init sets |cbs| to point to |data|. It does not take ownership of
 // |data|.
-OPENSSL_EXPORT void CBS_init(CBS *cbs, const uint8_t *data, size_t len);
+OPENSSL_INLINE void CBS_init(CBS *cbs, const uint8_t *data, size_t len) {
+  cbs->data = data;
+  cbs->len = len;
+}
 
 // CBS_skip advances |cbs| by |len| bytes. It returns one on success and zero
 // otherwise.
 OPENSSL_EXPORT int CBS_skip(CBS *cbs, size_t len);
 
 // CBS_data returns a pointer to the contents of |cbs|.
-OPENSSL_EXPORT const uint8_t *CBS_data(const CBS *cbs);
+OPENSSL_INLINE const uint8_t *CBS_data(const CBS *cbs) { return cbs->data; }
 
 // CBS_len returns the number of bytes remaining in |cbs|.
-OPENSSL_EXPORT size_t CBS_len(const CBS *cbs);
+OPENSSL_INLINE size_t CBS_len(const CBS *cbs) { return cbs->len; }
 
 // CBS_stow copies the current contents of |cbs| into |*out_ptr| and
 // |*out_len|. If |*out_ptr| is not NULL, the contents are freed with
@@ -636,6 +637,9 @@ OPENSSL_EXPORT int CBB_flush_asn1_set_of(CBB *cbb);
 
 
 // Unicode utilities.
+//
+// These functions consider noncharacters (see section 23.7 from Unicode 15.0.0)
+// to be invalid code points and will treat them as an error condition.
 
 // The following functions read one Unicode code point from |cbs| with the
 // corresponding encoding and store it in |*out|. They return one on success and
@@ -650,7 +654,9 @@ OPENSSL_EXPORT int CBS_get_utf32_be(CBS *cbs, uint32_t *out);
 OPENSSL_EXPORT size_t CBB_get_utf8_len(uint32_t u);
 
 // The following functions encode |u| to |cbb| with the corresponding
-// encoding. They return one on success and zero on error.
+// encoding. They return one on success and zero on error. Error conditions
+// include |u| being an invalid code point, or |u| being unencodable in the
+// specified encoding.
 OPENSSL_EXPORT int CBB_add_utf8(CBB *cbb, uint32_t u);
 OPENSSL_EXPORT int CBB_add_latin1(CBB *cbb, uint32_t u);
 OPENSSL_EXPORT int CBB_add_ucs2_be(CBB *cbb, uint32_t u);

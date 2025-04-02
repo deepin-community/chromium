@@ -26,21 +26,17 @@
 #include "media/capture/video_capture_types.h"
 
 namespace gfx {
-
 class GpuMemoryBuffer;
-
 }  // namespace gfx
 
 namespace gpu {
-
-class GpuMemoryBufferImpl;
-class GpuMemoryBufferSupport;
-
+class ClientSharedImage;
 }  // namespace gpu
 
 namespace media {
 
 class CameraBufferFactory;
+class VideoCaptureBufferObserver;
 
 struct BufferInfo;
 
@@ -56,7 +52,8 @@ class CAPTURE_EXPORT StreamBufferManager final {
   StreamBufferManager(
       CameraDeviceContext* device_context,
       bool video_capture_use_gmb,
-      std::unique_ptr<CameraBufferFactory> camera_buffer_factory);
+      std::unique_ptr<CameraBufferFactory> camera_buffer_factory,
+      std::unique_ptr<VideoCaptureBufferObserver> buffer_observer);
 
   StreamBufferManager(const StreamBufferManager&) = delete;
   StreamBufferManager& operator=(const StreamBufferManager&) = delete;
@@ -65,8 +62,9 @@ class CAPTURE_EXPORT StreamBufferManager final {
 
   void ReserveBuffer(StreamType stream_type);
 
-  gfx::GpuMemoryBuffer* GetGpuMemoryBufferById(StreamType stream_type,
-                                               uint64_t buffer_ipc_id);
+  scoped_refptr<gpu::ClientSharedImage> GetSharedImageById(
+      StreamType stream_type,
+      uint64_t buffer_ipc_id);
 
   // Acquires the VCD client buffer specified by |stream_type| and
   // |buffer_ipc_id|, with optional rotation applied.  |rotation| is the
@@ -115,7 +113,9 @@ class CAPTURE_EXPORT StreamBufferManager final {
 
   bool IsRecordingSupported();
 
-  std::unique_ptr<gpu::GpuMemoryBufferImpl> CreateGpuMemoryBuffer(
+  // TODO(crbug.com/359601431): Remove this method once shared image is used
+  // directly from the VideoCaptureDevice::Client::HandleProvider.
+  scoped_refptr<gpu::ClientSharedImage> CreateSharedImageFromGmbHandle(
       gfx::GpuMemoryBufferHandle handle,
       const VideoCaptureFormat& format,
       gfx::BufferUsage buffer_usage);
@@ -125,18 +125,18 @@ class CAPTURE_EXPORT StreamBufferManager final {
 
   // BufferPair holding up to two types of handles of a stream buffer.
   struct BufferPair {
-    BufferPair(std::unique_ptr<gfx::GpuMemoryBuffer> gmb,
+    BufferPair(scoped_refptr<gpu::ClientSharedImage> shared_image,
                std::optional<Buffer> vcd_buffer);
     BufferPair(BufferPair&& other);
     ~BufferPair();
-    // The GpuMemoryBuffer interface of the stream buffer.
-    //   - When the VCD runs SharedMemory-based VideoCapture buffer, |gmb| is
-    //     allocated by StreamBufferManager locally.
-    //   - When the VCD runs GpuMemoryBuffer-based VideoCapture buffer, |gmb| is
-    //     constructed from |vcd_buffer| below.
-    std::unique_ptr<gfx::GpuMemoryBuffer> gmb;
+    // The Mappable shared image interface of the stream buffer.
+    //   - When the VCD runs SharedMemory-based VideoCapture buffer,
+    //   |shared_image| is allocated by StreamBufferManager locally.
+    //   - When the VCD runs native GpuMemoryBuffer-based VideoCapture buffer,
+    //   |shared_image| is constructed from |vcd_buffer| below.
+    scoped_refptr<gpu::ClientSharedImage> shared_image;
     // The VCD buffer reserved from the VCD buffer pool.  This is only set when
-    // the VCD runs GpuMemoryBuffer-based VideoCapture buffer.
+    // the VCD runs native GpuMemoryBuffer-based VideoCapture buffer.
     std::optional<Buffer> vcd_buffer;
   };
 
@@ -174,9 +174,11 @@ class CAPTURE_EXPORT StreamBufferManager final {
 
   raw_ptr<CameraDeviceContext> device_context_;
 
-  bool video_capture_use_gmb_;
+  // The interface to notify camera device a new buffer needs to be registered
+  // or a buffer needs to be retired.
+  std::unique_ptr<VideoCaptureBufferObserver> buffer_observer_;
 
-  std::unique_ptr<gpu::GpuMemoryBufferSupport> gmb_support_;
+  bool video_capture_use_gmb_;
 
   std::unique_ptr<CameraBufferFactory> camera_buffer_factory_;
 

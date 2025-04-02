@@ -22,16 +22,16 @@
 #include "base/task/sequence_manager/sequence_manager_impl.h"
 #include "base/task/sequence_manager/task_queue.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/third_party/dynamic_annotations/dynamic_annotations.h"
 #include "base/threading/thread_id_name_manager.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/types/pass_key.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/base/attributes.h"
+#include "third_party/abseil-cpp/absl/base/dynamic_annotations.h"
 
 #if (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL)) || BUILDFLAG(IS_FUCHSIA)
+#include <optional>
+
 #include "base/files/file_descriptor_watcher_posix.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -47,7 +47,7 @@ namespace {
 // because its Stop method was called.  This allows us to catch cases where
 // MessageLoop::QuitWhenIdle() is called directly, which is unexpected when
 // using a Thread to setup and run a MessageLoop.
-ABSL_CONST_INIT thread_local bool was_quit_properly = false;
+constinit thread_local bool was_quit_properly = false;
 
 }  // namespace
 #endif
@@ -162,8 +162,9 @@ bool Thread::Start() {
 
   Options options;
 #if BUILDFLAG(IS_WIN)
-  if (com_status_ == STA)
+  if (com_status_ == STA) {
     options.message_pump_type = MessagePumpType::UI;
+  }
 #endif
   return StartWithOptions(std::move(options));
 }
@@ -227,16 +228,18 @@ bool Thread::StartWithOptions(Options options) {
 bool Thread::StartAndWaitForTesting() {
   DCHECK(owning_sequence_checker_.CalledOnValidSequence());
   bool result = Start();
-  if (!result)
+  if (!result) {
     return false;
+  }
   WaitUntilThreadStarted();
   return true;
 }
 
 bool Thread::WaitUntilThreadStarted() const {
   DCHECK(owning_sequence_checker_.CalledOnValidSequence());
-  if (!delegate_)
+  if (!delegate_) {
     return false;
+  }
   // https://crbug.com/918039
   base::ScopedAllowBaseSyncPrimitivesOutsideBlockingScope allow_wait;
   start_event_.Wait();
@@ -245,8 +248,9 @@ bool Thread::WaitUntilThreadStarted() const {
 
 void Thread::FlushForTesting() {
   DCHECK(owning_sequence_checker_.CalledOnValidSequence());
-  if (!delegate_)
+  if (!delegate_) {
     return;
+  }
 
   WaitableEvent done(WaitableEvent::ResetPolicy::AUTOMATIC,
                      WaitableEvent::InitialState::NOT_SIGNALED);
@@ -267,8 +271,9 @@ void Thread::Stop() {
   StopSoon();
 
   // Can't join if the |thread_| is either already gone or is non-joinable.
-  if (thread_.is_null())
+  if (thread_.is_null()) {
     return;
+  }
 
   // Wait for the thread to exit.
   //
@@ -289,8 +294,9 @@ void Thread::StopSoon() {
   // enable this check.
   // DCHECK(owning_sequence_checker_.CalledOnValidSequence());
 
-  if (stopping_ || !delegate_)
+  if (stopping_ || !delegate_) {
     return;
+  }
 
   stopping_ = true;
 
@@ -321,8 +327,9 @@ bool Thread::IsRunning() const {
   // not yet requested to stop (i.e. |stopping_| is false) we can just return
   // true. (Note that |stopping_| is touched only on the same sequence that
   // starts / started the new thread so we need no locking here.)
-  if (delegate_ && !stopping_)
+  if (delegate_ && !stopping_) {
     return true;
+  }
   // Otherwise check the |running_| flag, which is set to true by the new thread
   // only while it is inside Run().
   AutoLock lock(running_lock_);
@@ -367,7 +374,7 @@ void Thread::ThreadMain() {
 
   // Complete the initialization of our Thread object.
   PlatformThread::SetName(name_.c_str());
-  ANNOTATE_THREAD_NAME(name_.c_str());  // Tell the name to race detector.
+  ABSL_ANNOTATE_THREAD_NAME(name_.c_str());  // Tell the name to race detector.
 
   // Lazily initialize the |message_loop| so that it can run on this thread.
   DCHECK(delegate_);

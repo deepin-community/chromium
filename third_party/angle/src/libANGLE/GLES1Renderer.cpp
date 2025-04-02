@@ -20,7 +20,7 @@
 #include "libANGLE/ResourceManager.h"
 #include "libANGLE/Shader.h"
 #include "libANGLE/State.h"
-#include "libANGLE/context_private_call_gles_autogen.h"
+#include "libANGLE/context_private_call.inl.h"
 #include "libANGLE/renderer/ContextImpl.h"
 
 namespace
@@ -1105,7 +1105,6 @@ angle::Result GLES1Renderer::initializeRendererProgram(Context *context,
         setUniform1i(context, &executable, programState.tex2DSamplerLocs[i], i);
         setUniform1i(context, &executable, programState.texCubeSamplerLocs[i], i + kTexUnitCount);
     }
-    glState->setObjectDirty(GL_PROGRAM);
 
     // We just created a new program, we need to sync everything
     gles1State->setAllDirty();

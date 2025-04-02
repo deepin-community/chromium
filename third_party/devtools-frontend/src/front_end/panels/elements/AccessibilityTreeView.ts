@@ -23,6 +23,7 @@ export class AccessibilityTreeView extends UI.Widget.VBox implements
       toggleButton: HTMLElement,
       accessibilityTreeComponent: TreeOutline.TreeOutline.TreeOutline<AccessibilityTreeUtils.AXTreeNodeData>) {
     super();
+    this.registerRequiredCSS(accessibilityTreeViewStyles);
     // toggleButton is bound to a click handler on ElementsPanel to switch between the DOM tree
     // and accessibility tree views.
     this.toggleButton = toggleButton;
@@ -69,11 +70,11 @@ export class AccessibilityTreeView extends UI.Widget.VBox implements
   }
 
   override async wasShown(): Promise<void> {
+    super.wasShown();
     await this.refreshAccessibilityTree();
     if (this.inspectedDOMNode) {
       await this.loadSubTreeIntoAccessibilityModel(this.inspectedDOMNode);
     }
-    this.registerCSSFiles([accessibilityTreeViewStyles]);
   }
 
   async refreshAccessibilityTree(): Promise<void> {
@@ -144,7 +145,7 @@ export class AccessibilityTreeView extends UI.Widget.VBox implements
   }
 
   treeUpdated({data}: Common.EventTarget
-                  .EventTargetEvent<SDK.AccessibilityModel.EventTypes[SDK.AccessibilityModel.Events.TreeUpdated]>):
+                  .EventTargetEvent<SDK.AccessibilityModel.EventTypes[SDK.AccessibilityModel.Events.TREE_UPDATED]>):
       void {
     if (!data.root) {
       void this.renderTree();
@@ -162,10 +163,10 @@ export class AccessibilityTreeView extends UI.Widget.VBox implements
   }
 
   modelAdded(model: SDK.AccessibilityModel.AccessibilityModel): void {
-    model.addEventListener(SDK.AccessibilityModel.Events.TreeUpdated, this.treeUpdated, this);
+    model.addEventListener(SDK.AccessibilityModel.Events.TREE_UPDATED, this.treeUpdated, this);
   }
 
   modelRemoved(model: SDK.AccessibilityModel.AccessibilityModel): void {
-    model.removeEventListener(SDK.AccessibilityModel.Events.TreeUpdated, this.treeUpdated, this);
+    model.removeEventListener(SDK.AccessibilityModel.Events.TREE_UPDATED, this.treeUpdated, this);
   }
 }

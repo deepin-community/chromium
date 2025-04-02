@@ -25,6 +25,8 @@
 
 #include "third_party/blink/renderer/platform/geometry/length.h"
 
+#include <array>
+
 #include "third_party/blink/renderer/platform/geometry/blend.h"
 #include "third_party/blink/renderer/platform/geometry/calculation_value.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
@@ -35,15 +37,28 @@
 
 namespace blink {
 
-PLATFORM_EXPORT DEFINE_GLOBAL(Length, g_auto_length);
-PLATFORM_EXPORT DEFINE_GLOBAL(Length, g_none_length);
-PLATFORM_EXPORT DEFINE_GLOBAL(Length, g_fixed_zero_length);
+DEFINE_GLOBAL(PLATFORM_EXPORT, Length, g_auto_length);
+DEFINE_GLOBAL(PLATFORM_EXPORT, Length, g_fill_available_length);
+DEFINE_GLOBAL(PLATFORM_EXPORT, Length, g_stretch_length);
+DEFINE_GLOBAL(PLATFORM_EXPORT, Length, g_fit_content_length);
+DEFINE_GLOBAL(PLATFORM_EXPORT, Length, g_max_content_length);
+DEFINE_GLOBAL(PLATFORM_EXPORT, Length, g_min_content_length);
+DEFINE_GLOBAL(PLATFORM_EXPORT, Length, g_min_intrinsic_length);
 
 // static
 void Length::Initialize() {
   new (WTF::NotNullTag::kNotNull, (void*)&g_auto_length) Length(kAuto);
-  new (WTF::NotNullTag::kNotNull, (void*)&g_none_length) Length(kNone);
-  new (WTF::NotNullTag::kNotNull, (void*)&g_fixed_zero_length) Length(kFixed);
+  new (WTF::NotNullTag::kNotNull, (void*)&g_fill_available_length)
+      Length(kFillAvailable);
+  new (WTF::NotNullTag::kNotNull, (void*)&g_stretch_length) Length(kStretch);
+  new (WTF::NotNullTag::kNotNull, (void*)&g_fit_content_length)
+      Length(kFitContent);
+  new (WTF::NotNullTag::kNotNull, (void*)&g_max_content_length)
+      Length(kMaxContent);
+  new (WTF::NotNullTag::kNotNull, (void*)&g_min_content_length)
+      Length(kMinContent);
+  new (WTF::NotNullTag::kNotNull, (void*)&g_min_intrinsic_length)
+      Length(kMinIntrinsic);
 }
 
 class CalculationValueHandleMap {
@@ -140,7 +155,6 @@ PixelsAndPercent Length::GetPixelsAndPercent() const {
       return GetCalculationValue().GetPixelsAndPercent();
     default:
       NOTREACHED();
-      return PixelsAndPercent(0.0f, 0.0f, false, false);
   }
 }
 
@@ -203,7 +217,14 @@ float Length::NonNanCalculatedValue(float max_value,
   return result;
 }
 
-bool Length::IsContentOrIntrinsic() const {
+bool Length::HasAuto() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasAuto();
+  }
+  return GetType() == kAuto;
+}
+
+bool Length::HasContentOrIntrinsic() const {
   if (GetType() == kCalculated) {
     return GetCalculationValue().HasContentOrIntrinsicSize();
   }
@@ -212,24 +233,69 @@ bool Length::IsContentOrIntrinsic() const {
          GetType() == kContent;
 }
 
+bool Length::HasAutoOrContentOrIntrinsic() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasAutoOrContentOrIntrinsicSize();
+  }
+  return GetType() == kAuto || HasContentOrIntrinsic();
+}
+
+bool Length::HasPercent() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasPercent();
+  }
+  return GetType() == kPercent;
+}
+
+bool Length::HasPercentOrStretch() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasPercentOrStretch();
+  }
+  return GetType() == kPercent || GetType() == kStretch ||
+         GetType() == kFillAvailable;
+}
+
+bool Length::HasStretch() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasStretch();
+  }
+  return GetType() == kStretch || GetType() == kFillAvailable;
+}
+
+bool Length::HasMinContent() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasMinContent();
+  }
+  return GetType() == kMinContent;
+}
+
+bool Length::HasMaxContent() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasMaxContent();
+  }
+  return GetType() == kMaxContent;
+}
+
+bool Length::HasFitContent() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasFitContent();
+  }
+  return GetType() == kFitContent;
+}
+
 bool Length::IsCalculatedEqual(const Length& o) const {
   return IsCalculated() &&
          (&GetCalculationValue() == &o.GetCalculationValue() ||
           GetCalculationValue() == o.GetCalculationValue());
 }
 
-bool Length::HasAnchorQueries() const {
-  return IsCalculated() && GetCalculationValue().HasAnchorQueries();
-}
-
 String Length::ToString() const {
   StringBuilder builder;
   builder.Append("Length(");
-  static const char* const kTypeNames[] = {
-      "Auto",       "Percent",      "Fixed",         "MinContent",
-      "MaxContent", "MinIntrinsic", "FillAvailable", "FitContent",
-      "Calculated", "ExtendToZoom", "DeviceWidth",   "DeviceHeight",
-      "None",       "Content"};
+  static const auto kTypeNames = std::to_array<const char* const>(
+      {"Auto", "Percent", "Fixed", "MinContent", "MaxContent", "MinIntrinsic",
+       "FillAvailable", "Stretch", "FitContent", "Calculated", "Flex",
+       "ExtendToZoom", "DeviceWidth", "DeviceHeight", "None", "Content"});
   if (type_ < std::size(kTypeNames))
     builder.Append(kTypeNames[type_]);
   else

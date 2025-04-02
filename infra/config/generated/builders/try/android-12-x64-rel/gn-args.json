@@ -1,9 +1,9 @@
 {
   "gn_args": {
     "android_static_analysis": "off",
-    "coverage_instrumentation_input_file": "//.code-coverage/files_to_instrument.txt",
     "dcheck_always_on": true,
     "debuggable_apks": false,
+    "enable_chrome_android_internal": false,
     "ffmpeg_branding": "Chrome",
     "is_component_build": false,
     "is_debug": false,
@@ -15,8 +15,7 @@
     "system_webview_shell_package_name": "org.chromium.my_webview_shell",
     "target_cpu": "x64",
     "target_os": "android",
-    "use_clang_coverage": true,
-    "use_jacoco_coverage": true,
+    "use_reclient": false,
     "use_remoteexec": true,
     "use_siso": true
   }

@@ -37,6 +37,7 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/common/url_constants.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/web_dialogs/web_dialog_delegate.h"
 
 #if BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
@@ -83,7 +84,7 @@ class PrintPreviewDialogDelegate : public ui::WebDialogDelegate {
 
   ~PrintPreviewDialogDelegate() override;
 
-  ui::ModalType GetDialogModalType() const override;
+  ui::mojom::ModalType GetDialogModalType() const override;
   std::u16string GetDialogTitle() const override;
   std::u16string GetAccessibleDialogTitle() const override;
   GURL GetDialogContentURL() const override;
@@ -106,10 +107,9 @@ PrintPreviewDialogDelegate::PrintPreviewDialogDelegate(WebContents* initiator)
 
 PrintPreviewDialogDelegate::~PrintPreviewDialogDelegate() = default;
 
-ui::ModalType PrintPreviewDialogDelegate::GetDialogModalType() const {
+ui::mojom::ModalType PrintPreviewDialogDelegate::GetDialogModalType() const {
   // Not used, returning dummy value.
   NOTREACHED();
-  return ui::MODAL_TYPE_WINDOW;
 }
 
 std::u16string PrintPreviewDialogDelegate::GetDialogTitle() const {
@@ -217,6 +217,13 @@ void PrintPreviewDialogController::PrintPreview(
   }
 }
 
+// static
+std::unique_ptr<ui::WebDialogDelegate>
+PrintPreviewDialogController::CreatePrintPreviewDialogDelegateForTesting(
+    WebContents* initiator) {
+  return std::make_unique<PrintPreviewDialogDelegate>(initiator);
+}
+
 WebContents* PrintPreviewDialogController::GetOrCreatePreviewDialogForTesting(
     WebContents* initiator) {
   mojom::RequestPrintPreviewParams params;
@@ -234,7 +241,17 @@ WebContents* PrintPreviewDialogController::GetOrCreatePreviewDialog(
   if (preview_dialog) {
     return preview_dialog;
   }
-  return CreatePrintPreviewDialog(initiator, params);
+
+  // TODO(https://crbug.com/372062070: It's currently probably possible to
+  // invoke print-preview on non-tab web contents. There are currently tests
+  // that allow this for extension guest-views and chrome apps. For now allow
+  // these through. In the future we may want to restrict printing to tabs.
+  tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(initiator);
+  if (tab && !tab->CanShowModalUI()) {
+    return nullptr;
+  }
+
+  return CreatePrintPreviewDialog(tab, initiator, params);
 }
 
 WebContents* PrintPreviewDialogController::GetPrintPreviewForContents(
@@ -292,10 +309,29 @@ void PrintPreviewDialogController::EraseInitiatorInfo(
     return;
 
   web_contents_collection_.StopObserving(it->second.initiator);
-  it->second = {/*initiator=*/nullptr, /*request_params=*/{}};
+  it->second.initiator = nullptr;
+  it->second.request_params = {};
+  it->second.scoper.reset();
 }
 
 PrintPreviewDialogController::~PrintPreviewDialogController() = default;
+
+PrintPreviewDialogController::InitiatorData::InitiatorData(
+    InitiatorData&&) noexcept = default;
+
+PrintPreviewDialogController::InitiatorData&
+PrintPreviewDialogController::InitiatorData::operator=(
+    InitiatorData&&) noexcept = default;
+
+PrintPreviewDialogController::InitiatorData::InitiatorData(
+    content::WebContents* initiator,
+    const mojom::RequestPrintPreviewParams& request_params,
+    std::unique_ptr<tabs::ScopedTabModalUI> scoper)
+    : initiator(initiator),
+      request_params(request_params),
+      scoper(std::move(scoper)) {}
+
+PrintPreviewDialogController::InitiatorData::~InitiatorData() = default;
 
 void PrintPreviewDialogController::RenderProcessGone(
     content::WebContents* web_contents,
@@ -331,7 +367,6 @@ void PrintPreviewDialogController::WebContentsDestroyed(WebContents* contents) {
   WebContents* preview_dialog = GetPrintPreviewForContents(contents);
   if (!preview_dialog) {
     NOTREACHED();
-    return;
   }
 
   if (contents == preview_dialog)
@@ -351,7 +386,6 @@ void PrintPreviewDialogController::DidFinishNavigation(
   WebContents* preview_dialog = GetPrintPreviewForContents(contents);
   if (!preview_dialog) {
     NOTREACHED();
-    return;
   }
 
   if (contents != preview_dialog)
@@ -396,7 +430,8 @@ void PrintPreviewDialogController::OnPreviewDialogNavigated(
 }
 
 WebContents* PrintPreviewDialogController::CreatePrintPreviewDialog(
-    WebContents* initiator,
+    tabs::TabInterface* tab,
+    content::WebContents* initiator,
     const mojom::RequestPrintPreviewParams& params) {
   base::AutoReset<bool> auto_reset(&is_creating_print_preview_dialog_, true);
 
@@ -416,7 +451,8 @@ WebContents* PrintPreviewDialogController::CreatePrintPreviewDialog(
   PrintViewManager::CreateForWebContents(preview_dialog);
 
   // Add an entry to the map.
-  preview_dialog_map_[preview_dialog] = {initiator, params};
+  InitiatorData data(initiator, params, tab ? tab->ShowModalUI() : nullptr);
+  preview_dialog_map_.emplace(preview_dialog, std::move(data));
 
   // Make the print preview WebContents show up in the task manager.
   task_manager::WebContentsTags::CreateForPrintingContents(preview_dialog);
@@ -448,9 +484,7 @@ void PrintPreviewDialogController::RemoveInitiator(
   // Update the map entry first, so when the print preview dialog gets destroyed
   // and reaches RemovePreviewDialog(), it does not attempt to also remove the
   // initiator's observers.
-  preview_dialog_map_[preview_dialog] = {/*initiator=*/nullptr,
-                                         /*request_params=*/{}};
-  web_contents_collection_.StopObserving(initiator);
+  EraseInitiatorInfo(preview_dialog);
 
   PrintViewManager::FromWebContents(initiator)->PrintPreviewDone();
 

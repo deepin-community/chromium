@@ -6,12 +6,16 @@ import type * as puppeteer from 'puppeteer-core';
 import {
   $,
   click,
+  clickElement,
   getBrowserAndPages,
   goToResource,
-  reloadDevTools,
   waitFor,
-  clickElement,
+  waitForFunction,
 } from '../../shared/helper.js';
+
+import {
+  reloadDevTools,
+} from './cross-tool-helper.js';
 
 const DEVICE_TOOLBAR_TOGGLER_SELECTOR = '[aria-label="Toggle device toolbar"]';
 const DEVICE_TOOLBAR_SELECTOR = '.device-mode-toolbar';
@@ -26,20 +30,40 @@ const TEST_DEVICE_MENU_ITEM_SELECTOR = '[aria-label*="Test device, unchecked"]';
 const DUAL_SCREEN_BUTTON_SELECTOR = '[aria-label="Toggle dual-screen mode"]';
 const DEVICE_POSTURE_DROPDOWN_SELECTOR = '[aria-label="Device posture"]';
 const SCREEN_DIM_INPUT_SELECTOR = '[title="Width"]';
+const AUTO_AUTO_ADJUST_ZOOM_SELECTOR = '[aria-label*="Auto-adjust zoom"]';
 
 export const reloadDockableFrontEnd = async () => {
   await reloadDevTools({canDock: true});
 };
 
-export const openDeviceToolbar = async () => {
+export const deviceModeIsEnabled = async () => {
   const deviceToolbarToggler = await waitFor(DEVICE_TOOLBAR_TOGGLER_SELECTOR);
-  const togglerARIAPressed = await deviceToolbarToggler.evaluate(element => element.getAttribute('aria-pressed'));
-  const isOpen = togglerARIAPressed === 'true';
-  if (isOpen) {
+  const pressed = await deviceToolbarToggler.evaluate(element => {
+    const button = element.shadowRoot?.querySelector('.primary-toggle') as HTMLButtonElement;
+    return button.getAttribute('aria-pressed');
+  });
+  return pressed === 'true';
+};
+
+export const clickDeviceModeToggler = async () => {
+  const deviceToolbarToggler = await waitFor(DEVICE_TOOLBAR_TOGGLER_SELECTOR);
+  await clickElement(deviceToolbarToggler);
+};
+
+export const openDeviceToolbar = async () => {
+  if (await deviceModeIsEnabled()) {
     return;
   }
-  await clickElement(deviceToolbarToggler);
+  await clickDeviceModeToggler();
   await waitFor(DEVICE_TOOLBAR_SELECTOR);
+};
+
+export const deviceModeButtonCanEnable = async () => {
+  const deviceToolbarToggler = await waitFor(DEVICE_TOOLBAR_TOGGLER_SELECTOR);
+  return await deviceToolbarToggler.evaluate(element => {
+    const button = element.shadowRoot?.querySelector('.primary-toggle') as HTMLButtonElement;
+    return !button.disabled;
+  });
 };
 
 export const showMediaQueryInspector = async () => {
@@ -82,6 +106,11 @@ export const clickZoomDropDown = async () => {
   await click(ZOOM_LIST_DROPDOWN_SELECTOR, {root: toolbar});
 };
 
+export const clickWidthInput = async () => {
+  const toolbar = await waitFor(DEVICE_TOOLBAR_SELECTOR);
+  await click(SCREEN_DIM_INPUT_SELECTOR, {root: toolbar});
+};
+
 export const selectToggleButton = async () => {
   // button that toggles between single and double screen.
   const toggleButton = await $(DUAL_SCREEN_BUTTON_SELECTOR) as puppeteer.ElementHandle<HTMLButtonElement>;
@@ -91,32 +120,51 @@ export const selectToggleButton = async () => {
 export const selectEdit = async () => {
   await clickDevicesDropDown();
   await click(EDIT_MENU_ITEM_SELECTOR);
+  await waitForNotExpanded(DEVICE_LIST_DROPDOWN_SELECTOR);
 };
 
 export const selectDevice = async (name: string) => {
   await clickDevicesDropDown();
   await click(`[aria-label*="${name}, unchecked"]`);
+  await waitForNotExpanded(DEVICE_LIST_DROPDOWN_SELECTOR);
 };
 
 export const selectTestDevice = async () => {
   await clickDevicesDropDown();
   await click(TEST_DEVICE_MENU_ITEM_SELECTOR);
+  await waitForNotExpanded(DEVICE_LIST_DROPDOWN_SELECTOR);
 };
 
 // Test if span button works when emulating a dual screen device.
 export const selectDualScreen = async () => {
   await clickDevicesDropDown();
   await click(SURFACE_DUO_MENU_ITEM_SELECTOR);
+  await waitForNotExpanded(DEVICE_LIST_DROPDOWN_SELECTOR);
 };
 
 export const selectFoldableDevice = async () => {
   await clickDevicesDropDown();
   await click(FOLDABLE_DEVICE_MENU_ITEM_SELECTOR);
+  await waitForNotExpanded(DEVICE_LIST_DROPDOWN_SELECTOR);
+};
+
+const waitForNotExpanded = async (selector: string) => {
+  const toolbar = await waitFor(DEVICE_TOOLBAR_SELECTOR);
+  const dropdown = await waitFor(selector, toolbar);
+  await waitForFunction(async () => {
+    const expanded = await dropdown.evaluate(el => el.getAttribute('aria-expanded'));
+    return expanded === null;
+  });
+};
+
+export const waitForZoomDropDownNotExpanded = async () => {
+  await waitForNotExpanded(ZOOM_LIST_DROPDOWN_SELECTOR);
 };
 
 export const clickDevicePosture = async (name: string) => {
   await clickDevicePostureDropDown();
   await click(`[aria-label*="${name}, unchecked"]`);
+  await waitForNotExpanded(DEVICE_POSTURE_DROPDOWN_SELECTOR);
 };
 
 export const getDevicePostureDropDown = async () => {
@@ -137,10 +185,23 @@ export const getWidthOfDevice = async () => {
   return widthInput.evaluate(e => (e as HTMLInputElement).value);
 };
 
+export const getZoom = async () => {
+  // Read the width of spanned duo to make sure spanning works.
+  const widthInput = await waitFor(ZOOM_LIST_DROPDOWN_SELECTOR);
+  return widthInput.evaluate(e => (e as HTMLInputElement).innerText);
+};
+
+export const toggleAutoAdjustZoom = async () => {
+  await clickZoomDropDown();
+  await click(AUTO_AUTO_ADJUST_ZOOM_SELECTOR);
+  await waitForZoomDropDownNotExpanded();
+};
+
 const IPAD_MENU_ITEM_SELECTOR = '[aria-label*="iPad"]';
 
 // Test if span button is clickable when emulating a non-dual-screen device.
 export const selectNonDualScreenDevice = async () => {
   await clickDevicesDropDown();
   await click(IPAD_MENU_ITEM_SELECTOR);
+  await waitForNotExpanded(DEVICE_LIST_DROPDOWN_SELECTOR);
 };

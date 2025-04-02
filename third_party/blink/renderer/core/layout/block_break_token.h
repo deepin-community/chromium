@@ -254,7 +254,8 @@ class CORE_EXPORT BlockBreakToken final : public BreakToken {
  private:
   const base::span<const Member<const BreakToken>> ChildBreakTokensInternal()
       const {
-    return base::make_span(child_break_tokens_, const_num_children_);
+    // TODO(crbug.com/351564777): Resolve a buffer safety issue.
+    return UNSAFE_TODO(base::span(child_break_tokens_, const_num_children_));
   }
 
   Member<BlockBreakTokenData> data_;

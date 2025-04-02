@@ -61,6 +61,13 @@ DriveAvailability CheckDriveEnabledAndDriveAvailabilityForProfile(
 [[nodiscard]] bool IsOobeDrivePinningAvailable();
 [[nodiscard]] bool IsOobeDrivePinningScreenEnabled();
 
+// Returns true if the mirror sync feature should be available and visible in
+// the given Profile. This does not indicate whether the mirror sync
+// feature has been activated (turned on) by the user. It merely indicates
+// whether the mirror sync feature is available and can be turned on by the
+// user if they choose to.
+[[nodiscard]] bool IsDriveFsMirrorSyncAvailable(const Profile* profile);
+
 // Connection status to Drive.
 enum class ConnectionStatus {
   // Disconnected because Drive service is unavailable for this account (either
@@ -83,8 +90,11 @@ std::ostream& operator<<(std::ostream& out, ConnectionStatus status);
 // Sets the Drive connection status for testing purposes.
 void SetDriveConnectionStatusForTesting(ConnectionStatus status);
 
-// Returns the Drive connection status for the |profile|.
-ConnectionStatus GetDriveConnectionStatus(Profile* profile);
+// Returns the Drive connection status for the `profile`. Also returns the
+// device's online state in `is_online`. This could be different from the
+// connection status if drivefs is not running for some reason.
+ConnectionStatus GetDriveConnectionStatus(Profile* profile,
+                                          bool* is_online = nullptr);
 
 // Returns true if the supplied mime type is of a pinnable type. This indicates
 // the file can be made available offline.

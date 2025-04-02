@@ -6,21 +6,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Iterable, List, Optional, Tuple
 
-from crossbench import helper
-
-from .base import RunGroup
+from crossbench.helper import collection_helper
+from crossbench.runner.groups.base import RunGroup
 
 if TYPE_CHECKING:
   from crossbench import exception
   from crossbench.browsers.browser import Browser
   from crossbench.probes.probe import Probe
   from crossbench.probes.results import ProbeResult
+  from crossbench.runner.groups.cache_temperatures import \
+      CacheTemperaturesRunGroup
+  from crossbench.runner.groups.repetitions import RepetitionsRunGroup
   from crossbench.runner.run import Run
   from crossbench.stories.story import Story
-  from crossbench.types import JsonDict
-
-  from .cache_temperature import CacheTemperatureRunGroup
-  from .repetitions import RepetitionsRunGroup
+  from crossbench.types import JsonDict, JsonMapping
 
 
 class StoriesRunGroup(RunGroup):
@@ -38,7 +37,7 @@ class StoriesRunGroup(RunGroup):
              run_groups: Iterable[RepetitionsRunGroup],
              throw: bool = False) -> Tuple[StoriesRunGroup, ...]:
     return tuple(
-        helper.group_by(
+        collection_helper.group_by(
             run_groups,
             key=lambda run_group: run_group.browser,
             group=lambda _: cls(throw),
@@ -57,9 +56,9 @@ class StoriesRunGroup(RunGroup):
     return self._repetitions_groups
 
   @property
-  def cache_temperature_groups(self) -> Iterable[CacheTemperatureRunGroup]:
+  def cache_temperatures_groups(self) -> Iterable[CacheTemperaturesRunGroup]:
     for group in self._repetitions_groups:
-      yield from group.cache_temperature_groups
+      yield from group.cache_temperatures_groups
 
   @property
   def runs(self) -> Iterable[Run]:
@@ -83,8 +82,8 @@ class StoriesRunGroup(RunGroup):
     )
 
   @property
-  def info(self) -> JsonDict:
-    info = {
+  def info(self) -> JsonMapping:
+    info: JsonDict = {
         "label": self.browser.label,
         "browser": self.browser.app_name.title(),
         "version": self.browser.version,
@@ -100,5 +99,4 @@ class StoriesRunGroup(RunGroup):
     return info
 
   def _merge_probe_results(self, probe: Probe) -> ProbeResult:
-    # TODO: enable pytype again
-    return probe.merge_stories(self)  # pytype: disable=wrong-arg-types
+    return probe.merge_stories(self)

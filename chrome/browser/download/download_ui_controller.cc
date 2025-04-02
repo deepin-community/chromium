@@ -18,9 +18,9 @@
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_shelf.h"
 #include "chrome/browser/download/download_stats.h"
-#include "chrome/browser/ssl/security_state_tab_helper.h"
 #include "chrome/common/pref_names.h"
 #include "components/download/public/common/download_item.h"
+#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/security_state/core/security_state.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/web_contents.h"
@@ -31,6 +31,7 @@
 #include "chrome/browser/download/android/download_controller.h"
 #include "chrome/browser/download/android/download_controller_base.h"
 #include "components/pdf/common/constants.h"
+#include "content/public/browser/download_manager_delegate.h"
 #include "content/public/common/content_features.h"
 #else
 #include "chrome/browser/download/bubble/download_bubble_prefs.h"
@@ -48,10 +49,6 @@
 #include "chrome/browser/download/notification/download_notification_manager.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/startup/browser_params_proxy.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
 namespace {
 
 // DownloadShelfUIControllerDelegate{Android,} is used when a
@@ -61,8 +58,8 @@ namespace {
 
 class AndroidUIControllerDelegate : public DownloadUIController::Delegate {
  public:
-  AndroidUIControllerDelegate() {}
-  ~AndroidUIControllerDelegate() override {}
+  AndroidUIControllerDelegate() = default;
+  ~AndroidUIControllerDelegate() override = default;
 
  private:
   // DownloadUIController::Delegate
@@ -92,7 +89,7 @@ class DownloadShelfUIControllerDelegate
   // |profile| is required to outlive DownloadShelfUIControllerDelegate.
   explicit DownloadShelfUIControllerDelegate(Profile* profile)
       : profile_(profile) {}
-  ~DownloadShelfUIControllerDelegate() override {}
+  ~DownloadShelfUIControllerDelegate() override = default;
 
  private:
   // DownloadUIController::Delegate
@@ -202,24 +199,10 @@ class CrOSUIControllerDelegate : public DownloadUIController::Delegate {
       InitializeDownloadBubbleUpdateService(profile, manager);
     }
 
-    // Generally the `DownloadNotificationManager` should always be added as it
-    // provides System UI notifications on ChromeOS.
-    bool add_download_notification_manager = true;
-
-    // In Lacros, the `DownloadNotificationManager` should be added if and only
-    // if the new downloads integration with System UI surfaces is disabled.
-    // This ensures that exactly one System UI notification provider exists.
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    if (auto* proxy = chromeos::BrowserParamsProxy::Get();
-        proxy && proxy->IsSysUiDownloadsIntegrationV2Enabled()) {
-      add_download_notification_manager = false;
-    }
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
-    if (add_download_notification_manager) {
-      delegates_.emplace_back(
-          std::make_unique<DownloadNotificationManager>(profile));
-    }
+    // The `DownloadNotificationManager` should always be added as it provides
+    // System UI notifications on ChromeOS.
+    delegates_.emplace_back(
+        std::make_unique<DownloadNotificationManager>(profile));
   }
 
   CrOSUIControllerDelegate(const CrOSUIControllerDelegate&) = delete;
@@ -248,8 +231,7 @@ class CrOSUIControllerDelegate : public DownloadUIController::Delegate {
 
 } // namespace
 
-DownloadUIController::Delegate::~Delegate() {
-}
+DownloadUIController::Delegate::~Delegate() = default;
 
 void DownloadUIController::Delegate::OnButtonClicked() {}
 
@@ -304,7 +286,7 @@ void DownloadUIController::OnDownloadCreated(content::DownloadManager* manager,
   }
 
   if (web_contents) {
-    // TODO(crbug.com/1179196): Add test for this metric.
+    // TODO(crbug.com/40169435): Add test for this metric.
     RecordDownloadStartPerProfileType(
         Profile::FromBrowserContext(web_contents->GetBrowserContext()));
   }
@@ -320,8 +302,10 @@ void DownloadUIController::OnDownloadUpdated(content::DownloadManager* manager,
 
   bool needs_to_render = false;
 #if BUILDFLAG(IS_ANDROID)
-  if (base::FeatureList::IsEnabled(features::kAndroidOpenPdfInline) &&
+  if (manager && manager->GetDelegate() &&
+      manager->GetDelegate()->ShouldOpenPdfInline() &&
       !item->IsMustDownload() &&
+      item->GetState() == download::DownloadItem::IN_PROGRESS &&
       base::EqualsCaseInsensitiveASCII(item->GetMimeType(),
                                        pdf::kPDFMimeType)) {
     needs_to_render = true;

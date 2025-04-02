@@ -16,10 +16,12 @@
 #include "base/test/bind.h"
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync_file_system/drive_backend/sync_engine.h"
 #include "chrome/browser/sync_file_system/local/local_file_sync_service.h"
 #include "chrome/browser/sync_file_system/sync_file_system_service.h"
 #include "chrome/browser/sync_file_system/sync_file_system_service_factory.h"
+#include "chrome/browser/ui/browser.h"
 #include "components/drive/service/fake_drive_service.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -185,7 +187,8 @@ IN_PROC_BROWSER_TEST_F(SyncFileSystemTest, AuthorizationTest) {
                                     identity_manager()->GetPrimaryAccountInfo(
                                         signin::ConsentLevel::kSync),
                                     signin::ConsentLevel::kSync),
-                                PrimaryAccountChangeEvent::State()));
+                                PrimaryAccountChangeEvent::State(),
+                                signin_metrics::ProfileSignout::kTest));
   foo_created.Reply("resume");
 
   ASSERT_TRUE(bar_created.WaitUntilSatisfied());
@@ -203,7 +206,8 @@ IN_PROC_BROWSER_TEST_F(SyncFileSystemTest, AuthorizationTest) {
                                 PrimaryAccountChangeEvent::State(
                                     identity_manager()->GetPrimaryAccountInfo(
                                         signin::ConsentLevel::kSync),
-                                    signin::ConsentLevel::kSync)));
+                                    signin::ConsentLevel::kSync),
+                                signin_metrics::AccessPoint::kUnknown));
   WaitUntilIdle();
 
   bar_created.Reply("resume");

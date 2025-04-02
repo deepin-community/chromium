@@ -8,6 +8,7 @@
 #include "base/test/icu_test_util.h"
 #include "base/test/values_test_util.h"
 #include "base/values.h"
+#include "components/sync/protocol/sync_enums.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace syncer {
@@ -51,7 +52,7 @@ TEST_F(SyncCycleSnapshotTest, SyncCycleSnapshotToValue) {
   base::Value::Dict dict(snapshot.ToValue());
   EXPECT_EQ(14u, dict.size());
   ExpectDictStringValue(kBirthday, dict, "birthday");
-  // Base64-encoded version of |kBagOfChips|.
+  // Base64-encoded version of `kBagOfChips`.
   ExpectDictStringValue("YmFnb2ZjaGlwcwE=", dict, "bagOfChips");
   ExpectDictIntegerValue(model_neutral.num_successful_commits, dict,
                          "numSuccessfulCommits");

@@ -25,6 +25,7 @@
 #include <utility>
 
 #include "perfetto/base/build_config.h"
+#include "perfetto/base/compiler.h"
 #include "perfetto/base/export.h"
 #include "perfetto/base/logging.h"
 #include "perfetto/base/platform_handle.h"
@@ -40,7 +41,7 @@ namespace base {
 // Define the ScopedSocketHandle type.
 
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
-int CloseSocket(SocketHandle);   // A wrapper around ::closesocket().
+int CloseSocket(SocketHandle);  // A wrapper around ::closesocket().
 using ScopedSocketHandle =
     ScopedResource<SocketHandle, CloseSocket, static_cast<SocketHandle>(-1)>;
 #else
@@ -87,6 +88,7 @@ inline bool SockShmemSupported(SockFamily sock_family) {
 #if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
   return sock_family == SockFamily::kUnix;
 #else
+  base::ignore_result(sock_family);
   // On Windows shm is negotiated by sharing an unguessable token
   // over TCP sockets. In theory works on any socket type, in practice
   // we need to tell the difference between a local and a remote
@@ -398,7 +400,7 @@ class PERFETTO_EXPORT_COMPONENT UnixSocket {
   }
 #endif
 
-#if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) || \
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX_BUT_NOT_QNX) || \
     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
   // Process ID of the peer, as returned by the kernel. If the client
   // disconnects and the socket goes into the kDisconnected state, it

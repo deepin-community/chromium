@@ -162,8 +162,9 @@ class CopyExternalTextureForBrowserTests : public Parent {
         externalDesc.plane0 = externalTexturePlane0.CreateView();
         externalDesc.plane1 = externalTexturePlane1.CreateView();
 
-        externalDesc.visibleOrigin = {0, 0};
-        externalDesc.visibleSize = {kWidth, kHeight};
+        externalDesc.cropOrigin = {0, 0};
+        externalDesc.cropSize = {kWidth, kHeight};
+        externalDesc.apparentSize = {kWidth, kHeight};
 
         // Import the external texture
         return this->device.CreateExternalTexture(&externalDesc);
@@ -300,7 +301,6 @@ class CopyExternalTextureForBrowserTests_Basic
     : public CopyExternalTextureForBrowserTestsBase<CopyTestParams> {};
 
 TEST_P(CopyExternalTextureForBrowserTests_Basic, Copy) {
-    DAWN_SUPPRESS_TEST_IF(IsOpenGLES());
     DAWN_SUPPRESS_TEST_IF(IsOpenGL() && IsLinux());
 
     wgpu::CopyTextureForBrowserOptions options = {};
@@ -309,6 +309,10 @@ TEST_P(CopyExternalTextureForBrowserTests_Basic, Copy) {
     CopyRect srcCopyRect = GetParam().mCopySrcRect;
     CopyRect dstCopyRect = GetParam().mCopyDstRect;
     ScaleType scaleType = GetParam().mScaleType;
+
+    // TODO(crbug.com/346951918): only passes with SrcRect=TopLeft on Pixel 4 (Qualcomm)
+    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && IsQualcomm() &&
+                          srcCopyRect != CopyRect::TopLeft);
 
     // Test skip due to crbug.com/dawn/1719
     DAWN_SUPPRESS_TEST_IF(IsWARP() && srcCopyRect != CopyRect::TopLeft &&
@@ -414,7 +418,6 @@ class CopyExternalTextureForBrowserTests_Aspect : public CopyExternalTextureForB
 };
 
 TEST_P(CopyExternalTextureForBrowserTests_Aspect, Copy) {
-    DAWN_SUPPRESS_TEST_IF(IsOpenGLES());
     DAWN_SUPPRESS_TEST_IF(IsOpenGL() && IsLinux());
 
     wgpu::Origin3D srcOrigin = {};

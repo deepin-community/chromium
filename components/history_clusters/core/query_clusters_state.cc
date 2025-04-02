@@ -4,26 +4,25 @@
 
 #include "components/history_clusters/core/query_clusters_state.h"
 
+#include <algorithm>
 #include <set>
 
 #include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_types.h"
-#include "components/strings/grit/components_strings.h"
-#include "components/history_clusters/core/config.h"
 #include "components/history_clusters/core/features.h"
 #include "components/history_clusters/core/history_clusters_service.h"
 #include "components/history_clusters/core/history_clusters_service_task.h"
 #include "components/history_clusters/core/history_clusters_util.h"
-#include "url/gurl.h"
+#include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "url/gurl.h"
 
 namespace history_clusters {
 
@@ -31,9 +30,9 @@ namespace {
 
 QueryClustersFilterParams GetFilterParamsFromFlags(const std::string& query) {
   QueryClustersFilterParams filter_params;
-  filter_params.include_synced_visits = GetConfig().include_synced_visits;
-  filter_params.group_clusters_by_content =
-      GetConfig().content_clustering_enabled;
+  // Journeys launched Synced visits by default in early 2024.
+  filter_params.include_synced_visits = true;
+  filter_params.group_clusters_by_content = false;
 
   // If there is a query, we do not want to apply any filtering.
   if (!query.empty()) {
@@ -41,8 +40,7 @@ QueryClustersFilterParams GetFilterParamsFromFlags(const std::string& query) {
   }
 
   // Only set special filter params if the zero state filtering flag is applied.
-  if (!ShouldUseNavigationContextClustersFromPersistence() ||
-      !GetConfig().apply_zero_state_filtering) {
+  if (!ShouldUseNavigationContextClustersFromPersistence()) {
     return filter_params;
   }
 
@@ -104,10 +102,12 @@ QueryClustersState::QueryClustersState(
     base::WeakPtr<HistoryClustersService> service,
     history::HistoryService* history_service,
     const std::string& query,
+    base::Time begin_time,
     bool recluster)
     : service_(service),
       history_service_(history_service),
       query_(query),
+      begin_time_(begin_time),
       filter_params_(GetFilterParamsFromFlags(query)),
       recluster_(recluster),
       post_processing_task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
@@ -132,8 +132,8 @@ void QueryClustersState::LoadNextBatchOfClusters(ResultCallback callback) {
 
   base::TimeTicks query_start_time = base::TimeTicks::Now();
   query_clusters_task_ = service_->QueryClusters(
-      ClusteringRequestSource::kJourneysPage, filter_params_,
-      /*begin_time=*/base::Time(), continuation_params_, recluster_,
+      ClusteringRequestSource::kJourneysPage, filter_params_, begin_time_,
+      continuation_params_, recluster_,
       base::BindOnce(query_clusters_callback, weak_factory_.GetWeakPtr(),
                      query_start_time, std::move(callback)));
 }
@@ -311,8 +311,8 @@ void QueryClustersState::UpdateUniqueRawLabels(
     // Warning: N^2 algorithm below. If this ends up scaling poorly, it can be
     // optimized by adding a map that tracks which labels have been seen
     // already.
-    auto it = base::ranges::find(raw_label_counts_so_far_, raw_label_value,
-                                 &LabelCount::first);
+    auto it = std::ranges::find(raw_label_counts_so_far_, raw_label_value,
+                                &LabelCount::first);
     if (it == raw_label_counts_so_far_.end()) {
       it = raw_label_counts_so_far_.insert(it,
                                            std::make_pair(raw_label_value, 0));

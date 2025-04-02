@@ -41,7 +41,7 @@ class DisplayMediaAccessHandler : public CaptureAccessHandlerBase,
   ~DisplayMediaAccessHandler() override;
 
   // MediaAccessHandler implementation.
-  bool SupportsStreamType(content::WebContents* web_contents,
+  bool SupportsStreamType(content::RenderFrameHost* render_frame_host,
                           const blink::mojom::MediaStreamType stream_type,
                           const extensions::Extension* extension) override;
   bool CheckMediaAccessPermission(
@@ -61,6 +61,14 @@ class DisplayMediaAccessHandler : public CaptureAccessHandlerBase,
 
  private:
   friend class DisplayMediaAccessHandlerTest;
+
+  void ShowMediaSelectionDialog(content::WebContents* web_contents,
+                                const content::MediaStreamRequest& request,
+                                content::MediaResponseCallback callback);
+
+  void BypassMediaSelectionDialog(content::WebContents* web_contents,
+                                  const content::MediaStreamRequest& request,
+                                  content::MediaResponseCallback callback);
 
   void ProcessChangeSourceRequest(content::WebContents* web_contents,
                                   const content::MediaStreamRequest& request,

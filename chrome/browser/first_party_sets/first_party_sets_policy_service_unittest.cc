@@ -260,28 +260,28 @@ TEST_F(FirstPartySetsPolicyServiceTest,
 }
 
 TEST_F(FirstPartySetsPolicyServiceTest,
-       OnFirstPartySetsEnabledChanged_EnabledByBlock3pcToggle) {
+       FirstPartySetsEnabledWhenIn3pcdWith3pcsLimited) {
+  profile()->GetPrefs()->SetBoolean(
+      prefs::kPrivacySandboxRelatedWebsiteSetsEnabled, false);
+
   profile()->GetPrefs()->SetBoolean(prefs::kTrackingProtection3pcdEnabled,
                                     true);
   profile()->GetPrefs()->SetBoolean(prefs::kBlockAll3pcToggleEnabled, false);
 
-  service()->OnFirstPartySetsEnabledChanged(false);
-  EXPECT_TRUE(service()->is_enabled());
-
-  service()->OnFirstPartySetsEnabledChanged(true);
+  service()->InitForTesting();
   EXPECT_TRUE(service()->is_enabled());
 }
 
 TEST_F(FirstPartySetsPolicyServiceTest,
-       OnFirstPartySetsEnabledChanged_DisabledByBlock3pcToggle) {
+       FirstPartySetsDisabledWhenIn3pcdWithAll3pcsBlocked) {
+  profile()->GetPrefs()->SetBoolean(
+      prefs::kPrivacySandboxRelatedWebsiteSetsEnabled, true);
+
   profile()->GetPrefs()->SetBoolean(prefs::kTrackingProtection3pcdEnabled,
                                     true);
   profile()->GetPrefs()->SetBoolean(prefs::kBlockAll3pcToggleEnabled, true);
 
-  service()->OnFirstPartySetsEnabledChanged(false);
-  EXPECT_FALSE(service()->is_enabled());
-
-  service()->OnFirstPartySetsEnabledChanged(true);
+  service()->InitForTesting();
   EXPECT_FALSE(service()->is_enabled());
 }
 
@@ -332,9 +332,14 @@ TEST_P(FirstPartySetsPolicyServicePrefTest, FindEntry_FpsDisabledByPref) {
   // associatedSites: ["https://associate1.test"}
   SetGlobalSets(net::GlobalFirstPartySets(
       kVersion,
-      {{associate1_site,
-        {net::FirstPartySetEntry(primary_site, net::SiteType::kAssociated,
-                                 0)}}},
+      {
+          {associate1_site,
+           {net::FirstPartySetEntry(primary_site, net::SiteType::kAssociated,
+                                    0)}},
+          {primary_site,
+           {net::FirstPartySetEntry(primary_site, net::SiteType::kPrimary,
+                                    std::nullopt)}},
+      },
       {}));
 
   SetRwsEnabledViaPref(false);
@@ -343,8 +348,6 @@ TEST_P(FirstPartySetsPolicyServicePrefTest, FindEntry_FpsDisabledByPref) {
 
   // Verify that FindEntry doesn't return associate1's entry when FPS is off.
   EXPECT_FALSE(service()->FindEntry(associate1_site));
-  histogram_tester.ExpectUniqueSample(
-      "Cookie.FirstPartySets.NumBrowserQueriesBeforeInitialization", 0, 1);
   env().RunUntilIdle();
 }
 
@@ -352,6 +355,8 @@ TEST_P(FirstPartySetsPolicyServicePrefTest,
        FindEntry_FpsEnabled_ReturnsEmptyUntilAllSetsReady) {
   net::SchemefulSite primary_site(GURL("https://primary.test"));
   net::SchemefulSite associate1_site(GURL("https://associate1.test"));
+  net::FirstPartySetEntry primary_entry(net::FirstPartySetEntry(
+      primary_site, net::SiteType::kPrimary, std::nullopt));
   net::FirstPartySetEntry associate1_entry(
       net::FirstPartySetEntry(primary_site, net::SiteType::kAssociated, 0));
 
@@ -363,8 +368,13 @@ TEST_P(FirstPartySetsPolicyServicePrefTest,
   // Simulate the global First-Party Sets with the following set:
   // { primary: "https://primary.test",
   // associatedSites: ["https://associate1.test"}
-  SetGlobalSets(net::GlobalFirstPartySets(
-      kVersion, {{associate1_site, {associate1_entry}}}, {}));
+  SetGlobalSets(
+      net::GlobalFirstPartySets(kVersion,
+                                {
+                                    {primary_site, {primary_entry}},
+                                    {associate1_site, {associate1_entry}},
+                                },
+                                {}));
 
   // Verify that FindEntry returns empty if both sources of sets aren't ready
   // yet.
@@ -384,6 +394,8 @@ TEST_P(FirstPartySetsPolicyServicePrefTest,
 
   net::SchemefulSite primary_site(GURL("https://primary.test"));
   net::SchemefulSite associate_site(GURL("https://associate.test"));
+  net::FirstPartySetEntry primary_entry(net::FirstPartySetEntry(
+      primary_site, net::SiteType::kPrimary, std::nullopt));
   net::FirstPartySetEntry associate_entry(
       net::FirstPartySetEntry(primary_site, net::SiteType::kAssociated, 0));
 
@@ -397,24 +409,19 @@ TEST_P(FirstPartySetsPolicyServicePrefTest,
   // Simulate the global First-Party Sets with the following set:
   // { primary: "https://primary.test",
   // associatedSites: ["https://associate.test"}
-  SetGlobalSets(net::GlobalFirstPartySets(
-      kVersion, {{associate_site, {associate_entry}}}, {}));
+  SetGlobalSets(
+      net::GlobalFirstPartySets(kVersion,
+                                {
+                                    {primary_site, {primary_entry}},
+                                    {associate_site, {associate_entry}},
+                                },
+                                {}));
 
   // Simulate the profile set overrides are empty.
   service()->InitForTesting();
 
-  // The queries that occur before global sets are ready should be
-  // counted in our metric.
-  histogram_tester.ExpectUniqueSample(
-      "Cookie.FirstPartySets.NumBrowserQueriesBeforeInitialization", 3, 1);
-
   // Verify that FindEntry finally returns associate1's entry.
   EXPECT_EQ(service()->FindEntry(associate_site).value(), associate_entry);
-
-  // The queries that occur after global sets are ready shouldn't be
-  // counted by our metric.
-  histogram_tester.ExpectUniqueSample(
-      "Cookie.FirstPartySets.NumBrowserQueriesBeforeInitialization", 3, 1);
 
   env().RunUntilIdle();
 }
@@ -425,6 +432,8 @@ TEST_P(FirstPartySetsPolicyServicePrefTest,
 
   net::SchemefulSite primary_site(GURL("https://primary.test"));
   net::SchemefulSite associate_site(GURL("https://associate.test"));
+  net::FirstPartySetEntry primary_entry(net::FirstPartySetEntry(
+      primary_site, net::SiteType::kPrimary, std::nullopt));
   net::FirstPartySetEntry associate_entry(
       net::FirstPartySetEntry(primary_site, net::SiteType::kAssociated, 0));
 
@@ -433,8 +442,13 @@ TEST_P(FirstPartySetsPolicyServicePrefTest,
   // Simulate the global First-Party Sets with the following set:
   // { primary: "https://primary.test",
   // associatedSites: ["https://associate.test"}
-  SetGlobalSets(net::GlobalFirstPartySets(
-      kVersion, {{associate_site, {associate_entry}}}, {}));
+  SetGlobalSets(
+      net::GlobalFirstPartySets(kVersion,
+                                {
+                                    {primary_site, {primary_entry}},
+                                    {associate_site, {associate_entry}},
+                                },
+                                {}));
 
   // Simulate the profile set overrides are empty.
   service()->InitForTesting();
@@ -443,11 +457,6 @@ TEST_P(FirstPartySetsPolicyServicePrefTest,
   EXPECT_EQ(service()->FindEntry(associate_site).value(), associate_entry);
   EXPECT_EQ(service()->FindEntry(associate_site).value(), associate_entry);
   EXPECT_EQ(service()->FindEntry(associate_site).value(), associate_entry);
-
-  // None of the 3 queries should be counted in our metric since the service
-  // already has received its context config.
-  histogram_tester.ExpectUniqueSample(
-      "Cookie.FirstPartySets.NumBrowserQueriesBeforeInitialization", 0, 1);
 }
 
 TEST_P(FirstPartySetsPolicyServicePrefTest,
@@ -460,9 +469,14 @@ TEST_P(FirstPartySetsPolicyServicePrefTest,
   // associatedSites: ["https://associate.test"}
   SetGlobalSets(net::GlobalFirstPartySets(
       kVersion,
-      {{associate_site,
-        {net::FirstPartySetEntry(primary_site, net::SiteType::kAssociated,
-                                 0)}}},
+      {
+          {primary_site,
+           {net::FirstPartySetEntry(primary_site, net::SiteType::kPrimary,
+                                    std::nullopt)}},
+          {associate_site,
+           {net::FirstPartySetEntry(primary_site, net::SiteType::kAssociated,
+                                    0)}},
+      },
       {}));
 
   // Simulate First-Party Sets disabled by the user pref.
@@ -474,7 +488,7 @@ TEST_P(FirstPartySetsPolicyServicePrefTest,
   EXPECT_FALSE(service()->ForEachEffectiveSetEntry(
       [&](const net::SchemefulSite& site,
           const net::FirstPartySetEntry& entry) {
-        NOTREACHED_NORETURN();
+        NOTREACHED();
         return true;
       }));
 }
@@ -494,7 +508,7 @@ TEST_P(FirstPartySetsPolicyServicePrefTest,
   EXPECT_FALSE(service()->ForEachEffectiveSetEntry(
       [&](const net::SchemefulSite& site,
           const net::FirstPartySetEntry& entry) {
-        NOTREACHED_NORETURN();
+        NOTREACHED();
         return true;
       }));
 
@@ -510,7 +524,7 @@ TEST_P(FirstPartySetsPolicyServicePrefTest,
   EXPECT_FALSE(service()->ForEachEffectiveSetEntry(
       [&](const net::SchemefulSite& site,
           const net::FirstPartySetEntry& entry) {
-        NOTREACHED_NORETURN();
+        NOTREACHED();
         return true;
       }));
 
@@ -587,7 +601,7 @@ TEST_F(FirstPartySetsPolicyServicePrefTest,
 }
 
 TEST_F(FirstPartySetsPolicyServicePrefTest,
-       OnFirstPartySetsEnabledChanged_Default_WithConfig) {
+       OnRelatedWebsiteSetsEnabledChanged_Default_WithConfig) {
   service()->InitForTesting();
 
   EXPECT_CALL(mock_delegate, SetEnabled(_)).Times(1);
@@ -597,7 +611,7 @@ TEST_F(FirstPartySetsPolicyServicePrefTest,
 }
 
 TEST_F(FirstPartySetsPolicyServicePrefTest,
-       OnFirstPartySetsEnabledChanged_Default_WithoutConfig) {
+       OnRelatedWebsiteSetsEnabledChanged_Default_WithoutConfig) {
   EXPECT_CALL(mock_delegate, SetEnabled(_)).Times(1);
   EXPECT_CALL(mock_delegate, NotifyReady(_)).Times(0);
 
@@ -605,11 +619,11 @@ TEST_F(FirstPartySetsPolicyServicePrefTest,
 }
 
 TEST_F(FirstPartySetsPolicyServicePrefTest,
-       OnFirstPartySetsEnabledChanged_Disables_WithConfig) {
+       OnRelatedWebsiteSetsEnabledChanged_Disables_WithConfig) {
   service()->InitForTesting();
   EXPECT_CALL(mock_delegate, SetEnabled(true)).Times(1);
 
-  service()->OnFirstPartySetsEnabledChanged(false);
+  service()->OnRelatedWebsiteSetsEnabledChanged(false);
 
   EXPECT_CALL(mock_delegate, SetEnabled(false)).Times(1);
   EXPECT_CALL(mock_delegate, NotifyReady(_)).Times(1);
@@ -618,10 +632,10 @@ TEST_F(FirstPartySetsPolicyServicePrefTest,
 }
 
 TEST_F(FirstPartySetsPolicyServicePrefTest,
-       OnFirstPartySetsEnabledChanged_Disables_WithoutConfig) {
+       OnRelatedWebsiteSetsEnabledChanged_Disables_WithoutConfig) {
   EXPECT_CALL(mock_delegate, SetEnabled(true)).Times(1);
 
-  service()->OnFirstPartySetsEnabledChanged(false);
+  service()->OnRelatedWebsiteSetsEnabledChanged(false);
 
   EXPECT_CALL(mock_delegate, SetEnabled(false)).Times(1);
   EXPECT_CALL(mock_delegate, NotifyReady(_)).Times(0);
@@ -630,7 +644,7 @@ TEST_F(FirstPartySetsPolicyServicePrefTest,
 }
 
 TEST_F(FirstPartySetsPolicyServicePrefTest,
-       OnFirstPartySetsEnabledChanged_Enables_WithConfig) {
+       OnRelatedWebsiteSetsEnabledChanged_Enables_WithConfig) {
   net::SchemefulSite test_primary(GURL("https://a.test"));
   net::FirstPartySetEntry test_entry(test_primary, net::SiteType::kPrimary,
                                      std::nullopt);
@@ -639,7 +653,7 @@ TEST_F(FirstPartySetsPolicyServicePrefTest,
   SetContextConfig(test_config.Clone());
 
   service()->InitForTesting();
-  service()->OnFirstPartySetsEnabledChanged(true);
+  service()->OnRelatedWebsiteSetsEnabledChanged(true);
 
   // Ensure access delegate is called with SetEnabled(true) and NotifyReady is
   // called with the config (during initialization -- not due to SetEnabled).
@@ -652,8 +666,8 @@ TEST_F(FirstPartySetsPolicyServicePrefTest,
 }
 
 TEST_F(FirstPartySetsPolicyServicePrefTest,
-       OnFirstPartySetsEnabledChanged_Enables_WithoutConfig) {
-  service()->OnFirstPartySetsEnabledChanged(true);
+       OnRelatedWebsiteSetsEnabledChanged_Enables_WithoutConfig) {
+  service()->OnRelatedWebsiteSetsEnabledChanged(true);
 
   // NotifyReady isn't called since the config isn't ready to be sent.
   EXPECT_CALL(mock_delegate, SetEnabled(true)).Times(2);
@@ -663,7 +677,7 @@ TEST_F(FirstPartySetsPolicyServicePrefTest,
 }
 
 TEST_F(FirstPartySetsPolicyServicePrefTest,
-       OnFirstPartySetsEnabledChanged_OTRProfile) {
+       OnRelatedWebsiteSetsEnabledChanged_OTRProfile) {
   testing::NiceMock<MockFirstPartySetsAccessDelegate> mock_delegate;
   EXPECT_CALL(mock_delegate, SetEnabled(false)).Times(1);
   EXPECT_CALL(mock_delegate, SetEnabled(true)).Times(0);
@@ -689,7 +703,7 @@ TEST_F(FirstPartySetsPolicyServicePrefTest,
   ASSERT_FALSE(otr_service->is_enabled());
   env().RunUntilIdle();
 
-  otr_service->OnFirstPartySetsEnabledChanged(true);
+  otr_service->OnRelatedWebsiteSetsEnabledChanged(true);
   EXPECT_FALSE(otr_service->is_enabled());
 
   env().RunUntilIdle();
@@ -829,8 +843,8 @@ TEST_F(ThirdPartyCookieBlockingFirstPartySetsPolicyServiceTest, AlwaysEnabled) {
   service->AddRemoteAccessDelegate(std::move(mock_delegate_remote_));
 
   // These changes should not be forwarded to the delegate.
-  service->OnFirstPartySetsEnabledChanged(false);
-  service->OnFirstPartySetsEnabledChanged(true);
+  service->OnRelatedWebsiteSetsEnabledChanged(false);
+  service->OnRelatedWebsiteSetsEnabledChanged(true);
 
   env().RunUntilIdle();
 }

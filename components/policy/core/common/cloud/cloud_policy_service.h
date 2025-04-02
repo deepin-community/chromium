@@ -41,7 +41,7 @@ class POLICY_EXPORT CloudPolicyService : public CloudPolicyClient::Observer,
     // was successful.
     virtual void OnPolicyRefreshed(bool success) {}
 
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
   };
 
   // |client| and |store| must remain valid for the object life time.
@@ -74,7 +74,7 @@ class POLICY_EXPORT CloudPolicyService : public CloudPolicyClient::Observer,
   void OnStoreLoaded(CloudPolicyStore* store) override;
   void OnStoreError(CloudPolicyStore* store) override;
 
-  void ReportValidationResult(CloudPolicyStore* store);
+  void ReportValidationResult(CloudPolicyStore* store, ValidationAction action);
 
   bool IsInitializationComplete() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);

@@ -2,6 +2,313 @@ Skia Graphics Release Notes
 
 This file includes a list of high level updates for each milestone release.
 
+Milestone 134
+-------------
+  * `SkShaders::Color(SkColor4f, sk_sp<SkColorSpace>)` now always applies the color
+    space to the color, even if rendering to a legacy `SkSurface` that is not
+    color managed. In this case, the target color space is assumed to be sRGB.
+  * The A98 RGB, ProPhoto RGB, Display P3 and Rec2020 color spaces can now be used
+    for gradient interpolation.
+  * The `PrecompileContext` now allows client timed-based purging of Pipelines via
+    the new `PrecompileContext::purgePipelinesNotUsedInMs` call.
+
+* * *
+
+Milestone 133
+-------------
+  * Graphite's `Context` now provides an interface to report the GPU time spent processing a recording. The client provides
+    a different finished proc of type `skgpu::graphite::GpuFinishedWithStatsProc` using
+    `skgpu::graphite::InsertRecordingInfo::fFinishedWithStatsProc` and sets the flag
+    `skgpu::graphite::InsertRecordingInfo::fGpuStatsFlag` to `skgpu::GpuStatsFlags::kElapsedTime`. The new callback takes a
+    new struct, `skgpu::GpuStats`, which has an `elapsedTime` field that will indicate the amount of GPU time used by the
+    recording. This is implemented for the Dawn backend only. In WASM on WebGPU the reported time excludes any GPU transfers
+    that occur before the first render/compute pass or after the last pass because of limitations in the WebGPU timestamp
+    query API.
+
+    `GrDirectContext` provides a similar interface to report the GPU time spent in a flush. The client uses a new callback
+    type, `GrGpuFinishedWithStatsProc` and sets the same flag on `GrFlushInfo`. This is implemented for GL
+    (including GLES and WebGL).
+  * Graphite's logging priority can now be adjusted by defining
+    `SKGPU_GRAPHITE_LOWEST_ACTIVE_LOG_PRIORITY` in `SkUserConfig.h` to a value specified by the
+    `skgpu::graphite::LogPriority` enum.
+
+    For example:
+    ```
+    #define SKGPU_GRAPHITE_LOWEST_ACTIVE_LOG_PRIORITY skgpu::graphite::LogPriority::kWarning
+    ```
+
+    Would cause Graphite to log warnings, non-fatal errors, and fatal errors. However, debug logs would
+    be omitted.
+
+    `SKGPU_GRAPHITE_LOWEST_ACTIVE_LOG_PRIORITY` will default to `kWarning` in debug builds, and `kError`
+    in release builds.
+  * Split MtlGraphiteTypes.h into two files. MtlGraphiteTypes.h defines MtlTextureInfo, which is only available in Objective-C++. MtlGraphiteTypesUtils.h declares the utility functions that are callable from C++.
+  * `SK_CANVAS_SAVE_RESTORE_PREALLOC_COUNT` has been added to SkUserConfig.h and SkCanvas.h to let clients control
+    how much space is allocated for calls to `SkCanvas::save()`. Clients that don't make many calls can reduce the RAM used by `SkCanvas` by setting this (defaults to about 3kb).
+  * New public API: `SkColorSpace::MakeCICP` to create an `SkColorSpace` from code
+    points specified in Rec. ITU-T H.273.
+  * The ability to dump a SkSL::DebugTrace to JSON has been removed from the public API.
+  * `approximateFilteredBounds` has been removed from SkMaskFilter.
+  * A new PrecompileContext object has been added to assist Precompilation. The old API of the form:\
+        bool Precompile(Context*, ...);\
+    has been deprecated and replaced with the API:\
+        bool Precompile(PrecompileContext*, ...)\
+    The new PrecompileContext object can be obtained via the Context::makePrecompileContext call.
+
+    As an example of a possible Compilation/Precompilation threading model, one could employ 4 threads:
+
+    2 for creating Recordings (\<r1\> and \<r2\>) \
+    1 for precompiling (\<p1\>) \
+    and the main thread - which owns the Context and submits Recordings.
+
+    Start up for this scenario would look like:
+
+      the main thread moves a PrecompileContext to <p1> and begins precompiling there\
+      the main thread creates two Recorders and moves them to <r1> and <r2> to create Recordings\
+      the main thread continues on - calling Context::insertRecording on the posted Recordings.
+
+    The PrecompileContext can safely outlive the Context that created it, but it will
+    effectively be shut down at that point.
+  * Graphite has a new `ContextOptions::fRequiredOrderedRecordings` flag that enables certain optimizations when the
+    client knows that recordings are played back in order. Otherwise Graphite will need to clear some caches at the
+    start of each recording to ensure proper playback, which can significantly affect performance.
+
+    This replaces the old `ContextOptions::fDisableCachedGlyphUploads` flag.
+
+* * *
+
+Milestone 132
+-------------
+  * A new `SkCodec` method has been added: `hasHighBitDepthEncodedData`.
+  * `GrGLInterface` completeness requirements are modified to support using timer queries when available in the GL context.
+    The interface must have relevant functions initialized on OpenGL 3.3 or with GL_EXT_timer_query or GL_ARB_timerquery, on OpenGL ES with
+    GL_EXT_disjoint_timer_query, and on WebGL with GL_EXT_disjoint_timer_query or GL_EXT_disjoint_timer_query_webgl2.
+  * `GrGLInterface` now expects functions that take two `GLuints` instead of one `GLuint64` for `glWaitSync` and `glClientWaitSync`
+    when building with Emscripten. `GrGLMakeAssembledWebGLInterface` binds directly to the `emscipten_gl*` functions declared in the `<webgl/*>` headers rather than the functions declared
+    in `GLES3/gl32.h` and `GLES3/gl2ext.h`.
+  * `SkPathEffect::DashType`, `SkPathEffect::DashInfo` and `SkPathEffect::asADash` have been removed from the public API.
+
+* * *
+
+Milestone 131
+-------------
+  * `SkCanvas::SaveLayerRec` can optionally specify a tilemode to apply to backdrop
+    content when the new layer's effects would sample outside of the previous
+    layer's image.
+  * GrContextOptions::fSharpenMipmappedTextures has been restored. It is now enabled
+    by default but allows clients to disable this feature if desired.
+
+* * *
+
+Milestone 130
+-------------
+  * Add version of `SkAndroidCodec::getGainmapAndroidCodec` which returns an `SkAndroidCodec` instead
+    of an `SkStream`. Mark as deprecated the version that returns an `SkStream`.
+  * `SkColorFilter::filterColor` has been removed. Please use `SkColorFilter::filterColor4f` instead.
+  * SkFourByteTag has been moved to its own file: `include/core/SkFourByteTag.h`
+  * Ganesh files have been moved out of include/gpu/ into include/gpu/ganesh/. Shims have been left in place, but clients should migrate to the new paths.
+  * GR_GL_CUSTOM_SETUP_HEADER will be removed. Configuration in a client provided
+    SkUserConfig.h file (or defines set during compilation) are sufficient to affect
+    settings in GrGLConfig.h
+  * `GR_MAKE_BITFIELD_CLASS_OPS` and `GR_DECL_BITFIELD_CLASS_OPS_FRIENDS` have been removed
+    from the public API
+  * `SkMSec` has been removed from the public API, including `SkParse::FindMSec`
+  * A noop change to our SkSL runtime effect builder APIs. Moved make functions from subclasses
+    SkRuntimeShaderBuilder, SkRuntimeColorFilterBuilder, and SkRuntimeBlendBuilder to the base class
+    SkRuntimeEffectBuilder.
+
+* * *
+
+Milestone 129
+-------------
+  * The Dawn-specific constructors and methods on `skgpu::graphite::TextureInfo`,
+    `skgpu::graphite::BackendTexture`, have been deprecated and
+    moved to be functions in `DawnTypes.h`
+  * `SkImageFilters::DropShadow` and `SkImageFilters::DropShadowOnly` now accept
+    `SkColor4f` and `SkColorSpace` for the shadow color.
+  * `SkScalerContext::MakeRecAndEffects` now converts `SkFont::isEmbolden` to the `kEmbolden_Flag`.
+    It no longer automatically converts embolden requests into (more) stroking.
+    This can now (optionally) be done in `SkTypeface::onFilterRec` by calling the new `SkScalerContextRec::useStrokeForFakeBold()`.
+  * Skia no longer tests building against iOS 11.
+    The minimum deployment target is now iOS 12 as this is the minimum deplyment target for Xcode 15.
+  * The Vulkan-specific constructors and methods on `skgpu::graphite::TextureInfo`,
+    `skgpu::graphite::BackendTexture`, `skgpu::graphite::BackendSemaphore` have been deprecated and
+    moved to be functions in `VulkanGraphiteTypes.h`
+
+* * *
+
+Milestone 128
+-------------
+  * SkSL now properly reports an error if user code includes various GLSL reserved keywords.
+    Previously, Skia would correctly reject keywords that were included in "The OpenGL ES
+    Shading Language, Version 1.00," but did not detect reserved keywords added in more modern
+    GLSL versions. Instead, Skia would allow such code to compile during the construction of a
+    runtime effect, but actually rendering the effect using a modern version of OpenGL would
+    silently fail (or assert) due to the presence of the reserved name in the the code.
+
+    Examples of reserved names which SkSL will now reject include `dmat3x3`, `atomic_uint`,
+    `isampler2D`, or `imageCubeArray`.
+
+    For a more thorough list of reserved keywords, see the "3.6 Keywords" section of the
+    OpenGL Shading Language documentation.
+  * The following symbols (and their files) have been deleted in favor of their
+    GPU-backend-agnostic form:
+     - `GrVkBackendContext` -> `skgpu::VulkanBackendContext`
+     - `GrVkExtensions` -> `skgpu::VulkanExtensions`
+     - `GrVkMemoryAllocator` = `skgpu::VulkanMemoryAllocator`
+     - `GrVkBackendMemory` = `skgpu::VulkanBackendMemory`
+     - `GrVkAlloc` = `skgpu::VulkanAlloc`
+     - `GrVkYcbcrConversionInfo` = `skgpu::VulkanYcbcrConversionInfo`
+     - `GrVkGetProc` = `skgpu::VulkanGetProc`
+  * The Metal-specific constructors and methods on `skgpu::graphite::TextureInfo`,
+    `skgpu::graphite::BackendTexture`, `skgpu::graphite::BackendSemaphore` have been deprecated and
+    moved to be functions in `MtlGraphiteTypes.h`
+  * SkImage now has a method makeScaled(...) which returns a scaled version of
+    the image, retaining its original "domain"
+    - raster stays raster
+    - ganesh stays ganesh
+    - graphite stays graphite
+    - lazy images become raster (just like with makeSubset)
+
+* * *
+
+Milestone 127
+-------------
+  * SkSL now properly recognizes the types `uvec2`, `uvec3` or `uvec4`.
+
+    Unsigned types are not supported in Runtime Effects, as they did not exist in GLSL ES2; however,
+    SkSL should still recognize these typenames and reject them if they are used in a program.
+    That is, we should not allow `uvec3` to be used as a variable or function name. We will now properly
+    detect and reject this as an error.
+  * The following deprecated fields have been removed from `GrVkBackendContext`:
+     - `fMinAPIVersion`. Use `fMaxAPIVersion` instead.
+     - `fInstanceVersion`. Use `fMaxAPIVersion` instead.
+     - `fFeatures`. Use `fDeviceFeatures` or `fDeviceFeatures2` instead.
+     - `fOwnsInstanceAndDevice`. No replacement, as it had no effect.
+
+    `GrVkBackendContext` is now an alias for `skgpu::VulkanBackendContext`. Clients should use the latter, as the former will be eventually removed.
+  * SkShaderMaskFilters and SkTableMaskFilters have been deprecated. They will be removed entirely in an upcoming Skia release.
+
+* * *
+
+Milestone 126
+-------------
+  * Skia's internal array class (`skia_private::TArray<T>`) now protects its unused capacity when
+    [Address Sanitizer (ASAN)](https://clang.llvm.org/docs/AddressSanitizer.html) is enabled. Code which
+    inadvertently writes past the end of a Skia internal structure is now more likely to trigger an ASAN
+    error.
+  * `SkFloat2Bits` and `SkBits2Float` have been removed from the Skia public headers. These were always
+    private API (since they lived in `/include/private`) but they had leaked into some example code, and
+    tended to be available once a handful of Skia headers were #included.
+  * SkSL now allows the ++ and -- operators on vector and matrix variables.
+
+    Previously, attempting to use these operators on a vector or matrix would lead to an error. This was
+    a violation of the GLSL expression rules (5.9): "The arithmetic unary operators negate (-), post-
+    and pre-increment and decrement (-- and ++) operate on integer or floating-point values (including
+    vectors and matrices)."
+  * `SkScalarIsFinite`, `SkScalarsAreFinite`, and `SkScalarIsNaN` have been removed from the Skia API.
+    These calls can be replaced with the functionally-equivalent `std::isfinite` and `std::isnan`.
+  * Clients can explicitly make a Ganesh GL backend for iOS with
+    `GrGLInterfaces::MakeIOS` from `include/gpu/ganesh/gl/ios/GrGLMakeIOSInterface.h`
+  * Clients can explicitly make a Ganesh GL backend for Mac with
+    `GrGLInterfaces::MakeMac` from `include/gpu/ganesh/gl/mac/GrGLMakeMacInterface.h`
+  * The following headers have been relocated (notice "ganesh" in the filepath):
+     - include/gpu/gl/egl/GrGLMakeEGLInterface.h -> include/gpu/ganesh/gl/egl/GrGLMakeEGLInterface.h
+     - include/gpu/gl/glx/GrGLMakeGLXInterface.h -> include/gpu/ganesh/gl/glx/GrGLMakeGLXInterface.h
+     - include/gpu/gl/epoxy/GrGLMakeEpoxyEGLInterface.h -> include/gpu/ganesh/gl/epoxy/GrGLMakeEpoxyEGLInterface.h
+
+* * *
+
+Milestone 125
+-------------
+  * The size of the GPU memory cache budget can now be queried using member `maxBudgetedBytes` of `skgpu::graphite::Context` and `skgpu::graphite::Recorder`.
+  * Added `skgpu::graphite::Context::maxTextureSize()`, which exposes the maximum
+    texture dimension supported by the underlying backend.
+  * Using a MTLBinaryArchive to pre-load the MSL shader cache is no longer
+    supported in Ganesh, and the fBinaryArchive member of GrMtlBackendContext
+    has been removed.
+  * The `sksl-minify` tool can now eliminate unnecessary braces. For instance,
+    given the following SkSL code:
+
+    ```
+    if (condition) {
+        return 1;
+    } else {
+        return 2;
+    }
+    ```
+
+    The minifier will now emit:
+
+    ```
+    if(a)return 1;else return 2;
+    ```
+  * Added `SkBitmap::setColorSpace`. This API allows the colorspace of an existing
+    `SkBitmap` to be reinterpreted. The pixel data backing the bitmap will be left
+    as-is. The colorspace will be honored when the bitmap is accessed via APIs which
+    support colorspace conversion, like `readPixels`.
+  * `SkDrawLooper` has been removed completely from Skia. It was previously deprecated.
+  * Metal-specific constructors and methods have been removed from `GrBackendFormat`,
+    `GrBackendTexture`, and `GrBackendRenderTarget` and moved to
+    `include/gpu/ganesh/mtl/GrMtlBackendSurface.h`
+  * By default, //modules/skottie and //modules/svg will use primitive text shaping.
+    Clients that wish to use harfbuzz/icu for more correct shaping will need to
+    use one of the builders and call `setTextShapingFactory` with a newly-created
+    `SkShapers::Factory` implementation during construction.
+
+    For ease of configuration, `modules/skshaper/utils/FactoryHelpers.h` can be used
+    to provide this, but only if the client is depending on the correct skshaper
+    and skunicode modules (which should set defines such as `SK_SHAPER_HARFBUZZ_AVAILABLE`).
+
+    For example `builder.setTextShapingFactory(SkShapers::BestAvailable())` will use
+    Harfbuzz or CoreText for shaping if they were compiled in to the clients binary.
+
+* * *
+
+Milestone 124
+-------------
+  * `SkColorFilter::filterColor` is now deprecated and will eventually be removed in favor of `filterColor4f`.
+  * The Perlin noise shaders (`MakeFractalNoise` and `MakeTurbulence`) will now properly rotate when
+    transformed. On raster surfaces, the performance of Perlin noise has also been significantly
+    improved.
+  * Graphite's `SkImages::WrapTexture` now takes an additional parameter that indicates whether
+    a mipmapped texture should be used as is or whether Graphite should generate the upper level
+    contents from the base level contents.
+  * `GrBackendSemaphore::initMetal`, `GrBackendSemaphore::mtlSemaphore`, and
+    `GrBackendSemaphore::mtlValue` have been replaced with `GrBackendSemaphores::MakeMtl`,
+    `GrBackendSemaphores::GetMtlHandle`, and `GrBackendSemaphores::GetMtlValue`, defined in
+    `include/gpu/ganesh/mtl/GrMtlBackendSemaphore.h`
+  * `GrDirectContext::MakeMetal` has been moved to `GrDirectContexts::MakeMetal`, located in
+    `include/gpu/ganesh/mtl/GrMtlDirectContext.h`. The APIs that passed in void* have been removed
+    in that change, so clients who use those need to create a `GrMtlBackendContext` themselves.
+
+    `include/gpu/mtl/GrMtlTypes.h` and `include/gpu/mtl/GrMtlBackendContext.h` have been relocated to
+    `include/gpu/ganesh/mtl/GrMtlTypes.h` and `include/gpu/ganesh/mtl/GrMtlBackendContext.h`
+    respectively.
+  * Added `SkCodecs::DeferredImage` which is similar to `SkImages::DeferredFromEncodedData` except it
+    allows the caller to pass in a `SkCodec` directly instead of depending on compiled-in codecs.
+  * The following SkShaper functions have been moved or deleted:
+      - SkShaper::MakePrimitive() -> SkShapers::Primitive()
+      - SkShaper::MakeShaperDrivenWrapper() -> SkShapers::HB::ShaperDrivenWrapper()
+      - SkShaper::MakeShapeThenWrap() -> SkShapers::HB::ShapeThenWrap()
+      - SkShaper::MakeShapeDontWrapOrReorder() -> SkShapers::HB::ShapeDontWrapOrReorder()
+      - SkShaper::MakeCoreText() -> SkShapers::CT::CoreText()
+      - SkShaper::Make() -> deleted, use one of the above directly,
+      - SkShaper::MakeSkUnicodeBidiRunIterator() -> SkShapers::unicode::BidiRunIterator()
+      - SkShaper::MakeBiDiRunIterator() -> deleted, use SkShapers::unicode::BidiRunIterator() or SkShapers::TrivialBiDiRunIterator()
+      - SkShaper::MakeIcuBiDiRunIterator() -> deleted, use SkShapers::unicode::BidiRunIterator()
+      - SkShaper::MakeSkUnicodeHbScriptRunIterator() -> SkShapers::HB::ScriptRunIterator()
+      - SkShaper::MakeHbIcuScriptRunIterator() -> SkShapers::HB::ScriptRunIterator()
+      - SkShaper::MakeScriptRunIterator() -> deleted, use SkShapers::HB::ScriptRunIterator() or SkShapers::TrivialScriptRunIterator
+
+    Additionally, two `SkShaper::shape` method overloads have been removed - clients now need to
+    specify all 10 arguments (although it is common to pass in nullptr for features).
+  * `SkStream::getData()` has been added as a virtual. Subclasses can implement this if it is efficient
+    to turn the underlying contents into an SkData (e.g. SkStreamMemory). `SkStreamMemory::asData()`
+    has been renamed to `getData()` as a result of this change and will be removed in a future release.
+
+* * *
+
 Milestone 123
 -------------
   * When `SkCodec::SelectionPolicy::kPreferStillImage` is passed to `SkWuffsCodec`/`SkGifDecoder`

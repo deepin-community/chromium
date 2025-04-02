@@ -8,7 +8,6 @@ import {
   goTo,
   waitForFunction,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   clearTimeWindow,
   getAllRequestNames,
@@ -26,7 +25,7 @@ import {
 const SIMPLE_PAGE_REQUEST_NUMBER = 10;
 const SIMPLE_PAGE_URL = `requests.html?num=${SIMPLE_PAGE_REQUEST_NUMBER}`;
 
-describe('The Network Tab', async function() {
+describe('The Network Tab', function() {
   // The tests here tend to take time because they wait for requests to appear in the request panel.
   this.timeout(5000);
 
@@ -49,7 +48,7 @@ describe('The Network Tab', async function() {
     expectedNames.push(SIMPLE_PAGE_URL);
 
     const names = (await getAllRequestNames()).sort();
-    assert.deepStrictEqual(names, expectedNames, 'The right request names should appear in the list');
+    assert.deepEqual(names, expectedNames, 'The right request names should appear in the list');
   });
 
   it('can select requests', async () => {
@@ -91,7 +90,7 @@ describe('The Network Tab', async function() {
     });
     secondPageRequestNames.sort();
 
-    assert.deepStrictEqual(secondPageRequestNames, firstPageRequestNames, 'The requests were persisted');
+    assert.deepEqual(secondPageRequestNames, firstPageRequestNames, 'The requests were persisted');
   });
 
   it('should continue receiving new requests after timeline filter is cleared', async () => {

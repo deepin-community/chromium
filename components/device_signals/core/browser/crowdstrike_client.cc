@@ -150,7 +150,6 @@ std::unique_ptr<CrowdStrikeClient> CrowdStrikeClient::Create() {
   return std::make_unique<CrowdStrikeClientImpl>(GetCrowdStrikeZtaFilePath());
 #else
   NOTREACHED();
-  return nullptr;
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 }
 

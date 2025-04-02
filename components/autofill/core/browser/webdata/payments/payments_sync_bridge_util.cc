@@ -4,16 +4,17 @@
 
 #include "components/autofill/core/browser/webdata/payments/payments_sync_bridge_util.h"
 
+#include <algorithm>
+
 #include "base/base64.h"
 #include "base/check.h"
+#include "base/functional/overloaded.h"
 #include "base/pickle.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "components/autofill/core/browser/autofill_data_util.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/autofill_offer_data.h"
 #include "components/autofill/core/browser/data_model/autofill_wallet_usage_data.h"
@@ -22,14 +23,16 @@
 #include "components/autofill/core/browser/data_model/credit_card_cloud_token_data.h"
 #include "components/autofill/core/browser/data_model/iban.h"
 #include "components/autofill/core/browser/data_model/payment_instrument.h"
+#include "components/autofill/core/browser/data_quality/autofill_data_util.h"
 #include "components/autofill/core/browser/payments/payments_customer_data.h"
 #include "components/autofill/core/browser/webdata/payments/payments_autofill_table.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/autofill_util.h"
+#include "components/autofill/core/common/credit_card_network_identifiers.h"
 #include "components/sync/protocol/entity_data.h"
 
-using autofill::data_util::TruncateUTF8;
-using sync_pb::AutofillWalletSpecifics;
+using ::autofill::data_util::TruncateUTF8;
+using ::sync_pb::AutofillWalletSpecifics;
 
 namespace autofill {
 namespace {
@@ -40,16 +43,20 @@ sync_pb::WalletMaskedCreditCard::WalletCardType WalletCardTypeFromCardNetwork(
     return sync_pb::WalletMaskedCreditCard::AMEX;
   if (network == kDiscoverCard)
     return sync_pb::WalletMaskedCreditCard::DISCOVER;
+  if (network == kEloCard)
+    return sync_pb::WalletMaskedCreditCard::ELO;
   if (network == kJCBCard)
     return sync_pb::WalletMaskedCreditCard::JCB;
   if (network == kMasterCard)
     return sync_pb::WalletMaskedCreditCard::MASTER_CARD;
   if (network == kUnionPay)
     return sync_pb::WalletMaskedCreditCard::UNIONPAY;
+  if (network == kVerveCard &&
+      base::FeatureList::IsEnabled(features::kAutofillEnableVerveCardSupport)) {
+    return sync_pb::WalletMaskedCreditCard::VERVE;
+  }
   if (network == kVisaCard)
     return sync_pb::WalletMaskedCreditCard::VISA;
-  if (network == kEloCard)
-    return sync_pb::WalletMaskedCreditCard::ELO;
 
   // Some cards aren't supported by the client, so just return unknown.
   return sync_pb::WalletMaskedCreditCard::UNKNOWN;
@@ -62,16 +69,22 @@ const char* CardNetworkFromWalletCardType(
       return kAmericanExpressCard;
     case sync_pb::WalletMaskedCreditCard::DISCOVER:
       return kDiscoverCard;
+    case sync_pb::WalletMaskedCreditCard::ELO:
+      return kEloCard;
     case sync_pb::WalletMaskedCreditCard::JCB:
       return kJCBCard;
     case sync_pb::WalletMaskedCreditCard::MASTER_CARD:
       return kMasterCard;
     case sync_pb::WalletMaskedCreditCard::UNIONPAY:
       return kUnionPay;
+    case sync_pb::WalletMaskedCreditCard::VERVE:
+      if (base::FeatureList::IsEnabled(
+              features::kAutofillEnableVerveCardSupport)) {
+        return kVerveCard;
+      }
+      return kGenericCard;
     case sync_pb::WalletMaskedCreditCard::VISA:
       return kVisaCard;
-    case sync_pb::WalletMaskedCreditCard::ELO:
-      return kEloCard;
 
     // These aren't supported by the client, so just declare a generic card.
     case sync_pb::WalletMaskedCreditCard::MAESTRO:
@@ -80,6 +93,139 @@ const char* CardNetworkFromWalletCardType(
     case sync_pb::WalletMaskedCreditCard::UNKNOWN:
       return kGenericCard;
   }
+}
+
+sync_pb::CardBenefit::CategoryBenefitType
+CategoryBenefitTypeFromBenefitCategory(
+    const CreditCardCategoryBenefit::BenefitCategory benefit_category) {
+  switch (benefit_category) {
+    case CreditCardCategoryBenefit::BenefitCategory::kSubscription:
+      return sync_pb::CardBenefit::SUBSCRIPTION;
+    case CreditCardCategoryBenefit::BenefitCategory::kFlights:
+      return sync_pb::CardBenefit::FLIGHTS;
+    case CreditCardCategoryBenefit::BenefitCategory::kDining:
+      return sync_pb::CardBenefit::DINING;
+    case CreditCardCategoryBenefit::BenefitCategory::kEntertainment:
+      return sync_pb::CardBenefit::ENTERTAINMENT;
+    case CreditCardCategoryBenefit::BenefitCategory::kStreaming:
+      return sync_pb::CardBenefit::STREAMING;
+    case CreditCardCategoryBenefit::BenefitCategory::kGroceryStores:
+      return sync_pb::CardBenefit::GROCERY_STORES;
+    case CreditCardCategoryBenefit::BenefitCategory::kUnknownBenefitCategory:
+      return sync_pb::CardBenefit::CATEGORY_BENEFIT_TYPE_UNKNOWN;
+  }
+}
+
+CreditCardCategoryBenefit::BenefitCategory
+BenefitCategoryFromCategoryBenefitType(
+    const sync_pb::CardBenefit::CategoryBenefitType category_benefit_type) {
+  switch (category_benefit_type) {
+    case sync_pb::CardBenefit::SUBSCRIPTION:
+      return CreditCardCategoryBenefit::BenefitCategory::kSubscription;
+    case sync_pb::CardBenefit::FLIGHTS:
+      return CreditCardCategoryBenefit::BenefitCategory::kFlights;
+    case sync_pb::CardBenefit::DINING:
+      return CreditCardCategoryBenefit::BenefitCategory::kDining;
+    case sync_pb::CardBenefit::ENTERTAINMENT:
+      return CreditCardCategoryBenefit::BenefitCategory::kEntertainment;
+    case sync_pb::CardBenefit::STREAMING:
+      return CreditCardCategoryBenefit::BenefitCategory::kStreaming;
+    case sync_pb::CardBenefit::GROCERY_STORES:
+      return CreditCardCategoryBenefit::BenefitCategory::kGroceryStores;
+    case sync_pb::CardBenefit::CATEGORY_BENEFIT_TYPE_UNKNOWN:
+      return CreditCardCategoryBenefit::BenefitCategory::
+          kUnknownBenefitCategory;
+  }
+}
+
+// Creates a CreditCardBenefit from the specified `benefit_specifics` and
+// `instrument_id`.
+std::optional<CreditCardBenefit> CreditCardBenefitFromSpecifics(
+    const sync_pb::CardBenefit& benefit_specifics,
+    const int64_t instrument_id) {
+  if (!benefit_specifics.has_benefit_id() ||
+      !benefit_specifics.has_benefit_description()) {
+    return std::nullopt;
+  }
+
+  CreditCardBenefitBase::BenefitId benefit_id =
+      CreditCardBenefitBase::BenefitId(benefit_specifics.benefit_id());
+  CreditCardBenefitBase::LinkedCardInstrumentId linked_card_instrument_id =
+      CreditCardBenefitBase::LinkedCardInstrumentId(instrument_id);
+  std::u16string benefit_description =
+      base::UTF8ToUTF16(benefit_specifics.benefit_description());
+  // Set `start_time` to min if no value is given by specifics.
+  base::Time start_time =
+      benefit_specifics.has_start_time_unix_epoch_milliseconds()
+          ? base::Time::FromMillisecondsSinceUnixEpoch(
+                benefit_specifics.start_time_unix_epoch_milliseconds())
+          : base::Time::Min();
+  // Set `expiry_time` to max if no value is given by specifics.
+  base::Time expiry_time =
+      benefit_specifics.has_end_time_unix_epoch_milliseconds()
+          ? base::Time::FromMillisecondsSinceUnixEpoch(
+                benefit_specifics.end_time_unix_epoch_milliseconds())
+          : base::Time::Max();
+
+  if (benefit_specifics.has_flat_rate_benefit()) {
+    return CreditCardFlatRateBenefit(benefit_id, linked_card_instrument_id,
+                                     benefit_description, start_time,
+                                     expiry_time);
+  }
+
+  if (benefit_specifics.has_category_benefit() &&
+      BenefitCategoryFromCategoryBenefitType(
+          benefit_specifics.category_benefit().category_benefit_type()) !=
+          CreditCardCategoryBenefit::BenefitCategory::kUnknownBenefitCategory) {
+    return CreditCardCategoryBenefit(
+        benefit_id, linked_card_instrument_id,
+        BenefitCategoryFromCategoryBenefitType(
+            benefit_specifics.category_benefit().category_benefit_type()),
+        benefit_description, start_time, expiry_time);
+  }
+
+  if (benefit_specifics.has_merchant_benefit() &&
+      benefit_specifics.merchant_benefit().merchant_domain_size() > 0) {
+    base::flat_set<url::Origin> merchant_domains;
+    for (const std::string& url :
+         benefit_specifics.merchant_benefit().merchant_domain()) {
+      merchant_domains.insert(url::Origin::Create(GURL(url)));
+    }
+    return CreditCardMerchantBenefit(benefit_id, linked_card_instrument_id,
+                                     benefit_description, merchant_domains,
+                                     start_time, expiry_time);
+  }
+
+  return std::nullopt;
+}
+
+// Creates a vector of CreditCardBenefit from the specifies 'card_specifics`.
+std::vector<CreditCardBenefit> CreditCardBenefitsFromCardSpecifics(
+    const sync_pb::WalletMaskedCreditCard& card_specifics) {
+  std::vector<CreditCardBenefit> benefits_from_specifics;
+
+  // Only return card benefits if the related feature is enabled and
+  // `product_terms_url` is not empty.
+  // Benefit should not be returned without a `product_terms_url` as we
+  // should not show users data from the issuers without giving them
+  // access to the terms and conditions.
+  if (!card_specifics.has_product_terms_url() ||
+      !base::FeatureList::IsEnabled(
+          features::kAutofillEnableCardBenefitsSync)) {
+    return benefits_from_specifics;
+  }
+
+  // Get `CreditCardBenefit` from card_specifics.
+  for (const sync_pb::CardBenefit& benefit_specifics :
+       card_specifics.card_benefit()) {
+    if (std::optional<CreditCardBenefit> benefit =
+            CreditCardBenefitFromSpecifics(benefit_specifics,
+                                           card_specifics.instrument_id())) {
+      benefits_from_specifics.push_back(benefit.value());
+    }
+  }
+
+  return benefits_from_specifics;
 }
 
 // Creates a CreditCard from the specified `card` specifics.
@@ -108,8 +254,9 @@ CreditCard CardFromSpecifics(const sync_pb::WalletMaskedCreditCard& card) {
   result.set_card_issuer(issuer);
   result.set_issuer_id(card.card_issuer().issuer_id());
 
-  if (!card.nickname().empty())
+  if (!card.nickname().empty()) {
     result.SetNickname(base::UTF8ToUTF16(card.nickname()));
+  }
   result.set_instrument_id(card.instrument_id());
 
   CreditCard::VirtualCardEnrollmentState state;
@@ -153,10 +300,38 @@ CreditCard CardFromSpecifics(const sync_pb::WalletMaskedCreditCard& card) {
     result.set_virtual_card_enrollment_type(virtual_card_enrollment_type);
   }
 
-  if (!card.card_art_url().empty())
+  if (!card.card_art_url().empty()) {
     result.set_card_art_url(GURL(card.card_art_url()));
+  }
 
   result.set_product_description(base::UTF8ToUTF16(card.product_description()));
+
+  if (card.has_product_terms_url() &&
+      base::FeatureList::IsEnabled(features::kAutofillEnableCardBenefitsSync)) {
+    result.set_product_terms_url(GURL(card.product_terms_url()));
+  }
+
+  CreditCard::CardInfoRetrievalEnrollmentState enrollment_state =
+      CreditCard::CardInfoRetrievalEnrollmentState::kRetrievalUnspecified;
+  switch (card.card_info_retrieval_enrollment_state()) {
+    case sync_pb::WalletMaskedCreditCard::RETRIEVAL_ENROLLED:
+      enrollment_state =
+          CreditCard::CardInfoRetrievalEnrollmentState::kRetrievalEnrolled;
+      break;
+    case sync_pb::WalletMaskedCreditCard::RETRIEVAL_UNENROLLED_AND_NOT_ELIGIBLE:
+      enrollment_state = CreditCard::CardInfoRetrievalEnrollmentState::
+          kRetrievalUnenrolledAndNotEligible;
+      break;
+    case sync_pb::WalletMaskedCreditCard::RETRIEVAL_UNENROLLED_AND_ELIGIBLE:
+      enrollment_state = CreditCard::CardInfoRetrievalEnrollmentState::
+          kRetrievalUnenrolledAndEligible;
+      break;
+    case sync_pb::WalletMaskedCreditCard::RETRIEVAL_UNSPECIFIED:
+      enrollment_state =
+          CreditCard::CardInfoRetrievalEnrollmentState::kRetrievalUnspecified;
+      break;
+  }
+  result.set_card_info_retrieval_enrollment_state(enrollment_state);
 
   return result;
 }
@@ -182,15 +357,12 @@ CreditCardCloudTokenData CloudTokenDataFromSpecifics(
   return result;
 }
 
-// Creates an IBAN from the specified `iban` specifics.
-Iban IbanFromSpecifics(const sync_pb::WalletMaskedIban& iban) {
-  int64_t instrument_id = 0;
-  CHECK(base::StringToInt64(iban.instrument_id(), &instrument_id));
-  Iban result{Iban::InstrumentId(instrument_id)};
-  result.set_prefix(base::UTF8ToUTF16(iban.prefix()));
-  result.set_suffix(base::UTF8ToUTF16(iban.suffix()));
-  result.set_length(iban.length());
-  result.set_nickname(base::UTF8ToUTF16(iban.nickname()));
+// Creates an IBAN from the specified `payment_instrument` specifics.
+Iban IbanFromSpecifics(const sync_pb::PaymentInstrument& payment_instrument) {
+  Iban result{Iban::InstrumentId(payment_instrument.instrument_id())};
+  result.set_prefix(base::UTF8ToUTF16(payment_instrument.iban().prefix()));
+  result.set_suffix(base::UTF8ToUTF16(payment_instrument.iban().suffix()));
+  result.set_nickname(base::UTF8ToUTF16(payment_instrument.nickname()));
   return result;
 }
 
@@ -237,6 +409,10 @@ ConvertPaymentInstrumentPaymentRailToSyncPaymentRail(
   switch (payment_rail) {
     case PaymentInstrument::PaymentRail::kPix:
       return sync_pb::PaymentInstrument_SupportedRail_PIX;
+    case PaymentInstrument::PaymentRail::kPaymentHyperlink:
+      return sync_pb::PaymentInstrument_SupportedRail_PAYMENT_HYPERLINK;
+    case PaymentInstrument::PaymentRail::kCardNumber:
+      return sync_pb::PaymentInstrument_SupportedRail_CARD_NUMBER;
     case PaymentInstrument::PaymentRail::kUnknown:
       return sync_pb::PaymentInstrument_SupportedRail_SUPPORTED_RAIL_UNKNOWN;
   }
@@ -347,11 +523,38 @@ void SetAutofillWalletSpecificsFromServerCard(
     wallet_card->set_virtual_card_enrollment_type(virtual_card_enrollment_type);
   }
 
-  if (!card.card_art_url().is_empty())
+  if (!card.card_art_url().is_empty()) {
     wallet_card->set_card_art_url(card.card_art_url().spec());
+  }
 
   wallet_card->set_product_description(
       base::UTF16ToUTF8(card.product_description()));
+
+  if (!card.product_terms_url().is_empty()) {
+    wallet_card->set_product_terms_url(card.product_terms_url().spec());
+  }
+
+  sync_pb::WalletMaskedCreditCard::CardInfoRetrievalEnrollmentState
+      enrollment_state = sync_pb::WalletMaskedCreditCard::RETRIEVAL_UNSPECIFIED;
+  switch (card.card_info_retrieval_enrollment_state()) {
+    case CreditCard::CardInfoRetrievalEnrollmentState::kRetrievalEnrolled:
+      enrollment_state = sync_pb::WalletMaskedCreditCard::RETRIEVAL_ENROLLED;
+      break;
+    case CreditCard::CardInfoRetrievalEnrollmentState::
+        kRetrievalUnenrolledAndNotEligible:
+      enrollment_state = sync_pb::WalletMaskedCreditCard::
+          RETRIEVAL_UNENROLLED_AND_NOT_ELIGIBLE;
+      break;
+    case CreditCard::CardInfoRetrievalEnrollmentState::
+        kRetrievalUnenrolledAndEligible:
+      enrollment_state =
+          sync_pb::WalletMaskedCreditCard::RETRIEVAL_UNENROLLED_AND_ELIGIBLE;
+      break;
+    case CreditCard::CardInfoRetrievalEnrollmentState::kRetrievalUnspecified:
+      enrollment_state = sync_pb::WalletMaskedCreditCard::RETRIEVAL_UNSPECIFIED;
+      break;
+  }
+  wallet_card->set_card_info_retrieval_enrollment_state(enrollment_state);
 }
 
 void SetAutofillWalletSpecificsFromPaymentsCustomerData(
@@ -395,20 +598,63 @@ void SetAutofillWalletSpecificsFromMaskedIban(
     const Iban& iban,
     sync_pb::AutofillWalletSpecifics* wallet_specifics,
     bool enforce_utf8) {
-  wallet_specifics->set_type(AutofillWalletSpecifics::MASKED_IBAN);
-  sync_pb::WalletMaskedIban* wallet_iban =
-      wallet_specifics->mutable_masked_iban();
-  if (enforce_utf8) {
-    wallet_iban->set_instrument_id(
-        base::Base64Encode(base::NumberToString(iban.instrument_id())));
-  } else {
-    wallet_iban->set_instrument_id(base::NumberToString(iban.instrument_id()));
-  }
+  wallet_specifics->set_type(AutofillWalletSpecifics::PAYMENT_INSTRUMENT);
+  sync_pb::PaymentInstrument* wallet_payment_instrument =
+      wallet_specifics->mutable_payment_instrument();
+  wallet_payment_instrument->set_instrument_id(iban.instrument_id());
+  wallet_payment_instrument->set_nickname(base::UTF16ToUTF8(iban.nickname()));
+  sync_pb::WalletMaskedIban* masked_iban =
+      wallet_payment_instrument->mutable_iban();
+  masked_iban->set_prefix(base::UTF16ToUTF8(iban.prefix()));
+  masked_iban->set_suffix(base::UTF16ToUTF8(iban.suffix()));
+}
 
-  wallet_iban->set_prefix(base::UTF16ToUTF8(iban.prefix()));
-  wallet_iban->set_suffix(base::UTF16ToUTF8(iban.suffix()));
-  wallet_iban->set_nickname(base::UTF16ToUTF8(iban.nickname()));
-  wallet_iban->set_length(iban.length());
+void SetAutofillWalletSpecificsFromCardBenefit(
+    const CreditCardBenefit& benefit,
+    bool enforce_utf8,
+    sync_pb::AutofillWalletSpecifics& wallet_specifics) {
+  sync_pb::CardBenefit* wallet_benefit =
+      wallet_specifics.mutable_masked_card()->add_card_benefit();
+  const CreditCardBenefitBase& benefit_base = absl::visit(
+      [](const auto& a) -> const CreditCardBenefitBase& { return a; }, benefit);
+  if (enforce_utf8) {
+    wallet_benefit->set_benefit_id(
+        base::Base64Encode(benefit_base.benefit_id().value()));
+  } else {
+    wallet_benefit->set_benefit_id(benefit_base.benefit_id().value());
+  }
+  wallet_benefit->set_benefit_description(
+      base::UTF16ToUTF8(benefit_base.benefit_description()));
+  if (!benefit_base.start_time().is_min()) {
+    wallet_benefit->set_start_time_unix_epoch_milliseconds(
+        benefit_base.start_time().InMillisecondsSinceUnixEpoch());
+  }
+  if (!benefit_base.expiry_time().is_max()) {
+    wallet_benefit->set_end_time_unix_epoch_milliseconds(
+        benefit_base.expiry_time().InMillisecondsSinceUnixEpoch());
+  }
+  absl::visit(
+      base::Overloaded{
+          [&wallet_benefit](const CreditCardFlatRateBenefit&) {
+            wallet_benefit->mutable_flat_rate_benefit();
+          },
+          [&wallet_benefit](const CreditCardCategoryBenefit& category_benefit) {
+            wallet_benefit->mutable_category_benefit()
+                ->set_category_benefit_type(
+                    CategoryBenefitTypeFromBenefitCategory(
+                        category_benefit.benefit_category()));
+          },
+          [&wallet_benefit](const CreditCardMerchantBenefit& merchant_benefit) {
+            sync_pb::CardBenefit_MerchantBenefit* wallet_merchant_benefit =
+                wallet_benefit->mutable_merchant_benefit();
+            for (const url::Origin& merchant_origin :
+                 merchant_benefit.merchant_domains()) {
+              wallet_merchant_benefit->add_merchant_domain(
+                  merchant_origin.Serialize());
+            }
+          },
+      },
+      benefit);
 }
 
 void SetAutofillWalletUsageSpecificsFromAutofillWalletUsageData(
@@ -635,6 +881,23 @@ void SetAutofillWalletSpecificsFromBankAccount(
       ConvertBankAccountTypeToSyncBankAccountType(bank_account.account_type()));
 }
 
+void SetAutofillWalletSpecificsFromPaymentInstrument(
+    const sync_pb::PaymentInstrument& payment_instrument,
+    sync_pb::AutofillWalletSpecifics& wallet_specifics) {
+  wallet_specifics.set_type(AutofillWalletSpecifics::PAYMENT_INSTRUMENT);
+  *wallet_specifics.mutable_payment_instrument() = payment_instrument;
+}
+
+void SetAutofillWalletSpecificsFromPaymentInstrumentCreationOption(
+    const sync_pb::PaymentInstrumentCreationOption&
+        payment_instrument_creation_option,
+    sync_pb::AutofillWalletSpecifics& wallet_specifics) {
+  wallet_specifics.set_type(
+      AutofillWalletSpecifics::PAYMENT_INSTRUMENT_CREATION_OPTION);
+  *wallet_specifics.mutable_payment_instrument_creation_option() =
+      payment_instrument_creation_option;
+}
+
 void CopyRelevantWalletMetadataAndCvc(
     const PaymentsAutofillTable& table,
     std::vector<CreditCard>* cards_from_server) {
@@ -648,8 +911,10 @@ void CopyRelevantWalletMetadataAndCvc(
       if (saved_card->server_id() == server_card.server_id()) {
         // The wallet data doesn't have the use stats. Use the ones present on
         // disk to not overwrite them with bad data.
-        server_card.set_use_count(saved_card->use_count());
-        server_card.set_use_date(saved_card->use_date());
+        server_card.usage_history().set_use_count(
+            saved_card->usage_history().use_count());
+        server_card.usage_history().set_use_date(
+            saved_card->usage_history().use_date());
 
         // Wallet data from the server doesn't have the CVC data as it's
         // decoupled. Use the data present in the local storage, to prevent
@@ -673,7 +938,11 @@ void PopulateWalletTypesFromSyncData(
     std::vector<Iban>& wallet_ibans,
     std::vector<PaymentsCustomerData>& customer_data,
     std::vector<CreditCardCloudTokenData>& cloud_token_data,
-    std::vector<BankAccount>& bank_accounts) {
+    std::vector<BankAccount>& bank_accounts,
+    std::vector<CreditCardBenefit>& benefits,
+    std::vector<sync_pb::PaymentInstrument>& payment_instruments,
+    std::vector<sync_pb::PaymentInstrumentCreationOption>&
+        payment_instrument_creation_options) {
   for (const std::unique_ptr<syncer::EntityChange>& change : entity_data) {
     DCHECK(change->data().specifics.has_autofill_wallet());
 
@@ -681,10 +950,17 @@ void PopulateWalletTypesFromSyncData(
         change->data().specifics.autofill_wallet();
 
     switch (autofill_specifics.type()) {
-      case sync_pb::AutofillWalletSpecifics::MASKED_CREDIT_CARD:
+      case sync_pb::AutofillWalletSpecifics::MASKED_CREDIT_CARD: {
         wallet_cards.push_back(
             CardFromSpecifics(autofill_specifics.masked_card()));
+
+        std::vector<CreditCardBenefit> benefits_from_specifics =
+            CreditCardBenefitsFromCardSpecifics(
+                autofill_specifics.masked_card());
+        benefits.insert(benefits.end(), benefits_from_specifics.begin(),
+                        benefits_from_specifics.end());
         break;
+      }
       case sync_pb::AutofillWalletSpecifics::POSTAL_ADDRESS:
         // POSTAL_ADDRESS is deprecated.
         break;
@@ -698,20 +974,41 @@ void PopulateWalletTypesFromSyncData(
         break;
       case sync_pb::AutofillWalletSpecifics::PAYMENT_INSTRUMENT:
         // Only payment instruments of type bank account are supported. This
-        // support is also only available on Android. For other platforms, we'd
-        // ignore this type.
+        // support is also only available on Android. For other platforms,
+        // we'd ignore this type.
         if (AreMaskedBankAccountSupported() &&
             autofill_specifics.payment_instrument().instrument_details_case() ==
                 sync_pb::PaymentInstrument::InstrumentDetailsCase::
                     kBankAccount) {
           bank_accounts.push_back(BankAccountFromWalletSpecifics(
               autofill_specifics.payment_instrument()));
+        } else if (autofill_specifics.payment_instrument()
+                       .instrument_details_case() ==
+                   sync_pb::PaymentInstrument::InstrumentDetailsCase::kIban) {
+          wallet_ibans.push_back(
+              IbanFromSpecifics(autofill_specifics.payment_instrument()));
+        } else if (autofill_specifics.payment_instrument()
+                           .instrument_details_case() ==
+                       sync_pb::PaymentInstrument::InstrumentDetailsCase::
+                           kEwalletDetails &&
+                   IsEwalletAccountSupported()) {
+          payment_instruments.push_back(
+              autofill_specifics.payment_instrument());
+        } else if (autofill_specifics.payment_instrument()
+                           .instrument_details_case() ==
+                       sync_pb::PaymentInstrument::InstrumentDetailsCase::
+                           kBnplIssuerDetails &&
+                   IsBnplIssuerSupported()) {
+          payment_instruments.push_back(
+              autofill_specifics.payment_instrument());
         }
         break;
-      case sync_pb::AutofillWalletSpecifics::MASKED_IBAN:
-        wallet_ibans.push_back(
-            IbanFromSpecifics(autofill_specifics.masked_iban()));
+      case sync_pb::AutofillWalletSpecifics::PAYMENT_INSTRUMENT_CREATION_OPTION:
+        payment_instrument_creation_options.push_back(
+            autofill_specifics.payment_instrument_creation_option());
         break;
+      // This entry is deprecated and not supported anymore.
+      case sync_pb::AutofillWalletSpecifics::MASKED_IBAN:
       case sync_pb::AutofillWalletSpecifics::UNKNOWN:
         // Just ignore new entry types that the client doesn't know about.
         break;
@@ -744,7 +1041,7 @@ bool AreAnyItemsDifferent(const std::vector<std::unique_ptr<Item>>& old_data,
   auto compare_equal = [](const Item* lhs, const Item* rhs) {
     return lhs->Compare(*rhs) == 0;
   };
-  return !base::ranges::equal(old_ptrs, new_ptrs, compare_equal);
+  return !std::ranges::equal(old_ptrs, new_ptrs, compare_equal);
 }
 
 template bool AreAnyItemsDifferent<>(
@@ -755,9 +1052,69 @@ template bool AreAnyItemsDifferent<>(
     const std::vector<std::unique_ptr<CreditCardCloudTokenData>>&,
     const std::vector<CreditCardCloudTokenData>&);
 
-template bool AreAnyItemsDifferent<>(
-    const std::vector<std::unique_ptr<BankAccount>>&,
-    const std::vector<BankAccount>&);
+template bool AreAnyItemsDifferent<>(const std::vector<BankAccount>&,
+                                     const std::vector<BankAccount>&);
+
+template <class Item>
+bool AreAnyItemsDifferent(const std::vector<Item>& old_data,
+                          const std::vector<Item>& new_data) {
+  if (old_data.size() != new_data.size()) {
+    return true;
+  }
+
+  return base::MakeFlatSet<Item>(old_data) != base::MakeFlatSet<Item>(new_data);
+}
+
+template bool AreAnyItemsDifferent<>(const std::vector<CreditCardBenefit>&,
+                                     const std::vector<CreditCardBenefit>&);
+
+template bool AreAnyItemsDifferent<>(const std::vector<std::string>&,
+                                     const std::vector<std::string>&);
+
+bool AreAnyItemsDifferent(
+    const std::vector<sync_pb::PaymentInstrument>& old_instruments,
+    const std::vector<sync_pb::PaymentInstrument>& new_instruments) {
+  if (old_instruments.size() != new_instruments.size()) {
+    return true;
+  }
+
+  std::vector<std::string> old_instrument_strings, new_instrument_strings;
+  for (const auto& instrument : old_instruments) {
+    old_instrument_strings.push_back(instrument.SerializeAsString());
+  }
+  for (const auto& instrument : new_instruments) {
+    new_instrument_strings.push_back(instrument.SerializeAsString());
+  }
+
+  return AreAnyItemsDifferent(old_instrument_strings, new_instrument_strings);
+}
+
+bool AreAnyItemsDifferent(
+    const std::vector<sync_pb::PaymentInstrumentCreationOption>&
+        old_creation_options,
+    const std::vector<sync_pb::PaymentInstrumentCreationOption>&
+        new_creation_options) {
+  int old_creation_options_size = old_creation_options.size();
+  int new_creation_options_size = new_creation_options.size();
+  if (old_creation_options_size != new_creation_options_size) {
+    return true;
+  }
+
+  std::vector<std::string> old_creation_option_strings,
+      new_creation_option_strings;
+  old_creation_option_strings.reserve(old_creation_options_size);
+  new_creation_option_strings.reserve(new_creation_options_size);
+
+  for (const auto& creation_option : old_creation_options) {
+    old_creation_option_strings.push_back(creation_option.SerializeAsString());
+  }
+  for (const auto& creation_option : new_creation_options) {
+    new_creation_option_strings.push_back(creation_option.SerializeAsString());
+  }
+
+  return AreAnyItemsDifferent(old_creation_option_strings,
+                              new_creation_option_strings);
+}
 
 bool IsOfferSpecificsValid(const sync_pb::AutofillOfferSpecifics specifics) {
   // A valid offer has a non-empty id.
@@ -837,6 +1194,37 @@ bool AreMaskedBankAccountSupported() {
 #else
   return false;
 #endif  // BUILDFLAG(IS_ANDROID)
+}
+
+bool IsBnplIssuerSupported() {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
+  return base::FeatureList::IsEnabled(
+      features::kAutofillEnableBuyNowPayLaterSyncing);
+#else
+  return false;
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)
+}
+
+bool IsEwalletAccountSupported() {
+#if BUILDFLAG(IS_ANDROID)
+  return base::FeatureList::IsEnabled(features::kAutofillSyncEwalletAccounts);
+#else
+  return false;
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+bool IsGenericPaymentInstrumentSupported() {
+  // Currently only eWallet accounts and BNPL are using the generic payment
+  // instrument proto for read/write.
+  return IsEwalletAccountSupported() || IsBnplIssuerSupported();
+}
+
+bool IsPaymentInstrumentCreationOptionSupported() {
+  // Currently only BNPL issuer is using the payment instrument
+  // creation option proto for read/write.
+  return IsBnplIssuerSupported();
 }
 
 }  // namespace autofill

@@ -15,14 +15,13 @@
 #include "base/memory/ptr_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "remoting/proto/control.pb.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_options.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capturer.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_frame.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_region.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "remoting/host/chromeos/frame_sink_desktop_capturer.h"
 #endif
 
@@ -48,7 +47,8 @@ class DesktopCapturerProxy::Core : public webrtc::DesktopCapturer::Callback {
     DCHECK(!capturer_);
     capturer_ = std::move(capturer);
   }
-  void CreateCapturer(const webrtc::DesktopCaptureOptions& options);
+  void CreateCapturer(const webrtc::DesktopCaptureOptions& options,
+                      SourceId id);
 
   void Start(scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner);
   void SetSharedMemoryFactory(
@@ -83,11 +83,12 @@ DesktopCapturerProxy::Core::~Core() {
 }
 
 void DesktopCapturerProxy::Core::CreateCapturer(
-    const webrtc::DesktopCaptureOptions& options) {
+    const webrtc::DesktopCaptureOptions& options,
+    SourceId id) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(!capturer_);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   capturer_ = std::make_unique<FrameSinkDesktopCapturer>();
 #elif BUILDFLAG(IS_LINUX)
   static base::nix::SessionType session_type = base::nix::SessionType::kUnset;
@@ -102,10 +103,12 @@ void DesktopCapturerProxy::Core::CreateCapturer(
   } else {
     capturer_ = webrtc::DesktopCapturer::CreateScreenCapturer(options);
   }
-#else   // !BUILDFLAG(IS_CHROMEOS_ASH)
+#else   // !BUILDFLAG(IS_CHROMEOS)
   capturer_ = webrtc::DesktopCapturer::CreateScreenCapturer(options);
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
-  if (!capturer_) {
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+  if (capturer_) {
+    capturer_->SelectSource(id);
+  } else {
     LOG(ERROR) << "Failed to initialize screen capturer.";
   }
 }
@@ -195,13 +198,14 @@ DesktopCapturerProxy::~DesktopCapturerProxy() {
 }
 
 void DesktopCapturerProxy::CreateCapturer(
-    const webrtc::DesktopCaptureOptions& options) {
+    const webrtc::DesktopCaptureOptions& options,
+    SourceId id) {
   // CreateCapturer() must be called before Start().
   DCHECK(!callback_);
 
   capture_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&Core::CreateCapturer,
-                                base::Unretained(core_.get()), options));
+                                base::Unretained(core_.get()), options, id));
 }
 
 void DesktopCapturerProxy::set_capturer(

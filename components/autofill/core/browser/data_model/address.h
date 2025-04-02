@@ -29,13 +29,24 @@ class Address : public FormGroup {
   bool operator==(const Address& other) const;
 
   // FormGroup:
+  std::u16string GetInfo(FieldType type,
+                         const std::string& app_locale) const override;
+  std::u16string GetInfo(const AutofillType& type,
+                         const std::string& app_locale) const override;
   std::u16string GetRawInfo(FieldType type) const override;
   void SetRawInfoWithVerificationStatus(FieldType type,
                                         const std::u16string& value,
                                         VerificationStatus status) override;
+  // TODO(crbug.com/40264633): Change `AutofillType` into `FieldType`.
+  bool SetInfoWithVerificationStatus(const AutofillType& type,
+                                     const std::u16string& value,
+                                     const std::string& locale,
+                                     VerificationStatus status) override;
   void GetMatchingTypes(const std::u16string& text,
                         const std::string& locale,
                         FieldTypeSet* matching_types) const override;
+  // Return the verification status of a structured name value.
+  VerificationStatus GetVerificationStatus(FieldType type) const override;
 
   // Derives all missing tokens in the structured representation of the address
   // either parsing missing tokens from their assigned parent or by formatting
@@ -56,6 +67,10 @@ class Address : public FormGroup {
 
   // For structured addresses, returns true if |this| is mergeable with |newer|.
   bool IsStructuredAddressMergeable(const Address& newer) const;
+  // Like `IsStructuredAddressMergeable()`, but only for the subtree
+  // corresponding to `type`.
+  bool IsStructuredAddressMergeableForType(FieldType type,
+                                           const Address& other) const;
 
   // Returns a constant reference to the structured address' root node (i.e.
   // ADDRESS_HOME_ADDRESS) from the nodes store.
@@ -68,21 +83,15 @@ class Address : public FormGroup {
   bool IsLegacyAddress() const { return is_legacy_address_; }
 
   // Returns true if the given `field_type` is part of Autofill's address
-  // model for `GetAddressCountryCode()` and is accessible via settings.
+  // model for `GetAddressCountryCode()` and is accessible via settings. Note
+  // that a field can also be settings accessible via a different field that is
+  // at a higher level in the address hierarchy tree. The function returns true
+  // in this case as well.
   bool IsAddressFieldSettingAccessible(FieldType field_type) const;
 
  private:
   // FormGroup:
   void GetSupportedTypes(FieldTypeSet* supported_types) const override;
-  std::u16string GetInfoImpl(const AutofillType& type,
-                             const std::string& locale) const override;
-  bool SetInfoWithVerificationStatusImpl(const AutofillType& type,
-                                         const std::u16string& value,
-                                         const std::string& locale,
-                                         VerificationStatus status) override;
-
-  // Return the verification status of a structured name value.
-  VerificationStatus GetVerificationStatusImpl(FieldType type) const override;
 
   // Updates the address' country, builds the hierarchy model corresponding to
   // `country_code` and transfers the content of the old data model into the new

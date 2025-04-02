@@ -2,14 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "gpu/command_buffer/service/context_state.h"
 
 #include <stddef.h>
 
 #include <algorithm>
 #include <cmath>
-
 #include <optional>
+
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
 #include "gpu/command_buffer/service/buffer_manager.h"
 #include "gpu/command_buffer/service/framebuffer_manager.h"
@@ -69,7 +74,6 @@ GLuint GetServiceId(const TextureUnit& unit, GLuint target) {
       return GetOesServiceId(unit);
     default:
       NOTREACHED();
-      return 0;
   }
 }
 
@@ -86,7 +90,6 @@ bool TargetIsSupported(const FeatureInfo* feature_info, GLuint target) {
              feature_info->feature_flags().nv_egl_stream_consumer_external;
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -128,7 +131,6 @@ bool Vec4::Equal(const Vec4& other) const {
       break;
     default:
       NOTREACHED();
-      break;
   }
   return true;
 }
@@ -151,7 +153,6 @@ void Vec4::GetValues<GLfloat>(GLfloat* values) const {
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 
@@ -173,7 +174,6 @@ void Vec4::GetValues<GLint>(GLint* values) const {
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 
@@ -195,7 +195,6 @@ void Vec4::GetValues<GLuint>(GLuint* values) const {
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 
@@ -520,7 +519,6 @@ void ContextState::RestoreVertexAttribValues() const {
       } break;
       default:
         NOTREACHED();
-        break;
     }
   }
 }
@@ -768,7 +766,6 @@ void ContextState::SetBoundBuffer(GLenum target, Buffer* buffer) {
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 

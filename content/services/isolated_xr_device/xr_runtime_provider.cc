@@ -43,8 +43,8 @@ std::unique_ptr<VrDeviceT> EnableRuntime(
                        static_cast<int>(device->GetId()));
   // "Device" here refers to a runtime + hardware pair, not necessarily
   // a physical device.
-  client->OnDeviceAdded(device->BindXRRuntime(), device->BindCompositorHost(),
-                        device->GetDeviceData(), device->GetId());
+  client->OnDeviceAdded(device->BindXRRuntime(), device->GetDeviceData(),
+                        device->GetId());
   return device;
 }
 
@@ -194,7 +194,7 @@ void IsolatedXRRuntimeProvider::CreateContextProviderAsync(
   scoped_refptr<viz::ContextProvider> context_provider =
       base::MakeRefCounted<viz::ContextProviderCommandBuffer>(
           viz_gpu_->GetGpuChannel(), content::kGpuStreamIdDefault,
-          content::kGpuStreamPriorityUI, gpu::kNullSurfaceHandle,
+          content::kGpuStreamPriorityUI,
           GURL(std::string("chrome://gpu/XrRuntime")),
           false /* automatic flushes */, false /* support locking */,
           gpu::SharedMemoryLimits::ForMailboxContext(),

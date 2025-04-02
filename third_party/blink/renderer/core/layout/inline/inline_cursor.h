@@ -9,10 +9,12 @@
 
 #include "base/check_op.h"
 #include "base/dcheck_is_on.h"
+#include "base/memory/stack_allocated.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_items.h"
+#include "third_party/blink/renderer/core/layout/style_variant.h"
 #include "third_party/blink/renderer/platform/text/text_direction.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_view.h"
@@ -30,11 +32,9 @@ class InlinePaintContext;
 class LayoutBlockFlow;
 class LayoutInline;
 class LayoutObject;
-class LayoutUnit;
 class Node;
 class PhysicalBoxFragment;
 class ShapeResultView;
-enum class StyleVariant;
 struct LayoutSelectionStatus;
 struct PhysicalOffset;
 struct PhysicalRect;
@@ -45,6 +45,8 @@ struct PhysicalSize;
 // 2. Allows to save |Current()|, and can move back later. Moving to |Position|
 // is faster than moving to |FragmentItem|.
 class CORE_EXPORT InlineCursorPosition {
+  STACK_ALLOCATED();
+
  public:
   using ItemsSpan = FragmentItems::Span;
 
@@ -108,7 +110,7 @@ class CORE_EXPORT InlineCursorPosition {
   // |ComputedStyle| and related functions.
   StyleVariant GetStyleVariant() const { return item_->GetStyleVariant(); }
   bool UsesFirstLineStyle() const {
-    return GetStyleVariant() == StyleVariant::kFirstLine;
+    return blink::UsesFirstLineStyle(GetStyleVariant());
   }
   const ComputedStyle& Style() const { return item_->Style(); }
 
@@ -530,9 +532,10 @@ class CORE_EXPORT InlineCursor {
   // Functions to enumerate fragments for a |LayoutObject|.
   //
 
-  // Move to first |FragmentItem| or |NGPaintFragment| associated to
-  // |layout_object|. When |layout_object| has no associated fragments, this
-  // cursor points nothing.
+  // Move to the first `FragmentItem` associated to the `layout_object`.
+  // This cursor points nothing if any of the following conditions are true:
+  // * The `layout_object` has no associated fragments.
+  // * The `layout_object.IsOutOfFlowPositioned()`.
   void MoveTo(const LayoutObject& layout_object);
 
   // Same as |MoveTo|, except that this enumerates fragments for descendants
@@ -627,6 +630,10 @@ class CORE_EXPORT InlineCursor {
   // Used for |MoveToVisualLastForSameLayoutObject| and
   // |MoveToVisualFirstForSameLayoutObject|.
   void MoveToVisualFirstOrLastForCulledInline(bool last);
+
+  // Returns text_offset for the last position of caret in current line
+  // including the case of empty line.
+  wtf_size_t GetTextOffsetForEndOfLine(InlineCursor& cursor) const;
 
   // A helper class to enumerate |LayoutObject|s that contribute to a culled
   // inline.

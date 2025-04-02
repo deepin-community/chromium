@@ -3,18 +3,16 @@
 // found in the LICENSE file.
 
 #include "base/logging.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/apps/app_service/app_registry_cache_waiter.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/web_applications/web_app_controller_browsertest.h"
+#include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/context_menu_params.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -22,7 +20,7 @@
 
 namespace web_app {
 
-class LaunchWebAppBrowserTest : public WebAppControllerBrowserTest {
+class LaunchWebAppBrowserTest : public WebAppBrowserTestBase {
  public:
   LaunchWebAppBrowserTest() = default;
   ~LaunchWebAppBrowserTest() override = default;
@@ -43,8 +41,7 @@ IN_PROC_BROWSER_TEST_F(LaunchWebAppBrowserTest, OpenLinkInWebApp) {
       ui_test_utils::BrowserChangeObserver::ChangeType::kAdded);
 
   {
-    ui_test_utils::UrlLoadObserver url_observer(
-        start_url, content::NotificationService::AllSources());
+    ui_test_utils::UrlLoadObserver url_observer(start_url);
     content::ContextMenuParams params;
     params.page_url = GURL("https://www.example.com/");
     params.link_url = start_url;

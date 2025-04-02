@@ -16,7 +16,6 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "base/check.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "extensions/common/constants.h"
@@ -132,8 +131,9 @@ ContinueTaskContainerView::ContinueTaskContainerView(
     InitializeClamshellLayout();
   }
   GetViewAccessibility().SetRole(ax::mojom::Role::kList);
-  GetViewAccessibility().OverrideName(
-      l10n_util::GetStringUTF16(IDS_ASH_LAUNCHER_CONTINUE_SECTION_LABEL));
+  GetViewAccessibility().SetName(
+      l10n_util::GetStringUTF16(IDS_ASH_LAUNCHER_CONTINUE_SECTION_LABEL),
+      ax::mojom::NameFrom::kAttribute);
 }
 
 ContinueTaskContainerView::~ContinueTaskContainerView() = default;
@@ -308,7 +308,8 @@ void ContinueTaskContainerView::Update() {
   if (notifier) {
     std::vector<AppListNotifier::Result> notifier_results;
     for (const auto* task : tasks)
-      notifier_results.emplace_back(task->id(), task->metrics_type());
+      notifier_results.emplace_back(task->id(), task->metrics_type(),
+                                    task->continue_file_suggestion_type());
     notifier->NotifyResultsUpdated(SearchResultDisplayType::kContinue,
                                    notifier_results);
   }
@@ -327,7 +328,7 @@ ContinueTaskContainerView::GetRemovalAnimationForTaskView(
     return TaskViewRemovalAnimation::kFadeOut;
 
   const std::string& task_id = task_view->result()->id();
-  auto new_ids_it = base::ranges::find(new_task_ids, task_id);
+  auto new_ids_it = std::ranges::find(new_task_ids, task_id);
 
   // If the associated result was removed from the task list, animate it out.
   if (new_ids_it == new_task_ids.end())
@@ -506,6 +507,7 @@ void ContinueTaskContainerView::InitializeTabletLayout() {
                   gfx::Insets::TLBR(0, kColumnSpacingTablet, 0, 0))
       .SetDefault(views::kFlexBehaviorKey,
                   views::FlexSpecification(
+                      views::LayoutOrientation::kHorizontal,
                       views::MinimumFlexSizeRule::kScaleToMinimumSnapToZero,
                       views::MaximumFlexSizeRule::kScaleToMaximum));
 }

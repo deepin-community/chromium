@@ -5,25 +5,29 @@
 from __future__ import annotations
 
 import ctypes
+import functools
 import json
 import logging
-import pathlib
 import plistlib
 import re
+import socket
 import traceback as tb
 from subprocess import SubprocessError
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Type
 
 import psutil
 
-from .posix import PosixPlatform
+from crossbench import path as pth
+from crossbench.plt.posix import PosixPlatform
+from crossbench.plt.signals import MacOSSignals
 
 
 class MacOSPlatform(PosixPlatform):
-  SEARCH_PATHS = (
-      pathlib.Path("."),
-      pathlib.Path("/Applications"),
-      pathlib.Path.home() / "Applications",
+  SEARCH_PATHS: Tuple[pth.AnyPath, ...] = (
+      pth.AnyPosixPath("."),
+      pth.AnyPosixPath("/Applications"),
+      # TODO: support remote platforms
+      pth.LocalPath.home() / "Applications",
   )
 
   LSAPPINFO_IN_FRONT_LINE_RE = r".*\(in front\)\s*"
@@ -38,94 +42,145 @@ class MacOSPlatform(PosixPlatform):
     return "macos"
 
   @property
+  def signals(self) -> Type[MacOSSignals]:
+    return MacOSSignals
+
+  @functools.cached_property
   def version(self) -> str:
-    if not self._version:
-      self._version = self.sh_stdout("sw_vers", "-productVersion").strip()
-    return self._version
+    return self.sh_stdout("sw_vers", "-productVersion").strip()
 
-  @property
-  def device(self) -> str:
-    if not self._device:
-      self._device = self.sh_stdout("sysctl",
-                                    "hw.model").strip().split(maxsplit=1)[1]
-    return self._device
+  @functools.cached_property
+  def device(self) -> str:  #pylint: disable=invalid-overridden-method
+    return self.sh_stdout("sysctl", "hw.model").strip().split(maxsplit=1)[1]
 
-  @property
-  def cpu(self) -> str:
-    if not self._cpu:
-      brand = self.sh_stdout("sysctl", "-n", "machdep.cpu.brand_string").strip()
-      cores = self.sh_stdout("sysctl", "-n", "machdep.cpu.core_count").strip()
-      self._cpu = f"{brand} {cores} cores"
-    return self._cpu
+  @functools.cached_property
+  def cpu(self) -> str:  #pylint: disable=invalid-overridden-method
+    brand = self.sh_stdout("sysctl", "-n", "machdep.cpu.brand_string").strip()
+    num_cores = self.cpu_cores
+    return f"{brand} {num_cores} cores"
+
+  @functools.cached_property
+  def cpu_cores(self) -> int:
+    if self.is_local:
+      return super().cpu_cores
+    cores = self.sh_stdout("sysctl", "-n", "machdep.cpu.core_count").strip()
+    return int(cores)
 
   @property
   def is_battery_powered(self) -> bool:
-    if not self.is_remote:
+    if self.is_local:
       return super().is_battery_powered
     return "Battery Power" in self.sh_stdout("pmset", "-g", "batt")
 
-  def _find_app_binary_path(self, app_path: pathlib.Path) -> pathlib.Path:
-    assert app_path.suffix == ".app"
+  def get_relative_cpu_speed(self) -> float:
+    try:
+      lines = self.sh_stdout("pmset", "-g", "therm").split()
+      for index, line in enumerate(lines):
+        if line == "CPU_Speed_Limit":
+          return int(lines[index + 2]) / 100.0
+    except SubprocessError:
+      pass
+    logging.debug("Could not get relative CPU speed: %s", tb.format_exc())
+    return 1
+
+  @functools.lru_cache(maxsize=1)
+  def system_details(self) -> Dict[str, Any]:
+    details = super().system_details()
+    details.update({
+        "system_profiler":
+            self.sh_stdout("system_profiler", "SPHardwareDataType"),
+        "sysctl_machdep_cpu":
+            self.sh_stdout("sysctl", "machdep.cpu"),
+        "sysctl_hw":
+            self.sh_stdout("sysctl", "hw"),
+    })
+    return details
+
+  def _find_app_binary_path(self, app_path: pth.AnyPath) -> pth.AnyPath:
+    assert app_path.suffix == ".app", f"Expected .app but got {app_path}"
     bin_path = app_path / "Contents" / "MacOS" / app_path.stem
     if self.exists(bin_path):
       return bin_path
-    assert not self.is_remote, "Unsupported operation on remote platform"
-    binaries = [path for path in bin_path.parent.iterdir() if path.is_file()]
+    if not self.exists(bin_path.parent):
+      raise ValueError(f"Binary does not exist: {bin_path}")
+    self.assert_is_local()
+    binaries = [
+        path for path in self.iterdir(bin_path.parent) if self.is_file(path)
+    ]
     if len(binaries) == 1:
       return binaries[0]
     # Fallback to read plist
     plist_path = app_path / "Contents" / "Info.plist"
-    assert self.is_file(plist_path), (
-        f"Could not find Info.plist in app bundle: {app_path}")
-    with plist_path.open("rb") as f:
+    if not self.is_file(plist_path):
+      raise ValueError(f"Could not find Info.plist in app bundle: {app_path}")
+    # TODO: support remote platform
+    with self.local_path(plist_path).open("rb") as f:
       plist = plistlib.load(f)
     bin_path = (
         app_path / "Contents" / "MacOS" /
         plist.get("CFBundleExecutable", app_path.stem))
     if self.is_file(bin_path):
       return bin_path
-    raise ValueError(f"Invalid number of binaries candidates found: {binaries}")
+    if not binaries:
+      raise ValueError(f"No binaries found in {app_path}")
+    raise ValueError(f"Invalid number of binaries found: {binaries}")
 
-  def search_binary(self, app_or_bin: pathlib.Path) -> Optional[pathlib.Path]:
-    if not app_or_bin.parts:
+  def search_binary(self, app_or_bin: pth.AnyPathLike) -> Optional[pth.AnyPath]:
+    app_or_bin_path: pth.AnyPath = self.path(app_or_bin)
+    if not app_or_bin_path.parts:
       raise ValueError("Got empty path")
-    if result_path := self.which(str(app_or_bin)):
-      assert self.exists(result_path), f"{result_path} does not exist."
-      return result_path
-    is_app = app_or_bin.suffix == ".app"
+    is_app = app_or_bin_path.suffix == ".app"
+    if not is_app:
+      # Look up basic binaries with `which` if possible.
+      if result_path := self.which(app_or_bin_path):
+        assert self.exists(result_path), f"{result_path} does not exist."
+        return result_path
+    if app_path := self.lookup_binary_override(app_or_bin_path):
+      if app_path := self._validate_search_binary_candidate(is_app, app_path):
+        return app_path
     for search_path in self.SEARCH_PATHS:
       # Recreate Path object for easier pyfakefs testing
-      result_path = pathlib.Path(search_path) / app_or_bin
-      if not is_app:
-        if self.is_file(result_path):
-          return result_path
-        continue
-      if not self.is_dir(result_path):
-        continue
-      result_path = self._find_app_binary_path(result_path)
-      if self.exists(result_path):
-        return result_path
+      result_path = self.path(search_path) / app_or_bin_path
+      if app_path := self._validate_search_binary_candidate(
+          is_app, result_path):
+        return app_path
     return None
 
-  def search_app(self, app_or_bin: pathlib.Path) -> Optional[pathlib.Path]:
-    if not app_or_bin.parts:
+  def _validate_search_binary_candidate(
+      self, is_app: bool, result_path: pth.AnyPath) -> Optional[pth.AnyPath]:
+    if not is_app:
+      if self.is_file(result_path):
+        return result_path
+      return None
+    if not self.is_dir(result_path):
+      return None
+    result_path = self._find_app_binary_path(result_path)
+    if self.exists(result_path):
+      return result_path
+    return None
+
+  def search_app(self, app_or_bin: pth.AnyPathLike) -> Optional[pth.AnyPath]:
+    app_or_bin_path: pth.AnyPath = self.path(app_or_bin)
+    if not app_or_bin_path.parts:
       raise ValueError("Got empty path")
-    assert not self.is_remote, "Unsupported operation on remote platform"
-    if app_or_bin.suffix != ".app":
+    self.assert_is_local()
+    if app_or_bin_path.suffix != ".app":
       raise ValueError("Expected app name with '.app' suffix, "
-                       f"but got: '{app_or_bin.name}'")
-    binary = self.search_binary(app_or_bin)
+                       f"but got: '{app_or_bin_path.name}'")
+    binary = self.search_binary(app_or_bin_path)
     if not binary:
       return None
     # input: /Applications/Safari.app/Contents/MacOS/Safari
     # output: /Applications/Safari.app
     app_path = binary.parents[2]
-    assert app_path.suffix == ".app"
-    assert app_path.is_dir()
+    assert app_path.suffix == ".app", f"Expected .app but got {app_path}"
+    assert self.is_dir(app_path)
     return app_path
 
-  def app_version(self, app_or_bin: pathlib.Path) -> str:
-    assert app_or_bin.exists(), f"Binary {app_or_bin} does not exist."
+  def app_version(self, app_or_bin: pth.AnyPathLike) -> str:
+    app_or_bin = self.path(app_or_bin)
+    if not self.exists(app_or_bin):
+      raise ValueError(f"Binary {app_or_bin} does not exist.")
 
     app_path = None
     for current in (app_or_bin, *app_or_bin.parents):
@@ -135,16 +190,19 @@ class MacOSPlatform(PosixPlatform):
     if not app_path:
       # Most likely just a cli tool"
       return self.sh_stdout(app_or_bin, "--version").strip()
-    version_string = self.sh_stdout("mdls", "-name", "kMDItemVersion",
-                                    app_path).strip()
-    logging.debug("version_string = %s %s", version_string, app_path)
-    # Filter output: 'kMDItemVersion = "14.1"' => '"14.1"'
-    _, version_string = version_string.split(" = ", maxsplit=1)
-    if version_string != "(null)":
-      # Strip quotes: '"14.1"' => '14.1'
-      return version_string[1:-1]
+    info_plist = app_path / "Contents/Info.plist"
+    if self.exists(info_plist):
+      plist = plistlib.loads(self.cat_bytes(info_plist))
+      if version_string := plist.get("CFBundleShortVersionString"):
+        display_name = plist.get("CFBundleDisplayName")
+        if not display_name:
+          # Fallback. Apps like Firefox have no CFBundleDisplayName.
+          display_name = plist.get("CFBundleName")
+        return f"{display_name} {version_string}"
+
+
     # Backup solution use the binary (not the .app bundle) with --version.
-    maybe_bin_path: Optional[pathlib.Path] = app_or_bin
+    maybe_bin_path: Optional[pth.AnyPath] = app_or_bin
     if app_or_bin.suffix == ".app":
       maybe_bin_path = self.search_binary(app_or_bin)
     if not maybe_bin_path:
@@ -193,29 +251,6 @@ class MacOSPlatform(PosixPlatform):
 
     return None
 
-  def get_relative_cpu_speed(self) -> float:
-    try:
-      lines = self.sh_stdout("pmset", "-g", "therm").split()
-      for index, line in enumerate(lines):
-        if line == "CPU_Speed_Limit":
-          return int(lines[index + 2]) / 100.0
-    except SubprocessError:
-      pass
-    logging.debug("Could not get relative CPU speed: %s", tb.format_exc())
-    return 1
-
-  def system_details(self) -> Dict[str, Any]:
-    details = super().system_details()
-    details.update({
-        "system_profiler":
-            self.sh_stdout("system_profiler", "SPHardwareDataType"),
-        "sysctl_machdep_cpu":
-            self.sh_stdout("sysctl", "machdep.cpu"),
-        "sysctl_hw":
-            self.sh_stdout("sysctl", "hw"),
-    })
-    return details
-
   def check_system_monitoring(self, disable: bool = False) -> bool:
     return self.check_crowdstrike(disable)
 
@@ -234,9 +269,9 @@ class MacOSPlatform(PosixPlatform):
     raise ValueError("Could not get 'SPDisplaysDataType' form system profiler")
 
   def check_crowdstrike(self, disable: bool = False) -> bool:
-    falconctl = pathlib.Path(
+    falconctl = self.path(
         "/Applications/Falcon.app/Contents/Resources/falconctl")
-    if not falconctl.exists():
+    if not self.exists(falconctl):
       logging.debug("You're fine, falconctl or %s are not installed.",
                     falconctl)
       return True
@@ -262,6 +297,7 @@ class MacOSPlatform(PosixPlatform):
     return True
 
   def _get_display_service(self) -> Tuple[ctypes.CDLL, Any]:
+    assert self.is_local, "Operation not supported on remote platforms"
     core_graphics = ctypes.CDLL(
         "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
     main_display = core_graphics.CGMainDisplayID()
@@ -314,8 +350,19 @@ class MacOSPlatform(PosixPlatform):
     """
 
     display_services, main_display = self._get_display_service()
-    display_brightness = ctypes.c_float()
+    display_brightness = ctypes.c_float()  # pylint: disable=no-value-for-parameter
     ret = display_services.DisplayServicesGetBrightness(
         main_display, ctypes.byref(display_brightness))
     assert ret == 0
     return round(display_brightness.value * 100)
+
+  def screenshot(self, result_path: pth.AnyPath) -> None:
+    self.sh("screencapture", "-x", result_path)
+
+  def is_port_used(self, port: int) -> bool:
+    # We need a custom solution for macos:
+    # - psutil.net_connections requires root access on macos
+    # - 'ss' is not available by default on macos
+    # This is a semi-ideal solution as it creates a temporary local server.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+      return s.connect_ex(("localhost", port)) == 0

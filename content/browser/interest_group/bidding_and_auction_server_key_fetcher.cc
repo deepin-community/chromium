@@ -17,6 +17,7 @@
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "third_party/blink/public/common/features.h"
+#include "url/origin.h"
 
 namespace content {
 
@@ -61,6 +62,18 @@ constexpr net::NetworkTrafficAnnotationTag
     comments:
       ""
     )");
+
+const struct {
+  const char* origin;
+  const char* key_url;
+} kDefaultKeys[] = {
+    {kDefaultBiddingAndAuctionGCPCoordinatorOrigin,
+     kBiddingAndAuctionGCPCoordinatorKeyURL},
+    {kBiddingAndAuctionGCPCoordinatorOrigin,
+     kBiddingAndAuctionGCPCoordinatorKeyURL},
+    {kBiddingAndAuctionAWSCoordinatorOrigin,
+     kBiddingAndAuctionAWSCoordinatorKeyURL},
+};
 }  // namespace
 
 BiddingAndAuctionServerKeyFetcher::PerCoordinatorFetcherState::
@@ -74,8 +87,20 @@ BiddingAndAuctionServerKeyFetcher::PerCoordinatorFetcherState::operator=(
     PerCoordinatorFetcherState&& state) = default;
 
 BiddingAndAuctionServerKeyFetcher::BiddingAndAuctionServerKeyFetcher(
-    InterestGroupManagerImpl* manager)
-    : manager_(manager) {
+    InterestGroupManagerImpl* manager,
+    scoped_refptr<network::SharedURLLoaderFactory> loader_factory)
+    : loader_factory_(std::move(loader_factory)), manager_(manager) {
+  for (const auto& key_config : kDefaultKeys) {
+    url::Origin coordinator = url::Origin::Create(GURL(key_config.origin));
+    DCHECK_EQ(coordinator.scheme(), url::kHttpsScheme);
+    PerCoordinatorFetcherState state;
+    state.key_url = GURL(key_config.key_url);
+    if (!state.key_url.is_valid()) {
+      continue;
+    }
+    fetcher_state_map_.insert_or_assign(std::move(coordinator),
+                                        std::move(state));
+  }
   if (base::FeatureList::IsEnabled(
           blink::features::kFledgeBiddingAndAuctionServer)) {
     std::string config =
@@ -94,6 +119,10 @@ BiddingAndAuctionServerKeyFetcher::BiddingAndAuctionServerKeyFetcher(
 
           PerCoordinatorFetcherState state;
           state.key_url = GURL(kv.second.GetString());
+          if (!state.key_url.is_valid()) {
+            fetcher_state_map_.erase(coordinator);
+            continue;
+          }
           fetcher_state_map_.insert_or_assign(std::move(coordinator),
                                               std::move(state));
         }
@@ -103,9 +132,7 @@ BiddingAndAuctionServerKeyFetcher::BiddingAndAuctionServerKeyFetcher(
     if (key_url.is_valid()) {
       PerCoordinatorFetcherState state;
       state.key_url = std::move(key_url);
-      url::Origin coordinator = url::Origin::Create(
-          GURL(kDefaultBiddingAndAuctionGCPCoordinatorOrigin));
-      fetcher_state_map_.insert_or_assign(std::move(coordinator),
+      fetcher_state_map_.insert_or_assign(default_gcp_coordinator_,
                                           std::move(state));
     }
   }
@@ -114,15 +141,7 @@ BiddingAndAuctionServerKeyFetcher::BiddingAndAuctionServerKeyFetcher(
 BiddingAndAuctionServerKeyFetcher::~BiddingAndAuctionServerKeyFetcher() =
     default;
 
-void BiddingAndAuctionServerKeyFetcher::MaybePrefetchKeys(
-    scoped_refptr<network::SharedURLLoaderFactory> loader_factory) {
-  // We only prefetch keys if the prefetching is enabled and if
-  // kFledgeBiddingAndAuctionServer is enabled. We don't need to check
-  // kFledgeBiddingAndAuctionServer because if it's not enabled
-  // fetcher_state_map_ would have no keys.
-  if (!base::FeatureList::IsEnabled(features::kFledgePrefetchBandAKeys)) {
-    return;
-  }
+void BiddingAndAuctionServerKeyFetcher::MaybePrefetchKeys() {
   // We only want to prefetch once.
   if (did_prefetch_keys_) {
     return;
@@ -130,17 +149,17 @@ void BiddingAndAuctionServerKeyFetcher::MaybePrefetchKeys(
   did_prefetch_keys_ = true;
   for (auto& [coordinator, state] : fetcher_state_map_) {
     if (state.keys.size() == 0 || state.expiration < base::Time::Now()) {
-      FetchKeys(loader_factory, coordinator, state, base::DoNothing());
+      FetchKeys(coordinator, state, base::DoNothing());
     }
   }
 }
 
 void BiddingAndAuctionServerKeyFetcher::GetOrFetchKey(
-    scoped_refptr<network::SharedURLLoaderFactory> loader_factory,
-    std::optional<url::Origin> maybe_coordinator,
+    const std::optional<url::Origin>& maybe_coordinator,
     BiddingAndAuctionServerKeyFetcherCallback callback) {
-  url::Origin coordinator = maybe_coordinator.value_or(
-      url::Origin::Create(GURL(kDefaultBiddingAndAuctionGCPCoordinatorOrigin)));
+  const url::Origin& coordinator = maybe_coordinator.has_value()
+                                       ? *maybe_coordinator
+                                       : default_gcp_coordinator_;
   auto it = fetcher_state_map_.find(coordinator);
   if (it == fetcher_state_map_.end()) {
     std::move(callback).Run(
@@ -166,14 +185,14 @@ void BiddingAndAuctionServerKeyFetcher::GetOrFetchKey(
   }
   base::UmaHistogramBoolean("Ads.InterestGroup.ServerAuction.KeyFetch.Cached",
                             false);
-  FetchKeys(std::move(loader_factory), coordinator, state, std::move(callback));
+  FetchKeys(coordinator, state, std::move(callback));
 }
 
 void BiddingAndAuctionServerKeyFetcher::FetchKeys(
-    scoped_refptr<network::SharedURLLoaderFactory> loader_factory,
     const url::Origin& coordinator,
     PerCoordinatorFetcherState& state,
     BiddingAndAuctionServerKeyFetcherCallback callback) {
+  state.fetch_start = base::TimeTicks::Now();
   state.queue.push_back(std::move(callback));
   if (state.queue.size() > 1) {
     return;
@@ -186,23 +205,21 @@ void BiddingAndAuctionServerKeyFetcher::FetchKeys(
         coordinator,
         base::BindOnce(
             &BiddingAndAuctionServerKeyFetcher::OnFetchKeysFromDatabaseComplete,
-            weak_ptr_factory_.GetWeakPtr(), std::move(loader_factory),
-            coordinator));
+            weak_ptr_factory_.GetWeakPtr(), coordinator));
   } else {
-    FetchKeysFromNetwork(std::move(loader_factory), coordinator);
+    FetchKeysFromNetwork(coordinator);
   }
 }
 
 void BiddingAndAuctionServerKeyFetcher::OnFetchKeysFromDatabaseComplete(
-    scoped_refptr<network::SharedURLLoaderFactory> loader_factory,
-    const url::Origin coordinator,
+    const url::Origin& coordinator,
     std::pair<base::Time, std::vector<BiddingAndAuctionServerKey>>
         expiration_and_keys) {
   if (expiration_and_keys.second.empty() ||
       expiration_and_keys.first < base::Time::Now()) {
     base::UmaHistogramBoolean(
         "Ads.InterestGroup.ServerAuction.KeyFetch.DBCached", false);
-    FetchKeysFromNetwork(std::move(loader_factory), coordinator);
+    FetchKeysFromNetwork(coordinator);
   } else {
     base::UmaHistogramBoolean(
         "Ads.InterestGroup.ServerAuction.KeyFetch.DBCached", true);
@@ -212,10 +229,9 @@ void BiddingAndAuctionServerKeyFetcher::OnFetchKeysFromDatabaseComplete(
 }
 
 void BiddingAndAuctionServerKeyFetcher::FetchKeysFromNetwork(
-    scoped_refptr<network::SharedURLLoaderFactory> loader_factory,
     const url::Origin& coordinator) {
   PerCoordinatorFetcherState& state = fetcher_state_map_.at(coordinator);
-  state.fetch_start = base::TimeTicks::Now();
+  state.network_fetch_start = base::TimeTicks::Now();
 
   CHECK(!state.loader);
   auto resource_request = std::make_unique<network::ResourceRequest>();
@@ -229,7 +245,7 @@ void BiddingAndAuctionServerKeyFetcher::FetchKeysFromNetwork(
   state.loader->SetTimeoutDuration(kRequestTimeout);
 
   state.loader->DownloadToString(
-      loader_factory.get(),
+      loader_factory_.get(),
       base::BindOnce(
           &BiddingAndAuctionServerKeyFetcher::OnFetchKeysFromNetworkComplete,
           weak_ptr_factory_.GetWeakPtr(), coordinator),
@@ -248,7 +264,7 @@ void BiddingAndAuctionServerKeyFetcher::OnFetchKeysFromNetworkComplete(
   }
   base::UmaHistogramTimes(
       "Ads.InterestGroup.ServerAuction.KeyFetch.NetworkTime",
-      base::TimeTicks::Now() - state.fetch_start);
+      base::TimeTicks::Now() - state.network_fetch_start);
   base::UmaHistogramBoolean(
       "Ads.InterestGroup.ServerAuction.KeyFetch.NetworkCached", was_cached);
   data_decoder::DataDecoder::ParseJsonIsolated(
@@ -322,8 +338,6 @@ void BiddingAndAuctionServerKeyFetcher::CacheKeysAndRunAllCallbacks(
   PerCoordinatorFetcherState& state = fetcher_state_map_.at(coordinator);
   state.keys = keys;
   state.expiration = expiration;
-  base::UmaHistogramTimes("Ads.InterestGroup.ServerAuction.KeyFetch.TotalTime",
-                          base::TimeTicks::Now() - state.fetch_start);
 
   while (!state.queue.empty()) {
     // We call the callback *before* removing the current request from the list.

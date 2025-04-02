@@ -13,6 +13,7 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pdf_util.h"
 #include "components/pdf/common/constants.h"
+#include "components/pdf/common/pdf_util.h"
 #include "content/public/browser/download_utils.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
@@ -42,7 +43,7 @@ class PdfWebContentsLifetimeHelper
   }
 
   void NavigateIFrameToPlaceholder(const content::OpenURLParams& url_params) {
-    GetWebContents().OpenURL(url_params);
+    GetWebContents().OpenURL(url_params, /*navigation_handle_callback=*/{});
   }
 
  private:
@@ -75,7 +76,7 @@ PDFIFrameNavigationThrottle::PDFIFrameNavigationThrottle(
     content::NavigationHandle* navigation_handle)
     : content::NavigationThrottle(navigation_handle) {}
 
-PDFIFrameNavigationThrottle::~PDFIFrameNavigationThrottle() {}
+PDFIFrameNavigationThrottle::~PDFIFrameNavigationThrottle() = default;
 
 const char* PDFIFrameNavigationThrottle::GetNameForLogging() {
   return "PDFIFrameNavigationThrottle";
@@ -111,8 +112,6 @@ PDFIFrameNavigationThrottle::WillProcessResponse() {
           navigation_handle()->GetURL(), response_headers, mime_type)) {
     return content::NavigationThrottle::PROCEED;
   }
-
-  ReportPDFLoadStatus(PDFLoadStatus::kLoadedIframePdfWithNoPdfViewer);
 
 #if BUILDFLAG(ENABLE_PLUGINS)
   bool is_stale = false;
@@ -164,6 +163,8 @@ void PDFIFrameNavigationThrottle::LoadPlaceholderHTML() {
   content::WebContents* web_contents = navigation_handle()->GetWebContents();
   if (!web_contents)
     return;
+
+  ReportPDFLoadStatus(PDFLoadStatus::kLoadedIframePdfWithNoPdfViewer);
 
   PdfWebContentsLifetimeHelper::CreateForWebContents(web_contents);
   PdfWebContentsLifetimeHelper* helper =

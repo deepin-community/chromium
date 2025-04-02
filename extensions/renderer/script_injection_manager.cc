@@ -4,16 +4,16 @@
 
 #include "extensions/renderer/script_injection_manager.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <utility>
-#include "base/auto_reset.h"
-#include "base/containers/cxx20_erase.h"
+#include <vector>
+
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/values.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_observer.h"
@@ -95,7 +95,7 @@ class ScriptInjectionManager::RFOHelper : public content::RenderFrameObserver {
   void InvalidateAndResetFrame(bool force_reset);
 
   // The owning ScriptInjectionManager.
-  raw_ptr<ScriptInjectionManager, ExperimentalRenderer> manager_;
+  raw_ptr<ScriptInjectionManager> manager_;
 
   bool should_run_idle_ = true;
 
@@ -277,7 +277,7 @@ void ScriptInjectionManager::OnExtensionUnloaded(
 }
 
 void ScriptInjectionManager::OnInjectionFinished(ScriptInjection* injection) {
-  base::EraseIf(running_injections_,
+  std::erase_if(running_injections_,
                 [&injection](const std::unique_ptr<ScriptInjection>& mode) {
                   return injection == mode.get();
                 });
@@ -285,7 +285,7 @@ void ScriptInjectionManager::OnInjectionFinished(ScriptInjection* injection) {
 
 void ScriptInjectionManager::OnUserScriptsUpdated(
     const mojom::HostID& changed_host) {
-  base::EraseIf(
+  std::erase_if(
       pending_injections_,
       [&changed_host](const std::unique_ptr<ScriptInjection>& injection) {
         return changed_host == injection->host_id();
@@ -306,7 +306,7 @@ void ScriptInjectionManager::InvalidateForFrame(content::RenderFrame* frame) {
   // note it.
   active_injection_frames_.erase(frame);
 
-  base::EraseIf(pending_injections_,
+  std::erase_if(pending_injections_,
                 [&frame](const std::unique_ptr<ScriptInjection>& injection) {
                   return injection->render_frame() == frame;
                 });
@@ -478,7 +478,7 @@ void ScriptInjectionManager::ExecuteDeclarativeScript(
   if (injection.get()) {
     ScriptsRunInfo scripts_run_info(render_frame,
                                     mojom::RunLocation::kBrowserDriven);
-    // TODO(https://crbug.com/1186525): Use return value of TryToInject for
+    // TODO(crbug.com/40753782): Use return value of TryToInject for
     // error handling.
     TryToInject(std::move(injection), mojom::RunLocation::kBrowserDriven,
                 &scripts_run_info);
@@ -489,8 +489,8 @@ void ScriptInjectionManager::ExecuteDeclarativeScript(
 
 void ScriptInjectionManager::OnPermitScriptInjectionHandled(
     ScriptInjection* injection) {
-  auto iter = base::ranges::find(pending_injections_, injection,
-                                 &std::unique_ptr<ScriptInjection>::get);
+  auto iter = std::ranges::find(pending_injections_, injection,
+                                &std::unique_ptr<ScriptInjection>::get);
   if (iter == pending_injections_.end())
     return;
   DCHECK((*iter)->host_id().type == mojom::HostID::HostType::kExtensions);

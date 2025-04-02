@@ -31,11 +31,12 @@ enum class SyncConfirmationScreenMode : int {
   kPending = 1,
   kRestricted = 2,
   kUnrestricted = 3,
+  kDeadlined = 4,
 };
 
 SyncConfirmationScreenMode GetScreenMode(
     const AccountCapabilities& capabilities);
-// LINT.ThenChange(//chrome/browser/resources/signin/sync_confirmation/sync_confirmation_app.ts:screen_mode)
+// LINT.ThenChange(//chrome/browser/resources/signin/sync_confirmation/sync_confirmation_browser_proxy.ts:screen_mode)
 
 // WebUI message handler for the sync confirmation dialog. IdentityManager calls
 // in this class use signin::ConsentLevel::kSignin because the user hasn't
@@ -94,22 +95,18 @@ class SyncConfirmationHandler : public content::WebUIMessageHandler,
   // `OnAvatarChanged` with the signed-in user's picture url.
   virtual void HandleAccountInfoRequest(const base::Value::List& args);
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Handles the "openDeviceSyncSettings" message from the page. No arguments.
-  // This message is sent when the user clicks on the device settings link
-  // in the sync confirmation dialog, which keep the dialogue open and open
-  // new window in ash for device sync settings .
-  virtual void HandleOpenDeviceSyncSettings(const base::Value::List& args);
-#endif
   // Records the user's consent to sync. Called from `HandleConfirm` and
   // `HandleGoToSettings`, and expects two parameters to be passed through
   // these methods from the WebUI:
-  // 1. List of strings (names of the string resources constituting the consent
-  //                     description as per WebUIDataSource)
-  // 2. Strings (name of the string resource of the consent confirmation)
-  // This message is sent when the user interacts with the dialog in a positive
-  // manner, i.e. clicks on the confirmation button or the settings link.
-  virtual void RecordConsent(const base::Value::List& args);
+  // `consent_description`: a list of strings (names of the string resources
+  // constituting the consent description as per WebUIDataSource)
+  // `consent_confirmation`: a string (name of the string resource of the
+  // consent confirmation).
+  // This message is sent when the user interacts with the
+  // dialog in a positive manner, i.e. clicks on the confirmation button or the
+  // settings link.
+  virtual void RecordConsent(const base::Value::List& consent_description,
+                             const std::string& consent_confirmation);
 
   // Dispatches incoming account info to respective ui listeners
   // (::OnAvatarChanged, ::OnScreenModeChanged).

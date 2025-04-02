@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/web_applications/sub_apps_install_dialog_controller.h"
+
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
@@ -157,7 +158,7 @@ TEST_F(SubAppsInstallDialogControllerTest, EscPressed) {
   views::Widget* widget = controller->GetWidgetForTesting();
 
   // Simulate esc key press.
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_ESCAPE, ui::EF_NONE);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_ESCAPE, ui::EF_NONE);
   widget->OnKeyEvent(&event);
 
   EXPECT_FALSE(future.Get());

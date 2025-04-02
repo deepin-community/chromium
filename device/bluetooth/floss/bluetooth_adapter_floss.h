@@ -18,6 +18,7 @@
 #include "device/bluetooth/bluetooth_discovery_session.h"
 #include "device/bluetooth/bluetooth_export.h"
 #include "device/bluetooth/bluetooth_gatt_service.h"
+#include "device/bluetooth/bluetooth_local_gatt_service.h"
 #include "device/bluetooth/bluetooth_socket_thread.h"
 #include "device/bluetooth/floss/bluetooth_low_energy_scan_session_floss.h"
 #include "device/bluetooth/floss/bluetooth_socket_floss.h"
@@ -54,7 +55,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterFloss final
       public floss::FlossAdapterClient::Observer,
       public floss::FlossBatteryManagerClient::
           FlossBatteryManagerClientObserver,
-      public floss::FlossGattManagerClient::FlossGattServerObserver,
 #if BUILDFLAG(IS_CHROMEOS)
       public FlossAdminClientObserver,
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -137,6 +137,11 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterFloss final
   device::BluetoothLocalGattService* GetGattService(
       const std::string& identifier) const override;
 
+  base::WeakPtr<device::BluetoothLocalGattService> CreateLocalGattService(
+      const device::BluetoothUUID& uuid,
+      bool is_primary,
+      device::BluetoothLocalGattService::Delegate* delegate) override;
+
   // Register a GATT service. The service must belong to this adapter.
   void RegisterGattService(BluetoothLocalGattServiceFloss* service);
 
@@ -164,10 +169,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterFloss final
   // this method will return false.
   bool SendValueChanged(BluetoothLocalGattCharacteristicFloss* characteristic,
                         const std::vector<uint8_t>& value);
-
-  // FlossGattServerObserver overrides
-  void GattServerNotificationSent(std::string address,
-                                  GattStatus status) override;
 
 #if BUILDFLAG(IS_CHROMEOS)
   void SetServiceAllowList(const UUIDList& uuids,
@@ -246,6 +247,9 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterFloss final
                        DBusResult<Void> ret);
   // Called when all device properties have been initialized
   void OnInitializeDeviceProperties(BluetoothDeviceFloss* device_ptr);
+  // Called once the battery data for a specific device has been fetched
+  void OnGetBatteryInformation(
+      DBusResult<std::optional<BatterySet>> battery_set);
   // Called when the UUIDs property changed and fetched.
   void OnDeviceUuidsChanged(BluetoothDeviceFloss* device_ptr);
   void OnGetConnectionState(const FlossDeviceId& device_id,
@@ -269,7 +273,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterFloss final
   // Complete adapter present/enabled changes after adapter clients are ready.
   // Invoke PresentChanged to the observers only when |is_newly_present| is
   // true.
-  void OnAdapterClientsReady(bool enabled, bool is_newly_present);
+  void OnAdapterClientsReady(bool is_newly_present);
 
   // Initialize observers for adapter dependent clients. We need to add + remove
   // these observers whenever we get a powered notification.
@@ -280,7 +284,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterFloss final
   void RemoveAdapter();
 
   void PopulateInitialDevices();
-  void ClearAllDevices();
 
   // floss::FlossAdapterClient::Observer override.
   void DiscoverableChanged(bool discoverable) override;
@@ -305,6 +308,8 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterFloss final
       FlossAdapterClient::BondState bond_state) override;
   void AdapterDeviceConnected(const FlossDeviceId& device_id) override;
   void AdapterDeviceDisconnected(const FlossDeviceId& device_id) override;
+  void AdapterDeviceConnectionFailed(const FlossDeviceId& device_id,
+                                     uint32_t status) override;
 
   // floss::FlossBatteryManagerClient::FlossBatteryManagerClientObserver
   // override.

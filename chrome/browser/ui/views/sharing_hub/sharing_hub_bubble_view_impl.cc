@@ -14,6 +14,7 @@
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -45,13 +46,15 @@ SharingHubBubbleViewImpl::SharingHubBubbleViewImpl(
     views::View* anchor_view,
     share::ShareAttempt attempt,
     SharingHubBubbleController* controller)
-    : LocationBarBubbleDelegateView(anchor_view, attempt.web_contents.get()),
+    : LocationBarBubbleDelegateView(anchor_view,
+                                    attempt.web_contents.get(),
+                                    /*autosize=*/true),
       attempt_(attempt) {
   DCHECK(anchor_view);
   DCHECK(controller);
 
   SetAccessibleTitle(l10n_util::GetStringUTF16(IDS_SHARING_HUB_TOOLTIP));
-  SetButtons(ui::DIALOG_BUTTON_NONE);
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   set_fixed_width(views::LayoutProvider::Get()->GetDistanceMetric(
       views::DISTANCE_BUBBLE_PREFERRED_WIDTH));
   RegisterWindowClosingCallback(base::BindOnce(
@@ -79,8 +82,9 @@ void SharingHubBubbleViewImpl::OnThemeChanged() {
 
 void SharingHubBubbleViewImpl::OnActionSelected(
     SharingHubBubbleActionButton* button) {
-  if (!controller_)
+  if (!controller_) {
     return;
+  }
 
   // The announcement has to happen here rather than in the button itself: the
   // button doesn't know whether controller_ will be null, so it doesn't know
@@ -125,15 +129,6 @@ void SharingHubBubbleViewImpl::PopulateScrollView(
         std::make_unique<SharingHubBubbleActionButton>(this, action));
     view->SetGroup(kActionButtonGroup);
   }
-
-  MaybeSizeToContents();
-  DeprecatedLayoutImmediately();
-}
-
-void SharingHubBubbleViewImpl::MaybeSizeToContents() {
-  // The widget may be null if this is called while the dialog is opening.
-  if (GetWidget())
-    SizeToContents();
 }
 
 void SharingHubBubbleViewImpl::OnWindowClosing() {

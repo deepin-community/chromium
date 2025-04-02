@@ -23,15 +23,8 @@ class HttpResponseHeaders;
 namespace network {
 class CSPContext;
 
-namespace features {
-// TODO(https://crbug.com/1477193): This feature flag can be removed after M126.
-COMPONENT_EXPORT(NETWORK_CPP)
-BASE_DECLARE_FEATURE(kCspStopMatchingWildcardDirectivesToFtp);
-}  // namespace features
-
 // The field |allowed_if_wildcard_does_not_match_ws| is the result assuming '*'
-// doesn't match ws or wss, and |allowed_if_wildcard_does_not_match_ftp| is the
-// result assuming '*' doesn't match ftp. These two are only for logging.
+// doesn't match ws or wss. It is only for logging.
 class COMPONENT_EXPORT(NETWORK_CPP) CSPCheckResult {
  public:
   explicit CSPCheckResult(bool);
@@ -45,21 +38,17 @@ class COMPONENT_EXPORT(NETWORK_CPP) CSPCheckResult {
   static CSPCheckResult Allowed();
   static CSPCheckResult Blocked();
   static CSPCheckResult AllowedOnlyIfWildcardMatchesWs();
-  static CSPCheckResult AllowedOnlyIfWildcardMatchesFtp();
 
   bool WouldBlockIfWildcardDoesNotMatchWs() const;
-  bool WouldBlockIfWildcardDoesNotMatchFtp() const;
 
   bool IsAllowed() const;
 
  private:
   CSPCheckResult(bool allowed,
-                 bool allowed_if_wildcard_does_not_match_ws,
-                 bool allowed_if_wildcard_does_not_match_ftp);
+                 bool allowed_if_wildcard_does_not_match_ws);
 
   bool allowed_;
   bool allowed_if_wildcard_does_not_match_ws_;
-  bool allowed_if_wildcard_does_not_match_ftp_;
 };
 
 // Return the next Content Security Policy directive after |directive| in
@@ -116,7 +105,6 @@ CSPCheckResult CheckContentSecurityPolicy(
     const GURL& url,
     const GURL& url_before_redirects,
     bool has_followed_redirect,
-    bool is_response_check,
     CSPContext* context,
     const mojom::SourceLocationPtr& source_location,
     bool is_form_submission,

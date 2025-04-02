@@ -16,7 +16,7 @@
 #include "chrome/browser/history/top_sites_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/instant_service.h"
-#include "chrome/browser/ui/webui/webui_util.h"
+#include "chrome/browser/ui/webui/webui_util_desktop.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/favicon/core/history_ui_favicon_request_handler.h"
@@ -50,15 +50,21 @@ GURL GetUnsafeRequestOrigin(const content::WebContents::Getter& wc_getter) {
   return web_contents ? web_contents->GetLastCommittedURL() : GURL();
 }
 
-bool ParseHistoryUiOrigin(const GURL& url,
-                          favicon::HistoryUiFaviconRequestOrigin* origin) {
+bool IsOriginAllowedServerFallback(const GURL& url) {
+  // Allow chrome-untrusted://data-sharing to use Google server fallback.
+  if (url.scheme() == content::kChromeUIUntrustedScheme &&
+      url.host() == chrome::kChromeUIUntrustedDataSharingHost) {
+    return true;
+  }
   GURL history_url(chrome::kChromeUIHistoryURL);
   if (url == history_url) {
-    *origin = favicon::HistoryUiFaviconRequestOrigin::kHistory;
     return true;
   }
   if (url == history_url.Resolve(chrome::kChromeUIHistorySyncedTabs)) {
-    *origin = favicon::HistoryUiFaviconRequestOrigin::kHistorySyncedTabs;
+    return true;
+  }
+  if (url == GURL(chrome::kChromeUINewTabURL) ||
+      url == GURL(chrome::kChromeUINewTabPageURL)) {
     return true;
   }
   return false;
@@ -67,20 +73,24 @@ bool ParseHistoryUiOrigin(const GURL& url,
 }  // namespace
 
 FaviconSource::FaviconSource(Profile* profile,
-                             chrome::FaviconUrlFormat url_format)
-    : profile_(profile->GetOriginalProfile()), url_format_(url_format) {}
+                             chrome::FaviconUrlFormat url_format,
+                             bool serve_untrusted)
+    : profile_(profile->GetOriginalProfile()),
+      url_format_(url_format),
+      serve_untrusted_(serve_untrusted) {}
 
-FaviconSource::~FaviconSource() {}
+FaviconSource::~FaviconSource() = default;
 
 std::string FaviconSource::GetSource() {
   switch (url_format_) {
     case chrome::FaviconUrlFormat::kFaviconLegacy:
       return chrome::kChromeUIFaviconHost;
     case chrome::FaviconUrlFormat::kFavicon2:
-      return chrome::kChromeUIFavicon2Host;
+      return serve_untrusted_ ? chrome::kChromeUIUntrustedFavicon2URL
+                              : chrome::kChromeUIFavicon2Host;
   }
+
   NOTREACHED();
-  return "";
 }
 
 void FaviconSource::StartDataRequest(
@@ -151,13 +161,9 @@ void FaviconSource::StartDataRequest(
       }
     }
 
-    favicon::HistoryUiFaviconRequestOrigin parsed_history_ui_origin;
-    if (!parsed.allow_favicon_server_fallback ||
-        !ParseHistoryUiOrigin(GetUnsafeRequestOrigin(wc_getter),
-                              &parsed_history_ui_origin)) {
+    if (!(parsed.allow_favicon_server_fallback &&
+          IsOriginAllowedServerFallback(GetUnsafeRequestOrigin(wc_getter)))) {
       // Request from local storage only.
-      // TODO(victorvianna): Expose fallback_to_host in FaviconRequestHandler
-      // API and move the explanatory comment for |fallback_to_host| here.
       const bool fallback_to_host = true;
       favicon_service->GetRawFaviconForPageURL(
           page_url, {favicon_base::IconType::kFavicon}, desired_size_in_pixel,
@@ -183,8 +189,7 @@ void FaviconSource::StartDataRequest(
         page_url, desired_size_in_pixel,
         base::BindOnce(&FaviconSource::OnFaviconDataAvailable,
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback),
-                       parsed, wc_getter),
-        parsed_history_ui_origin);
+                       parsed, wc_getter));
   }
 }
 
@@ -218,7 +223,7 @@ bool FaviconSource::ShouldServiceRequest(
 
 ui::NativeTheme* FaviconSource::GetNativeTheme(
     const content::WebContents::Getter& wc_getter) {
-  return webui::GetNativeTheme(wc_getter.Run());
+  return webui::GetNativeThemeDeprecated(wc_getter.Run());
 }
 
 void FaviconSource::OnFaviconDataAvailable(
@@ -249,10 +254,11 @@ void FaviconSource::SendDefaultResponse(
   int icon_size = std::ceil(parsed.size_in_dip * parsed.device_scale_factor);
   SkBitmap bitmap = favicon::GenerateMonogramFavicon(GURL(parsed.page_url),
                                                      icon_size, icon_size);
-  std::vector<unsigned char> bitmap_data;
-  bool result = gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, false, &bitmap_data);
-  DCHECK(result);
-  std::move(callback).Run(base::RefCountedBytes::TakeVector(&bitmap_data));
+  std::optional<std::vector<uint8_t>> bitmap_data =
+      gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, /*discard_transparency=*/false);
+  DCHECK(bitmap_data);
+  std::move(callback).Run(base::MakeRefCounted<base::RefCountedBytes>(
+      std::move(bitmap_data).value()));
 }
 
 void FaviconSource::SendDefaultResponse(

@@ -6,9 +6,12 @@
 
 #include <algorithm>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
 #include "base/time/time.h"
 #include "mojo/public/c/system/data_pipe.h"
@@ -26,7 +29,7 @@ namespace {
 const char kDataContentType[] = "Content-Type: application/octet-stream";
 
 // Write the data from |file_| by chunks of 32 kbs.
-constexpr int64_t kMaxSize = 32 * 1024;
+constexpr size_t kMaxSize = 32 * 1024;
 
 }  // namespace
 
@@ -61,6 +64,9 @@ bool ConnectorDataPipeGetter::InternalMemoryMappedFile::DoInitialize() {
   void* mapped = mmap(nullptr, static_cast<size_t>(file_len), PROT_READ,
                       MAP_SHARED, file_.GetPlatformFile(), 0);
   if (mapped == MAP_FAILED) {
+    LOG(ERROR) << "Upload failure: The creation of a memory mapped file with "
+                  "MAP_SHARED failed for file "
+               << file_.GetPlatformFile();
     // Retry with MAP_PRIVATE mode.
     // Some file systems do not support MAP_SHARED. Here, it is acceptable to
     // use MAP_PRIVATE instead. Note: For MAP_PRIVATE, it is unspecified whether
@@ -70,9 +76,9 @@ bool ConnectorDataPipeGetter::InternalMemoryMappedFile::DoInitialize() {
                   MAP_PRIVATE, file_.GetPlatformFile(), 0);
   }
   if (mapped == MAP_FAILED) {
-    DPLOG(ERROR) << "Upload failure: The creation of a memory mapped file "
-                    "failed for file "
-                 << file_.GetPlatformFile();
+    LOG(ERROR) << "Upload failure: The creation of a memory mapped file with "
+                  "MAP_PRIVATE failed for file "
+               << file_.GetPlatformFile();
     return false;
   }
   length_ = static_cast<size_t>(file_len);
@@ -98,7 +104,8 @@ void ConnectorDataPipeGetter::InternalMemoryMappedFile::CloseHandles() {
 std::unique_ptr<ConnectorDataPipeGetter>
 ConnectorDataPipeGetter::CreateMultipartPipeGetter(const std::string& boundary,
                                                    const std::string& metadata,
-                                                   base::File file) {
+                                                   base::File file,
+                                                   bool is_obfuscated) {
   if (!file.IsValid()) {
     return nullptr;
   }
@@ -108,8 +115,8 @@ ConnectorDataPipeGetter::CreateMultipartPipeGetter(const std::string& boundary,
     return nullptr;
   }
 
-  return std::make_unique<ConnectorDataPipeGetter>(boundary, metadata,
-                                                   std::move(mm_file));
+  return std::make_unique<ConnectorDataPipeGetter>(
+      boundary, metadata, std::move(mm_file), is_obfuscated);
 }
 
 // static
@@ -133,7 +140,8 @@ ConnectorDataPipeGetter::CreateMultipartPipeGetter(
 
 // static
 std::unique_ptr<ConnectorDataPipeGetter>
-ConnectorDataPipeGetter::CreateResumablePipeGetter(base::File file) {
+ConnectorDataPipeGetter::CreateResumablePipeGetter(base::File file,
+                                                   bool is_obfuscated) {
   if (!file.IsValid()) {
     return nullptr;
   }
@@ -143,9 +151,9 @@ ConnectorDataPipeGetter::CreateResumablePipeGetter(base::File file) {
     return nullptr;
   }
 
-  return std::make_unique<ConnectorDataPipeGetter>(/*boundary*/ std::string(),
-                                                   /*metadata*/ std::string(),
-                                                   std::move(mm_file));
+  return std::make_unique<ConnectorDataPipeGetter>(
+      /*boundary*/ std::string(),
+      /*metadata*/ std::string(), std::move(mm_file), is_obfuscated);
 }
 
 // static
@@ -167,13 +175,19 @@ ConnectorDataPipeGetter::CreateResumablePipeGetter(
 ConnectorDataPipeGetter::ConnectorDataPipeGetter(
     const std::string& boundary,
     const std::string& metadata,
-    std::unique_ptr<InternalMemoryMappedFile> file)
+    std::unique_ptr<InternalMemoryMappedFile> file,
+    bool is_obfuscated)
     : ConnectorDataPipeGetter(boundary,
                               metadata,
                               std::move(file),
                               base::ReadOnlySharedMemoryMapping()) {
   file_data_pipe_ = true;
   CHECK(file_->IsValid());
+
+  if (is_obfuscated) {
+    deobfuscator_ =
+        std::make_unique<enterprise_obfuscation::DownloadObfuscator>();
+  }
 }
 
 ConnectorDataPipeGetter::ConnectorDataPipeGetter(
@@ -202,7 +216,18 @@ void ConnectorDataPipeGetter::Read(mojo::ScopedDataPipeProducerHandle pipe,
                                    ReadCallback callback) {
   Reset();
 
-  std::move(callback).Run(net::OK, FullSize());
+  if (deobfuscator_ && file_data_pipe_) {
+    CHECK(file_->IsValid());
+    auto overhead =
+        deobfuscator_->CalculateDeobfuscationOverhead(file_->bytes());
+    if (!overhead.value()) {
+      return;
+    }
+    // Pass the size of the deobfuscated data to the data pipe producer.
+    std::move(callback).Run(net::OK, FullSize() - overhead.value());
+  } else {
+    std::move(callback).Run(net::OK, FullSize());
+  }
 
   pipe_ = std::move(pipe);
   watcher_ = std::make_unique<mojo::SimpleWatcher>(
@@ -290,7 +315,9 @@ bool ConnectorDataPipeGetter::WriteMultipartRequestFormat(
   CHECK_GE(offset, 0);
   CHECK_LT(offset, static_cast<int64_t>(str.size()));
 
-  return Write(str.data(), str.size(), offset);
+  base::span<const uint8_t> bytes = base::as_byte_span(str);
+  bytes = bytes.subspan(base::checked_cast<size_t>(offset));
+  return Write(bytes);
 }
 
 bool ConnectorDataPipeGetter::WriteFileData() {
@@ -299,8 +326,33 @@ bool ConnectorDataPipeGetter::WriteFileData() {
   CHECK_GE(file_offset, 0);
   CHECK_LT(file_offset, static_cast<int64_t>(file_->length()));
 
-  return Write(reinterpret_cast<const char*>(file_->data()), file_->length(),
-               file_offset);
+  base::span<const uint8_t> bytes = file_->bytes();
+  bytes = bytes.subspan(base::checked_cast<size_t>(file_offset));
+
+  if (!deobfuscator_) {
+    return Write(bytes);
+  }
+
+  // For obfuscated files, we deobfuscate chunk by chunk and write it
+  // incrementally.
+  while (!bytes.empty()) {
+    auto deobfuscated_chunk = deobfuscator_->GetNextDeobfuscatedChunk(bytes);
+    if (!deobfuscated_chunk.has_value()) {
+      Reset();
+      return false;
+    }
+
+    if (!Write(deobfuscated_chunk.value())) {
+      return false;
+    }
+
+    size_t offset = deobfuscator_->GetNextChunkOffset();
+
+    // Update positions and move to the next chunk to deobfuscate.
+    write_position_ += offset;
+    bytes = bytes.subspan(offset);
+  }
+  return true;
 }
 
 bool ConnectorDataPipeGetter::WritePageData() {
@@ -308,23 +360,22 @@ bool ConnectorDataPipeGetter::WritePageData() {
   CHECK_GE(page_offset, 0);
   CHECK_LT(page_offset, static_cast<int64_t>(page_.size()));
 
-  return Write(page_.GetMemoryAs<char>(), page_.size(), page_offset);
+  base::span<const uint8_t> bytes = page_.GetMemoryAsSpan<uint8_t>();
+  bytes = bytes.subspan(base::checked_cast<size_t>(page_offset));
+  return Write(bytes);
 }
 
-bool ConnectorDataPipeGetter::Write(const char* data,
-                                    int64_t full_size,
-                                    int64_t offset) {
+bool ConnectorDataPipeGetter::Write(base::span<const uint8_t> data) {
   while (true) {
-    int64_t remaining_bytes = full_size - offset;
-    uint32_t write_size =
-        static_cast<uint32_t>(std::min(kMaxSize, remaining_bytes));
-    if (write_size == 0) {
+    if (data.empty()) {
       // The data is fully read, so allow the next Write.
       return true;
     }
 
+    size_t actually_written_bytes = 0;
     int result =
-        pipe_->WriteData(data + offset, &write_size, MOJO_WRITE_DATA_FLAG_NONE);
+        pipe_->WriteData(data.first(std::min(kMaxSize, data.size())),
+                         MOJO_WRITE_DATA_FLAG_NONE, actually_written_bytes);
     if (result == MOJO_RESULT_SHOULD_WAIT) {
       watcher_->ArmOrNotify();
       return false;
@@ -333,9 +384,14 @@ bool ConnectorDataPipeGetter::Write(const char* data,
       return false;
     }
 
-    offset += write_size;
-    write_position_ += write_size;
-    DCHECK_LE(offset, full_size);
+    data = data.subspan(actually_written_bytes);
+    if (deobfuscator_) {
+      // Update write position within the current deobfuscated chunk for the
+      // next call.
+      deobfuscator_->UpdateDeobfuscatedChunkPosition(actually_written_bytes);
+    } else {
+      write_position_ += actually_written_bytes;
+    }
   }
 }
 

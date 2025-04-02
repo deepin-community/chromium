@@ -205,7 +205,6 @@ uint64_t GetRemoveMask(const base::Value::List& data_types) {
         break;
       case browsing_data::PolicyDataType::kNumTypes:
         NOTREACHED();
-        break;
     }
   }
   return result;
@@ -455,6 +454,11 @@ bool ChromeBrowsingDataLifetimeManager::
 
   for (syncer::UserSelectableType type : sync_types) {
     if (!sync_service->GetUserSettings()->IsTypeManagedByPolicy(type)) {
+      return false;
+    } else if (sync_service->GetActiveDataTypes().HasAny(
+                   syncer::UserSelectableTypeToAllDataTypes(type))) {
+      // If the sync type is disabled by policy, but the sync service has not
+      // deactivated the type yet, then data can not be safely cleared yet.
       return false;
     }
   }

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/nearby_sharing/nearby_sharing_service_impl.h"
 
+#include <array>
 #include <utility>
 
 #include "ash/public/cpp/new_window_delegate.h"
@@ -24,12 +25,12 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/nearby_sharing/certificates/common.h"
 #include "chrome/browser/nearby_sharing/certificates/nearby_share_certificate_manager_impl.h"
 #include "chrome/browser/nearby_sharing/certificates/nearby_share_encrypted_metadata_key.h"
 #include "chrome/browser/nearby_sharing/client/nearby_share_client_impl.h"
-#include "chrome/browser/nearby_sharing/common/nearby_share_enums.h"
 #include "chrome/browser/nearby_sharing/common/nearby_share_features.h"
 #include "chrome/browser/nearby_sharing/common/nearby_share_prefs.h"
 #include "chrome/browser/nearby_sharing/constants.h"
@@ -42,7 +43,6 @@
 #include "chrome/browser/nearby_sharing/nearby_share_metrics.h"
 #include "chrome/browser/nearby_sharing/nearby_share_transfer_profiler.h"
 #include "chrome/browser/nearby_sharing/paired_key_verification_runner.h"
-#include "chrome/browser/nearby_sharing/public/cpp/nearby_connections_manager.h"
 #include "chrome/browser/nearby_sharing/share_target.h"
 #include "chrome/browser/nearby_sharing/transfer_metadata.h"
 #include "chrome/browser/nearby_sharing/transfer_metadata_builder.h"
@@ -53,12 +53,13 @@
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #include "chrome/services/sharing/public/cpp/advertisement.h"
 #include "chrome/services/sharing/public/cpp/conversions.h"
+#include "chromeos/ash/components/nearby/common/connections_manager/nearby_connections_manager.h"
 #include "chromeos/ash/services/nearby/public/mojom/nearby_connections_types.mojom.h"
 #include "chromeos/ash/services/nearby/public/mojom/nearby_decoder.mojom.h"
 #include "chromeos/ash/services/nearby/public/mojom/nearby_share_target_types.mojom.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/cross_device/logging/logging.h"
-#include "components/metrics/structured/structured_metrics_features.h"
+#include "components/cross_device/nearby/nearby_features.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/storage_partition.h"
@@ -115,6 +116,10 @@ constexpr base::TimeDelta kClearNearbyProcessUnexpectedShutdownCountDelay =
 // nearby_share_prefs).
 constexpr base::TimeDelta kNearbyVisibilityReminderTimerDelay = base::Days(180);
 
+// Whether or not WifiLan is supported for advertising (mDNS). Support as
+// a bandwidth upgrade medium is behind a feature flag. Currently unsupported.
+constexpr bool kIsWifiLanAdvertisingSupported = false;
+
 std::string ReceiveSurfaceStateToString(
     NearbySharingService::ReceiveSurfaceState state) {
   switch (state) {
@@ -139,15 +144,15 @@ std::string SendSurfaceStateToString(
   }
 }
 
-std::string PowerLevelToString(PowerLevel level) {
+std::string PowerLevelToString(NearbyConnectionsManager::PowerLevel level) {
   switch (level) {
-    case PowerLevel::kLowPower:
+    case NearbyConnectionsManager::PowerLevel::kLowPower:
       return "LOW_POWER";
-    case PowerLevel::kMediumPower:
+    case NearbyConnectionsManager::PowerLevel::kMediumPower:
       return "MEDIUM_POWER";
-    case PowerLevel::kHighPower:
+    case NearbyConnectionsManager::PowerLevel::kHighPower:
       return "HIGH_POWER";
-    case PowerLevel::kUnknown:
+    case NearbyConnectionsManager::PowerLevel::kUnknown:
       return "UNKNOWN";
   }
 }
@@ -211,7 +216,7 @@ std::string GetDeviceId(
   std::optional<std::vector<uint8_t>> mac_address =
       GetBluetoothMacAddressFromCertificate(*certificate);
   if (mac_address) {
-    return base::NumberToString(base::FastHash(base::make_span(*mac_address)));
+    return base::NumberToString(base::FastHash(base::span(*mac_address)));
   }
 
   if (!certificate->id().empty()) {
@@ -248,7 +253,7 @@ bool IsOutOfStorage(const base::FilePath& file_path,
 
 int64_t GeneratePayloadId() {
   int64_t payload_id = 0;
-  crypto::RandBytes(&payload_id, sizeof(payload_id));
+  crypto::RandBytes(base::byte_span_from_ref(payload_id));
   return payload_id;
 }
 
@@ -286,27 +291,33 @@ class TransferUpdateDecorator : public TransferUpdateCallback {
   Callback callback_;
 };
 
-bool isVisibleForAdvertising(Visibility visibility) {
-  if (visibility == Visibility::kYourDevices &&
-      features::IsSelfShareEnabled()) {
-    return true;
-  }
-  return visibility == Visibility::kAllContacts ||
-         visibility == Visibility::kSelectedContacts;
+bool isVisibleForAdvertising(nearby_share::mojom::Visibility visibility) {
+  return visibility == nearby_share::mojom::Visibility::kAllContacts ||
+         visibility == nearby_share::mojom::Visibility::kSelectedContacts ||
+         visibility == nearby_share::mojom::Visibility::kYourDevices;
+}
+
+NearbyShareEncryptedMetadataKey AdvertisementToKey(
+    const sharing::mojom::AdvertisementPtr& advertisement) {
+  return NearbyShareEncryptedMetadataKey(
+      base::span<const uint8_t, kNearbyShareNumBytesMetadataEncryptionKeySalt>(
+          advertisement->salt),
+      base::span<const uint8_t, kNearbyShareNumBytesMetadataEncryptionKey>(
+          advertisement->encrypted_metadata_key));
 }
 
 }  // namespace
 
 NearbySharingServiceImpl::NearbySharingServiceImpl(
-    PrefService* prefs,
-    NotificationDisplayService* notification_display_service,
+    user_manager::User& user,
     Profile* profile,
+    NotificationDisplayService* notification_display_service,
     std::unique_ptr<NearbyConnectionsManager> nearby_connections_manager,
     ash::nearby::NearbyProcessManager* process_manager,
     std::unique_ptr<PowerClient> power_client,
     std::unique_ptr<WifiNetworkConfigurationHandler> wifi_network_handler)
-    : prefs_(prefs),
-      profile_(profile),
+    : profile_(profile),
+      prefs_(profile_->GetPrefs()),
       nearby_connections_manager_(std::move(nearby_connections_manager)),
       process_manager_(process_manager),
       power_client_(std::move(power_client)),
@@ -315,30 +326,27 @@ NearbySharingServiceImpl::NearbySharingServiceImpl(
           IdentityManagerFactory::GetForProfile(profile),
           profile->GetURLLoaderFactory(),
           &nearby_share_http_notifier_)),
-      profile_info_provider_(
-          std::make_unique<NearbyShareProfileInfoProviderImpl>(profile_)),
       local_device_data_manager_(
           NearbyShareLocalDeviceDataManagerImpl::Factory::Create(
-              prefs,
-              http_client_factory_.get(),
-              profile_info_provider_.get())),
+              user,
+              http_client_factory_.get())),
       contact_manager_(NearbyShareContactManagerImpl::Factory::Create(
-          prefs,
+          profile_->GetProfileUserName(),
+          prefs_,
           http_client_factory_.get(),
-          local_device_data_manager_.get(),
-          profile_info_provider_.get())),
+          local_device_data_manager_.get())),
       certificate_manager_(NearbyShareCertificateManagerImpl::Factory::Create(
+          profile_->GetProfileUserName(),
+          profile->GetPath(),
+          prefs_,
           local_device_data_manager_.get(),
           contact_manager_.get(),
-          profile_info_provider_.get(),
-          prefs,
           profile->GetDefaultStoragePartition()->GetProtoDatabaseProvider(),
-          profile->GetPath(),
           http_client_factory_.get())),
       transfer_profiler_(std::make_unique<NearbyShareTransferProfiler>()),
       logger_(std::make_unique<NearbyShareLogger>()),
-      settings_(prefs, local_device_data_manager_.get()),
-      feature_usage_metrics_(prefs),
+      settings_(prefs_, local_device_data_manager_.get()),
+      feature_usage_metrics_(prefs_),
       on_network_changed_delay_timer_(
           FROM_HERE,
           kProcessNetworkChangeTimerDelay,
@@ -379,17 +387,15 @@ NearbySharingServiceImpl::NearbySharingServiceImpl(
 
   // Register logging observers.
   AddObserver(logger_.get());
-  if (base::FeatureList::IsEnabled(metrics::structured::kNearbyShareMetrics)) {
-    AddObserver(discovery_metric_logger_.get());
-    AddObserver(throughput_metric_logger_.get());
-    AddObserver(attachment_metric_logger_.get());
-    AddObserver(neaby_share_metric_logger_.get());
-  }
+  AddObserver(discovery_metric_logger_.get());
+  AddObserver(throughput_metric_logger_.get());
+  AddObserver(attachment_metric_logger_.get());
+  AddObserver(neaby_share_metric_logger_.get());
 
   GetBluetoothAdapter();
 
   nearby_notification_manager_ = std::make_unique<NearbyNotificationManager>(
-      notification_display_service, this, prefs, profile_);
+      notification_display_service, this, prefs_, profile_);
 
   net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
 
@@ -413,12 +419,10 @@ NearbySharingServiceImpl::~NearbySharingServiceImpl() {
 
   // Unregister observers.
   RemoveObserver(logger_.get());
-  if (base::FeatureList::IsEnabled(metrics::structured::kNearbyShareMetrics)) {
-    RemoveObserver(discovery_metric_logger_.get());
-    RemoveObserver(throughput_metric_logger_.get());
-    RemoveObserver(attachment_metric_logger_.get());
-    RemoveObserver(neaby_share_metric_logger_.get());
-  }
+  RemoveObserver(discovery_metric_logger_.get());
+  RemoveObserver(throughput_metric_logger_.get());
+  RemoveObserver(attachment_metric_logger_.get());
+  RemoveObserver(neaby_share_metric_logger_.get());
 }
 
 void NearbySharingServiceImpl::Shutdown() {
@@ -516,7 +520,7 @@ NearbySharingService::StatusCodes NearbySharingServiceImpl::RegisterSendSurface(
 
   if (state == SendSurfaceState::kForeground) {
     // Only check this error case for foreground senders
-    if (!HasAvailableConnectionMediums()) {
+    if (!HasAvailableDiscoveryMediums()) {
       RecordNearbyShareError(
           NearbyShareError::kRegisterSendSurfaceNoAvailableConnectionMedium);
       CD_LOG(VERBOSE, Feature::NS)
@@ -651,7 +655,7 @@ NearbySharingServiceImpl::RegisterReceiveSurface(
       return StatusCodes::kTransferAlreadyInProgress;
     }
 
-    if (!HasAvailableConnectionMediums()) {
+    if (!HasAvailableAdvertisingMediums()) {
       RecordNearbyShareError(
           NearbyShareError::kRegisterReceiveSurfaceNoAvailableConnectionMedium);
       CD_LOG(VERBOSE, Feature::NS)
@@ -690,7 +694,7 @@ NearbySharingServiceImpl::RegisterReceiveSurface(
       << __func__ << ": A ReceiveSurface(" << ReceiveSurfaceStateToString(state)
       << ") has been registered";
 
-  // TODO(crbug.com/1186559): Remove these logs. They are only needed to help
+  // TODO(crbug.com/40753805): Remove these logs. They are only needed to help
   // debug crbug.com/1186559.
   if (state == ReceiveSurfaceState::kForeground) {
     if (!IsBluetoothPresent()) {
@@ -774,7 +778,11 @@ NearbySharingServiceImpl::ClearForegroundReceiveSurfaces() {
 }
 
 bool NearbySharingServiceImpl::IsInHighVisibility() const {
-  return in_high_visibility;
+  if (chromeos::features::IsQuickShareV2Enabled()) {
+    return prefs_->GetBoolean(prefs::kNearbySharingInHighVisibilityPrefName);
+  }
+
+  return in_high_visibility_;
 }
 
 bool NearbySharingServiceImpl::IsTransferring() const {
@@ -1168,7 +1176,7 @@ void NearbySharingServiceImpl::CleanupAfterNearbyProcessStopped() {
   is_receiving_files_ = false;
   is_sending_files_ = false;
   is_connecting_ = false;
-  advertising_power_level_ = PowerLevel::kUnknown;
+  advertising_power_level_ = NearbyConnectionsManager::PowerLevel::kUnknown;
 
   process_shutdown_pending_timer_.Stop();
   certificate_download_during_discovery_timer_.Stop();
@@ -1370,7 +1378,7 @@ void NearbySharingServiceImpl::OnEnabledChanged(bool enabled) {
 }
 
 void NearbySharingServiceImpl::OnFastInitiationNotificationStateChanged(
-    FastInitiationNotificationState state) {
+    nearby_share::mojom::FastInitiationNotificationState state) {
   CD_LOG(VERBOSE, Feature::NS)
       << __func__ << ": Fast Initiation Notification state: " << state;
   // Runs through a series of checks to determine if background scanning should
@@ -1385,14 +1393,16 @@ void NearbySharingServiceImpl::OnDeviceNameChanged(
   // TODO(vecore): handle device name change
 }
 
-void NearbySharingServiceImpl::OnDataUsageChanged(DataUsage data_usage) {
+void NearbySharingServiceImpl::OnDataUsageChanged(
+    nearby_share::mojom::DataUsage data_usage) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CD_LOG(INFO, Feature::NS)
       << __func__ << ": Nearby sharing data usage changed to " << data_usage;
   StopAdvertisingAndInvalidateSurfaceState();
 }
 
-void NearbySharingServiceImpl::OnVisibilityChanged(Visibility new_visibility) {
+void NearbySharingServiceImpl::OnVisibilityChanged(
+    nearby_share::mojom::Visibility new_visibility) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CD_LOG(INFO, Feature::NS)
       << __func__ << ": Nearby sharing visibility changed to "
@@ -1452,6 +1462,25 @@ void NearbySharingServiceImpl::OnEndpointLost(const std::string& endpoint_id) {
                      base::Unretained(this), endpoint_id));
 }
 
+void NearbySharingServiceImpl::OnInitialMedium(const std::string& endpoint_id,
+                                               const Medium medium) {
+  // Our |share_target_map_| is populated in CreateShareTarget. This
+  // is deterministically called *before* this method when sending,
+  // and *after* this method when receiving. In other words, we can
+  // expect to *not* record the initial medium when receiving.
+  // We determined this acceptable as the initial medium when receiving
+  // will always be Bluetooth, until other mediums are supported (Wifi LAN
+  // can be an initial medium when sending due to mDNS discovery.)
+  if (!share_target_map_.contains(endpoint_id)) {
+    return;
+  }
+  RecordNearbyShareInitialConnectionMedium(medium);
+  auto share_target = share_target_map_[endpoint_id];
+  for (auto& observer : observers_) {
+    observer.OnInitialMedium(share_target, medium);
+  }
+}
+
 void NearbySharingServiceImpl::OnBandwidthUpgrade(
     const std::string& endpoint_id,
     const Medium medium) {
@@ -1465,6 +1494,15 @@ void NearbySharingServiceImpl::OnBandwidthUpgrade(
   }
 }
 
+void NearbySharingServiceImpl::OnBandwidthUpgradeV3(
+    nearby::presence::PresenceDevice remote_device,
+    const Medium medium) {
+  // Because `NearbySharingServiceImpl` is currently only consuming V1 APIs from
+  // `NearbyConnections`, this function is to be left as `NOTIMPLEMENTED()` as
+  // only Nearby Presence is using V3 APIs.
+  NOTIMPLEMENTED();
+}
+
 void NearbySharingServiceImpl::OnLockStateChanged(bool locked) {
   CD_LOG(VERBOSE, Feature::NS)
       << __func__ << ": Screen lock state changed. (" << locked << ")";
@@ -1474,8 +1512,7 @@ void NearbySharingServiceImpl::OnLockStateChanged(bool locked) {
   // not Hidden.
   nearby_share::mojom::Visibility current_visibility =
       settings_.GetVisibility();
-  if (features::IsSelfShareEnabled() &&
-      current_visibility != nearby_share::mojom::Visibility::kNoOne) {
+  if (current_visibility != nearby_share::mojom::Visibility::kNoOne) {
     if (locked) {
       // Store old visibility setting.
       user_visibility_ = current_visibility;
@@ -1543,27 +1580,33 @@ NearbySharingServiceImpl::GetReceiveCallbacksFromState(
       return background_receive_callbacks_;
     case ReceiveSurfaceState::kUnknown:
       NOTREACHED();
-      return foreground_receive_callbacks_;
   }
 }
 
-bool NearbySharingServiceImpl::IsVisibleInBackground(Visibility visibility) {
+bool NearbySharingServiceImpl::IsVisibleInBackground(
+    nearby_share::mojom::Visibility visibility) {
   return isVisibleForAdvertising(visibility);
 }
 
 const std::optional<std::vector<uint8_t>>
 NearbySharingServiceImpl::CreateEndpointInfo(
     const std::optional<std::string>& device_name) {
-  std::vector<uint8_t> salt;
-  std::vector<uint8_t> encrypted_key;
+  std::array<uint8_t, sharing::Advertisement::kSaltSize> salt;
+  salt = GenerateRandomBytes<sharing::Advertisement::kSaltSize>();
+  std::array<uint8_t,
+             sharing::Advertisement::kMetadataEncryptionKeyHashByteSize>
+      encrypted_key;
+  encrypted_key = GenerateRandomBytes<
+      sharing::Advertisement::kMetadataEncryptionKeyHashByteSize>();
 
   nearby_share::mojom::Visibility visibility = settings_.GetVisibility();
   if (isVisibleForAdvertising(visibility)) {
     std::optional<NearbyShareEncryptedMetadataKey> encrypted_metadata_key =
         certificate_manager_->EncryptPrivateCertificateMetadataKey(visibility);
     if (encrypted_metadata_key) {
-      salt = encrypted_metadata_key->salt();
-      encrypted_key = encrypted_metadata_key->encrypted_key();
+      base::span(salt).copy_from(encrypted_metadata_key->salt());
+      base::span(encrypted_key)
+          .copy_from(encrypted_metadata_key->encrypted_key());
     } else {
       CD_LOG(WARNING, Feature::NS)
           << __func__ << ": Failed to encrypt private certificate metadata key "
@@ -1571,24 +1614,14 @@ NearbySharingServiceImpl::CreateEndpointInfo(
     }
   }
 
-  if (salt.empty() || encrypted_key.empty()) {
-    // Generate random metadata key.
-    salt = GenerateRandomBytes(sharing::Advertisement::kSaltSize);
-    encrypted_key = GenerateRandomBytes(
-        sharing::Advertisement::kMetadataEncryptionKeyHashByteSize);
-  }
-
   nearby_share::mojom::ShareTargetType device_type =
       nearby_share::mojom::ShareTargetType::kLaptop;
 
   std::unique_ptr<sharing::Advertisement> advertisement =
-      sharing::Advertisement::NewInstance(
-          std::move(salt), std::move(encrypted_key), device_type, device_name);
-  if (advertisement) {
-    return advertisement->ToEndpointInfo();
-  } else {
-    return std::nullopt;
-  }
+      sharing::Advertisement::NewInstance(salt, encrypted_key, device_type,
+                                          device_name);
+  return advertisement ? std::make_optional(advertisement->ToEndpointInfo())
+                       : std::nullopt;
 }
 
 void NearbySharingServiceImpl::GetBluetoothAdapter() {
@@ -1792,8 +1825,8 @@ void NearbySharingServiceImpl::OnOutgoingAdvertisementDecoded(
 
   // Once we get the advertisement, the first thing to do is decrypt the
   // certificate.
-  NearbyShareEncryptedMetadataKey encrypted_metadata_key(
-      advertisement->salt, advertisement->encrypted_metadata_key);
+  NearbyShareEncryptedMetadataKey encrypted_metadata_key =
+      AdvertisementToKey(advertisement);
   GetCertificateManager()->GetDecryptedPublicCertificate(
       std::move(encrypted_metadata_key),
       base::BindOnce(&NearbySharingServiceImpl::OnOutgoingDecryptedCertificate,
@@ -1895,10 +1928,10 @@ bool NearbySharingServiceImpl::IsBluetoothPowered() const {
   return IsBluetoothPresent() && bluetooth_adapter_->IsPowered();
 }
 
-bool NearbySharingServiceImpl::HasAvailableConnectionMediums() {
-  // Check if Wifi or Ethernet LAN is off.  Advertisements won't work, so
-  // disable them, unless bluetooth is known to be enabled. Not all platforms
-  // have bluetooth, so wifi LAN is a platform-agnostic check.
+bool NearbySharingServiceImpl::HasAvailableAdvertisingMediums() {
+  // Advertising is currently unsupported unless bluetooth is known to be
+  // enabled. When Wifi LAN advertising (mDNS) is supported, we also need
+  // to check network conditions.
   net::NetworkChangeNotifier::ConnectionType connection_type =
       net::NetworkChangeNotifier::GetConnectionType();
   bool hasNetworkConnection =
@@ -1907,8 +1940,22 @@ bool NearbySharingServiceImpl::HasAvailableConnectionMediums() {
       connection_type ==
           net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET;
   return IsBluetoothPowered() ||
-         (kIsWifiLanAdvertisingSupported && kIsWifiLanDiscoverySupported &&
-          hasNetworkConnection);
+         (hasNetworkConnection && kIsWifiLanAdvertisingSupported);
+}
+
+bool NearbySharingServiceImpl::HasAvailableDiscoveryMediums() {
+  // Discovery is supported over both Bluetooth and Wifi LAN (mDNS),
+  // so either of those mediums must be enabled. mDNS discovery
+  // additionally needs a network connection.
+  net::NetworkChangeNotifier::ConnectionType connection_type =
+      net::NetworkChangeNotifier::GetConnectionType();
+  bool hasNetworkConnection =
+      connection_type ==
+          net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI ||
+      connection_type ==
+          net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET;
+  return IsBluetoothPowered() ||
+         (hasNetworkConnection && ::features::IsNearbyMdnsEnabled());
 }
 
 void NearbySharingServiceImpl::InvalidateSurfaceState() {
@@ -1942,7 +1989,8 @@ bool NearbySharingServiceImpl::ShouldStopNearbyProcess() {
   }
 
   // We're currently advertising.
-  if (advertising_power_level_ != PowerLevel::kUnknown) {
+  if (advertising_power_level_ !=
+      NearbyConnectionsManager::PowerLevel::kUnknown) {
     return false;
   }
 
@@ -2008,7 +2056,7 @@ void NearbySharingServiceImpl::InvalidateScanningState() {
     return;
   }
 
-  if (!HasAvailableConnectionMediums()) {
+  if (!HasAvailableDiscoveryMediums()) {
     StopScanning();
     CD_LOG(VERBOSE, Feature::NS)
         << __func__
@@ -2131,17 +2179,7 @@ void NearbySharingServiceImpl::InvalidateAdvertisingState() {
     return;
   }
 
-  // Do not advertise on lock screen unless Self Share is enabled.
-  if (!base::FeatureList::IsEnabled(features::kNearbySharingSelfShare)) {
-    if (is_screen_locked_) {
-      StopAdvertising();
-      CD_LOG(VERBOSE, Feature::NS)
-          << __func__ << ": Stopping advertising because the screen is locked.";
-      return;
-    }
-  }
-
-  if (!HasAvailableConnectionMediums()) {
+  if (!HasAvailableAdvertisingMediums()) {
     StopAdvertising();
     CD_LOG(VERBOSE, Feature::NS)
         << __func__
@@ -2198,18 +2236,19 @@ void NearbySharingServiceImpl::InvalidateAdvertisingState() {
 
   process_shutdown_pending_timer_.Stop();
 
-  PowerLevel power_level;
+  NearbyConnectionsManager::PowerLevel power_level;
   if (!foreground_receive_callbacks_.empty()) {
-    power_level = PowerLevel::kHighPower;
+    power_level = NearbyConnectionsManager::PowerLevel::kHighPower;
     // TODO(crbug/1100367) handle fast init
     // } else if (isFastInitDeviceNearby) {
-    //   power_level = PowerLevel::kMediumPower;
+    //   power_level = NearbyConnectionsManager::PowerLevel::kMediumPower;
   } else {
-    power_level = PowerLevel::kLowPower;
+    power_level = NearbyConnectionsManager::PowerLevel::kLowPower;
   }
 
-  DataUsage data_usage = settings_.GetDataUsage();
-  if (advertising_power_level_ != PowerLevel::kUnknown) {
+  nearby_share::mojom::DataUsage data_usage = settings_.GetDataUsage();
+  if (advertising_power_level_ !=
+      NearbyConnectionsManager::PowerLevel::kUnknown) {
     if (power_level == advertising_power_level_) {
       CD_LOG(VERBOSE, Feature::NS)
           << __func__ << ": Ignoring, already advertising with power level "
@@ -2277,7 +2316,8 @@ void NearbySharingServiceImpl::InvalidateAdvertisingState() {
 }
 
 void NearbySharingServiceImpl::StopAdvertising() {
-  if (advertising_power_level_ == PowerLevel::kUnknown) {
+  if (advertising_power_level_ ==
+      NearbyConnectionsManager::PowerLevel::kUnknown) {
     CD_LOG(VERBOSE, Feature::NS)
         << __func__ << ": Not currently advertising, ignoring.";
     return;
@@ -2299,7 +2339,7 @@ void NearbySharingServiceImpl::StopAdvertising() {
   // with contact-based enabled), StartAdvertising will be called
   // immediately after StopAdvertising and will fail if the power level
   // indicates already advertising.
-  advertising_power_level_ = PowerLevel::kUnknown;
+  advertising_power_level_ = NearbyConnectionsManager::PowerLevel::kUnknown;
 }
 
 void NearbySharingServiceImpl::StartScanning() {
@@ -2307,7 +2347,7 @@ void NearbySharingServiceImpl::StartScanning() {
   DCHECK(!power_client_->IsSuspended());
   DCHECK(settings_.GetEnabled());
   DCHECK(!is_screen_locked_);
-  DCHECK(HasAvailableConnectionMediums());
+  DCHECK(HasAvailableDiscoveryMediums());
   DCHECK(!foreground_send_transfer_callbacks_.empty());
 
   if (is_scanning_) {
@@ -2365,7 +2405,8 @@ NearbySharingService::StatusCodes NearbySharingServiceImpl::StopScanning() {
 }
 
 void NearbySharingServiceImpl::StopAdvertisingAndInvalidateSurfaceState() {
-  if (advertising_power_level_ != PowerLevel::kUnknown) {
+  if (advertising_power_level_ !=
+      NearbyConnectionsManager::PowerLevel::kUnknown) {
     StopAdvertising();
   }
 
@@ -2400,7 +2441,7 @@ void NearbySharingServiceImpl::InvalidateFastInitiationScanning() {
   }
 
   if (settings_.GetFastInitiationNotificationState() !=
-      FastInitiationNotificationState::kEnabled) {
+      nearby_share::mojom::FastInitiationNotificationState::kEnabled) {
     CD_LOG(VERBOSE, Feature::NS)
         << __func__
         << ": Stopping background scanning; fast initiation "
@@ -2464,7 +2505,8 @@ void NearbySharingServiceImpl::InvalidateFastInitiationScanning() {
     return;
   }
 
-  if (advertising_power_level_ == PowerLevel::kHighPower) {
+  if (advertising_power_level_ ==
+      NearbyConnectionsManager::PowerLevel::kHighPower) {
     CD_LOG(VERBOSE, Feature::NS)
         << __func__
         << ": Stopping background scanning because we're already "
@@ -3008,8 +3050,8 @@ void NearbySharingServiceImpl::SendIntroduction(
   v1_frame->set_type(sharing::nearby::V1Frame::INTRODUCTION);
   v1_frame->set_allocated_introduction(introduction.release());
 
-  std::vector<uint8_t> data(frame.ByteSize());
-  frame.SerializeToArray(data.data(), frame.ByteSize());
+  std::vector<uint8_t> data(frame.ByteSizeLong());
+  frame.SerializeToArray(data.data(), frame.ByteSizeLong());
   connection->Write(std::move(data));
 
   // We've successfully written the introduction, so we now have to wait for the
@@ -3186,8 +3228,8 @@ void NearbySharingServiceImpl::WriteResponse(
   v1_frame->set_type(sharing::nearby::V1Frame::RESPONSE);
   v1_frame->mutable_connection_response()->set_status(status);
 
-  std::vector<uint8_t> data(frame.ByteSize());
-  frame.SerializeToArray(data.data(), frame.ByteSize());
+  std::vector<uint8_t> data(frame.ByteSizeLong());
+  frame.SerializeToArray(data.data(), frame.ByteSizeLong());
 
   connection.Write(std::move(data));
 }
@@ -3200,8 +3242,8 @@ void NearbySharingServiceImpl::WriteCancel(NearbyConnection& connection) {
   sharing::nearby::V1Frame* v1_frame = frame.mutable_v1();
   v1_frame->set_type(sharing::nearby::V1Frame::CANCEL);
 
-  std::vector<uint8_t> data(frame.ByteSize());
-  frame.SerializeToArray(data.data(), frame.ByteSize());
+  std::vector<uint8_t> data(frame.ByteSizeLong());
+  frame.SerializeToArray(data.data(), frame.ByteSizeLong());
 
   connection.Write(std::move(data));
 }
@@ -3285,8 +3327,8 @@ void NearbySharingServiceImpl::OnIncomingAdvertisementDecoded(
   transfer_profiler_->OnIncomingEndpointDecoded(endpoint_id,
                                                 IsInHighVisibility());
 
-  NearbyShareEncryptedMetadataKey encrypted_metadata_key(
-      advertisement->salt, advertisement->encrypted_metadata_key);
+  NearbyShareEncryptedMetadataKey encrypted_metadata_key =
+      AdvertisementToKey(advertisement);
   GetCertificateManager()->GetDecryptedPublicCertificate(
       std::move(encrypted_metadata_key),
       base::BindOnce(&NearbySharingServiceImpl::OnIncomingDecryptedCertificate,
@@ -3526,8 +3568,9 @@ void NearbySharingServiceImpl::RunPairedKeyVerification(
       process_manager_, share_target_info->connection()));
 
   bool restrict_to_contacts =
-      share_target.is_incoming &&
-      advertising_power_level_ != PowerLevel::kHighPower;
+      features::IsRestrictToContactsEnabled() && share_target.is_incoming &&
+      advertising_power_level_ !=
+          NearbyConnectionsManager::PowerLevel::kHighPower;
   share_target_info->set_key_verification_runner(
       std::make_unique<PairedKeyVerificationRunner>(
           share_target, endpoint_id, *token, share_target_info->connection(),
@@ -3590,7 +3633,8 @@ void NearbySharingServiceImpl::OnIncomingConnectionKeyVerificationDone(
       transfer_profiler_->OnPairedKeyHandshakeComplete(
           info->endpoint_id().value());
 
-      if (advertising_power_level_ == PowerLevel::kHighPower) {
+      if (advertising_power_level_ ==
+          NearbyConnectionsManager::PowerLevel::kHighPower) {
         // Upgrade bandwidth if advertising at high-visibility. Bandwidth
         // upgrades may expose stable identifiers, but this isn't a concern
         // here because high-visibility already leaks the device name.
@@ -4111,15 +4155,13 @@ void NearbySharingServiceImpl::OnStorageCheckCompleted(
     return;
   }
 
-  if (base::FeatureList::IsEnabled(features::kNearbySharingSelfShare)) {
-    // Auto-accept self shares when not in high-visibility mode, unless the
-    // filetype includes WiFi credentials.
-    if (share_target.CanAutoAccept() && !IsInHighVisibility()) {
-      CD_LOG(INFO, Feature::NS) << __func__ << ": Auto-accepting self share.";
-      Accept(share_target, base::DoNothing());
-    } else {
-      CD_LOG(INFO, Feature::NS) << __func__ << ": Can't auto-accept transfer.";
-    }
+  // Auto-accept self shares when not in high-visibility mode, unless the
+  // filetype includes WiFi credentials.
+  if (share_target.CanAutoAccept() && !IsInHighVisibility()) {
+    CD_LOG(INFO, Feature::NS) << __func__ << ": Auto-accepting self share.";
+    Accept(share_target, base::DoNothing());
+  } else {
+    CD_LOG(INFO, Feature::NS) << __func__ << ": Can't auto-accept transfer.";
   }
 
   frames_reader->ReadFrame(
@@ -4262,9 +4304,7 @@ std::optional<ShareTarget> NearbySharingServiceImpl::CreateShareTarget(
   target.device_name = std::move(*device_name);
   target.is_incoming = is_incoming;
   target.device_id = GetDeviceId(endpoint_id, certificate);
-  if (base::FeatureList::IsEnabled(features::kNearbySharingSelfShare)) {
-    target.for_self_share = certificate && certificate->for_self_share();
-  }
+  target.for_self_share = certificate && certificate->for_self_share();
 
   ShareTargetInfo& info = GetOrCreateShareTargetInfo(target, endpoint_id);
 
@@ -4850,13 +4890,19 @@ void NearbySharingServiceImpl::OnStartDiscoveryResult(
 
 void NearbySharingServiceImpl::SetInHighVisibility(
     bool new_in_high_visibility) {
-  if (in_high_visibility == new_in_high_visibility) {
+  if (IsInHighVisibility() == new_in_high_visibility) {
     return;
   }
 
-  in_high_visibility = new_in_high_visibility;
+  if (chromeos::features::IsQuickShareV2Enabled()) {
+    prefs_->SetBoolean(prefs::kNearbySharingInHighVisibilityPrefName,
+                       /*value=*/new_in_high_visibility);
+  } else {
+    in_high_visibility_ = new_in_high_visibility;
+  }
+
   for (auto& observer : observers_) {
-    observer.OnHighVisibilityChanged(in_high_visibility);
+    observer.OnHighVisibilityChanged(new_in_high_visibility);
   }
 }
 

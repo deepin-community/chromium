@@ -14,6 +14,7 @@ import {assert} from 'chrome://resources/js/assert.js';
 import {entriesToURLs} from '../../common/js/entry_utils.js';
 import {recordEnum} from '../../common/js/metrics.js';
 import {type ElementObject, type KeyModifiers, VolumeType} from '../../common/js/shared_types.js';
+import {debug} from '../../common/js/util.js';
 import type {MetadataKey} from '../../foreground/js/metadata/metadata_item.js';
 
 import {test} from './test_util_base.js';
@@ -598,11 +599,25 @@ test.util.sync.fakeMouseRightClick =
             return false;
           }
 
-          const contextMenuEvent =
-              new MouseEvent('contextmenu', {bubbles: true, composed: true});
-          return test.util.sync.sendEvent(
-              contentWindow, targetQuery, contextMenuEvent);
+          return test.util.sync.fakeContextMenu(contentWindow, targetQuery);
         };
+
+/**
+ * Simulate a fake contextmenu event without right clicking on the element
+ * specified by |targetQuery|. This is mainly to simulate long press on the
+ * element.
+ *
+ * @param contentWindow Window to be tested.
+ * @param targetQuery Query to specify the element.
+ * @return True if the event is sent to the target, false otherwise.
+ */
+test.util.sync.fakeContextMenu =
+    (contentWindow: Window, targetQuery: string): boolean => {
+      const contextMenuEvent =
+          new MouseEvent('contextmenu', {bubbles: true, composed: true});
+      return test.util.sync.sendEvent(
+          contentWindow, targetQuery, contextMenuEvent);
+    };
 
 /**
  * Simulates a fake touch event (touch start and touch end) on the element
@@ -997,7 +1012,7 @@ test.util.async.getFilesUnderVolume = async (
 
 
   const filesPromise = names.map(name => {
-    // TODO(crbug.com/880130): Remove this conditional.
+    // TODO(crbug.com/40591990): Remove this conditional.
     if (volumeType === VolumeType.DOWNLOADS) {
       name = 'Downloads/' + name;
     }
@@ -1069,10 +1084,10 @@ test.util.executeTestMessage =
       if (test.util.async[request.func]) {
         args[test.util.async[request.func].length - 1] = function(
             ...innerArgs: any[]) {
-          console.debug('Received the result of ' + request.func);
+          debug('Received the result of ' + request.func);
           sendResponse.apply(null, innerArgs);
         };
-        console.debug('Waiting for the result of ' + request.func);
+        debug('Waiting for the result of ' + request.func);
         test.util.async[request.func].apply(null, args);
         return true;
       } else if (test.util.sync[request.func]) {
@@ -1124,9 +1139,16 @@ test.util.async.getContentMetadata =
  * "loaded" on its root element.
  */
 test.util.sync.isFileManagerLoaded = (contentWindow: Window) => {
-  if (contentWindow && contentWindow.fileManager &&
-      contentWindow.fileManager.ui) {
-    return contentWindow.fileManager.ui.element.hasAttribute('loaded');
+  if (contentWindow && contentWindow.fileManager) {
+    try {
+      // The test util functions can be loaded prior to the fileManager.ui
+      // element being available, this results in an assertion failure. Treat
+      // this as file manager not being loaded instead of a hard failure.
+      return contentWindow.fileManager.ui.element.hasAttribute('loaded');
+    } catch (e) {
+      console.warn(e);
+      return false;
+    }
   }
 
   return false;

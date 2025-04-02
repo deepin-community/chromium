@@ -38,12 +38,15 @@ namespace {
 
 using RoundedDisplayMasksInfo = TextureDrawQuad::RoundedDisplayMasksInfo;
 
-constexpr OverlayCandidateFactory::OverlayContext kOverlayContextForTesting{
-    .is_delegated_context = true,
-    .supports_clip_rect = true,
-    .supports_out_of_window_clip_rect = true,
-    .supports_arbitrary_transform = true,
-    .supports_rounded_display_masks = false};
+OverlayCandidateFactory::OverlayContext GetOverlayContextForTesting() {
+  OverlayCandidateFactory::OverlayContext context;
+  context.is_delegated_context = true;
+  context.supports_clip_rect = true;
+  context.supports_out_of_window_clip_rect = true;
+  context.supports_arbitrary_transform = true;
+  context.supports_rounded_display_masks = false;
+  return context;
+}
 
 // TODO(zoraiznaeem): Move resource creation code into OverlayTestBase class.
 class OverlayCandidateFactoryTestBase : public testing::Test {
@@ -62,15 +65,16 @@ class OverlayCandidateFactoryTestBase : public testing::Test {
     child_resource_provider_.ReleaseAllExportedResources(true);
   }
 
-  ResourceId CreateResource(bool is_overlay_candidate) {
-    scoped_refptr<ContextProvider> child_context_provider =
+  ResourceId CreateResource(bool is_overlay_candidate, GrSurfaceOrigin origin) {
+    scoped_refptr<RasterContextProvider> child_context_provider =
         TestContextProvider::Create();
 
     child_context_provider->BindToCurrentSequence();
 
     auto resource = TransferableResource::MakeGpu(
-        gpu::Mailbox::GenerateForSharedImage(), GL_TEXTURE_2D, gpu::SyncToken(),
+        gpu::Mailbox::Generate(), GL_TEXTURE_2D, gpu::SyncToken(),
         gfx::Size(1, 1), SinglePlaneFormat::kRGBA_8888, is_overlay_candidate);
+    resource.origin = origin;
 
     ResourceId resource_id =
         child_resource_provider_.ImportResource(resource, base::DoNothing());
@@ -146,15 +150,14 @@ class OverlayCandidateFactoryTestBase : public testing::Test {
                          /*anti_aliasing_off=*/false);
     }
 
+    OverlayCandidateFactory::OverlayContext context;
+    context.is_delegated_context = true;
+    context.disable_wire_size_optimization = disable_wire_size_optimization;
+    context.supports_clip_rect = true;
+    context.supports_arbitrary_transform = true;
+    context.supports_mask_filter = true;
     OverlayCandidateFactory factory = CreateCandidateFactory(
-        render_pass, gfx::RectF(render_pass.output_rect),
-        OverlayCandidateFactory::OverlayContext{
-            .is_delegated_context = true,
-            .disable_wire_size_optimization = disable_wire_size_optimization,
-            .supports_clip_rect = true,
-            .supports_arbitrary_transform = true,
-            .supports_mask_filter = true,
-        });
+        render_pass, gfx::RectF(render_pass.output_rect), context);
 
     OverlayCandidateList candidates;
     for (const auto* quad : render_pass.quad_list) {
@@ -263,7 +266,7 @@ TEST_F(OverlayCandidateFactoryTest, IsOccluded) {
 
   OverlayCandidateFactory factory =
       CreateCandidateFactory(render_pass, gfx::RectF(render_pass.output_rect),
-                             kOverlayContextForTesting);
+                             GetOverlayContextForTesting());
   gfx::Transform identity;
   identity.MakeIdentity();
 
@@ -300,7 +303,7 @@ TEST_F(OverlayCandidateFactoryTest, IsOccludedScaled) {
 
   OverlayCandidateFactory factory =
       CreateCandidateFactory(render_pass, gfx::RectF(render_pass.output_rect),
-                             kOverlayContextForTesting);
+                             GetOverlayContextForTesting());
   gfx::Transform quad_to_target_transform;
   quad_to_target_transform.Scale(1.6, 1.6);
 
@@ -341,15 +344,15 @@ class OverlayCandidateFactoryArbitraryTransformTest
   TextureDrawQuad CreateUnclippedDrawQuad(
       AggregatedRenderPass& render_pass,
       const gfx::Rect& quad_rect,
-      const gfx::Transform& quad_to_target_transform) {
+      const gfx::Transform& quad_to_target_transform,
+      GrSurfaceOrigin origin = kTopLeft_GrSurfaceOrigin) {
     SharedQuadState* sqs = render_pass.CreateAndAppendSharedQuadState();
     sqs->quad_to_target_transform = quad_to_target_transform;
     TextureDrawQuad quad;
     quad.SetNew(sqs, quad_rect, quad_rect, false,
-                CreateResource(/*is_overlay_candidate=*/true), false,
+                CreateResource(/*is_overlay_candidate=*/true, origin), false,
                 gfx::PointF(), gfx::PointF(1, 1), SkColors::kTransparent, false,
-                false, false, gfx::ProtectedVideoType::kClear);
-
+                false, gfx::ProtectedVideoType::kClear);
     return quad;
   }
 };
@@ -364,7 +367,7 @@ TEST_F(OverlayCandidateFactoryArbitraryTransformTest,
 
   OverlayCandidateFactory factory =
       CreateCandidateFactory(render_pass, gfx::RectF(render_pass.output_rect),
-                             kOverlayContextForTesting);
+                             GetOverlayContextForTesting());
 
   gfx::Transform transform;
   transform.Translate(1, 2);
@@ -391,7 +394,7 @@ TEST_F(OverlayCandidateFactoryArbitraryTransformTest, SupportsNonAxisAligned) {
 
   OverlayCandidateFactory factory =
       CreateCandidateFactory(render_pass, gfx::RectF(render_pass.output_rect),
-                             kOverlayContextForTesting);
+                             GetOverlayContextForTesting());
 
   gfx::Transform transform;
   transform.Rotate(1);
@@ -416,14 +419,14 @@ TEST_F(OverlayCandidateFactoryArbitraryTransformTest, TransformIncludesYFlip) {
 
   OverlayCandidateFactory factory =
       CreateCandidateFactory(render_pass, gfx::RectF(render_pass.output_rect),
-                             kOverlayContextForTesting);
+                             GetOverlayContextForTesting());
 
   gfx::Transform transform;
   // Use a non-axis aligned transform so it can't be converted to an
   // OverlayTransform.
   transform.SkewX(45.0);
-  auto quad = CreateUnclippedDrawQuad(render_pass, gfx::Rect(1, 1), transform);
-  quad.y_flipped = true;
+  auto quad = CreateUnclippedDrawQuad(render_pass, gfx::Rect(1, 1), transform,
+                                      /*origin=*/kBottomLeft_GrSurfaceOrigin);
 
   OverlayCandidate candidate;
   OverlayCandidate::CandidateStatus result =
@@ -451,12 +454,12 @@ TEST_F(OverlayCandidateFactoryArbitraryTransformTest,
   render_pass.SetNew(AggregatedRenderPassId::FromUnsafeValue(1),
                      gfx::Rect(0, 0, 1, 1), gfx::Rect(), gfx::Transform());
 
-  const OverlayCandidateFactory::OverlayContext context = {
-      .is_delegated_context = true,
-      .disable_wire_size_optimization = true,
-      .supports_clip_rect = true,
-      .supports_arbitrary_transform = true,
-      .supports_mask_filter = true};
+  OverlayCandidateFactory::OverlayContext context;
+  context.is_delegated_context = true;
+  context.disable_wire_size_optimization = true;
+  context.supports_clip_rect = true;
+  context.supports_arbitrary_transform = true;
+  context.supports_mask_filter = true;
   OverlayCandidateFactory factory = CreateCandidateFactory(
       render_pass, gfx::RectF(render_pass.output_rect), context);
 
@@ -479,11 +482,11 @@ TEST_F(OverlayCandidateFactoryArbitraryTransformTest,
   render_pass.SetNew(AggregatedRenderPassId::FromUnsafeValue(1),
                      gfx::Rect(0, 0, 2, 2), gfx::Rect(), gfx::Transform());
 
-  const OverlayCandidateFactory::OverlayContext context = {
-      .is_delegated_context = true,
-      .disable_wire_size_optimization = false,
-      .supports_clip_rect = true,
-      .supports_arbitrary_transform = true};
+  OverlayCandidateFactory::OverlayContext context;
+  context.is_delegated_context = true;
+  context.disable_wire_size_optimization = false;
+  context.supports_clip_rect = true;
+  context.supports_arbitrary_transform = true;
   OverlayCandidateFactory factory = CreateCandidateFactory(
       render_pass, gfx::RectF(render_pass.output_rect), context);
 
@@ -500,6 +503,56 @@ TEST_F(OverlayCandidateFactoryArbitraryTransformTest,
       absl::holds_alternative<gfx::OverlayTransform>(candidate.transform));
   EXPECT_EQ(absl::get<gfx::OverlayTransform>(candidate.transform),
             gfx::OVERLAY_TRANSFORM_NONE);
+}
+
+TEST_F(OverlayCandidateFactoryArbitraryTransformTest,
+       Allow3DTransformNoPerspective) {
+  AggregatedRenderPass render_pass;
+  render_pass.SetNew(AggregatedRenderPassId::FromUnsafeValue(1),
+                     gfx::Rect(0, 0, 10, 10), gfx::Rect(), gfx::Transform());
+
+  OverlayCandidateFactory factory =
+      CreateCandidateFactory(render_pass, gfx::RectF(render_pass.output_rect),
+                             GetOverlayContextForTesting());
+
+  gfx::Transform transform;
+  transform.RotateAboutXAxis(5);
+  transform.RotateAboutYAxis(5);
+  transform.RotateAboutZAxis(5);
+
+  EXPECT_TRUE(!transform.HasPerspective());
+
+  auto quad = CreateUnclippedDrawQuad(render_pass, gfx::Rect(1, 1), transform);
+
+  OverlayCandidate candidate;
+  OverlayCandidate::CandidateStatus result =
+      factory.FromDrawQuad(&quad, candidate);
+  ASSERT_EQ(result, OverlayCandidate::CandidateStatus::kSuccess);
+}
+
+// Checks that a transform that preserve the flatness of quads on the XY-plane,
+// but not necessarily without perspective are still allowed to be promoted.
+TEST_F(OverlayCandidateFactoryArbitraryTransformTest,
+       TechnicallyFlatTransform) {
+  AggregatedRenderPass render_pass;
+  render_pass.SetNew(AggregatedRenderPassId::FromUnsafeValue(1),
+                     gfx::Rect(0, 0, 10, 10), gfx::Rect(), gfx::Transform());
+
+  OverlayCandidateFactory factory =
+      CreateCandidateFactory(render_pass, gfx::RectF(render_pass.output_rect),
+                             GetOverlayContextForTesting());
+
+  gfx::Transform transform = gfx::Transform::ColMajor(1, 0.1, 0, 0,      //
+                                                      0.1, 1, 0, 0,      //
+                                                      0.1, 0.1, 2, 0.1,  //
+                                                      0.1, 0.1, 0, 1);
+
+  auto quad = CreateUnclippedDrawQuad(render_pass, gfx::Rect(1, 1), transform);
+
+  OverlayCandidate candidate;
+  OverlayCandidate::CandidateStatus result =
+      factory.FromDrawQuad(&quad, candidate);
+  ASSERT_EQ(result, OverlayCandidate::CandidateStatus::kSuccess);
 }
 
 #if DCHECK_IS_ON() && defined(GTEST_HAS_DEATH_TEST)
@@ -523,27 +576,27 @@ class OverlayCandidateFactoryInvalidContextTest
 // space and cannot be baked into the display rect when there is an arbitrary
 // transform in between.
 TEST_F(OverlayCandidateFactoryInvalidContextTest, NoClipSupport) {
-  CheckContext(
-      OverlayCandidateFactory::OverlayContext{
-          .is_delegated_context = true,
-          .supports_clip_rect = false,
-          .supports_out_of_window_clip_rect = false,
-          .supports_arbitrary_transform = true},
-      "context_.supports_clip_rect \\|\\| "
-      "!context_.supports_arbitrary_transform");
+  OverlayCandidateFactory::OverlayContext context;
+  context.is_delegated_context = true;
+  context.supports_clip_rect = false;
+  context.supports_out_of_window_clip_rect = false;
+  context.supports_arbitrary_transform = true;
+  CheckContext(context,
+               "context_.supports_clip_rect \\|\\| "
+               "!context_.supports_arbitrary_transform");
 }
 
 // All quads have a transform on their |sqs|, we need to support some way to
 // store it on our OverlayCandidates. This test checks that an
 // OverlayCandidateFactory without transform support is invalid.
 TEST_F(OverlayCandidateFactoryInvalidContextTest, NoTransformSupport) {
-  CheckContext(
-      OverlayCandidateFactory::OverlayContext{
-          .is_delegated_context = true,
-          .disable_wire_size_optimization = true,
-          .supports_arbitrary_transform = false},
-      "!context_.disable_wire_size_optimization \\|\\| "
-      "context_.supports_arbitrary_transform");
+  OverlayCandidateFactory::OverlayContext context;
+  context.is_delegated_context = true;
+  context.disable_wire_size_optimization = true;
+  context.supports_arbitrary_transform = false;
+  CheckContext(context,
+               "!context_.disable_wire_size_optimization \\|\\| "
+               "context_.supports_arbitrary_transform");
 }
 #endif
 
@@ -555,10 +608,10 @@ TEST_F(OverlayCandidateFactoryArbitraryTransformTest,
   render_pass.SetNew(AggregatedRenderPassId::FromUnsafeValue(1),
                      gfx::Rect(0, 0, 1, 1), gfx::Rect(), gfx::Transform());
 
-  const OverlayCandidateFactory::OverlayContext context{
-      .is_delegated_context = true,
-      .supports_clip_rect = true,
-      .supports_arbitrary_transform = false};
+  OverlayCandidateFactory::OverlayContext context;
+  context.is_delegated_context = true;
+  context.supports_clip_rect = true;
+  context.supports_arbitrary_transform = false;
 
   OverlayCandidateFactory factory = CreateCandidateFactory(
       render_pass, gfx::RectF(render_pass.output_rect), context);
@@ -581,10 +634,10 @@ TEST_F(OverlayCandidateFactoryArbitraryTransformTest,
   render_pass.SetNew(render_pass_id, gfx::Rect(0, 0, 2, 2), gfx::Rect(),
                      gfx::Transform());
 
-  const OverlayCandidateFactory::OverlayContext context{
-      .is_delegated_context = true,
-      .supports_clip_rect = true,
-      .supports_arbitrary_transform = false};
+  OverlayCandidateFactory::OverlayContext context;
+  context.is_delegated_context = true;
+  context.supports_clip_rect = true;
+  context.supports_arbitrary_transform = false;
 
   OverlayCandidateFactory factory = CreateCandidateFactory(
       render_pass, gfx::RectF(render_pass.output_rect), context);
@@ -598,7 +651,9 @@ TEST_F(OverlayCandidateFactoryArbitraryTransformTest,
                gfx::Vector2dF(1, 1), gfx::PointF(0, 0), gfx::RectF(), false,
                1.0);
 
-  base::flat_map<AggregatedRenderPassId, cc::FilterOperations*> filter_map;
+  base::flat_map<AggregatedRenderPassId,
+                 raw_ptr<cc::FilterOperations, CtnExperimental>>
+      filter_map;
   // The actual filter operation doesn't matter in this case.
   cc::FilterOperations filter_op;
   filter_map.insert({render_pass_id, &filter_op});
@@ -645,7 +700,7 @@ TEST_F(OverlayCandidateFactoryArbitraryTransformTest,
 
   OverlayCandidateFactory factory =
       CreateCandidateFactory(render_pass, gfx::RectF(render_pass.output_rect),
-                             kOverlayContextForTesting);
+                             GetOverlayContextForTesting());
 
   // Make a rotated quad which doesn't intersect with the damage, but the
   // axis-aligned bounding box of its target space rect does. This rect should
@@ -704,18 +759,19 @@ class TransformedOverlayClipRectTest : public OverlayCandidateFactoryTestBase {
     sqs->quad_to_target_transform = quad_to_target_transform;
     sqs->clip_rect = clip_rect;
     TextureDrawQuad quad;
-    quad.SetNew(sqs, quad_rect, quad_rect, false,
-                CreateResource(/*is_overlay_candidate=*/true), false,
-                quad_uv_rect.origin(), quad_uv_rect.bottom_right(),
-                SkColors::kTransparent, false, false, false,
-                gfx::ProtectedVideoType::kClear);
+    quad.SetNew(
+        sqs, quad_rect, quad_rect, false,
+        CreateResource(/*is_overlay_candidate=*/true, kTopLeft_GrSurfaceOrigin),
+        false, quad_uv_rect.origin(), quad_uv_rect.bottom_right(),
+        SkColors::kTransparent, false, false, gfx::ProtectedVideoType::kClear);
 
     return quad;
   }
 
   void RunClipToTopLeftCornerTest(gfx::OverlayTransform overlay_transform,
                                   gfx::RectF quad_uvs,
-                                  gfx::RectF expected_uvs) {
+                                  gfx::RectF expected_uvs,
+                                  bool needs_detiling = false) {
     AggregatedRenderPass render_pass;
     gfx::Rect bounds(100, 100);
     render_pass.SetNew(AggregatedRenderPassId::FromUnsafeValue(1), bounds,
@@ -723,9 +779,10 @@ class TransformedOverlayClipRectTest : public OverlayCandidateFactoryTestBase {
 
     // Create a factory without clip rect or arbitrary transform delegation, so
     // that any clips will be baked into the candidate.
+    OverlayCandidateFactory::OverlayContext context;
+    context.is_delegated_context = true;
     OverlayCandidateFactory factory = CreateCandidateFactory(
-        render_pass, gfx::RectF(render_pass.output_rect),
-        OverlayCandidateFactory::OverlayContext{.is_delegated_context = true});
+        render_pass, gfx::RectF(render_pass.output_rect), context);
 
     // |transform| maps the rect (0,0 1x1) to (50,50 100x100).
     gfx::Transform transform =
@@ -736,6 +793,7 @@ class TransformedOverlayClipRectTest : public OverlayCandidateFactoryTestBase {
                                       bounds, quad_uvs);
 
     OverlayCandidate candidate;
+    candidate.needs_detiling = needs_detiling;
     OverlayCandidate::CandidateStatus result =
         factory.FromDrawQuad(&quad, candidate);
     ASSERT_EQ(result, OverlayCandidate::CandidateStatus::kSuccess);
@@ -787,14 +845,45 @@ TEST_F(TransformedOverlayClipRectTest, ClippedUvs) {
       gfx::RectF(0.1f, 0.2f, 0.4f, 0.4f), gfx::RectF(0.3f, 0.4f, 0.2f, 0.2f));
 }
 
+// Test to make sure we handle overlays that need detiling and have a rotation
+// correctly. The UV rect of these overlays assumes no rotation, so we have to
+// rotate them before applying the clip.
+TEST_F(TransformedOverlayClipRectTest, NoTransformNeedsDetiling) {
+  RunClipToTopLeftCornerTest(
+      gfx::OverlayTransform::OVERLAY_TRANSFORM_NONE, gfx::RectF(0.7f, 0.6f),
+      gfx::RectF(0.0f, 0.0f, 0.35f, 0.3f), /*needs_detiling=*/true);
+}
+
+TEST_F(TransformedOverlayClipRectTest, Rotate90NeedsDetiling) {
+  RunClipToTopLeftCornerTest(
+      gfx::OverlayTransform::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_90,
+      gfx::RectF(0.7f, 0.6f), gfx::RectF(0.0f, 0.3f, 0.35f, 0.3f),
+      /*needs_detiling=*/true);
+}
+
+TEST_F(TransformedOverlayClipRectTest, Rotate180NeedsDetiling) {
+  RunClipToTopLeftCornerTest(
+      gfx::OverlayTransform::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_180,
+      gfx::RectF(0.7f, 0.6f), gfx::RectF(0.35f, 0.3f, 0.35f, 0.3f),
+      /*needs_detiling=*/true);
+}
+
+TEST_F(TransformedOverlayClipRectTest, Rotate270NeedsDetiling) {
+  RunClipToTopLeftCornerTest(
+      gfx::OverlayTransform::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_270,
+      gfx::RectF(0.7f, 0.6f), gfx::RectF(0.35f, 0.0f, 0.35f, 0.3f),
+      /*needs_detiling=*/true);
+}
+
 TEST_F(OverlayCandidateFactoryTest, RenderPassClipped) {
   AggregatedRenderPass render_pass;
   render_pass.SetNew(AggregatedRenderPassId::FromUnsafeValue(1),
                      gfx::Rect(0, 0, 100, 100), gfx::Rect(), gfx::Transform());
 
+  OverlayCandidateFactory::OverlayContext context;
+  context.is_delegated_context = true;
   OverlayCandidateFactory factory = CreateCandidateFactory(
-      render_pass, gfx::RectF(render_pass.output_rect),
-      OverlayCandidateFactory::OverlayContext{.is_delegated_context = true});
+      render_pass, gfx::RectF(render_pass.output_rect), context);
 
   // Entirely clipped
   gfx::Rect clip_rect(0, 0);
@@ -814,9 +903,10 @@ TEST_F(OverlayCandidateFactoryTest, RenderPassOffscreen) {
   render_pass.SetNew(AggregatedRenderPassId::FromUnsafeValue(1),
                      gfx::Rect(0, 0, 100, 100), gfx::Rect(), gfx::Transform());
 
+  OverlayCandidateFactory::OverlayContext context;
+  context.is_delegated_context = true;
   OverlayCandidateFactory factory = CreateCandidateFactory(
-      render_pass, gfx::RectF(render_pass.output_rect),
-      OverlayCandidateFactory::OverlayContext{.is_delegated_context = true});
+      render_pass, gfx::RectF(render_pass.output_rect), context);
 
   AggregatedRenderPassId rpid(2);
   gfx::Transform transform;
@@ -843,9 +933,10 @@ TEST_F(OverlayCandidateFactoryTest, RenderPassOffscreenBeforeFilter) {
   AggregatedRenderPassId rpid(2);
   render_pass_filters_[rpid] = &filter_ops;
 
+  OverlayCandidateFactory::OverlayContext context;
+  context.is_delegated_context = true;
   OverlayCandidateFactory factory = CreateCandidateFactory(
-      render_pass, gfx::RectF(render_pass.output_rect),
-      OverlayCandidateFactory::OverlayContext{.is_delegated_context = true});
+      render_pass, gfx::RectF(render_pass.output_rect), context);
 
   gfx::Transform transform;
   transform.Translate(gfx::Vector2dF(0, 101));
@@ -868,13 +959,13 @@ TEST_F(OverlayCandidateFactoryTest, ClipDelegation_Success) {
   gfx::Transform identity;
   auto* quad = AddQuad(rect, identity, &render_pass, clip, rect);
 
+  OverlayCandidateFactory::OverlayContext context;
+  context.is_delegated_context = true;
   OverlayCandidateFactory noclip_factory = CreateCandidateFactory(
-      render_pass, gfx::RectF(render_pass.output_rect),
-      OverlayCandidateFactory::OverlayContext{.is_delegated_context = true});
+      render_pass, gfx::RectF(render_pass.output_rect), context);
+  context.supports_clip_rect = true;
   OverlayCandidateFactory clip_factory = CreateCandidateFactory(
-      render_pass, gfx::RectF(render_pass.output_rect),
-      OverlayCandidateFactory::OverlayContext{.is_delegated_context = true,
-                                              .supports_clip_rect = true});
+      render_pass, gfx::RectF(render_pass.output_rect), context);
 
   OverlayCandidate no_clip_cand;
   OverlayCandidate clip_cand;
@@ -901,15 +992,14 @@ TEST_F(OverlayCandidateFactoryTest, ClipDelegation_OutOfWindow) {
   transform.Translate(gfx::Vector2dF(0, -30));
   auto* quad = AddQuad(kRect, transform, &render_pass, kClip, kRect);
 
+  OverlayCandidateFactory::OverlayContext context;
+  context.is_delegated_context = true;
   OverlayCandidateFactory noclip_factory = CreateCandidateFactory(
-      render_pass, gfx::RectF(render_pass.output_rect),
-      OverlayCandidateFactory::OverlayContext{.is_delegated_context = true});
-  OverlayCandidateFactory clip_factory =
-      CreateCandidateFactory(render_pass, gfx::RectF(render_pass.output_rect),
-                             OverlayCandidateFactory::OverlayContext{
-                                 .is_delegated_context = true,
-                                 .supports_clip_rect = true,
-                                 .supports_out_of_window_clip_rect = true});
+      render_pass, gfx::RectF(render_pass.output_rect), context);
+  context.supports_clip_rect = true;
+  context.supports_out_of_window_clip_rect = true;
+  OverlayCandidateFactory clip_factory = CreateCandidateFactory(
+      render_pass, gfx::RectF(render_pass.output_rect), context);
 
   OverlayCandidate no_clip_cand;
   OverlayCandidate clip_cand;
@@ -938,13 +1028,13 @@ TEST_F(OverlayCandidateFactoryTest, ClipDelegation_VisibleRect) {
   gfx::Transform identity;
   auto* quad = AddQuad(rect, identity, &render_pass, clip, visible_rect);
 
+  OverlayCandidateFactory::OverlayContext context;
+  context.is_delegated_context = true;
   OverlayCandidateFactory noclip_factory = CreateCandidateFactory(
-      render_pass, gfx::RectF(render_pass.output_rect),
-      OverlayCandidateFactory::OverlayContext{.is_delegated_context = true});
+      render_pass, gfx::RectF(render_pass.output_rect), context);
+  context.supports_clip_rect = true;
   OverlayCandidateFactory clip_factory = CreateCandidateFactory(
-      render_pass, gfx::RectF(render_pass.output_rect),
-      OverlayCandidateFactory::OverlayContext{.is_delegated_context = true,
-                                              .supports_clip_rect = true});
+      render_pass, gfx::RectF(render_pass.output_rect), context);
 
   OverlayCandidate no_clip_cand;
   OverlayCandidate clip_cand;

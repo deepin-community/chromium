@@ -6,11 +6,14 @@
 #define CHROME_BROWSER_UI_VIEWS_CONTROLS_HOVER_BUTTON_H_
 
 #include <string>
+#include <vector>
 
+#include "base/callback_list.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/types/pass_key.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/menu_button.h"
@@ -20,6 +23,10 @@ namespace media_router {
 FORWARD_DECLARE_TEST(CastDialogSinkButtonTest, SetTitleLabel);
 FORWARD_DECLARE_TEST(CastDialogSinkButtonTest, SetStatusLabel);
 }  // namespace media_router
+
+namespace webid {
+class AccountSelectionViewTestBase;
+}
 
 namespace ui {
 class ImageModel;
@@ -31,6 +38,7 @@ class StyledLabel;
 class View;
 }  // namespace views
 
+class HoverButtonTest;
 class HoverButtonController;
 class PageInfoBubbleViewBrowserTest;
 
@@ -42,6 +50,8 @@ class HoverButton : public views::LabelButton {
  public:
   enum Style { STYLE_PROMINENT, STYLE_ERROR };
 
+  HoverButton();
+
   // Creates a single line hover button with no icon.
   HoverButton(PressedCallback callback, const std::u16string& text);
 
@@ -52,32 +62,35 @@ class HoverButton : public views::LabelButton {
 
   // Creates a HoverButton with custom subviews. |icon_view| replaces the
   // LabelButton icon, and titles appear on separate rows. An empty |subtitle|
-  // will vertically center |title|. |secondary_view|, when set, is shown
-  // on the opposite side of the button from |icon_view|.
-  // When |add_vertical_label_spacing| is false it will not add vertical spacing
-  // to the label wrapper.
-  // Warning: |icon_view| must have a fixed size and be correctly set during its
-  // constructor for the HoverButton to layout correctly.
-  HoverButton(PressedCallback callback,
-              std::unique_ptr<views::View> icon_view,
-              const std::u16string& title,
-              const std::u16string& subtitle = std::u16string(),
-              std::unique_ptr<views::View> secondary_view = nullptr,
-              bool add_vertical_label_spacing = true);
+  // and |footer| will vertically center |title|. |footer| will be shown below
+  // |title| and |subtitle|. |secondary_view|, when set, is shown on the
+  // opposite side of the button from |icon_view|. When
+  // |add_vertical_label_spacing| is false it will not add vertical spacing to
+  // the label wrapper. Warning: |icon_view| must have a fixed size and be
+  // correctly set during its constructor for the HoverButton to layout
+  // correctly.
+  HoverButton(
+      PressedCallback callback,
+      std::unique_ptr<views::View> icon_view,
+      const std::u16string& title,
+      const std::u16string& subtitle = std::u16string(),
+      std::unique_ptr<views::View> secondary_view = nullptr,
+      bool add_vertical_label_spacing = true,
+      const std::u16string& footer = std::u16string(),
+      int icon_label_spacing = ChromeLayoutProvider::Get()->GetDistanceMetric(
+          views::DISTANCE_RELATED_LABEL_HORIZONTAL));
 
   HoverButton(const HoverButton&) = delete;
   HoverButton& operator=(const HoverButton&) = delete;
   ~HoverButton() override;
 
   // views::LabelButton:
+  void SetCallback(PressedCallback callback) override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void SetBorder(std::unique_ptr<views::Border> b) override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void PreferredSizeChanged() override;
   void OnViewBoundsChanged(View* observed_view) override;
-
-  // Sets the title text to |text|, and updates the button size, when |title_|
-  // exists.
-  void SetTitleText(const std::u16string& text);
 
   // Sets the text style of the title considering the color of the background.
   // Passing |background_color| makes sure that the text color will not be
@@ -91,15 +104,17 @@ class HoverButton : public views::LabelButton {
   void SetSubtitleTextStyle(int text_context,
                             views::style::TextStyle text_style);
 
-  // Updates the accessible name and tooltip of the button if necessary based on
-  // |title_| and |subtitle_| labels.
-  void SetTooltipAndAccessibleName();
+  // Set the text context and style of the footer.
+  void SetFooterTextStyle(int text_context, views::style::TextStyle text_style);
 
-  views::StyledLabel* title() const { return title_; }
+  void SetIconHorizontalMargins(int left, int right);
 
   PressedCallback& callback(base::PassKey<HoverButtonController>) {
     return callback_;
   }
+
+  views::StyledLabel* title() { return title_; }
+  const views::StyledLabel* title() const { return title_; }
 
  protected:
   // views::MenuButton:
@@ -108,6 +123,7 @@ class HoverButton : public views::LabelButton {
   views::View* GetTooltipHandlerForPoint(const gfx::Point& point) override;
 
   views::Label* subtitle() const { return subtitle_; }
+  views::Label* footer() const { return footer_; }
   views::View* icon_view() const { return icon_view_; }
   views::View* secondary_view() const { return secondary_view_; }
 
@@ -116,23 +132,31 @@ class HoverButton : public views::LabelButton {
                            SetTitleLabel);
   FRIEND_TEST_ALL_PREFIXES(media_router::CastDialogSinkButtonTest,
                            SetStatusLabel);
-  FRIEND_TEST_ALL_PREFIXES(ExtensionsMenuItemViewTest,
-                           NotifyClickExecutesAction);
-  FRIEND_TEST_ALL_PREFIXES(ExtensionsMenuItemViewTest,
-                           UpdatesToDisplayCorrectActionTitle);
-  friend class AccountSelectionBubbleViewTest;
-  friend class AccountSelectionModalViewTest;
+  friend class webid::AccountSelectionViewTestBase;
+  friend class HoverButtonTest;
   friend class PageInfoBubbleViewBrowserTest;
 
+  // Updates the accessible name and tooltip of the button if necessary based on
+  // `title_` and `subtitle_` labels.
+  void UpdateTooltipAndAccessibleName();
+
   void OnPressed(const ui::Event& event);
+
+  // Create the label for subtitle or footer.
+  std::unique_ptr<views::Label> CreateSecondaryLabel(
+      const std::u16string& text);
 
   PressedCallback callback_;
 
   raw_ptr<views::StyledLabel> title_ = nullptr;
+  raw_ptr<views::View> icon_wrapper_ = nullptr;
   raw_ptr<views::View> label_wrapper_ = nullptr;
   raw_ptr<views::Label> subtitle_ = nullptr;
+  raw_ptr<views::Label> footer_ = nullptr;
   raw_ptr<views::View> icon_view_ = nullptr;
   raw_ptr<views::View> secondary_view_ = nullptr;
+
+  std::vector<base::CallbackListSubscription> text_changed_subscriptions_;
 
   base::ScopedObservation<views::View, views::ViewObserver> label_observation_{
       this};

@@ -15,11 +15,11 @@
 #include "quiche/quic/core/crypto/quic_decrypter.h"
 #include "quiche/quic/core/crypto/quic_encrypter.h"
 #include "quiche/quic/core/crypto/quic_random.h"
+#include "quiche/quic/core/frames/quic_immediate_ack_frame.h"
 #include "quiche/quic/core/frames/quic_reset_stream_at_frame.h"
 #include "quiche/quic/core/quic_connection_id.h"
 #include "quiche/quic/core/quic_packets.h"
 #include "quiche/quic/core/quic_types.h"
-#include "quiche/quic/platform/api/quic_export.h"
 
 namespace quic {
 
@@ -223,6 +223,9 @@ class QUICHE_EXPORT QuicFramerVisitorInterface {
   // Called when an AckFrequencyFrame has been parsed.
   virtual bool OnAckFrequencyFrame(const QuicAckFrequencyFrame& frame) = 0;
 
+  // Called when an ImmediateAckFrame has been parsed.
+  virtual bool OnImmediateAckFrame(const QuicImmediateAckFrame& frame) = 0;
+
   // Called when an ResetStreamAtFrame has been parsed.
   virtual bool OnResetStreamAtFrame(const QuicResetStreamAtFrame& frame) = 0;
 
@@ -327,6 +330,8 @@ class QUICHE_EXPORT QuicFramer {
   void set_receive_timestamps_exponent(uint32_t exponent) const {
     receive_timestamps_exponent_ = exponent;
   }
+
+  bool process_reset_stream_at() const { return process_reset_stream_at_; }
 
   // Allows enabling RESET_STREAM_AT frame processing.
   void set_process_reset_stream_at(bool process_reset_stream_at) {
@@ -489,6 +494,24 @@ class QUICHE_EXPORT QuicFramer {
       QuicConnectionId* source_connection_id,
       std::optional<absl::string_view>* retry_token,
       std::string* detailed_error, ConnectionIdGeneratorInterface& generator);
+
+  // Attempts to parse the packet number and decrypt the packet payload at
+  // server for IETF Initial packets. Returns an error code if parsing or
+  // decrypting fails. Returns QUIC_NO_ERROR if
+  // - Parsing did not happen due to failed preconditions. In this case,
+  //   *packet_number will be set to std::nullopt. This happens if
+  //   - |version| is neither draft29 nor RFCv1.
+  //   - |packet| is not a IETF Inital packet.
+  // - Parsing and decrypting succeeded. In this case, *packet_number will be
+  //   the parsed packet number.
+  static QuicErrorCode TryDecryptInitialPacketDispatcher(
+      const QuicEncryptedPacket& packet, const ParsedQuicVersion& version,
+      PacketHeaderFormat format, QuicLongHeaderType long_packet_type,
+      const QuicConnectionId& destination_connection_id,
+      const QuicConnectionId& source_connection_id,
+      const std::optional<absl::string_view>& retry_token,
+      QuicPacketNumber largest_decrypted_inital_packet_number,
+      QuicDecrypter& decrypter, std::optional<uint64_t>* packet_number);
 
   // Serializes a packet containing |frames| into |buffer|.
   // Returns the length of the packet, which must not be longer than
@@ -742,6 +765,7 @@ class QUICHE_EXPORT QuicFramer {
   friend class test::QuicFramerPeer;
 
   using NackRangeMap = std::map<QuicPacketNumber, uint8_t>;
+  using AssociatedDataStorage = absl::InlinedVector<char, 20>;
 
   // AckTimestampRange is a data structure derived from a QuicAckFrame. It is
   // used to serialize timestamps in a IETF_ACK_RECEIVE_TIMESTAMPS frame.
@@ -793,11 +817,12 @@ class QUICHE_EXPORT QuicFramer {
   // written to |full_packet_number|. Finally, the header, with header
   // protection removed, is written to |associated_data| to be used in packet
   // decryption. |packet| is used in computing the asociated data.
-  bool RemoveHeaderProtection(QuicDataReader* reader,
-                              const QuicEncryptedPacket& packet,
-                              QuicPacketHeader* header,
-                              uint64_t* full_packet_number,
-                              std::vector<char>* associated_data);
+  static bool RemoveHeaderProtection(
+      QuicDataReader* reader, const QuicEncryptedPacket& packet,
+      QuicDecrypter& decrypter, Perspective perspective,
+      const ParsedQuicVersion& version, QuicPacketNumber base_packet_number,
+      QuicPacketHeader* header, uint64_t* full_packet_number,
+      AssociatedDataStorage& associated_data);
 
   bool ProcessIetfDataPacket(QuicDataReader* encrypted_reader,
                              QuicPacketHeader* header,
@@ -843,7 +868,7 @@ class QUICHE_EXPORT QuicFramer {
   // First processes possibly truncated packet number. Calculates the full
   // packet number from the truncated one and the last seen packet number, and
   // stores it to |packet_number|.
-  bool ProcessAndCalculatePacketNumber(
+  static bool ProcessAndCalculatePacketNumber(
       QuicDataReader* reader, QuicPacketNumberLength packet_number_length,
       QuicPacketNumber base_packet_number, uint64_t* packet_number);
   bool ProcessFrameData(QuicDataReader* reader, const QuicPacketHeader& header);
@@ -886,9 +911,9 @@ class QUICHE_EXPORT QuicFramer {
 
   // Returns the full packet number from the truncated
   // wire format version and the last seen packet number.
-  uint64_t CalculatePacketNumberFromWire(
+  static uint64_t CalculatePacketNumberFromWire(
       QuicPacketNumberLength packet_number_length,
-      QuicPacketNumber base_packet_number, uint64_t packet_number) const;
+      QuicPacketNumber base_packet_number, uint64_t packet_number);
 
   // Returns the QuicTime::Delta corresponding to the time from when the framer
   // was created.

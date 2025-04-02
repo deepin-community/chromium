@@ -4,12 +4,12 @@
 
 #include "components/webrtc/media_stream_devices_controller.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 #include <vector>
 
 #include "base/functional/bind.h"
-#include "base/ranges/algorithm.h"
 #include "build/build_config.h"
 #include "components/permissions/permission_util.h"
 #include "content/public/browser/browser_context.h"
@@ -230,7 +230,7 @@ blink::mojom::StreamDevicesSetPtr MediaStreamDevicesController::GetDevices(
   if (!audio_allowed && !video_allowed)
     return nullptr;
 
-  // TODO(crbug.com/1300883): Generalize to multiple streams.
+  // TODO(crbug.com/40216442): Generalize to multiple streams.
   stream_devices_set->stream_devices.emplace_back(
       blink::mojom::StreamDevices::New());
   blink::mojom::StreamDevices& devices = *stream_devices_set->stream_devices[0];
@@ -245,64 +245,38 @@ blink::mojom::StreamDevicesSetPtr MediaStreamDevicesController::GetDevices(
               blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE) {
         DCHECK_EQ(blink::mojom::MediaStreamType::NO_SERVICE,
                   request_.video_type);
-        if (!request_.requested_audio_device_ids.empty()) {
-          devices.audio_device = *enumerator_->GetRequestedAudioDevice(
-              request_.requested_audio_device_ids.front());
-        } else {
-          const blink::MediaStreamDevices& audio_devices =
-              enumerator_->GetAudioCaptureDevices();
-          if (!audio_devices.empty())
-            devices.audio_device = audio_devices.front();
-        }
+        devices.audio_device =
+            enumerator_->GetPreferredAudioDeviceForBrowserContext(
+                web_contents_->GetBrowserContext(),
+                request_.requested_audio_device_ids);
       } else if (video_allowed &&
                  request_.video_type ==
                      blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE) {
         DCHECK_EQ(blink::mojom::MediaStreamType::NO_SERVICE,
                   request_.audio_type);
         // Pepper API opens only one device at a time.
-        if (!request_.requested_video_device_ids.empty()) {
-          devices.video_device = *enumerator_->GetRequestedVideoDevice(
-              request_.requested_video_device_ids.front());
-        } else {
-          const blink::MediaStreamDevices& video_devices =
-              enumerator_->GetVideoCaptureDevices();
-          if (!video_devices.empty())
-            devices.video_device = video_devices.front();
-        }
+        devices.video_device =
+            enumerator_->GetPreferredVideoDeviceForBrowserContext(
+                web_contents_->GetBrowserContext(),
+                request_.requested_video_device_ids);
       }
       break;
     }
     case blink::MEDIA_GENERATE_STREAM: {
-      bool get_default_audio_device = audio_allowed;
-      bool get_default_video_device = video_allowed;
-
       // Get the exact audio or video device if an id is specified.
       if (audio_allowed && !request_.requested_audio_device_ids.empty()) {
-        const blink::MediaStreamDevice* audio_device =
-            enumerator_->GetRequestedAudioDevice(
-                request_.requested_audio_device_ids.front());
-        if (audio_device) {
-          devices.audio_device = *audio_device;
-          get_default_audio_device = false;
-        }
+        devices.audio_device =
+            enumerator_->GetPreferredAudioDeviceForBrowserContext(
+                web_contents_->GetBrowserContext(),
+                request_.requested_audio_device_ids);
       }
       if (video_allowed && !request_.requested_video_device_ids.empty()) {
-        const blink::MediaStreamDevice* video_device =
-            enumerator_->GetRequestedVideoDevice(
-                request_.requested_video_device_ids.front());
-        if (video_device) {
-          devices.video_device = *video_device;
-          get_default_video_device = false;
-        }
+        devices.video_device =
+            enumerator_->GetPreferredVideoDeviceForBrowserContext(
+                web_contents_->GetBrowserContext(),
+                request_.requested_video_device_ids);
       }
 
-      // If either or both audio and video devices were requested but not
-      // specified by id, get the default devices.
-      if (get_default_audio_device || get_default_video_device) {
-        enumerator_->GetDefaultDevicesForBrowserContext(
-            web_contents_->GetBrowserContext(), get_default_audio_device,
-            get_default_video_device, devices);
-      }
       break;
     }
     case blink::MEDIA_GET_OPEN_DEVICE: {
@@ -310,18 +284,24 @@ blink::mojom::StreamDevicesSetPtr MediaStreamDevicesController::GetDevices(
       // need to get permissions for MediaStreamDevice as those are controlled
       // by the original context.
       NOTREACHED();
-      break;
     }
     case blink::MEDIA_DEVICE_ACCESS: {
-      // Get the default devices for the request.
-      enumerator_->GetDefaultDevicesForBrowserContext(
-          web_contents_->GetBrowserContext(), audio_allowed, video_allowed,
-          devices);
+      // Get the preferred devices for the request.
+      if (audio_allowed) {
+        // `SpeechRecognitionManagerImpl` doesn't provide a list of requested
+        // devices, so just get the most preferred device without filtering.
+        CHECK(request_.requested_audio_device_ids.empty());
+        devices.audio_device =
+            enumerator_->GetPreferredAudioDeviceForBrowserContext(
+                web_contents_->GetBrowserContext(), {});
+      }
+      // MEDIA_DEVICE_ACCESS is only used for speech recognition, so it never
+      // requests video access.
+      CHECK(!video_allowed);
       break;
     }
     case blink::MEDIA_DEVICE_UPDATE: {
       NOTREACHED();
-      break;
     }
   }  // switch
 
@@ -416,7 +396,6 @@ bool MediaStreamDevicesController::IsUserAcceptAllowed(
       break;
     default:
       NOTREACHED();
-      return false;
   }
 
   std::vector<std::string> required_android_permissions;
@@ -470,7 +449,7 @@ void MediaStreamDevicesController::PromptAnsweredGroupedRequest(
   }
 
   std::vector<ContentSetting> responses;
-  base::ranges::transform(
+  std::ranges::transform(
       permissions_status, back_inserter(responses),
       permissions::PermissionUtil::PermissionStatusToContentSetting);
 

@@ -18,7 +18,7 @@ class GpuVideoAcceleratorFactories;
 
 namespace blink {
 
-// VideoTrackRecorder::Encoder class encodes h264, vp8, vp9 and av1 using
+// VideoTrackRecorder::Encoder class encodes h264, hevc, vp8, vp9 and av1 using
 // media::VideoEncoder implementation.
 class MODULES_EXPORT MediaRecorderEncoderWrapper final
     : public VideoTrackRecorder::Encoder {
@@ -26,7 +26,7 @@ class MODULES_EXPORT MediaRecorderEncoderWrapper final
   using CreateEncoderCB =
       base::RepeatingCallback<std::unique_ptr<media::VideoEncoder>(
           media::GpuVideoAcceleratorFactories*)>;
-  using OnErrorCB = base::OnceClosure;
+  using OnErrorCB = base::OnceCallback<void(const media::EncoderStatus&)>;
 
   MediaRecorderEncoderWrapper(
       scoped_refptr<base::SequencedTaskRunner> encoding_task_runner,
@@ -43,9 +43,6 @@ class MODULES_EXPORT MediaRecorderEncoderWrapper final
   MediaRecorderEncoderWrapper& operator=(const MediaRecorderEncoderWrapper&) =
       delete;
 
-  base::WeakPtr<Encoder> GetWeakPtr() override {
-    return weak_factory_.GetWeakPtr();
-  }
   bool IsScreenContentEncodingForTesting() const override;
 
  private:
@@ -98,8 +95,7 @@ class MODULES_EXPORT MediaRecorderEncoderWrapper final
       media::VideoEncoderOutput output,
       std::optional<media::VideoEncoder::CodecDescription> description);
 
-  const raw_ptr<media::GpuVideoAcceleratorFactories, ExperimentalRenderer>
-      gpu_factories_;
+  const raw_ptr<media::GpuVideoAcceleratorFactories> gpu_factories_;
 
   const media::VideoCodecProfile profile_;
   const media::VideoCodec codec_;

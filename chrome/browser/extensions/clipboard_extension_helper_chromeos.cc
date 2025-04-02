@@ -49,7 +49,6 @@ class ClipboardExtensionHelper::ClipboardImageDataDecoder
         break;
       case clipboard::ImageType::kNone:
         NOTREACHED();
-        break;
     }
 
     has_request_pending_ = true;
@@ -82,7 +81,7 @@ ClipboardExtensionHelper::ClipboardExtensionHelper() {
       std::make_unique<ClipboardImageDataDecoder>(this);
 }
 
-ClipboardExtensionHelper::~ClipboardExtensionHelper() {}
+ClipboardExtensionHelper::~ClipboardExtensionHelper() = default;
 
 void ClipboardExtensionHelper::DecodeAndSaveImageData(
     std::vector<uint8_t> data,

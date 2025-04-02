@@ -8,7 +8,9 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "components/viz/common/resources/shared_image_format_utils.h"
 #include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
+#include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
@@ -20,7 +22,8 @@ RecyclableCanvasResource::RecyclableCanvasResource(
 
 RecyclableCanvasResource::~RecyclableCanvasResource() {
   if (cache_ && resource_provider_) {
-    cache_->OnDestroyRecyclableResource(std::move(resource_provider_));
+    cache_->OnDestroyRecyclableResource(std::move(resource_provider_),
+                                        completion_sync_token_);
   }
 }
 
@@ -44,7 +47,10 @@ WebGPURecyclableResourceCache::GetOrCreateCanvasResource(
   std::unique_ptr<CanvasResourceProvider> provider =
       AcquireCachedProvider(info);
   if (!provider) {
-    provider = CanvasResourceProvider::CreateWebGPUImageProvider(info);
+    provider = CanvasResourceProvider::CreateWebGPUImageProvider(
+        gfx::Size(info.width(), info.height()),
+        viz::SkColorTypeToSinglePlaneSharedImageFormat(info.colorType()),
+        info.alphaType(), SkColorSpaceToGfxColorSpace(info.refColorSpace()));
     if (!provider)
       return nullptr;
   }
@@ -54,7 +60,8 @@ WebGPURecyclableResourceCache::GetOrCreateCanvasResource(
 }
 
 void WebGPURecyclableResourceCache::OnDestroyRecyclableResource(
-    std::unique_ptr<CanvasResourceProvider> resource_provider) {
+    std::unique_ptr<CanvasResourceProvider> resource_provider,
+    const gpu::SyncToken& completion_sync_token) {
   int resource_size = resource_provider->Size().width() *
                       resource_provider->Size().height() *
                       resource_provider->GetSkImageInfo().bytesPerPixel();
@@ -62,21 +69,10 @@ void WebGPURecyclableResourceCache::OnDestroyRecyclableResource(
     total_unused_resources_in_bytes_ += resource_size;
 
     // WaitSyncToken on the canvas resource.
-    gpu::SyncToken finished_access_token;
-    auto* webgpu = context_provider_->ContextProvider()->WebGPUInterface();
-    webgpu->GenUnverifiedSyncTokenCHROMIUM(finished_access_token.GetData());
-    resource_provider->OnDestroyRecyclableCanvasResource(finished_access_token);
+    resource_provider->OnDestroyRecyclableCanvasResource(completion_sync_token);
 
     unused_providers_.push_front(Resource(std::move(resource_provider),
                                           current_timer_id_, resource_size));
-  }
-
-  if (last_seen_max_unused_resources_in_bytes_ <
-      total_unused_resources_in_bytes_) {
-    last_seen_max_unused_resources_in_bytes_ = total_unused_resources_in_bytes_;
-  }
-  if (last_seen_max_unused_resources_ < unused_providers_.size()) {
-    last_seen_max_unused_resources_ = unused_providers_.size();
   }
 
   // If the cache is full, release LRU from the back.
@@ -110,6 +106,14 @@ WebGPURecyclableResourceCache::AcquireCachedProvider(
   for (it = unused_providers_.begin(); it != unused_providers_.end(); ++it) {
     CanvasResourceProvider* resource_provider = it->resource_provider_.get();
     if (image_info == resource_provider->GetSkImageInfo()) {
+      break;
+    }
+    // Detect and allow for the case wherein the passed-info implicitly
+    // specifies sRGB via a null SkColorSpace whereas the resource provider is
+    // explicitly storing sRGB.
+    if (!image_info.colorSpace() &&
+        (image_info.makeColorSpace(SkColorSpace::MakeSRGB()) ==
+         resource_provider->GetSkImageInfo())) {
       break;
     }
   }
@@ -150,33 +154,6 @@ void WebGPURecyclableResourceCache::ReleaseStaleResources() {
     total_unused_resources_in_bytes_ -= unused_providers_.back().resource_size_;
     unused_providers_.pop_back();
   }
-
-  // The number of stale Resources released this time in this function.
-  base::UmaHistogramCustomCounts("Blink.Canvas.WebGPUStaleResourceCount",
-                                 stale_resource_count, /*min=*/0,
-                                 /*max=*/300,
-                                 /*buckets=*/50);
-
-  // The maximum number of total resource memory size between two
-  // ReleaseStaleResources() calls.
-  // UmaHistogramCustomCounts only takes the int type as input.
-  int last_seen_max_unused_resources_in_kb =
-      static_cast<int>(last_seen_max_unused_resources_in_bytes_ / 1024);
-  base::UmaHistogramCustomCounts("Blink.Canvas.WebGPUMaxRecycledResourcesInKB",
-                                 last_seen_max_unused_resources_in_kb,
-                                 /*min=*/0,
-                                 /*max=*/kMaxRecyclableResourceCachesInKB,
-                                 /*buckets=*/50);
-  last_seen_max_unused_resources_in_bytes_ = 0;
-
-  // The maximum number of unused resources between two ReleaseStaleResources()
-  // calls.
-  base::UmaHistogramCustomCounts("Blink.Canvas.WebGPUMaxRecycledResourcesCount",
-                                 last_seen_max_unused_resources_,
-                                 /*min=*/0,
-                                 /*max=*/300,
-                                 /*buckets=*/50);
-  last_seen_max_unused_resources_ = 0;
 
   current_timer_id_++;
   StartResourceCleanUpTimer();

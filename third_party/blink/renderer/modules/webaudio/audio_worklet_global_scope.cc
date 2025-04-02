@@ -23,6 +23,7 @@
 #include "third_party/blink/renderer/modules/webaudio/audio_worklet_processor.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_worklet_processor_definition.h"
 #include "third_party/blink/renderer/modules/webaudio/cross_thread_audio_worklet_processor_info.h"
+#include "third_party/blink/renderer/platform/audio/denormal_disabler.h"
 #include "third_party/blink/renderer/platform/bindings/callback_method_retriever.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
@@ -34,6 +35,9 @@ AudioWorkletGlobalScope::AudioWorkletGlobalScope(
     : WorkletGlobalScope(std::move(creation_params),
                          thread->GetWorkerReportingProxy(),
                          thread) {
+  // Disable denormals for performance.
+  DenormalModifier::DisableDenormals();
+
   // Audio is prone to jank introduced by e.g. the garbage collector. Workers
   // are generally put in a background mode (as they are non-visible). Audio is
   // an exception here, requiring low-latency behavior similar to any visible
@@ -111,12 +115,11 @@ void AudioWorkletGlobalScope::registerProcessor(
 
   v8::Local<v8::Value> v8_parameter_descriptors;
   {
-    v8::TryCatch try_catch(isolate);
+    TryRethrowScope rethrow_scope(isolate, exception_state);
     if (!processor_ctor->CallbackObject()
              ->Get(current_context,
                    V8AtomicString(isolate, "parameterDescriptors"))
              .ToLocal(&v8_parameter_descriptors)) {
-      exception_state.RethrowV8Exception(try_catch.Exception());
       return;
     }
   }

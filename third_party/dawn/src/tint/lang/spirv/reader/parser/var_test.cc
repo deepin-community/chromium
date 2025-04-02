@@ -47,8 +47,8 @@ TEST_F(SpirvParserTest, FunctionVar) {
                OpFunctionEnd
 )",
               R"(
-%main = @compute @workgroup_size(1, 1, 1) func():void -> %b1 {
-  %b1 = block {
+%main = @compute @workgroup_size(1u, 1u, 1u) func():void {
+  $B1: {
     %2:ptr<function, u32, read_write> = var
     ret
   }
@@ -74,8 +74,8 @@ TEST_F(SpirvParserTest, FunctionVar_Initializer) {
                OpFunctionEnd
 )",
               R"(
-%main = @compute @workgroup_size(1, 1, 1) func():void -> %b1 {
-  %b1 = block {
+%main = @compute @workgroup_size(1u, 1u, 1u) func():void {
+  $B1: {
     %2:ptr<function, u32, read_write> = var, 42u
     ret
   }
@@ -100,12 +100,12 @@ TEST_F(SpirvParserTest, PrivateVar) {
                OpFunctionEnd
 )",
               R"(
-%b1 = block {  # root
+$B1: {  # root
   %1:ptr<private, u32, read_write> = var
 }
 
-%main = @compute @workgroup_size(1, 1, 1) func():void -> %b2 {
-  %b2 = block {
+%main = @compute @workgroup_size(1u, 1u, 1u) func():void {
+  $B2: {
     ret
   }
 }
@@ -130,12 +130,12 @@ TEST_F(SpirvParserTest, PrivateVar_Initializer) {
                OpFunctionEnd
 )",
               R"(
-%b1 = block {  # root
+$B1: {  # root
   %1:ptr<private, u32, read_write> = var, 42u
 }
 
-%main = @compute @workgroup_size(1, 1, 1) func():void -> %b2 {
-  %b2 = block {
+%main = @compute @workgroup_size(1u, 1u, 1u) func():void {
+  $B2: {
     ret
   }
 }
@@ -170,12 +170,12 @@ tint_symbol_1 = struct @align(4) {
   tint_symbol:u32 @offset(0)
 }
 
-%b1 = block {  # root
+$B1: {  # root
   %1:ptr<storage, tint_symbol_1, read> = var @binding_point(1, 2)
 }
 
-%main = @compute @workgroup_size(1, 1, 1) func():void -> %b2 {
-  %b2 = block {
+%main = @compute @workgroup_size(1u, 1u, 1u) func():void {
+  $B2: {
     ret
   }
 }
@@ -209,12 +209,12 @@ tint_symbol_1 = struct @align(4) {
   tint_symbol:u32 @offset(0)
 }
 
-%b1 = block {  # root
+$B1: {  # root
   %1:ptr<storage, tint_symbol_1, read_write> = var @binding_point(1, 2)
 }
 
-%main = @compute @workgroup_size(1, 1, 1) func():void -> %b2 {
-  %b2 = block {
+%main = @compute @workgroup_size(1u, 1u, 1u) func():void {
+  $B2: {
     ret
   }
 }
@@ -252,13 +252,13 @@ tint_symbol_1 = struct @align(4) {
   tint_symbol:u32 @offset(0)
 }
 
-%b1 = block {  # root
+$B1: {  # root
   %1:ptr<storage, tint_symbol_1, read> = var @binding_point(1, 2)
   %2:ptr<storage, tint_symbol_1, read_write> = var @binding_point(1, 3)
 }
 
-%main = @compute @workgroup_size(1, 1, 1) func():void -> %b2 {
-  %b2 = block {
+%main = @compute @workgroup_size(1u, 1u, 1u) func():void {
+  $B2: {
     ret
   }
 }
@@ -292,12 +292,43 @@ tint_symbol_1 = struct @align(4) {
   tint_symbol:u32 @offset(0)
 }
 
-%b1 = block {  # root
+$B1: {  # root
   %1:ptr<uniform, tint_symbol_1, read> = var @binding_point(1, 2)
 }
 
-%main = @compute @workgroup_size(1, 1, 1) func():void -> %b2 {
-  %b2 = block {
+%main = @compute @workgroup_size(1u, 1u, 1u) func():void {
+  $B2: {
+    ret
+  }
+}
+)");
+}
+
+TEST_F(SpirvParserTest, UniformConstantVar) {
+    EXPECT_IR(R"(
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %1 "main"
+               OpExecutionMode %1 LocalSize 1 1 1
+               OpDecorate %6 DescriptorSet 1
+               OpDecorate %6 Binding 2
+       %void = OpTypeVoid
+       %samp = OpTypeSampler
+%_ptr_Uniform_samp = OpTypePointer UniformConstant %samp
+          %5 = OpTypeFunction %void
+          %6 = OpVariable %_ptr_Uniform_samp UniformConstant
+          %1 = OpFunction %void None %5
+          %7 = OpLabel
+               OpReturn
+               OpFunctionEnd
+)",
+              R"(
+$B1: {  # root
+  %1:ptr<handle, sampler, read> = var @binding_point(1, 2)
+}
+
+%main = @compute @workgroup_size(1u, 1u, 1u) func():void {
+  $B2: {
     ret
   }
 }

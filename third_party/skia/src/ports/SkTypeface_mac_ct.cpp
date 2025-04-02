@@ -57,6 +57,7 @@
 #include "src/utils/mac/SkCGBase.h"
 #include "src/utils/mac/SkCGGeometry.h"
 #include "src/utils/mac/SkCTFont.h"
+#include "src/utils/mac/SkCTFontCreateExactCopy.h"
 #include "src/utils/mac/SkUniqueCFRef.h"
 
 #include <dlfcn.h>
@@ -88,6 +89,7 @@ SkString SkCFTypeIDDescription(CFTypeID id) {
 template<typename CF> CFTypeID SkCFGetTypeID();
 #define SK_GETCFTYPEID(cf) \
 template<> CFTypeID SkCFGetTypeID<cf##Ref>() { return cf##GetTypeID(); }
+SK_GETCFTYPEID(CFArray);
 SK_GETCFTYPEID(CFBoolean);
 SK_GETCFTYPEID(CFDictionary);
 SK_GETCFTYPEID(CFNumber);
@@ -149,72 +151,6 @@ static bool SkCFNumberDynamicCast(CFTypeRef cf, T* number, CFNumberRef* cfNumber
         *cfNumber = cfAsCFNumber;
     }
     return true;
-}
-
-// In macOS 10.12 and later any variation on the CGFont which has default axis value will be
-// dropped when creating the CTFont. Unfortunately, in macOS 10.15 the priority of setting
-// the optical size (and opsz variation) is
-// 1. the value of kCTFontOpticalSizeAttribute in the CTFontDescriptor (undocumented)
-// 2. the opsz axis default value if kCTFontOpticalSizeAttribute is 'none' (undocumented)
-// 3. the opsz variation on the nascent CTFont from the CGFont (was dropped if default)
-// 4. the opsz variation in kCTFontVariationAttribute in CTFontDescriptor (crashes 10.10)
-// 5. the size requested (can fudge in SkTypeface but not SkScalerContext)
-// The first one which is found will be used to set the opsz variation (after clamping).
-static void add_opsz_attr(CFMutableDictionaryRef attr, double opsz) {
-    SkUniqueCFRef<CFNumberRef> opszValueNumber(
-        CFNumberCreate(kCFAllocatorDefault, kCFNumberDoubleType, &opsz));
-    // Avoid using kCTFontOpticalSizeAttribute directly
-    CFStringRef SkCTFontOpticalSizeAttribute = CFSTR("NSCTFontOpticalSizeAttribute");
-    CFDictionarySetValue(attr, SkCTFontOpticalSizeAttribute, opszValueNumber.get());
-}
-
-// This turns off application of the 'trak' table to advances, but also all other tracking.
-static void add_notrak_attr(CFMutableDictionaryRef attr) {
-    int zero = 0;
-    SkUniqueCFRef<CFNumberRef> unscaledTrackingNumber(
-        CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &zero));
-    CFStringRef SkCTFontUnscaledTrackingAttribute = CFSTR("NSCTFontUnscaledTrackingAttribute");
-    CFDictionarySetValue(attr, SkCTFontUnscaledTrackingAttribute, unscaledTrackingNumber.get());
-}
-
-SkUniqueCFRef<CTFontRef> SkCTFontCreateExactCopy(CTFontRef baseFont, CGFloat textSize,
-                                                 OpszVariation opszVariation)
-{
-    SkUniqueCFRef<CFMutableDictionaryRef> attr(
-    CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
-                              &kCFTypeDictionaryKeyCallBacks,
-                              &kCFTypeDictionaryValueCallBacks));
-
-    if (opszVariation.isSet) {
-        add_opsz_attr(attr.get(), opszVariation.value);
-    } else {
-        // On (at least) 10.10 though 10.14 the default system font was SFNSText/SFNSDisplay.
-        // The CTFont is backed by both; optical size < 20 means SFNSText else SFNSDisplay.
-        // On at least 10.11 the glyph ids in these fonts became non-interchangable.
-        // To keep glyph ids stable over size changes, preserve the optical size.
-        // In 10.15 this was replaced with use of variable fonts with an opsz axis.
-        // A CTFont backed by multiple fonts picked by opsz where the multiple backing fonts are
-        // variable fonts with opsz axis and non-interchangeable glyph ids would break the
-        // opsz.isSet branch above, but hopefully that never happens.
-        // See https://crbug.com/524646 .
-        CFStringRef SkCTFontOpticalSizeAttribute = CFSTR("NSCTFontOpticalSizeAttribute");
-        SkUniqueCFRef<CFTypeRef> opsz(CTFontCopyAttribute(baseFont, SkCTFontOpticalSizeAttribute));
-        double opsz_val;
-        if (!opsz ||
-            CFGetTypeID(opsz.get()) != CFNumberGetTypeID() ||
-            !CFNumberGetValue(static_cast<CFNumberRef>(opsz.get()),kCFNumberDoubleType,&opsz_val) ||
-            opsz_val <= 0)
-        {
-            opsz_val = CTFontGetSize(baseFont);
-        }
-        add_opsz_attr(attr.get(), opsz_val);
-    }
-    add_notrak_attr(attr.get());
-
-    SkUniqueCFRef<CTFontDescriptorRef> desc(CTFontDescriptorCreateWithAttributes(attr.get()));
-
-    return SkUniqueCFRef<CTFontRef>(
-            CTFontCreateCopyWithAttributes(baseFont, textSize, nullptr, desc.get()));
 }
 
 CTFontRef SkTypeface_GetCTFontRef(const SkTypeface* face) {
@@ -564,7 +500,6 @@ std::unique_ptr<SkAdvancedTypefaceMetrics> SkTypeface_Mac::onGetAdvancedMetrics(
         SkUniqueCFRef<CFStringRef> fontName(CTFontCopyPostScriptName(ctFont.get()));
         if (fontName.get()) {
             SkStringFromCFString(fontName.get(), &info->fPostScriptName);
-            info->fFontName = info->fPostScriptName;
         }
     }
 
@@ -581,17 +516,21 @@ std::unique_ptr<SkAdvancedTypefaceMetrics> SkTypeface_Mac::onGetAdvancedMetrics(
         SkOTUtils::SetAdvancedTypefaceFlags(fsType, info.get());
     }
 
-    // If it's not a truetype font, mark it as 'other'. Assume that TrueType
-    // fonts always have both glyf and loca tables. At the least, this is what
-    // sfntly needs to subset the font. CTFontCopyAttribute() does not always
-    // succeed in determining this directly.
-    if (!this->getTableSize(SkSetFourByteTag('g','l','y','f')) ||
-        !this->getTableSize(SkSetFourByteTag('l','o','c','a')))
-    {
+    // If it's not an OpenType font, mark it as 'other'. Assume that OpenType
+    // fonts always have both glyf and loca tables or a CFF table.
+    // At the least, this is what is needed to subset the font.
+    // CTFontCopyAttribute() does not always succeed in determining this directly.
+    constexpr SkFontTableTag glyf = SkSetFourByteTag('g','l','y','f');
+    constexpr SkFontTableTag loca = SkSetFourByteTag('l','o','c','a');
+    constexpr SkFontTableTag CFF  = SkSetFourByteTag('C','F','F',' ');
+    if (this->getTableSize(glyf) && this->getTableSize(loca)) {
+        info->fType = SkAdvancedTypefaceMetrics::kTrueType_Font;
+    } else if (this->getTableSize(CFF)) {
+        info->fType = SkAdvancedTypefaceMetrics::kCFF_Font;
+    } else {
         return info;
     }
 
-    info->fType = SkAdvancedTypefaceMetrics::kTrueType_Font;
     CTFontSymbolicTraits symbolicTraits = CTFontGetSymbolicTraits(ctFont.get());
     if (symbolicTraits & kCTFontMonoSpaceTrait) {
         info->fStyle |= SkAdvancedTypefaceMetrics::kFixedPitch_Style;
@@ -791,6 +730,16 @@ bool SkTypeface_Mac::onGlyphMaskNeedsCurrentColor() const {
 
 CFArrayRef SkTypeface_Mac::getVariationAxes() const {
     fInitVariationAxes([this]{
+        // Prefer kCTFontVariationAxesAttribute, faster since it doesn't localize axis names.
+        SkUniqueCFRef<CTFontDescriptorRef> desc(CTFontCopyFontDescriptor(fFontRef.get()));
+        SkUniqueCFRef<CFTypeRef> cf(
+                CTFontDescriptorCopyAttribute(desc.get(), kCTFontVariationAxesAttribute));
+        CFArrayRef array;
+        if (cf && SkCFDynamicCast(cf.get(), &array, "Axes")) {
+            fVariationAxes.reset(array);
+            cf.release();
+            return;
+        }
         fVariationAxes.reset(CTFontCopyVariationAxes(fFontRef.get()));
     });
     return fVariationAxes.get();
@@ -946,6 +895,8 @@ std::unique_ptr<SkScalerContext> SkTypeface_Mac::onCreateScalerContext(
 }
 
 void SkTypeface_Mac::onFilterRec(SkScalerContextRec* rec) const {
+    rec->useStrokeForFakeBold();
+
     if (rec->fFlags & SkScalerContext::kLCD_BGROrder_Flag ||
         rec->fFlags & SkScalerContext::kLCD_Vertical_Flag)
     {

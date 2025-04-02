@@ -293,10 +293,10 @@ class EGLPreRotationSurfaceTest : public ANGLETest<EGLPreRotationSurfaceTestPara
 // Provide a predictable pattern for testing pre-rotation
 TEST_P(EGLPreRotationSurfaceTest, OrientedWindowWithDraw)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     // To aid in debugging, we want this window visible
@@ -379,10 +379,10 @@ TEST_P(EGLPreRotationSurfaceTest, OrientedWindowWithDraw)
 //  +------------+------------+      +--------+--------+
 TEST_P(EGLPreRotationSurfaceTest, OrientedWindowWithDerivativeDraw)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     // To aid in debugging, we want this window visible
@@ -627,6 +627,77 @@ TEST_P(EGLPreRotationSurfaceTest, ChangeRotationWithDraw)
     }
 }
 
+// Android-specific test that changes a window's rotation and size. This is to check the actual size
+// and the surface capabilities returned by vkGetPhysicalDeviceSurfaceCapabilitiesKHR.
+TEST_P(EGLPreRotationSurfaceTest, CheckSurfaceCapabilities)
+{
+    // This test is confined to Android.
+    ANGLE_SKIP_TEST_IF(isVulkanRenderer() && !IsAndroid() && IsLinux() && isSwiftshader());
+
+    initializeDisplay();
+    initializeSurfaceWithRGBA8888Config();
+
+    eglMakeCurrent(mDisplay, mWindowSurface, mWindowSurface, mContext);
+    ASSERT_EGL_SUCCESS();
+
+    EGLint preWindowSurfaceWidth  = 0;
+    EGLint preWindowSurfaceHeight = 0;
+    EGLint curWindowSurfaceWidth  = 300;
+    EGLint curWindowSurfaceHeight = 200;
+    EGLint actualWidth            = 0;
+    EGLint actualHeight           = 0;
+
+    // Set the initial window surface size.
+    mOSWindow->resize(curWindowSurfaceWidth, curWindowSurfaceHeight);
+    mOSWindow->setOrientation(curWindowSurfaceWidth, curWindowSurfaceHeight);
+    eglSwapBuffers(mDisplay, mWindowSurface);
+    ASSERT_EGL_SUCCESS();
+
+    eglQuerySurface(mDisplay, mWindowSurface, EGL_WIDTH, &actualWidth);
+    eglQuerySurface(mDisplay, mWindowSurface, EGL_HEIGHT, &actualHeight);
+    ASSERT_EGL_SUCCESS();
+
+    // eglSwapBuffers(vkQueuePresentKHR) is called before eglQuerySurface
+    // so actualWidth and actualHeight need to be curWindowSurfaceHeight and curWindowSurfaceHeight
+    // (300, 200).
+    EXPECT_EQ(curWindowSurfaceWidth, actualWidth);
+    EXPECT_EQ(curWindowSurfaceHeight, actualHeight);
+
+    // Store the old values
+    preWindowSurfaceWidth  = curWindowSurfaceWidth;
+    preWindowSurfaceHeight = curWindowSurfaceHeight;
+
+    // Set the new values
+    curWindowSurfaceWidth  = 200;
+    curWindowSurfaceHeight = 300;
+
+    mOSWindow->resize(curWindowSurfaceWidth, curWindowSurfaceHeight);
+    mOSWindow->setOrientation(curWindowSurfaceWidth, curWindowSurfaceHeight);
+
+    eglQuerySurface(mDisplay, mWindowSurface, EGL_WIDTH, &actualWidth);
+    eglQuerySurface(mDisplay, mWindowSurface, EGL_HEIGHT, &actualHeight);
+    ASSERT_EGL_SUCCESS();
+
+    // eglSwapBuffers(vkQueuePresentKHR) is not called before eglQuerySurface
+    // so actualWidth and actualHeight need to be preWindowSurfaceWidth and preWindowSurfaceHeight
+    // (300, 200).
+    EXPECT_EQ(preWindowSurfaceWidth, actualWidth);
+    EXPECT_EQ(preWindowSurfaceHeight, actualHeight);
+
+    eglSwapBuffers(mDisplay, mWindowSurface);
+    ASSERT_EGL_SUCCESS();
+
+    eglQuerySurface(mDisplay, mWindowSurface, EGL_WIDTH, &actualWidth);
+    eglQuerySurface(mDisplay, mWindowSurface, EGL_HEIGHT, &actualHeight);
+    ASSERT_EGL_SUCCESS();
+
+    // Now eglSwapBuffers(vkQueuePresentKHR) is called
+    // so actualWidth and actualHeight will be curWindowSurfaceHeight and curWindowSurfaceHeight
+    // (200, 300).
+    EXPECT_EQ(curWindowSurfaceWidth, actualWidth);
+    EXPECT_EQ(curWindowSurfaceHeight, actualHeight);
+}
+
 // A slight variation of EGLPreRotationSurfaceTest, where the initial window size is 400x300, yet
 // the drawing is still 256x256.  In addition, gl_FragCoord is used in a "clever" way, as the color
 // of the 256x256 drawing area, which reproduces an interesting pre-rotation case from the
@@ -653,10 +724,10 @@ class EGLPreRotationLargeSurfaceTest : public EGLPreRotationSurfaceTest
 // Provide a predictable pattern for testing pre-rotation
 TEST_P(EGLPreRotationLargeSurfaceTest, OrientedWindowWithFragCoordDraw)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     // To aid in debugging, we want this window visible
@@ -835,10 +906,10 @@ class EGLPreRotationBlitFramebufferTest : public EGLPreRotationLargeSurfaceTest
 // to blit that pattern into various places within the 400x300 window
 TEST_P(EGLPreRotationBlitFramebufferTest, BasicBlitFramebuffer)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     // To aid in debugging, we want this window visible
@@ -926,10 +997,10 @@ TEST_P(EGLPreRotationBlitFramebufferTest, BasicBlitFramebuffer)
 // Blit the ms0 stencil buffer to the default framebuffer with rotation on android.
 TEST_P(EGLPreRotationBlitFramebufferTest, BlitStencilWithRotation)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     setWindowVisible(mOSWindow, true);
@@ -1001,7 +1072,7 @@ TEST_P(EGLPreRotationBlitFramebufferTest, BlitStencilWithRotation)
 
     // Some pixels around x=0/63 (related to the pre-rotation degree) still fail on android.
     // From the image in the window, the failures near one of the image's edge look like "aliasing".
-    // We need to fix blit with pre-rotation. http://anglebug.com/5044
+    // We need to fix blit with pre-rotation. http://anglebug.com/42263612
     // EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::blue);
     // EXPECT_PIXEL_COLOR_EQ(0, 64, GLColor::blue);
     // EXPECT_PIXEL_COLOR_EQ(63, 1, GLColor::blue);
@@ -1015,10 +1086,10 @@ TEST_P(EGLPreRotationBlitFramebufferTest, BlitStencilWithRotation)
 // Blit the multisample stencil buffer to the default framebuffer with rotation on android.
 TEST_P(EGLPreRotationBlitFramebufferTest, BlitMultisampleStencilWithRotation)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     setWindowVisible(mOSWindow, true);
@@ -1087,7 +1158,7 @@ TEST_P(EGLPreRotationBlitFramebufferTest, BlitMultisampleStencilWithRotation)
     EXPECT_PIXEL_COLOR_EQ(64, 63, GLColor::blue);
 
     // Some pixels around x=0/127 or y=0 (related to the pre-rotation degree)still fail on android.
-    // We need to fix blit with pre-rotation. http://anglebug.com/5044
+    // We need to fix blit with pre-rotation. http://anglebug.com/42263612
     // Failures of Rotated90Degrees.
     // EXPECT_PIXEL_COLOR_EQ(127, 1, GLColor::blue);
     // EXPECT_PIXEL_COLOR_EQ(127, 63, GLColor::blue);
@@ -1106,13 +1177,13 @@ TEST_P(EGLPreRotationBlitFramebufferTest, BlitMultisampleStencilWithRotation)
 // Blit stencil to default framebuffer with flip and prerotation.
 TEST_P(EGLPreRotationBlitFramebufferTest, BlitStencilWithFlip)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
-    // We need to fix blit with pre-rotation. http://anglebug.com/5044
+    // We need to fix blit with pre-rotation. http://anglebug.com/42263612
     ANGLE_SKIP_TEST_IF(IsPixel4() || IsPixel4XL() || IsWindows());
 
     // To aid in debugging, we want this window visible
@@ -1423,10 +1494,10 @@ TEST_P(EGLPreRotationBlitFramebufferTest, BlitMultisampleColorToResolved)
 // Blit color buffer to default framebuffer with linear filter.
 TEST_P(EGLPreRotationBlitFramebufferTest, BlitColorWithLinearFilter)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     setWindowVisible(mOSWindow, true);
@@ -1481,10 +1552,10 @@ TEST_P(EGLPreRotationBlitFramebufferTest, BlitColorWithLinearFilter)
 // to blit the left and right halves of that pattern into various places within the 400x300 window
 TEST_P(EGLPreRotationBlitFramebufferTest, LeftAndRightBlitFramebuffer)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     // To aid in debugging, we want this window visible
@@ -1599,10 +1670,10 @@ TEST_P(EGLPreRotationBlitFramebufferTest, LeftAndRightBlitFramebuffer)
 // to blit the top and bottom halves of that pattern into various places within the 400x300 window
 TEST_P(EGLPreRotationBlitFramebufferTest, TopAndBottomBlitFramebuffer)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     // To aid in debugging, we want this window visible
@@ -1718,10 +1789,10 @@ TEST_P(EGLPreRotationBlitFramebufferTest, TopAndBottomBlitFramebuffer)
 // size
 TEST_P(EGLPreRotationBlitFramebufferTest, ScaledBlitFramebuffer)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     // To aid in debugging, we want this window visible
@@ -1841,10 +1912,10 @@ TEST_P(EGLPreRotationBlitFramebufferTest, ScaledBlitFramebuffer)
 // window, and then use glBlitFramebuffer to blit that pattern into an FBO
 TEST_P(EGLPreRotationBlitFramebufferTest, FboDestBlitFramebuffer)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     // To aid in debugging, we want this window visible
@@ -1932,10 +2003,10 @@ TEST_P(EGLPreRotationBlitFramebufferTest, FboDestBlitFramebuffer)
 // that are partially out-of-bounds of the source
 TEST_P(EGLPreRotationBlitFramebufferTest, FboDestOutOfBoundsSourceBlitFramebuffer)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     // To aid in debugging, we want this window visible
@@ -2089,10 +2160,10 @@ TEST_P(EGLPreRotationBlitFramebufferTest, FboDestOutOfBoundsSourceBlitFramebuffe
 // that are partially out-of-bounds of the source, and cause a "stretch" to occur
 TEST_P(EGLPreRotationBlitFramebufferTest, FboDestOutOfBoundsSourceWithStretchBlitFramebuffer)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     // To aid in debugging, we want this window visible
@@ -2213,10 +2284,10 @@ TEST_P(EGLPreRotationBlitFramebufferTest, FboDestOutOfBoundsSourceWithStretchBli
 // coordinates that are partially out-of-bounds of the source
 TEST_P(EGLPreRotationBlitFramebufferTest, FboDestOutOfBoundsSourceAndDestBlitFramebuffer)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     // To aid in debugging, we want this window visible
@@ -2422,10 +2493,10 @@ class EGLPreRotationInterpolateAtOffsetTest : public EGLPreRotationSurfaceTest
 // Draw with interpolateAtOffset() builtin function to pre-rotated default FBO
 TEST_P(EGLPreRotationInterpolateAtOffsetTest, InterpolateAtOffsetWithDefaultFBO)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     // To aid in debugging, we want this window visible
@@ -2467,10 +2538,10 @@ TEST_P(EGLPreRotationInterpolateAtOffsetTest, InterpolateAtOffsetWithDefaultFBO)
 // Draw with interpolateAtOffset() builtin function to pre-rotated custom FBO
 TEST_P(EGLPreRotationInterpolateAtOffsetTest, InterpolateAtOffsetWithCustomFBO)
 {
-    // http://anglebug.com/4453
+    // http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(isVulkanRenderer() && IsLinux() && IsIntel());
 
-    // Flaky on Linux SwANGLE http://anglebug.com/4453
+    // Flaky on Linux SwANGLE http://anglebug.com/42263074
     ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
 
     // To aid in debugging, we want this window visible
@@ -2519,11 +2590,6 @@ TEST_P(EGLPreRotationInterpolateAtOffsetTest, InterpolateAtOffsetWithCustomFBO)
 }
 
 }  // anonymous namespace
-
-#ifdef Bool
-// X11 ridiculousness.
-#    undef Bool
-#endif
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(EGLPreRotationInterpolateAtOffsetTest);
 ANGLE_INSTANTIATE_TEST_COMBINE_1(EGLPreRotationInterpolateAtOffsetTest,

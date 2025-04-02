@@ -30,21 +30,22 @@
 #include <utility>
 #include <vector>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/data_vector.h"
+#include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_string.h"
-#include "core/fxcrt/span_util.h"
+#include "core/fxcrt/stl_util.h"
 #include "fxbarcode/common/BC_CommonByteMatrix.h"
 #include "fxbarcode/common/reedsolomon/BC_ReedSolomon.h"
 #include "fxbarcode/common/reedsolomon/BC_ReedSolomonGF256.h"
 #include "fxbarcode/qrcode/BC_QRCoder.h"
 #include "fxbarcode/qrcode/BC_QRCoderBitVector.h"
-#include "fxbarcode/qrcode/BC_QRCoderECBlocks.h"
+#include "fxbarcode/qrcode/BC_QRCoderECBlockData.h"
 #include "fxbarcode/qrcode/BC_QRCoderMaskUtil.h"
 #include "fxbarcode/qrcode/BC_QRCoderMatrixUtil.h"
 #include "fxbarcode/qrcode/BC_QRCoderMode.h"
 #include "fxbarcode/qrcode/BC_QRCoderVersion.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
 
 using ModeStringPair = std::pair<CBC_QRCoderMode*, ByteString>;
 
@@ -58,11 +59,11 @@ struct QRCoderBlockPair {
 };
 
 // This is a mapping for an ASCII table, starting at an index of 32.
-const int8_t kAlphaNumericTable[] = {
-    36, -1, -1, -1, 37, 38, -1, -1, -1, -1, 39, 40, -1, 41, 42, 43,  // 32-47
-    0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  44, -1, -1, -1, -1, -1,  // 48-63
-    -1, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,  // 64-79
-    25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35};
+const auto kAlphaNumericTable = fxcrt::ToArray<const int8_t>(
+    {36, -1, -1, -1, 37, 38, -1, -1, -1, -1, 39, 40, -1, 41, 42, 43,  // 32-47
+     0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  44, -1, -1, -1, -1, -1,  // 48-63
+     -1, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,  // 64-79
+     25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35});
 
 int32_t GetAlphaNumericCode(int32_t code) {
   if (code < 32)
@@ -282,7 +283,7 @@ CBC_QRCoderMode* ChooseMode(const ByteString& content) {
   bool hasNumeric = false;
   bool hasAlphaNumeric = false;
   for (size_t i = 0; i < content.GetLength(); i++) {
-    if (isdigit(content[i])) {
+    if (FXSYS_IsDecimalDigit(content[i])) {
       hasNumeric = true;
     } else if (GetAlphaNumericCode(content[i]) != -1) {
       hasAlphaNumeric = true;
@@ -321,9 +322,9 @@ bool InterleaveWithECBytes(CBC_QRCoderBitVector* bits,
       return false;
 
     DataVector<uint8_t> dataBytes(numDataBytesInBlock);
-    fxcrt::spancpy(
-        pdfium::make_span(dataBytes),
-        bits->GetArray().subspan(dataBytesOffset, numDataBytesInBlock));
+    fxcrt::Copy(bits->GetArray().subspan(dataBytesOffset, numDataBytesInBlock),
+                dataBytes);
+
     DataVector<uint8_t> ecBytes = GenerateECBytes(dataBytes, numEcBytesInBlock);
     if (ecBytes.empty())
       return false;

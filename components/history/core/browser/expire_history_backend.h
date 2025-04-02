@@ -37,7 +37,7 @@ class HistoryDatabase;
 // Encapsulates visit expiration criteria and type of visits to expire.
 class ExpiringVisitsReader {
  public:
-  virtual ~ExpiringVisitsReader() {}
+  virtual ~ExpiringVisitsReader() = default;
   // Populates `visits` from `db`, using provided `end_time` and `max_visits`
   // cap.
   virtual bool Read(base::Time end_time, HistoryDatabase* db,
@@ -152,6 +152,9 @@ class ExpireHistoryBackend {
 
     // The URLs deleted during this operation.
     URLRows deleted_urls;
+
+    // All the visits that were deleted.
+    std::set<VisitID> deleted_visit_ids_;
 
     // All favicon IDs that the deleted URLs had. Favicons will be shared
     // between all URLs with the same favicon, so this is the set of IDs that we
@@ -302,7 +305,7 @@ class ExpireHistoryBackend {
   // Work queue for periodic expiration tasks, used by DoExpireIteration() to
   // determine what to do at an iteration, as well as populate it for future
   // iterations.
-  base::queue<const ExpiringVisitsReader*> work_queue_;
+  base::queue<raw_ptr<const ExpiringVisitsReader, CtnExperimental>> work_queue_;
 
   // Readers for various types of visits.
   // TODO(dglazkov): If you are adding another one, please consider reorganizing

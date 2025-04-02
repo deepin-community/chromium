@@ -2,7 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include <stddef.h>
+
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -15,10 +21,8 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
-#include "base/strings/string_piece.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/task_environment.h"
-#include "components/services/storage/indexed_db/leveldb/leveldb_factory.h"
 #include "components/services/storage/indexed_db/leveldb/leveldb_state.h"
 #include "components/services/storage/indexed_db/locks/partitioned_lock_manager.h"
 #include "components/services/storage/indexed_db/scopes/leveldb_scopes.h"
@@ -31,10 +35,9 @@
 #include "third_party/leveldatabase/leveldb_chrome.h"
 #include "third_party/leveldatabase/src/include/leveldb/comparator.h"
 
-namespace content {
-namespace leveldb_unittest {
+namespace content::indexed_db {
+namespace {
 
-constexpr size_t kWriteBufferSize = 4 * 1024 * 1024;
 static const size_t kDefaultMaxOpenIteratorsPerDatabase = 50;
 
 class SimpleLDBComparator : public leveldb::Comparator {
@@ -97,8 +100,7 @@ TEST_F(TransactionalLevelDBDatabaseTest, CorruptionTest) {
   std::string got_value;
   scoped_refptr<LevelDBState> ldb_state;
   leveldb::Status status;
-  std::tie(leveldb_, status, std::ignore) = leveldb_factory_->OpenLevelDBState(
-      temp_directory_.GetPath(), true, kWriteBufferSize);
+  status = CreateAndSaveLevelDBState();
   EXPECT_TRUE(status.ok());
 
   status = OpenLevelDBDatabase();
@@ -110,8 +112,7 @@ TEST_F(TransactionalLevelDBDatabaseTest, CorruptionTest) {
   transactional_leveldb_database_.reset();
   CloseScopesAndDestroyLevelDBState();
 
-  std::tie(leveldb_, status, std::ignore) = leveldb_factory_->OpenLevelDBState(
-      temp_directory_.GetPath(), true, kWriteBufferSize);
+  status = CreateAndSaveLevelDBState();
   EXPECT_TRUE(status.ok());
 
   status = OpenLevelDBDatabase();
@@ -126,16 +127,14 @@ TEST_F(TransactionalLevelDBDatabaseTest, CorruptionTest) {
 
   EXPECT_TRUE(leveldb_chrome::CorruptClosedDBForTesting(DatabaseDirFilePath()));
 
-  std::tie(leveldb_, status, std::ignore) = leveldb_factory_->OpenLevelDBState(
-      temp_directory_.GetPath(), true, kWriteBufferSize);
+  status = CreateAndSaveLevelDBState();
   EXPECT_FALSE(status.ok());
   EXPECT_TRUE(status.IsCorruption());
 
-  status = leveldb_factory_->DestroyLevelDB(DatabaseDirFilePath());
+  status = DestroyDB();
   EXPECT_TRUE(status.ok());
 
-  std::tie(leveldb_, status, std::ignore) = leveldb_factory_->OpenLevelDBState(
-      temp_directory_.GetPath(), true, kWriteBufferSize);
+  status = CreateAndSaveLevelDBState();
   EXPECT_TRUE(status.ok());
 
   status = OpenLevelDBDatabase();
@@ -171,5 +170,5 @@ TEST(LevelDB, Locking) {
   EXPECT_TRUE(status.ok());
 }
 
-}  // namespace leveldb_unittest
-}  // namespace content
+}  // namespace
+}  // namespace content::indexed_db

@@ -42,9 +42,8 @@ class CPSPrinterDriver final : public RenderDeviceDriverIface {
                 const CFX_GraphStateData* pGraphState,
                 uint32_t fill_color,
                 uint32_t stroke_color,
-                const CFX_FillRenderOptions& fill_options,
-                BlendMode blend_type) override;
-  bool GetClipBox(FX_RECT* pRect) override;
+                const CFX_FillRenderOptions& fill_options) override;
+  FX_RECT GetClipBox() const override;
   bool SetDIBits(RetainPtr<const CFX_DIBBase> bitmap,
                  uint32_t color,
                  const FX_RECT& src_rect,
@@ -60,13 +59,12 @@ class CPSPrinterDriver final : public RenderDeviceDriverIface {
                      const FX_RECT* pClipRect,
                      const FXDIB_ResampleOptions& options,
                      BlendMode blend_type) override;
-  bool StartDIBits(RetainPtr<const CFX_DIBBase> bitmap,
-                   float alpha,
-                   uint32_t color,
-                   const CFX_Matrix& matrix,
-                   const FXDIB_ResampleOptions& options,
-                   std::unique_ptr<CFX_ImageRenderer>* handle,
-                   BlendMode blend_type) override;
+  StartResult StartDIBits(RetainPtr<const CFX_DIBBase> bitmap,
+                          float alpha,
+                          uint32_t color,
+                          const CFX_Matrix& matrix,
+                          const FXDIB_ResampleOptions& options,
+                          BlendMode blend_type) override;
   bool DrawDeviceText(pdfium::span<const TextCharPos> pCharPos,
                       CFX_Font* pFont,
                       const CFX_Matrix& mtObject2Device,

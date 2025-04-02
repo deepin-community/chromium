@@ -29,6 +29,7 @@
 
 #include "src/tint/utils/command/command.h"
 
+#include <limits.h>
 #include <sys/poll.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -36,8 +37,12 @@
 #include <sstream>
 #include <vector>
 
-namespace tint {
+#include "src/tint/utils/macros/compiler.h"
+#include "src/tint/utils/system/executable_path.h"
 
+TINT_BEGIN_DISABLE_WARNING(UNSAFE_BUFFER_USAGE);
+
+namespace tint {
 namespace {
 
 /// File is a simple wrapper around a POSIX file descriptor
@@ -74,7 +79,7 @@ class File {
     operator int() { return handle_; }
 
     /// @returns true if the file is not closed
-    operator bool() { return handle_ != kClosed; }
+    explicit operator bool() { return handle_ != kClosed; }
 
   private:
     File(const File&) = delete;
@@ -102,7 +107,7 @@ class Pipe {
     }
 
     /// @returns true if the pipe has an open read or write file
-    operator bool() { return read || write; }
+    explicit operator bool() { return read || write; }
 
     /// The reader end of the pipe
     File read;
@@ -119,7 +124,23 @@ bool ExecutableExists(const std::string& path) {
     return s.st_mode & S_IXUSR;
 }
 
+std::string GetCWD() {
+    char cwd[PATH_MAX] = "";
+    [[maybe_unused]] auto res = getcwd(cwd, sizeof(cwd));
+    return cwd;
+}
+
 std::string FindExecutable(const std::string& name) {
+    if (name.length() >= 1 && name[0] != '/') {
+        auto in_cwd = GetCWD() + "/" + name;
+        if (ExecutableExists(in_cwd)) {
+            return in_cwd;
+        }
+        auto in_exe_path = tint::ExecutableDirectory() + "/" + name;
+        if (ExecutableExists(in_exe_path)) {
+            return in_exe_path;
+        }
+    }
     if (ExecutableExists(name)) {
         return name;
     }
@@ -277,3 +298,5 @@ Command::Output Command::Exec(std::initializer_list<std::string> arguments) cons
 }
 
 }  // namespace tint
+
+TINT_BEGIN_DISABLE_WARNING(UNSAFE_BUFFER_USAGE);

@@ -8,7 +8,6 @@ import {
   goToResource,
   waitForElementWithTextContent,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   expandSelectedNodeRecursively,
   getContentOfSelectedNode,
@@ -17,7 +16,7 @@ import {
   waitForSelectedNodeChange,
 } from '../helpers/elements-helpers.js';
 
-describe('The Elements tab', async () => {
+describe('The Elements tab', () => {
   it('can delete elements in the tree', async () => {
     const {frontend} = getBrowserAndPages();
 

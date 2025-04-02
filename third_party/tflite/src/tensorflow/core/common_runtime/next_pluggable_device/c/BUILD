@@ -1,5 +1,5 @@
-load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
 load("//tensorflow:tensorflow.bzl", "tf_cc_shared_object", "tf_cc_test")
+load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -29,6 +29,8 @@ cc_library(
     deps = [
         ":plugin_c_api_hdrs",
         "//tensorflow/core/platform:logging",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@local_tsl//tsl/platform:env",
         "@tf_runtime//:hostcontext_alwayslink",
     ],
@@ -169,8 +171,8 @@ tf_cc_test(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
         "@com_google_googletest//:gtest_main",
-        "@local_tsl//tsl/lib/core:status_test_util",
         "@local_tsl//tsl/platform:status",
+        "@local_xla//xla/tsl/lib/core:status_test_util",
     ],
 )
 
@@ -225,6 +227,6 @@ cc_library(
         "//tensorflow/core:framework",
         "//tensorflow/core:framework_internal",
         "//tensorflow/core/framework:types_proto_cc",
-        "@local_tsl//tsl/framework:allocator",
+        "@local_xla//xla/tsl/framework:allocator",
     ],
 )

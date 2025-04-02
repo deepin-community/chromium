@@ -47,6 +47,7 @@
 
 #include <memory>
 
+#include "base/auto_reset.h"
 #include "base/dcheck_is_on.h"
 #include "base/gtest_prod_util.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -89,6 +90,20 @@ enum PaintLayerIteration {
       kNegativeZOrderChildren | kNormalFlowChildren | kPositiveZOrderChildren
 };
 
+// TODO(crbug.com/332933527): Support anchors-valid.
+// If the size of this enum changes, make sure to update the bits needed for
+// `invisible_for_position_visibility_`.
+enum class LayerPositionVisibility : uint8_t {
+  // anchors-visible, anchor intersection.
+  kAnchorsIntersectionVisible = 1,
+  // anchors-visible, anchor CSS visibility.
+  kAnchorsCssVisible = 1 << 1,
+  // anchors-visible, chained anchor visibility.
+  kChainedAnchorsVisible = 1 << 2,
+  // no-overflow.
+  kNoOverflow = 1 << 3,
+};
+
 // PaintLayer is an old object that handles lots of unrelated operations.
 //
 // We want it to die at some point and be replaced by more focused objects,
@@ -98,16 +113,10 @@ enum PaintLayerIteration {
 // The class is central to painting and hit-testing. That's because it handles
 // a lot of tasks (we included ones done by associated satellite objects for
 // historical reasons):
+// - Stacking management (with PaintLayerStackingNode),
 // - Complex painting operations (opacity, clipping, filters, reflections, ...).
-// - hardware acceleration (through PaintLayerCompositor).
 // - scrolling (through PaintLayerScrollableArea).
-// - some performance optimizations.
-//
-// The compositing code is also based on PaintLayer. The entry to it is the
-// PaintLayerCompositor, which fills |composited_layer_mapping| for hardware
-// accelerated layers.
-//
-// TODO(jchaffraix): Expand the documentation about hardware acceleration.
+// - etc. (see LayoutBoxModelObject::LayerTypeRequired() implementations).
 //
 //
 // ***** SELF-PAINTING LAYER *****
@@ -183,10 +192,10 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   PaintLayer* FirstChild() const { return first_.Get(); }
   PaintLayer* LastChild() const { return last_.Get(); }
 
-  // TODO(wangxianzhu): Find a better name for it. 'paintContainer' might be
-  // good but we can't use it for now because it conflicts with
-  // PaintInfo::paintContainer.
-  PaintLayer* CompositingContainer() const;
+  // Returns the parent layer in paint order. The layer will iterate this layer
+  // as a child in PaintLayerPaintOrderIterator.
+  PaintLayer* PaintingContainer() const;
+
   PaintLayer* AncestorStackingContext() const;
 
   void AddChild(PaintLayer* new_child, PaintLayer* before_child = nullptr);
@@ -252,13 +261,6 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   bool HitTest(const HitTestLocation& location,
                HitTestResult&,
                const PhysicalRect& hit_test_area);
-
-  // Static position is set in parent's coordinate space.
-  LayoutUnit StaticBlockPosition() const { return static_block_position_; }
-
-  void SetStaticBlockPosition(LayoutUnit position) {
-    static_block_position_ = position;
-  }
 
   using InlineEdge = LogicalStaticPosition::InlineEdge;
   using BlockEdge = LogicalStaticPosition::BlockEdge;
@@ -358,11 +360,13 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   // Filter reference box is the area over which the filter is computed, in the
   // local coordinate system of the effect node containing the filter.
   gfx::RectF FilterReferenceBox() const;
+  std::optional<gfx::SizeF> FilterViewport() const;
   gfx::RectF BackdropFilterReferenceBox() const;
   gfx::RRectF BackdropFilterBounds() const;
 
   void UpdateFilterReferenceBox();
-  void UpdateFilters(const ComputedStyle* old_style,
+  void UpdateFilters(StyleDifference,
+                     const ComputedStyle* old_style,
                      const ComputedStyle& new_style);
   void UpdateBackdropFilters(const ComputedStyle* old_style,
                              const ComputedStyle& new_style);
@@ -382,8 +386,6 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   }
 
   PaintLayerClipper Clipper() const;
-
-  bool ScrollsOverflow() const;
 
   bool NeedsVisualOverflowRecalc() const {
     return needs_visual_overflow_recalc_;
@@ -428,11 +430,6 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   // stacking contexts.
   bool HasNonIsolatedDescendantWithBlendMode() const;
 
-  CompositingReasons GetCompositingReasons() const {
-    // TODO(pdr): Remove this.
-    return CompositingReason::kNone;
-  }
-
   void UpdateDescendantDependentFlags();
 
   void UpdateSelfPaintingLayer();
@@ -443,6 +440,8 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   void DidUpdateScrollsOverflow();
 
   bool SelfNeedsRepaint() const { return self_needs_repaint_; }
+  // Whether any descendant in paint order (not including descendants across
+  // paint-blocking display locks) has SelfNeedsRepaint().
   bool DescendantNeedsRepaint() const { return descendant_needs_repaint_; }
   bool SelfOrDescendantNeedsRepaint() const {
     return self_needs_repaint_ || descendant_needs_repaint_;
@@ -500,7 +499,7 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
 
   bool Has3DTransformedDescendant() const {
     DCHECK(!needs_descendant_dependent_flags_update_);
-    return has3d_transformed_descendant_;
+    return has_3d_transformed_descendant_;
   }
 
   // See
@@ -509,11 +508,12 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   bool IsReplacedNormalFlowStacking() const;
 
 #if DCHECK_IS_ON()
-  bool IsInStackingParentZOrderLists() const;
   bool LayerListMutationAllowed() const { return layer_list_mutation_allowed_; }
 #endif
 
   void DirtyStackingContextZOrderLists();
+
+  bool IsZOrderListVisible() const;
 
   bool KnownToClipSubtreeToPaddingBox() const;
 
@@ -521,7 +521,21 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
 
   PhysicalRect LocalBoundingBoxIncludingSelfPaintingDescendants() const;
 
+  // If `invisible` is true, the whole subtree will be omitted in painting and
+  // hit-testing. The invisible status of each LayerPositionVisibility value is
+  // tracked separately.
+  void SetInvisibleForPositionVisibility(LayerPositionVisibility visibility,
+                                         bool invisible);
+  // Returns true if any bit of the flag is set.
+  bool InvisibleForPositionVisibility() const {
+    return invisible_for_position_visibility_;
+  }
+  bool HasAncestorInvisibleForPositionVisibility() const;
+  bool HasViewTransitionName() const { return has_view_transition_name_; }
+
  private:
+  void UpdateHasVisibleContent();
+  void SetHasVisibleSelfPaintingDescendant(bool);
   void Update3DTransformedDescendantStatus();
 
   // Bounding box in the coordinates of this layer.
@@ -531,8 +545,6 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   void SetPreviousSibling(PaintLayer* prev) { previous_ = prev; }
   void SetFirstChild(PaintLayer* first) { first_ = first; }
   void SetLastChild(PaintLayer* last) { last_ = last; }
-
-  void UpdateHasSelfPaintingLayerDescendant() const;
 
   void AppendSingleFragmentForHitTesting(
       PaintLayerFragments&,
@@ -644,10 +656,14 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
 
   void SetNeedsDescendantDependentFlagsUpdate();
 
-  void UpdateTransformAfterStyleChange(const ComputedStyle* old_style,
+  void UpdateTransformAfterStyleChange(StyleDifference,
+                                       const ComputedStyle* old_style,
                                        const ComputedStyle& new_style);
 
-  void MarkCompositingContainerChainForNeedsRepaint();
+  enum class PaintingContainerType { kParent, kStackingContext };
+  PaintingContainerType GetPaintingContainerType() const;
+
+  void MarkPaintingContainerChainForNeedsRepaint();
 
   void MergeNeedsPaintPhaseFlagsFrom(const PaintLayer& layer) {
     needs_paint_phase_descendant_outlines_ |=
@@ -683,10 +699,15 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
 
   // Set on a stacking context layer that has 3D descendants anywhere
   // in a preserves3D hierarchy. Hint to do 3D-aware hit testing.
-  unsigned has3d_transformed_descendant_ : 1;
+  unsigned has_3d_transformed_descendant_ : 1 = false;
 
-  unsigned self_needs_repaint_ : 1;
-  unsigned descendant_needs_repaint_ : 1;
+  unsigned self_needs_repaint_ : 1 = false;
+  // This is marked along the PaintingContainer() chain, i.e. the 'descendant'
+  // here is in paint order.
+  unsigned descendant_needs_repaint_ : 1 = false;
+  // This is marked for the layer itself and along the Parent() chain, i.e.
+  // the 'subtree' here is in PaintLayer tree order.
+  unsigned subtree_needs_clear_repaint_flags_ : 1 = false;
 
   unsigned needs_cull_rect_update_ : 1;
   unsigned forces_children_cull_rect_update_ : 1;
@@ -727,6 +748,11 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   unsigned static_inline_edge_ : 2;
   unsigned static_block_edge_ : 2;
 
+  unsigned invisible_for_position_visibility_ : 4 = 0;
+  unsigned descendant_needs_check_position_visibility_ : 1 = false;
+
+  unsigned has_view_transition_name_ : 1 = false;
+
 #if DCHECK_IS_ON()
   mutable unsigned layer_list_mutation_allowed_ : 1;
   bool is_destroyed_ = false;
@@ -758,6 +784,7 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   friend class PaintLayerPaintOrderIterator;
   friend class PaintLayerPaintOrderReverseIterator;
   friend class PaintLayerStackingNode;
+  friend class CheckAncestorPositionVisibilityScope;
 
   FRIEND_TEST_ALL_PREFIXES(PaintLayerTest,
                            DescendantDependentFlagsStopsAtThrottledFrames);
@@ -773,15 +800,37 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   FRIEND_TEST_ALL_PREFIXES(PaintLayerOverlapTest,
                            NestedFixedUsesExpandedBoundingBoxForOverlap);
   FRIEND_TEST_ALL_PREFIXES(PaintLayerOverlapTest,
-
                            FixedWithExpandedBoundsForChild);
   FRIEND_TEST_ALL_PREFIXES(PaintLayerOverlapTest,
                            FixedWithClippedExpandedBoundsForChild);
   FRIEND_TEST_ALL_PREFIXES(PaintLayerOverlapTest,
                            FixedWithExpandedBoundsForGrandChild);
   FRIEND_TEST_ALL_PREFIXES(PaintLayerOverlapTest,
-
                            FixedWithExpandedBoundsForFixedChild);
+};
+
+// This scope should be instantiated for each stacking context during hit-test
+// and paint. In rare cases, a non-stacking-context PaintLayer containing
+// self-painting descendants sets descendant_needs_check_position_visibility_
+// to true on the containing stacking context to let descendants (not across
+// descendant stacking contexts) check if they need to hide due to the position
+// visibility hidden flag on that layer.
+class CheckAncestorPositionVisibilityScope {
+  STACK_ALLOCATED();
+
+ public:
+  explicit CheckAncestorPositionVisibilityScope(
+      const PaintLayer& stacking_context)
+      : reset_(&should_check_,
+               stacking_context.descendant_needs_check_position_visibility_) {
+    CHECK(stacking_context.GetLayoutObject().IsStackingContext());
+  }
+
+  static bool ShouldCheck() { return should_check_; }
+
+ private:
+  static bool should_check_;
+  base::AutoReset<bool> reset_;
 };
 
 #if DCHECK_IS_ON()

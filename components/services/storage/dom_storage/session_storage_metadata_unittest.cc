@@ -37,19 +37,13 @@ std::vector<uint8_t> StdStringToUint8Vector(const std::string& s) {
 }
 
 std::vector<uint8_t> SliceToVector(const leveldb::Slice& s) {
-  auto span = base::make_span(s);
+  base::span span(s);
   return std::vector<uint8_t>(span.begin(), span.end());
 }
 
 void ErrorCallback(leveldb::Status* status_out, leveldb::Status status) {
   *status_out = status;
 }
-
-// The leveldb::Env used by the Indexed DB backend.
-class LevelDBEnv : public leveldb_env::ChromiumEnv {
- public:
-  LevelDBEnv() : ChromiumEnv("LevelDBEnv.SessionStorageMetadataTest") {}
-};
 
 class SessionStorageMetadataTest : public testing::Test {
  public:
@@ -75,7 +69,7 @@ class SessionStorageMetadataTest : public testing::Test {
         std::begin(SessionStorageMetadata::kNamespacePrefixBytes),
         std::end(SessionStorageMetadata::kNamespacePrefixBytes));
   }
-  ~SessionStorageMetadataTest() override {}
+  ~SessionStorageMetadataTest() override = default;
 
   void ReadMetadataFromDatabase(SessionStorageMetadata* metadata) {
     std::vector<uint8_t> version_value;
@@ -458,7 +452,7 @@ class SessionStorageMetadataMigrationTest : public testing::Test {
  protected:
   base::test::TaskEnvironment task_environment_;
   base::ScopedTempDir temp_path_;
-  LevelDBEnv leveldb_env_;
+  leveldb_env::ChromiumEnv leveldb_env_;
   std::string test_namespace1_id_;
   std::string test_namespace2_id_;
   blink::StorageKey test_storage_key1_;

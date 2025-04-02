@@ -13,14 +13,14 @@
 // limitations under the License.
 
 import m from 'mithril';
-
 import {classNames} from '../base/classnames';
 
 interface DetailsShellAttrs {
   title: m.Children;
   description?: m.Children;
   buttons?: m.Children;
-  // Stretch/shrink the content to fill the parent vertically.
+
+  // Vertically fill parent container and disable scrolling
   fillParent?: boolean;
 }
 
@@ -28,12 +28,7 @@ interface DetailsShellAttrs {
 // It provides regular placement for the header bar and placement of buttons
 export class DetailsShell implements m.ClassComponent<DetailsShellAttrs> {
   view({attrs, children}: m.Vnode<DetailsShellAttrs>) {
-    const {
-      title,
-      description,
-      buttons,
-      fillParent = true,
-    } = attrs;
+    const {title, description, buttons, fillParent = true} = attrs;
 
     return m(
       'section.pf-details-shell',
@@ -44,10 +39,7 @@ export class DetailsShell implements m.ClassComponent<DetailsShellAttrs> {
         m('span.pf-header-description', description),
         m('nav.pf-header-buttons', buttons),
       ),
-      m(
-        'article.pf-content',
-        children,
-      ),
+      m('article.pf-content', children),
     );
   }
 }

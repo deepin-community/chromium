@@ -14,6 +14,8 @@
 #include "ash/test/ash_test_helper.h"
 #include "ash/wm/desks/templates/saved_desk_test_helper.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
+#include "chromeos/constants/chromeos_features.h"
 
 namespace views {
 class Label;
@@ -40,9 +42,9 @@ class OverviewTestBase : public AshTestBase {
   OverviewTestBase& operator=(const OverviewTestBase&) = delete;
   ~OverviewTestBase() override;
 
-  // Enters tablet mode. Needed by tests that test dragging and or splitview,
-  // which are tablet mode only.
+  // Enters/Leaves tablet mode.
   void EnterTabletMode();
+  void LeaveTabletMode();
 
   bool InOverviewSession() const;
 
@@ -127,6 +129,8 @@ class OverviewTestBase : public AshTestBase {
   void CheckOverviewHistogram(const std::string& histogram,
                               const std::vector<int>& counts);
 
+  base::test::ScopedFeatureList scoped_feature_list_{
+      chromeos::features::kOverviewSessionInitOptimizations};
   std::unique_ptr<ShelfViewTestAPI> shelf_view_test_api_;
   std::vector<std::string> trace_names_;
 };

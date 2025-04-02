@@ -14,20 +14,27 @@
 
 namespace blink {
 class IdentityUserInfo;
+class IdentityResolveOptions;
+class V8UnionIdentityProviderTokenOrUSVString;
 
 class MODULES_EXPORT IdentityProvider : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static ScriptPromiseTyped<IDLSequence<IdentityUserInfo>> getUserInfo(
+  static ScriptPromise<IDLSequence<IdentityUserInfo>> getUserInfo(
       ScriptState*,
       const blink::IdentityProviderConfig*,
       ExceptionState&);
 
   static void close(ScriptState*);
-  static ScriptPromise registerIdentityProvider(ScriptState*, const String&);
-  static ScriptPromise unregisterIdentityProvider(ScriptState*, const String&);
-  static ScriptPromise resolve(ScriptState*, const String&);
+  static ScriptPromise<IDLBoolean> registerIdentityProvider(ScriptState*,
+                                                            const String&);
+  static ScriptPromise<IDLUndefined> unregisterIdentityProvider(ScriptState*,
+                                                                const String&);
+  static ScriptPromise<IDLUndefined> resolve(
+      ScriptState*,
+      const V8UnionIdentityProviderTokenOrUSVString* token,
+      const IdentityResolveOptions* options = nullptr);
 };
 
 }  // namespace blink

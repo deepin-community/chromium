@@ -1,6 +1,16 @@
 // Copyright 2015 The Chromium Authors
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #ifndef BSSL_PKI_VERIFY_CERTIFICATE_CHAIN_H_
 #define BSSL_PKI_VERIFY_CERTIFICATE_CHAIN_H_
@@ -15,7 +25,7 @@
 #include "input.h"
 #include "parsed_certificate.h"
 
-namespace bssl {
+BSSL_NAMESPACE_BEGIN
 
 namespace der {
 struct GeneralizedTime;
@@ -30,8 +40,10 @@ enum class KeyPurpose {
   CLIENT_AUTH,
   SERVER_AUTH_STRICT,  // Skip ANY_EKU when checking, require EKU present in
                        // certificate.
+  SERVER_AUTH_STRICT_LEAF, // Same as above, but only for leaf cert.
   CLIENT_AUTH_STRICT,  // Skip ANY_EKU when checking, require EKU present in
                        // certificate.
+  CLIENT_AUTH_STRICT_LEAF, // Same as above, but only for leaf ce
 };
 
 enum class InitialExplicitPolicy {
@@ -54,18 +66,22 @@ enum class InitialAnyPolicyInhibit {
 class OPENSSL_EXPORT VerifyCertificateChainDelegate {
  public:
   // Implementations should return true if |signature_algorithm| is allowed for
-  // certificate signing, false otherwise. When returning false implementations
-  // can optionally add high-severity errors to |errors| with details on why it
-  // was rejected.
+  // certificate signing, false otherwise. When false is returned, the caller
+  // will add a high severity error of kUnacceptableSignatureAlgorithm to
+  // |errors|. When returning false, implementations can optionally add warnings
+  // to errors to |errors| with details on why it was rejected.  Implementations
+  // may add any further details on why the signature algorithm was deemed
+  // unacceptable by adding warnings to |errors|.
   virtual bool IsSignatureAlgorithmAcceptable(
       SignatureAlgorithm signature_algorithm, CertErrors *errors) = 0;
 
-  // Implementations should return true if |public_key| is acceptable. This is
-  // called for each certificate in the chain, including the target certificate.
-  // When returning false implementations can optionally add high-severity
-  // errors to |errors| with details on why it was rejected.
-  //
-  // |public_key| can be assumed to be non-null.
+  // Implementations should return true if |public_key| is acceptable, false
+  // otherwise. This is called for each certificate in the chain, including the
+  // target certificate.  When false is returned, the caller will add a high
+  // severity error of kUnacceptablePublicKey to |errors|. When returning false,
+  // implementations may add any further details on why the public key was
+  // deemed unacceptable by adding warnings to |errors|.  |public_key| can be
+  // assumed to be non-null.
   virtual bool IsPublicKeyAcceptable(EVP_PKEY *public_key,
                                      CertErrors *errors) = 0;
 
@@ -264,6 +280,6 @@ OPENSSL_EXPORT bool VerifyCertificateIsSelfSigned(const ParsedCertificate &cert,
                                                   SignatureVerifyCache *cache,
                                                   CertErrors *errors);
 
-}  // namespace bssl
+BSSL_NAMESPACE_END
 
 #endif  // BSSL_PKI_VERIFY_CERTIFICATE_CHAIN_H_

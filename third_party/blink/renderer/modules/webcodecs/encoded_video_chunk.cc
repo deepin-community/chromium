@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "third_party/blink/renderer/modules/webcodecs/encoded_video_chunk.h"
 
 #include <utility>
@@ -36,8 +41,7 @@ EncodedVideoChunk* EncodedVideoChunk::Create(ScriptState* script_state,
         std::make_unique<ArrayBufferContentsExternalMemory>(
             std::move(buffer_contents), array_span));
   } else {
-    buffer =
-        media::DecoderBuffer::CopyFrom(array_span.data(), array_span.size());
+    buffer = media::DecoderBuffer::CopyFrom(array_span);
   }
   DCHECK(buffer);
 
@@ -80,8 +84,10 @@ EncodedVideoChunk* EncodedVideoChunk::Create(ScriptState* script_state,
 EncodedVideoChunk::EncodedVideoChunk(scoped_refptr<media::DecoderBuffer> buffer)
     : buffer_(std::move(buffer)) {}
 
-String EncodedVideoChunk::type() const {
-  return buffer_->is_key_frame() ? "key" : "delta";
+V8EncodedVideoChunkType EncodedVideoChunk::type() const {
+  return V8EncodedVideoChunkType(buffer_->is_key_frame()
+                                     ? V8EncodedVideoChunkType::Enum::kKey
+                                     : V8EncodedVideoChunkType::Enum::kDelta);
 }
 
 int64_t EncodedVideoChunk::timestamp() const {
@@ -95,25 +101,25 @@ std::optional<uint64_t> EncodedVideoChunk::duration() const {
 }
 
 uint64_t EncodedVideoChunk::byteLength() const {
-  return buffer_->data_size();
+  return buffer_->size();
 }
 
 void EncodedVideoChunk::copyTo(const AllowSharedBufferSource* destination,
                                ExceptionState& exception_state) {
   // Validate destination buffer.
   auto dest_wrapper = AsSpan<uint8_t>(destination);
-  if (dest_wrapper.size() < buffer_->data_size()) {
+  if (dest_wrapper.size() < buffer_->size()) {
     exception_state.ThrowTypeError("destination is not large enough.");
     return;
   }
 
-  if (buffer_->data_size() == 0) {
+  if (buffer_->empty()) {
     // Calling memcpy with nullptr is UB, even if count is zero.
     return;
   }
 
   // Copy data.
-  memcpy(dest_wrapper.data(), buffer_->data(), buffer_->data_size());
+  memcpy(dest_wrapper.data(), buffer_->data(), buffer_->size());
 }
 
 }  // namespace blink

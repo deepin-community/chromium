@@ -12,6 +12,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_source_location_type.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/origin_trials/origin_trial_context.h"
+#include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_client_settings_object.h"
@@ -56,10 +57,9 @@ void WorkerModuleScriptFetcher::Fetch(
     DCHECK_EQ(level_, ModuleGraphLevel::kTopLevelModuleFetch);
 
     auto identifier = CreateUniqueIdentifier();
-    if (global_scope_->IsServiceWorkerGlobalScope()) {
-      global_scope_->SetMainResoureIdentifier(identifier);
-    }
-
+    global_scope_->SetMainResoureIdentifier(identifier);
+    probe::WillSendWorkerMainRequest(global_scope_.Get(), identifier,
+                                     fetch_params.Url());
     fetch_params.MutableResourceRequest().SetInspectorId(identifier);
     worker_main_script_loader_ = MakeGarbageCollected<WorkerMainScriptLoader>();
     worker_main_script_loader_->Start(
@@ -88,7 +88,8 @@ void WorkerModuleScriptFetcher::Fetch(
   ScriptResource::Fetch(fetch_params, fetch_client_settings_object_fetcher,
                         this, global_scope_->GetIsolate(),
                         ScriptResource::kNoStreaming, kNoCompileHintsProducer,
-                        kNoCompileHintsConsumer);
+                        kNoCompileHintsConsumer,
+                        v8_compile_hints::MagicCommentMode::kNever);
 }
 
 void WorkerModuleScriptFetcher::Trace(Visitor* visitor) const {
@@ -199,18 +200,20 @@ void WorkerModuleScriptFetcher::NotifyClient(
       cache_handler, response_referrer_policy));
 }
 
-void WorkerModuleScriptFetcher::DidReceiveData(base::span<const char> span) {
+void WorkerModuleScriptFetcher::DidReceiveDataWorkerMainScript(
+    base::span<const char> span) {
   if (!decoder_) {
     decoder_ = std::make_unique<TextResourceDecoder>(TextResourceDecoderOptions(
         TextResourceDecoderOptions::kPlainTextContent,
         worker_main_script_loader_->GetScriptEncoding()));
   }
-  if (!span.size())
+  if (!span.size()) {
     return;
-  source_text_.Append(decoder_->Decode(span.data(), span.size()));
+  }
+  source_text_.Append(decoder_->Decode(span));
 }
 
-void WorkerModuleScriptFetcher::OnStartLoadingBody(
+void WorkerModuleScriptFetcher::OnStartLoadingBodyWorkerMainScript(
     const ResourceResponse& resource_response) {
   if (!MIMETypeRegistry::IsSupportedJavaScriptMIMEType(
           resource_response.HttpContentType())) {

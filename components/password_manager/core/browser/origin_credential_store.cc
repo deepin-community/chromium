@@ -24,11 +24,13 @@ using BlocklistedStatus = OriginCredentialStore::BlocklistedStatus;
 UiCredential::UiCredential(std::u16string username,
                            std::u16string password,
                            url::Origin origin,
+                           std::string display_name,
                            password_manager_util::GetLoginMatchType match_type,
                            base::Time last_used)
     : username_(std::move(username)),
       password_(std::move(password)),
       origin_(std::move(origin)),
+      display_name_(std::move(display_name)),
       match_type_(match_type),
       last_used_(last_used) {}
 
@@ -88,6 +90,9 @@ std::ostream& operator<<(std::ostream& os, const UiCredential& credential) {
       break;
     case password_manager_util::GetLoginMatchType::kPSL:
       match_type = "PSL match";
+      break;
+    case password_manager_util::GetLoginMatchType::kGrouped:
+      match_type = "grouped match";
       break;
   }
   return os << "(user: \"" << credential.username() << "\", " << "pwd: \""

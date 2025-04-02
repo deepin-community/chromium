@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <string>
+#include <string_view>
 
 #include "base/command_line.h"
 #include "base/strings/strcat.h"
@@ -51,7 +52,9 @@ const char kCookieOptions[] = ";expires=Wed Jan 01 2038 00:00:00 GMT";
 constexpr int kBlockAll = 2;
 
 bool IsJavascriptEnabled(content::WebContents* contents) {
-  return content::ExecJs(contents->GetPrimaryMainFrame(), "123");
+  return content::ExecJs(
+      contents->GetPrimaryMainFrame(), "123",
+      content::EvalJsOptions::EXECUTE_SCRIPT_HONOR_JS_CONTENT_SETTINGS);
 }
 
 }  // namespace
@@ -182,7 +185,7 @@ IN_PROC_BROWSER_TEST_F(WebBluetoothPolicyTest, MAYBE_Block) {
       new testing::NiceMock<device::MockBluetoothAdapter>;
   EXPECT_CALL(*adapter, IsPresent()).WillRepeatedly(testing::Return(true));
   auto bt_global_values =
-      device::BluetoothAdapterFactory::Get()->InitGlobalValuesForTesting();
+      device::BluetoothAdapterFactory::Get()->InitGlobalOverrideValues();
   bt_global_values->SetLESupported(true);
   device::BluetoothAdapterFactory::SetAdapterForTesting(adapter);
 
@@ -586,5 +589,273 @@ IN_PROC_BROWSER_TEST_F(WebPrintingPolicyTest, WebPrintingBlockedForUrls) {
             GetWebPrintingContentSetting(GetTestingUrl()));
 }
 #endif
+
+#if !BUILDFLAG(IS_ANDROID)
+class DirectSocketsPolicyTest : public PolicyTest {
+ public:
+  void SetUpOnMainThread() override {
+    PolicyTest::SetUpOnMainThread();
+    ASSERT_TRUE(embedded_test_server()->Start());
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetTestingUrl()));
+  }
+
+ protected:
+  GURL GetTestingUrl() const {
+    return embedded_test_server()->GetURL("/empty.html");
+  }
+
+  ContentSetting GetDirectSocketsDefaultContentSetting() {
+    return HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+        ->GetDefaultContentSetting(ContentSettingsType::DIRECT_SOCKETS,
+                                   /*provider_id=*/nullptr);
+  }
+
+  ContentSetting GetDirectSocketsContentSetting(const GURL& url) {
+    return HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+        ->GetContentSetting(/*primary_url=*/url, /*secondary_url=*/url,
+                            ContentSettingsType::DIRECT_SOCKETS);
+  }
+
+  void SetDefaultDirectSocketsSettingToBlocked() {
+    SetPolicy(&policies_, key::kDefaultDirectSocketsSetting,
+              base::Value(kBlockSetting));
+    UpdateProviderPolicy(policies_);
+  }
+
+  void SetDirectSocketsAllowedFor(const GURL& url) {
+    SetPolicy(&policies_, key::kDirectSocketsAllowedForUrls,
+              base::Value(base::Value::List().Append(url.spec())));
+    UpdateProviderPolicy(policies_);
+  }
+
+  void SetDirectSocketsBlockedFor(const GURL& url) {
+    SetPolicy(&policies_, key::kDirectSocketsBlockedForUrls,
+              base::Value(base::Value::List().Append(url.spec())));
+    UpdateProviderPolicy(policies_);
+  }
+
+ private:
+  static constexpr int32_t kBlockSetting = 2;
+  base::test::ScopedFeatureList feature_list_;
+  PolicyMap policies_;
+};
+
+IN_PROC_BROWSER_TEST_F(DirectSocketsPolicyTest, DefaultDirectSocketsSetting) {
+  EXPECT_EQ(CONTENT_SETTING_ALLOW, GetDirectSocketsDefaultContentSetting());
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            GetDirectSocketsContentSetting(GetTestingUrl()));
+
+  SetDefaultDirectSocketsSettingToBlocked();
+
+  EXPECT_EQ(CONTENT_SETTING_BLOCK, GetDirectSocketsDefaultContentSetting());
+  EXPECT_EQ(CONTENT_SETTING_BLOCK,
+            GetDirectSocketsContentSetting(GetTestingUrl()));
+}
+
+IN_PROC_BROWSER_TEST_F(DirectSocketsPolicyTest, DirectSocketsAllowedForUrls) {
+  SetDefaultDirectSocketsSettingToBlocked();
+  SetDirectSocketsAllowedFor(GetTestingUrl());
+
+  EXPECT_EQ(CONTENT_SETTING_BLOCK, GetDirectSocketsDefaultContentSetting());
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            GetDirectSocketsContentSetting(GetTestingUrl()));
+}
+
+IN_PROC_BROWSER_TEST_F(DirectSocketsPolicyTest, DirectSocketsBlockedForUrls) {
+  SetDirectSocketsBlockedFor(GetTestingUrl());
+
+  EXPECT_EQ(CONTENT_SETTING_ALLOW, GetDirectSocketsDefaultContentSetting());
+  EXPECT_EQ(CONTENT_SETTING_BLOCK,
+            GetDirectSocketsContentSetting(GetTestingUrl()));
+}
+#endif
+
+#if !BUILDFLAG(IS_ANDROID)
+class ControlledFramePolicyTest : public PolicyTest {
+ public:
+  void SetUpOnMainThread() override {
+    PolicyTest::SetUpOnMainThread();
+    ASSERT_TRUE(embedded_test_server()->Start());
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetTestingUrl()));
+  }
+
+ protected:
+  GURL GetTestingUrl() const {
+    return embedded_test_server()->GetURL("/empty.html");
+  }
+
+  ContentSetting GetControlledFrameDefaultContentSetting() {
+    return HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+        ->GetDefaultContentSetting(ContentSettingsType::CONTROLLED_FRAME,
+                                   /*provider_id=*/nullptr);
+  }
+
+  ContentSetting GetControlledFrameContentSetting(const GURL& url) {
+    return HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+        ->GetContentSetting(/*primary_url=*/url, /*secondary_url=*/url,
+                            ContentSettingsType::CONTROLLED_FRAME);
+  }
+
+  void SetDefaultControlledFrameSettingToBlocked() {
+    SetPolicy(&policies_, key::kDefaultControlledFrameSetting,
+              base::Value(kBlockSetting));
+    UpdateProviderPolicy(policies_);
+  }
+
+  void SetControlledFrameAllowedFor(const GURL& url) {
+    SetPolicy(&policies_, key::kControlledFrameAllowedForUrls,
+              base::Value(base::Value::List().Append(url.spec())));
+    UpdateProviderPolicy(policies_);
+  }
+
+  void SetControlledFrameBlockedFor(const GURL& url) {
+    SetPolicy(&policies_, key::kControlledFrameBlockedForUrls,
+              base::Value(base::Value::List().Append(url.spec())));
+    UpdateProviderPolicy(policies_);
+  }
+
+ private:
+  static constexpr int32_t kBlockSetting = 2;
+  PolicyMap policies_;
+};
+
+IN_PROC_BROWSER_TEST_F(ControlledFramePolicyTest,
+                       ControlledFrameSocketsSetting) {
+  EXPECT_EQ(CONTENT_SETTING_ALLOW, GetControlledFrameDefaultContentSetting());
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            GetControlledFrameContentSetting(GetTestingUrl()));
+
+  SetDefaultControlledFrameSettingToBlocked();
+
+  EXPECT_EQ(CONTENT_SETTING_BLOCK, GetControlledFrameDefaultContentSetting());
+  EXPECT_EQ(CONTENT_SETTING_BLOCK,
+            GetControlledFrameContentSetting(GetTestingUrl()));
+}
+
+IN_PROC_BROWSER_TEST_F(ControlledFramePolicyTest,
+                       ControlledFrameAllowedForUrls) {
+  SetDefaultControlledFrameSettingToBlocked();
+  SetControlledFrameAllowedFor(GetTestingUrl());
+
+  EXPECT_EQ(CONTENT_SETTING_BLOCK, GetControlledFrameDefaultContentSetting());
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            GetControlledFrameContentSetting(GetTestingUrl()));
+}
+
+IN_PROC_BROWSER_TEST_F(ControlledFramePolicyTest,
+                       ControlledFrameBlockedForUrls) {
+  SetControlledFrameBlockedFor(GetTestingUrl());
+
+  EXPECT_EQ(CONTENT_SETTING_ALLOW, GetControlledFrameDefaultContentSetting());
+  EXPECT_EQ(CONTENT_SETTING_BLOCK,
+            GetControlledFrameContentSetting(GetTestingUrl()));
+}
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+class SmartCardConnectPolicyTest : public PolicyTest {
+ public:
+  SmartCardConnectPolicyTest() {
+    feature_list_.InitAndEnableFeature(blink::features::kSmartCard);
+  }
+
+  void SetUpOnMainThread() override {
+    PolicyTest::SetUpOnMainThread();
+    ASSERT_TRUE(embedded_test_server()->Start());
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetTestingUrl()));
+  }
+
+ protected:
+  GURL GetTestingUrl() const {
+    return embedded_test_server()->GetURL("/empty.html");
+  }
+
+  std::pair<ContentSetting, content_settings::SettingSource>
+  GetSmartCardConnectContentSetting(const GURL& url) {
+    content_settings::SettingInfo settings_info;
+    auto content_setting =
+        HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+            ->GetContentSetting(/*primary_url=*/url, /*secondary_url=*/url,
+                                ContentSettingsType::SMART_CARD_GUARD,
+                                &settings_info);
+    return std::make_pair(content_setting, settings_info.source);
+  }
+
+  void SetSmartCardConnectAllowedFor(std::string_view url) {
+    SetPolicy(&policies_, key::kSmartCardConnectAllowedForUrls,
+              base::Value(base::Value::List().Append(url)));
+    UpdateProviderPolicy(policies_);
+  }
+
+  void SetSmartCardConnectBlockedFor(std::string_view url) {
+    SetPolicy(&policies_, key::kSmartCardConnectBlockedForUrls,
+              base::Value(base::Value::List().Append(url)));
+    UpdateProviderPolicy(policies_);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+  PolicyMap policies_;
+};
+
+IN_PROC_BROWSER_TEST_F(SmartCardConnectPolicyTest,
+                       SmartCardConnectAllowedForUrls) {
+  ASSERT_EQ(std::make_pair(CONTENT_SETTING_ASK,
+                           content_settings::SettingSource::kUser),
+            GetSmartCardConnectContentSetting(GetTestingUrl()));
+
+  SetSmartCardConnectAllowedFor(GetTestingUrl().spec());
+
+  EXPECT_EQ(std::make_pair(CONTENT_SETTING_ALLOW,
+                           content_settings::SettingSource::kPolicy),
+            GetSmartCardConnectContentSetting(GetTestingUrl()));
+}
+
+IN_PROC_BROWSER_TEST_F(SmartCardConnectPolicyTest,
+                       SmartCardConnectBlockedForUrls) {
+  ASSERT_EQ(std::make_pair(CONTENT_SETTING_ASK,
+                           content_settings::SettingSource::kUser),
+            GetSmartCardConnectContentSetting(GetTestingUrl()));
+
+  SetSmartCardConnectBlockedFor(GetTestingUrl().spec());
+
+  EXPECT_EQ(std::make_pair(CONTENT_SETTING_BLOCK,
+                           content_settings::SettingSource::kPolicy),
+            GetSmartCardConnectContentSetting(GetTestingUrl()));
+}
+
+IN_PROC_BROWSER_TEST_F(SmartCardConnectPolicyTest,
+                       SmartCardConnectBlockedForWildcard) {
+  ASSERT_EQ(std::make_pair(CONTENT_SETTING_ASK,
+                           content_settings::SettingSource::kUser),
+            GetSmartCardConnectContentSetting(GetTestingUrl()));
+
+  SetSmartCardConnectBlockedFor("*");
+
+  ASSERT_EQ(std::make_pair(CONTENT_SETTING_BLOCK,
+                           content_settings::SettingSource::kPolicy),
+            GetSmartCardConnectContentSetting(GetTestingUrl()));
+
+  // Allow should override block
+  SetSmartCardConnectAllowedFor(GetTestingUrl().spec());
+
+  EXPECT_EQ(std::make_pair(CONTENT_SETTING_ALLOW,
+                           content_settings::SettingSource::kPolicy),
+            GetSmartCardConnectContentSetting(GetTestingUrl()));
+}
+
+IN_PROC_BROWSER_TEST_F(SmartCardConnectPolicyTest,
+                       SmartCardConnectCannotBeAllowedForWildcard) {
+  ASSERT_EQ(std::make_pair(CONTENT_SETTING_ASK,
+                           content_settings::SettingSource::kUser),
+            GetSmartCardConnectContentSetting(GetTestingUrl()));
+
+  SetSmartCardConnectAllowedFor("*");
+
+  ASSERT_EQ(std::make_pair(CONTENT_SETTING_ASK,
+                           content_settings::SettingSource::kUser),
+            GetSmartCardConnectContentSetting(GetTestingUrl()));
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace policy

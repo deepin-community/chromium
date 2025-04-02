@@ -34,7 +34,7 @@ class EGLLockSurface3Test : public ANGLETest<>
 
         EGLint dispattrs[] = {EGL_PLATFORM_ANGLE_TYPE_ANGLE, GetParam().getRenderer(), EGL_NONE};
         mDisplay           = eglGetPlatformDisplayEXT(
-                      EGL_PLATFORM_ANGLE_ANGLE, reinterpret_cast<void *>(EGL_DEFAULT_DISPLAY), dispattrs);
+            EGL_PLATFORM_ANGLE_ANGLE, reinterpret_cast<void *>(EGL_DEFAULT_DISPLAY), dispattrs);
         EXPECT_NE(mDisplay, EGL_NO_DISPLAY);
         EXPECT_EGL_TRUE(eglInitialize(mDisplay, nullptr, nullptr));
     }
@@ -183,6 +183,50 @@ class EGLLockSurface3Test : public ANGLETest<>
     static constexpr EGLint kWidth  = 5;
     static constexpr EGLint kHeight = 5;
 };
+
+// Create parity between eglQuerySurface and eglQuerySurface64KHR
+TEST_P(EGLLockSurface3Test, QuerySurfaceAndQuerySurface64Parity)
+{
+    ANGLE_SKIP_TEST_IF(!supportsLockSurface3Extension());
+
+    EGLint clientVersion = mMajorVersion == 3 ? EGL_OPENGL_ES3_BIT : EGL_OPENGL_ES2_BIT;
+    EGLint attribs[]     = {EGL_RED_SIZE,
+                            8,
+                            EGL_GREEN_SIZE,
+                            8,
+                            EGL_BLUE_SIZE,
+                            8,
+                            EGL_ALPHA_SIZE,
+                            8,
+                            EGL_RENDERABLE_TYPE,
+                            clientVersion,
+                            EGL_SURFACE_TYPE,
+                            (EGL_PBUFFER_BIT | EGL_LOCK_SURFACE_BIT_KHR),
+                            EGL_NONE};
+    EGLint count         = 0;
+    EGLConfig config     = EGL_NO_CONFIG_KHR;
+    EXPECT_EGL_TRUE(eglChooseConfig(mDisplay, attribs, &config, 1, &count));
+    EXPECT_GT(count, 0);
+    ANGLE_SKIP_TEST_IF(config == EGL_NO_CONFIG_KHR);
+
+    EGLint pBufferAttribs[]   = {EGL_WIDTH, kWidth, EGL_HEIGHT, kHeight, EGL_NONE};
+    EGLSurface pBufferSurface = eglCreatePbufferSurface(mDisplay, config, pBufferAttribs);
+    EXPECT_NE(pBufferSurface, EGL_NO_SURFACE);
+
+    EGLint width         = 0;
+    EGLAttribKHR width64 = 0;
+    EXPECT_EGL_TRUE(eglQuerySurface(mDisplay, pBufferSurface, EGL_WIDTH, &width));
+    EXPECT_EGL_TRUE(eglQuerySurface64KHR(mDisplay, pBufferSurface, EGL_WIDTH, &width64));
+    EXPECT_EQ(static_cast<EGLAttribKHR>(width), width64);
+
+    EGLint height         = 0;
+    EGLAttribKHR height64 = 0;
+    EXPECT_EGL_TRUE(eglQuerySurface(mDisplay, pBufferSurface, EGL_HEIGHT, &height));
+    EXPECT_EGL_TRUE(eglQuerySurface64KHR(mDisplay, pBufferSurface, EGL_HEIGHT, &height64));
+    EXPECT_EQ(static_cast<EGLAttribKHR>(height), height64);
+
+    EXPECT_EGL_TRUE(eglDestroySurface(mDisplay, pBufferSurface));
+}
 
 // Create PBufferSurface, Lock, check all the attributes, unlock.
 TEST_P(EGLLockSurface3Test, AttributeTest)
@@ -380,7 +424,9 @@ TEST_P(EGLLockSurface3Test, PbufferSurfaceReadWriteTest)
 
     EXPECT_TRUE(checkSurfaceRGBA32(fillColor));
 
-    EXPECT_EGL_TRUE(eglMakeCurrent(mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, context));
+    EXPECT_EGL_TRUE(eglMakeCurrent(mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+    EXPECT_EGL_TRUE(eglDestroySurface(mDisplay, pBufferSurface));
+    EXPECT_EGL_TRUE(eglDestroyContext(mDisplay, context));
 }
 
 // Create PBufferSurface, glClear Green, Lock, check buffer for green, Write white pixels,
@@ -455,7 +501,9 @@ TEST_P(EGLLockSurface3Test, PbufferSurfaceReadWriteDeferredCleaarTest)
 
     EXPECT_TRUE(checkSurfaceRGBA32(fillColor));
 
-    EXPECT_EGL_TRUE(eglMakeCurrent(mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, context));
+    EXPECT_EGL_TRUE(eglMakeCurrent(mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+    EXPECT_EGL_TRUE(eglDestroySurface(mDisplay, pBufferSurface));
+    EXPECT_EGL_TRUE(eglDestroyContext(mDisplay, context));
 }
 
 // Create WindowSurface, Clear Color to GREEN, draw red quad, Lock with PRESERVE_PIXELS,
@@ -530,11 +578,11 @@ TEST_P(EGLLockSurface3Test, WindowSurfaceReadTest)
     EXPECT_TRUE(checkSurfaceRGBA32(drawColor));
     EXPECT_EGL_TRUE(eglSwapBuffers(mDisplay, windowSurface));
 
-    EXPECT_EGL_TRUE(eglMakeCurrent(mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, context));
-
     glDeleteTextures(1, &texture);
 
-    eglDestroySurface(mDisplay, windowSurface);
+    EXPECT_EGL_TRUE(eglMakeCurrent(mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+    EXPECT_EGL_TRUE(eglDestroySurface(mDisplay, windowSurface));
+    EXPECT_EGL_TRUE(eglDestroyContext(mDisplay, context));
     osWindow->destroy();
     OSWindow::Delete(&osWindow);
 }
@@ -613,11 +661,11 @@ TEST_P(EGLLockSurface3Test, WindowMsaaSurfaceReadTest)
     EXPECT_TRUE(checkSurfaceRGBA32(drawColor));
     EXPECT_EGL_TRUE(eglSwapBuffers(mDisplay, windowSurface));
 
-    EXPECT_EGL_TRUE(eglMakeCurrent(mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, context));
-
     glDeleteTextures(1, &texture);
 
-    eglDestroySurface(mDisplay, windowSurface);
+    EXPECT_EGL_TRUE(eglMakeCurrent(mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+    EXPECT_EGL_TRUE(eglDestroySurface(mDisplay, windowSurface));
+    EXPECT_EGL_TRUE(eglDestroyContext(mDisplay, context));
     osWindow->destroy();
     OSWindow::Delete(&osWindow);
 }
@@ -678,9 +726,9 @@ TEST_P(EGLLockSurface3Test, WindowSurfaceWritePreserveTest)
     EXPECT_TRUE(checkSurfaceRGBA32(fillColor));
     EXPECT_EGL_TRUE(eglSwapBuffers(mDisplay, windowSurface));
 
-    EXPECT_EGL_TRUE(eglMakeCurrent(mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, context));
-
-    eglDestroySurface(mDisplay, windowSurface);
+    EXPECT_EGL_TRUE(eglMakeCurrent(mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+    EXPECT_EGL_TRUE(eglDestroySurface(mDisplay, windowSurface));
+    EXPECT_EGL_TRUE(eglDestroyContext(mDisplay, context));
     osWindow->destroy();
     OSWindow::Delete(&osWindow);
 }

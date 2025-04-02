@@ -5,6 +5,7 @@
 #include "chrome/browser/apps/app_service/app_icon/app_icon_loader.h"
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/containers/contains.h"
@@ -22,7 +23,6 @@
 #include "base/threading/scoped_blocking_call.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/trace_event/trace_event.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_factory.h"
 #include "chrome/browser/apps/app_service/app_icon/dip_px_util.h"
 #include "chrome/browser/apps/icon_standardizer.h"
@@ -31,7 +31,6 @@
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
-#include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon_base/favicon_types.h"
@@ -56,7 +55,7 @@
 #include "ui/gfx/image/image_skia_rep.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/app_list/md_icon_normalizer.h"
 #include "chrome/browser/ash/arc/icon_decode_request.h"
@@ -64,7 +63,7 @@
 #include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
 #include "chrome/browser/icon_transcoder/svg_icon_transcoder.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace {
 
@@ -85,7 +84,7 @@ std::vector<uint8_t> ReadFileAsCompressedData(const base::FilePath path) {
   return std::vector<uint8_t>(data.begin(), data.end());
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 apps::IconValuePtr ReadAdaptiveIconFiles(apps::AdaptiveIconPaths icon_paths) {
   TRACE_EVENT0("ui", "ReadAdaptiveIconFiles");
   base::AssertLongCPUWorkAllowed();
@@ -193,7 +192,7 @@ void ReadFilesAndMaybeResize(apps::AdaptiveIconPaths icon_paths,
                      icon_size_in_px, std::move(callback)));
 }
 
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // Returns a callback that converts a gfx::Image to an ImageSkia.
 base::OnceCallback<void(const gfx::Image&)> ImageToImageSkia(
@@ -278,16 +277,16 @@ apps::IconValuePtr ApplyEffects(apps::IconEffects icon_effects,
     DCHECK(!(icon_effects & apps::IconEffects::kCrOsStandardMask));
     iv->uncompressed = apps::CreateStandardIconImage(iv->uncompressed);
   }
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (icon_effects & apps::IconEffects::kMdIconStyle) {
-    // TODO(crbug.com/826982): MD post-processing is not always applied: "See
+    // TODO(crbug.com/40569217): MD post-processing is not always applied: "See
     // legacy code:
     // https://cs.chromium.org/search/?q=ChromeAppIconLoader&type=cs In one
     // cases MD design is used in another not."
     app_list::MaybeResizeAndPadIconForMd(
         gfx::Size(size_hint_in_dip, size_hint_in_dip), &iv->uncompressed);
   }
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   if (!iv->uncompressed.isNull()) {
     iv->uncompressed.MakeThreadSafe();
@@ -422,7 +421,7 @@ void AppIconLoader::ApplyBadges(IconEffects icon_effects,
                                 const std::optional<std::string>& app_id,
                                 IconValuePtr iv) {
   TRACE_EVENT0("ui", "AppIconLoader::ApplyBadges");
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (icon_effects & apps::IconEffects::kGuestOsBadge) {
     CHECK(profile_ != nullptr && app_id.has_value());
     auto* registry =
@@ -433,9 +432,9 @@ void AppIconLoader::ApplyBadges(IconEffects icon_effects,
     std::move(callback_).Run(std::move(iv));
     return;
   }
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-  const bool from_bookmark = icon_effects & apps::IconEffects::kRoundCorners;
+  const bool rounded_corners = icon_effects & apps::IconEffects::kRoundCorners;
 
   bool app_launchable = true;
   // Only one badge can be visible at a time.
@@ -456,7 +455,7 @@ void AppIconLoader::ApplyBadges(IconEffects icon_effects,
 
   extensions::ChromeAppIcon::ApplyEffects(
       size_hint_in_dip_, extensions::ChromeAppIcon::ResizeFunction(),
-      app_launchable, from_bookmark, badge_type, &iv->uncompressed);
+      app_launchable, rounded_corners, badge_type, &iv->uncompressed);
 
   std::move(callback_).Run(std::move(iv));
 }
@@ -474,7 +473,7 @@ void AppIconLoader::LoadWebAppIcon(const std::string& web_app_id,
   // |icon_scale_for_compressed_response_| to apps::EncodeImageToPngBytes(). In
   // most cases AppIconLoader always uses the 1.0 intended icon scale
   // factor as an intermediate representation to be compressed and returned.
-  // TODO(crbug.com/1112737): Investigate how to unify it and set
+  // TODO(crbug.com/40709882): Investigate how to unify it and set
   // |icon_scale_for_compressed_response_| value in AppIconLoader()
   // constructor.
   icon_scale_for_compressed_response_ = icon_scale_;
@@ -609,7 +608,7 @@ void AppIconLoader::LoadIconFromCompressedData(
   icon_scale_for_compressed_response_ = icon_scale_;
 
   base::span<const uint8_t> data_span =
-      base::as_bytes(base::make_span(compressed_icon_data));
+      base::as_byte_span(compressed_icon_data);
 
   apps::CompressedDataToImageSkia(
       data_span, icon_scale_,
@@ -627,13 +626,13 @@ void AppIconLoader::LoadIconFromResource(int icon_resource) {
     icon_effects_ &= ~apps::IconEffects::kCrOsStandardIcon;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (icon_resource == IDR_LOGO_CROSTINI_DEFAULT) {
     // For the Crostini penguin icon, clear the standard icon effects, and use
     // the raw icon.
     icon_effects_ &= ~apps::IconEffects::kCrOsStandardIcon;
   }
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   if (icon_resource == kInvalidIconResource) {
     MaybeLoadFallbackOrCompleteEmpty();
@@ -645,7 +644,7 @@ void AppIconLoader::LoadIconFromResource(int icon_resource) {
       // For compressed icons with no |icon_effects|, serve the
       // already-compressed bytes.
       if (icon_effects_ == apps::IconEffects::kNone) {
-        base::StringPiece data =
+        std::string_view data =
             ui::ResourceBundle::GetSharedInstance().GetRawDataResource(
                 icon_resource);
         CompleteWithCompressed(/*is_maskable_icon=*/false,
@@ -675,7 +674,7 @@ void AppIconLoader::LoadIconFromResource(int icon_resource) {
   MaybeLoadFallbackOrCompleteEmpty();
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void AppIconLoader::LoadArcIconPngData(
     const std::vector<uint8_t>& icon_png_data) {
   TRACE_EVENT0("ui", "AppIconLoader::LoadArcIconPngData");
@@ -729,9 +728,7 @@ void AppIconLoader::LoadArcActivityIcons(
     std::move(arc_activity_icons_callback_).Run(arc_activity_icons_);
   }
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-#if BUILDFLAG(IS_CHROMEOS)
 void AppIconLoader::GetWebAppCompressedIconData(
     const std::string& web_app_id,
     ui::ResourceScaleFactor scale_factor,
@@ -783,9 +780,7 @@ void AppIconLoader::GetChromeAppCompressedIconData(
           base::BindOnce(&AppIconLoader::OnReadChromeAppForCompressedIconData,
                          base::WrapRefCounted(this))));
 }
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
 void AppIconLoader::GetArcAppCompressedIconData(
     const std::string& app_id,
     ArcAppListPrefs* arc_prefs,
@@ -1015,7 +1010,7 @@ void AppIconLoader::OnArcActivityIconLoaded(gfx::ImageSkia* arc_activity_icon,
     std::move(arc_activity_icons_callback_).Run(arc_activity_icons_);
   }
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 void AppIconLoader::MaybeApplyEffectsAndComplete(const gfx::ImageSkia image) {
   TRACE_EVENT0("ui", "AppIconLoader::MaybeApplyEffectsAndComplete");

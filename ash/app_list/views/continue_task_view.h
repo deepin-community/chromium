@@ -11,7 +11,8 @@
 #include "ash/app_list/model/search/search_result_observer.h"
 #include "ash/ash_export.h"
 #include "base/memory/raw_ptr.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/controls/button/button.h"
 
@@ -47,7 +48,9 @@ class ASH_EXPORT ContinueTaskView : public views::Button,
     kLocalFile = 0,
     kDriveFile = 1,
     kUnknown = 2,
-    kMaxValue = kUnknown,
+    kHelpApp = 3,
+    kDesksAdminTemplate = 4,
+    kMaxValue = kDesksAdminTemplate,
   };
 
   ContinueTaskView(AppListViewDelegate* view_delegate, bool tablet_mode);
@@ -56,7 +59,8 @@ class ASH_EXPORT ContinueTaskView : public views::Button,
   ~ContinueTaskView() override;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   gfx::Size GetMinimumSize() const override;
   gfx::Size GetMaximumSize() const override;
   void OnThemeChanged() override;
@@ -90,9 +94,10 @@ class ASH_EXPORT ContinueTaskView : public views::Button,
   void OnButtonPressed(const ui::Event& event);
 
   // views::ContextMenuController:
-  void ShowContextMenuForViewImpl(views::View* source,
-                                  const gfx::Point& point,
-                                  ui::MenuSourceType source_type) override;
+  void ShowContextMenuForViewImpl(
+      views::View* source,
+      const gfx::Point& point,
+      ui::mojom::MenuSourceType source_type) override;
 
   // Opens the search result related to the view.
   void OpenResult(int event_flags);

@@ -6,6 +6,7 @@
 #define CC_PAINT_DRAW_IMAGE_H_
 
 #include <optional>
+
 #include "cc/paint/paint_export.h"
 #include "cc/paint/paint_flags.h"
 #include "cc/paint/paint_image.h"
@@ -86,6 +87,8 @@ class CC_PAINT_EXPORT DrawImage {
   }
 
  private:
+  void SetTargetColorParams(const TargetColorParams& target_color_params);
+
   PaintImage paint_image_;
   bool use_dark_mode_;
   SkIRect src_rect_;

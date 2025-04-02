@@ -21,17 +21,37 @@ const UIStrings = {
 const str_ = i18n.i18n.registerUIStrings('panels/elements/DOMLinkifier.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
+export interface Options extends Common.Linkifier.Options {
+  hiddenClassList?: string[];
+}
+
 export const decorateNodeLabel = function(
-    node: SDK.DOMModel.DOMNode, parentElement: HTMLElement, tooltipContent?: string): void {
+    node: SDK.DOMModel.DOMNode, parentElement: HTMLElement, options: Options): void {
   const originalNode = node;
   const isPseudo = node.nodeType() === Node.ELEMENT_NODE && node.pseudoType();
   if (isPseudo && node.parentNode) {
     node = node.parentNode;
   }
 
-  let title = node.nodeNameInCorrectCase();
+  // Special case rendering the node links for view transition pseudo elements.
+  // We don't include the ancestor name in the node link because
+  // they always have the same ancestor. See crbug.com/340633630.
+  if (node.isViewTransitionPseudoNode()) {
+    const pseudoElement = parentElement.createChild('span', 'extra node-label-pseudo');
+    const viewTransitionPseudoText = `::${originalNode.pseudoType()}(${originalNode.pseudoIdentifier()})`;
+    UI.UIUtils.createTextChild(pseudoElement, viewTransitionPseudoText);
+    UI.Tooltip.Tooltip.install(parentElement, options.tooltip || viewTransitionPseudoText);
+    return;
+  }
 
   const nameElement = parentElement.createChild('span', 'node-label-name');
+  if (options.textContent) {
+    nameElement.textContent = options.textContent;
+    UI.Tooltip.Tooltip.install(parentElement, options.tooltip || options.textContent);
+    return;
+  }
+
+  let title = node.nodeNameInCorrectCase();
   nameElement.textContent = title;
 
   const idAttribute = node.getAttribute('id');
@@ -53,7 +73,7 @@ export const decorateNodeLabel = function(
       const classesElement = parentElement.createChild('span', 'extra node-label-class');
       for (let i = 0; i < classes.length; ++i) {
         const className = classes[i];
-        if (className && !foundClasses.has(className)) {
+        if (className && !options.hiddenClassList?.includes(className) && !foundClasses.has(className)) {
           const part = '.' + className;
           title += part;
           UI.UIUtils.createTextChild(classesElement, part);
@@ -74,26 +94,27 @@ export const decorateNodeLabel = function(
     UI.UIUtils.createTextChild(pseudoElement, pseudoText);
     title += pseudoText;
   }
-  UI.Tooltip.Tooltip.install(parentElement, tooltipContent || title);
+  UI.Tooltip.Tooltip.install(parentElement, options.tooltip || title);
 };
 
-export const linkifyNodeReference = function(
-    node: SDK.DOMModel.DOMNode|null, options: Common.Linkifier.Options|undefined = {
-      tooltip: undefined,
-      preventKeyboardFocus: undefined,
-    }): Node {
+export const linkifyNodeReference = function(node: SDK.DOMModel.DOMNode|null, options: Options|undefined = {
+  tooltip: undefined,
+  preventKeyboardFocus: undefined,
+  textContent: undefined,
+  isDynamicLink: false,
+}): Node {
   if (!node) {
     return document.createTextNode(i18nString(UIStrings.node));
   }
 
   const root = document.createElement('span');
   root.classList.add('monospace');
-  const shadowRoot =
-      UI.Utils.createShadowRootWithCoreStyles(root, {cssFile: [domLinkifierStyles], delegatesFocus: undefined});
-  const link = (shadowRoot.createChild('div', 'node-link') as HTMLDivElement);
+  const shadowRoot = UI.UIUtils.createShadowRootWithCoreStyles(root, {cssFile: domLinkifierStyles});
+  const link = shadowRoot.createChild('button', 'node-link text-button link-style');
+  link.classList.toggle('dynamic-link', options.isDynamicLink);
   link.setAttribute('jslog', `${VisualLogging.link('node').track({click: true, keydown: 'Enter'})}`);
 
-  decorateNodeLabel(node, link, options.tooltip);
+  decorateNodeLabel(node, link, options);
 
   link.addEventListener('click', () => {
     void Common.Revealer.reveal(node, false);
@@ -102,37 +123,28 @@ export const linkifyNodeReference = function(
   link.addEventListener('mouseover', node.highlight.bind(node, undefined), false);
   link.addEventListener('mouseleave', () => SDK.OverlayModel.OverlayModel.hideDOMNodeHighlight(), false);
 
-  if (!options.preventKeyboardFocus) {
-    link.addEventListener('keydown', event => {
-      if (event.key === 'Enter') {
-        void Common.Revealer.reveal(node, false);
-      }
-    });
-    link.tabIndex = 0;
-    UI.ARIAUtils.markAsLink(link);
+  if (options.preventKeyboardFocus) {
+    link.tabIndex = -1;
   }
 
   return root;
 };
 
 export const linkifyDeferredNodeReference = function(
-    deferredNode: SDK.DOMModel.DeferredDOMNode, options: Common.Linkifier.Options|undefined = {
+    deferredNode: SDK.DOMModel.DeferredDOMNode, options: Options|undefined = {
       tooltip: undefined,
       preventKeyboardFocus: undefined,
     }): Node {
   const root = document.createElement('div');
-  const shadowRoot =
-      UI.Utils.createShadowRootWithCoreStyles(root, {cssFile: [domLinkifierStyles], delegatesFocus: undefined});
-  const link = (shadowRoot.createChild('div', 'node-link') as HTMLDivElement);
-  link.setAttribute('jslog', `${VisualLogging.link('node').track({click: true, keydown: 'Enter'})}`);
+  const shadowRoot = UI.UIUtils.createShadowRootWithCoreStyles(root, {cssFile: domLinkifierStyles});
+  const link = shadowRoot.createChild('button', 'node-link text-button link-style');
+  link.setAttribute('jslog', `${VisualLogging.link('node').track({click: true})}`);
   link.createChild('slot');
   link.addEventListener('click', deferredNode.resolve.bind(deferredNode, onDeferredNodeResolved), false);
   link.addEventListener('mousedown', e => e.consume(), false);
 
-  if (!options.preventKeyboardFocus) {
-    link.addEventListener('keydown', event => event.key === 'Enter' && deferredNode.resolve(onDeferredNodeResolved));
-    link.tabIndex = 0;
-    UI.ARIAUtils.markAsLink(link);
+  if (options.preventKeyboardFocus) {
+    link.tabIndex = -1;
   }
 
   function onDeferredNodeResolved(node: SDK.DOMModel.DOMNode|null): void {
@@ -155,7 +167,7 @@ export class Linkifier implements Common.Linkifier.Linkifier {
 
     return linkifierInstance;
   }
-  linkify(object: Object, options?: Common.Linkifier.Options): Node {
+  linkify(object: Object, options?: Options): Node {
     if (object instanceof SDK.DOMModel.DOMNode) {
       return linkifyNodeReference(object, options);
     }

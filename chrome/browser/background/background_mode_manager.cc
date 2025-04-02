@@ -427,7 +427,7 @@ void BackgroundModeManager::LaunchBackgroundApplication(
           base::DoNothing());
 #else
   // background mode is not used in Chrome OS platform.
-  // TODO(crbug.com/1291803): Remove the background mode manager from Chrome OS
+  // TODO(crbug.com/40212901): Remove the background mode manager from Chrome OS
   // build.
   NOTIMPLEMENTED();
 #endif
@@ -554,7 +554,9 @@ void BackgroundModeManager::OnProfileWillBeRemoved(
     const base::FilePath& profile_path) {
   Profile* profile =
       g_browser_process->profile_manager()->GetProfileByPath(profile_path);
-  DCHECK(profile);
+  if (!profile) {
+    return;
+  }
   UnregisterProfile(profile);
 }
 
@@ -878,7 +880,6 @@ gfx::ImageSkia GetStatusTrayIcon() {
       IDR_STATUS_TRAY_ICON);
 #else
   NOTREACHED();
-  return gfx::ImageSkia();
 #endif
 }
 
@@ -987,10 +988,14 @@ void BackgroundModeManager::UpdateStatusTrayIconContextMenu() {
 }
 
 void BackgroundModeManager::RemoveStatusTrayIcon() {
-  if (status_icon_)
-    status_tray_->RemoveStatusIcon(status_icon_);
-  status_icon_ = nullptr;
-  context_menu_ = nullptr;
+  if (status_icon_) {
+    std::unique_ptr<StatusIcon> removed_icon =
+        status_tray_->RemoveStatusIcon(status_icon_);
+    context_menu_ = nullptr;
+    status_icon_ = nullptr;
+    removed_icon.reset();
+  }
+  status_tray_ = nullptr;
 }
 
 BackgroundModeManager::BackgroundModeData*

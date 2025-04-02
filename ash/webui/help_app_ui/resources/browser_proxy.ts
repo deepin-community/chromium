@@ -38,10 +38,6 @@ const guestFrame = document.createElement('iframe');
 guestFrame.src = `${GUEST_ORIGIN}${location.pathname}${location.search}`;
 document.body.appendChild(guestFrame);
 
-// Cached result whether Local Search Service is enabled.
-const isLssEnabled =
-    helpApp.handler.isLssEnabled().then(result => result.enabled);
-
 // Cached result of whether Launcher Search is enabled.
 const isLauncherSearchEnabled =
     helpApp.handler.isLauncherSearchEnabled().then(result => result.enabled);
@@ -81,6 +77,10 @@ guestMessagePipe.registerHandler(Message.OPEN_FEEDBACK_DIALOG, () => {
   return helpApp.handler.openFeedbackDialog();
 });
 
+guestMessagePipe.registerHandler(
+    Message.SHOW_ON_DEVICE_APP_CONTROLS,
+    () => void helpApp.handler.showOnDeviceAppControls());
+
 guestMessagePipe.registerHandler(Message.SHOW_PARENTAL_CONTROLS, () => void
   helpApp.handler.showParentalControls());
 
@@ -90,9 +90,6 @@ guestMessagePipe.registerHandler(
 
 guestMessagePipe.registerHandler(
     Message.ADD_OR_UPDATE_SEARCH_INDEX, async (data: SearchableItem[]) => {
-      if (!(await isLssEnabled)) {
-        return;
-      }
       const dataToSend = data.map(searchableItem => {
         const contents: Content[] = [
           {
@@ -145,18 +142,12 @@ guestMessagePipe.registerHandler(
     });
 
 guestMessagePipe.registerHandler(Message.CLEAR_SEARCH_INDEX, async () => {
-  if (!(await isLssEnabled)) {
-    return;
-  }
   return indexRemote.clearIndex();
 });
 
 guestMessagePipe.registerHandler(
   Message.FIND_IN_SEARCH_INDEX,
   async (dataFromApp: {query: string, maxResults: number}) => {
-      if (!(await isLssEnabled)) {
-        return {results: null};
-      }
       const response = await indexRemote.find(
           toTruncatedString16(dataFromApp.query), dataFromApp.maxResults || 50);
 
@@ -273,10 +264,6 @@ guestMessagePipe.registerHandler(Message.LAUNCH_MICROSOFT_365_SETUP, () => void
   helpApp.handler.launchMicrosoft365Setup());
 
 guestMessagePipe.registerHandler(
-    Message.MAYBE_SHOW_DISCOVER_NOTIFICATION, () => void
-      helpApp.handler.maybeShowDiscoverNotification());
-
-guestMessagePipe.registerHandler(
     Message.MAYBE_SHOW_RELEASE_NOTES_NOTIFICATION, () => void
       helpApp.handler.maybeShowReleaseNotesNotification());
 
@@ -285,11 +272,28 @@ guestMessagePipe.registerHandler(Message.GET_DEVICE_INFO, async () => {
 });
 
 guestMessagePipe.registerHandler(
+    Message.OPEN_SETTINGS,
+    (path: number) => void helpApp.handler.openSettings(path));
+
+guestMessagePipe.registerHandler(
   Message.OPEN_URL_IN_BROWSER_AND_TRIGGER_INSTALL_DIALOG,
   (url: string | object) => {
     helpApp.handler.openUrlInBrowserAndTriggerInstallDialog(toUrl(url));
   },
 );
+
+guestMessagePipe.registerHandler(
+    Message.SET_HAS_COMPLETED_NEW_DEVICE_CHECKLIST,
+    () => void helpApp.handler.setHasCompletedNewDeviceChecklist());
+
+guestMessagePipe.registerHandler(
+    Message.SET_HAS_VISITED_HOW_TO_PAGE,
+    () => void helpApp.handler.setHasVisitedHowToPage());
+
+guestMessagePipe.registerHandler(
+    Message.OPEN_APP_MALL_PATH, ({path}: {path: string}) => {
+      window.open(`chrome://mall/${path}`);
+    });
 
 /** Compare two positions by their start index. Use for sorting. */
 function compareByStart(a: Position, b: Position): number {

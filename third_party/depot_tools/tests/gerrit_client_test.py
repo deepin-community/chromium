@@ -27,13 +27,16 @@ class TestGerritClient(unittest.TestCase):
                                           'branchname')
 
     @mock.patch('gerrit_util.CreateGerritBranch', return_value='')
-    def test_branch(self, util_mock):
+    @mock.patch('gerrit_util.GetGerritBranch', return_value='')
+    def test_branch(self, _, CreateGerritBranch_mock):
         gerrit_client.main([
             'branch', '--host', 'https://example.org/foo', '--project',
             'projectname', '--branch', 'branchname', '--commit', 'commitname'
         ])
-        util_mock.assert_called_once_with('example.org', 'projectname',
-                                          'branchname', 'commitname')
+        CreateGerritBranch_mock.assert_called_once_with('example.org',
+                                                        'projectname',
+                                                        'branchname',
+                                                        'commitname')
 
     @mock.patch('gerrit_util.QueryChanges', return_value='')
     def test_changes(self, util_mock):
@@ -155,6 +158,24 @@ class TestGerritClient(unittest.TestCase):
                                           1,
                                           labels={'some-label': '-2'})
 
+    @mock.patch('gerrit_util.SetReview', return_value='')
+    def test_addmessage(self, util_mock):
+        gerrit_client.main([
+            'addmessage',
+            '--host',
+            'https://example.org/foo',
+            '-c',
+            '1',
+            '-r',
+            '2',
+            '-m',
+            'This is a message',
+        ])
+        util_mock.assert_called_once_with('example.org',
+                                          1,
+                                          revision='2',
+                                          msg='This is a message',
+                                          automatic_attention_set_update=None)
 
 if __name__ == '__main__':
     logging.basicConfig(

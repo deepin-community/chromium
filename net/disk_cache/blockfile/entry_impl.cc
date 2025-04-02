@@ -2,11 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "net/disk_cache/blockfile/entry_impl.h"
 
 #include <limits>
 #include <memory>
 
+#include "base/containers/heap_array.h"
 #include "base/files/file_util.h"
 #include "base/hash/hash.h"
 #include "base/numerics/safe_math.h"
@@ -1514,7 +1520,7 @@ uint32_t EntryImpl::GetEntryFlags() {
 }
 
 void EntryImpl::GetData(int index,
-                        std::unique_ptr<char[]>* buffer,
+                        base::HeapArray<char>* buffer,
                         Addr* address) {
   DCHECK(backend_.get());
   if (user_buffers_[index].get() && user_buffers_[index]->Size() &&
@@ -1523,15 +1529,15 @@ void EntryImpl::GetData(int index,
     int data_len = entry_.Data()->data_size[index];
     if (data_len <= user_buffers_[index]->Size()) {
       DCHECK(!user_buffers_[index]->Start());
-      *buffer = std::make_unique<char[]>(data_len);
-      memcpy(buffer->get(), user_buffers_[index]->Data(), data_len);
+      *buffer = base::HeapArray<char>::Uninit(data_len);
+      memcpy(buffer->data(), user_buffers_[index]->Data(), data_len);
       return;
     }
   }
 
   // Bad news: we'd have to read the info from disk so instead we'll just tell
   // the caller where to read from.
-  *buffer = nullptr;
+  *buffer = {};
   address->set_value(entry_.Data()->data_addr[index]);
   if (address->is_initialized()) {
     // Prevent us from deleting the block from the backing store.

@@ -19,6 +19,7 @@
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/signin/public/identity_manager/primary_account_mutator.h"
 #include "google_apis/gaia/gaia_auth_util.h"
+#include "google_apis/gaia/gaia_id.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "chrome/browser/ash/net/network_portal_detector_test_impl.h"
@@ -41,20 +42,21 @@ void OnWillCreateBrowserContextServices(
 }
 
 void SetCookieForGaiaId(
-    const std::string& gaia_id,
+    const GaiaId& gaia_id,
     const std::string& email,
     bool signed_out,
     signin::IdentityManager* identity_manager,
     network::TestURLLoaderFactory* test_url_loader_factory) {
-  base::flat_map<std::string, signin::CookieParamsForTest> cookies_by_gaia_id;
+  base::flat_map<GaiaId, signin::CookieParamsForTest> cookies_by_gaia_id;
   signin::AccountsInCookieJarInfo cookies =
       identity_manager->GetAccountsInCookieJar();
-  for (const gaia::ListedAccount& account : cookies.signed_in_accounts) {
+  for (const gaia::ListedAccount& account :
+       cookies.GetPotentiallyInvalidSignedInAccounts()) {
     cookies_by_gaia_id[account.gaia_id] = {.email = account.email,
                                            .gaia_id = account.gaia_id,
                                            .signed_out = false};
   }
-  for (const gaia::ListedAccount& account : cookies.signed_out_accounts) {
+  for (const gaia::ListedAccount& account : cookies.GetSignedOutAccounts()) {
     cookies_by_gaia_id[account.gaia_id] = {
         .email = account.email, .gaia_id = account.gaia_id, .signed_out = true};
   }
@@ -88,10 +90,6 @@ void InitNetwork() {
 
   portal_detector->SetDefaultNetworkForTesting(default_network->guid());
 
-  portal_detector->SetDetectionResultsForTesting(
-      default_network->guid(),
-      ash::NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_ONLINE, 204);
-
   // Takes ownership.
   ash::network_portal_detector::InitializeForTesting(portal_detector);
 }
@@ -116,9 +114,30 @@ AccountInfo SignInUnconsentedAccount(
   return account_info;
 }
 
-void SignOutAccount(Profile* profile,
-                    network::TestURLLoaderFactory* test_url_loader_factory,
-                    const CoreAccountId& account_id) {
+AccountInfo ImplicitSignInUnconsentedAccount(
+    Profile* profile,
+    network::TestURLLoaderFactory* test_url_loader_factory,
+    const std::string& email) {
+  signin::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(profile);
+  signin::AccountAvailabilityOptionsBuilder builder;
+  AccountInfo account_info = signin::MakeAccountAvailable(
+      identity_manager,
+      builder
+#if !BUILDFLAG(IS_CHROMEOS_ASH)
+          .AsPrimary(signin::ConsentLevel::kSignin)
+#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+        // `kWebSignin` is not explicit signin.
+          .WithAccessPoint(signin_metrics::AccessPoint::kWebSignin)
+          .Build(email));
+  SetCookieForGaiaId(account_info.gaia, account_info.email,
+                     /*signed_out=*/false, identity_manager,
+                     test_url_loader_factory);
+  return account_info;
+}
+
+void SignOut(Profile* profile,
+             network::TestURLLoaderFactory* test_url_loader_factory) {
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
   CoreAccountInfo account =
@@ -127,7 +146,8 @@ void SignOutAccount(Profile* profile,
   SetCookieForGaiaId(account.gaia, account.email,
                      /*signed_out=*/true, identity_manager,
                      test_url_loader_factory);
-  signin::RemoveRefreshTokenForAccount(identity_manager, account_id);
+  signin::ClearPrimaryAccount(identity_manager);
+  signin::RemoveRefreshTokenForPrimaryAccount(identity_manager);
 }
 
 #if !BUILDFLAG(IS_CHROMEOS_ASH)

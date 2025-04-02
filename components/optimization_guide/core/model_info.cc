@@ -46,7 +46,6 @@ std::unique_ptr<ModelInfo> ModelInfo::Create(
     }
     if (!additional_file_path->IsAbsolute()) {
       NOTREACHED() << FilePathToString(*additional_file_path);
-      continue;
     }
     additional_files[additional_file_path->BaseName().value()] =
         *additional_file_path;

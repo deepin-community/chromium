@@ -67,6 +67,14 @@ using BindGroupMask = ityp::bitset<BindGroupIndex, kMaxBindGroups>;
 template <typename Value>
 using PerBindGroup = ityp::array<BindGroupIndex, Value, kMaxBindGroups>;
 
+// Immediate data constant index get mapped to a packed range of indices
+using ImmediateConstantIndex = TypedInteger<struct ImmediateConstantIndexT, uint32_t>;
+constexpr ImmediateConstantIndex kMaxImmediateConstantIndexTyped =
+    ImmediateConstantIndex(kMaxImmediateConstantsPerPipeline);
+
+using ImmediateConstantMask =
+    ityp::bitset<ImmediateConstantIndex, kMaxImmediateConstantsPerPipeline>;
+
 // Color attachment indices represent the index in the wgpu::FragmentState::targets array, the
 // wgpu::RenderPassDescriptor::colorAttachments arry and other similar arrays.
 using ColorAttachmentIndex = TypedInteger<struct ColorAttachmentIndexT, uint8_t>;
@@ -122,6 +130,7 @@ constexpr ExecutionSerial kBeginningOfGPUTime = ExecutionSerial(0);
 // token, which prevents them (and any BindGroups created with them) from being used with any
 // other pipelines.
 using PipelineCompatibilityToken = TypedInteger<struct PipelineCompatibilityTokenT, uint64_t>;
+constexpr PipelineCompatibilityToken kExplicitPCT = PipelineCompatibilityToken(0);
 
 using Nanoseconds = TypedInteger<struct NanosecondsT, uint64_t>;
 

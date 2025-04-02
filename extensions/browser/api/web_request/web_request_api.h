@@ -14,6 +14,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
@@ -27,7 +28,6 @@
 #include "base/values.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/global_request_id.h"
-#include "extensions/browser/api/declarative/rules_registry.h"
 #include "extensions/browser/api/declarative_webrequest/request_stage.h"
 #include "extensions/browser/api/web_request/extension_web_request_event_router.h"
 #include "extensions/browser/api/web_request/web_request_permissions.h"
@@ -36,7 +36,6 @@
 #include "extensions/browser/extension_api_frame_id_map.h"
 #include "extensions/browser/extension_function.h"
 #include "extensions/browser/extension_registry_observer.h"
-#include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "extensions/common/extension_id.h"
 #include "ipc/ipc_sender.h"
 #include "net/base/auth.h"
@@ -64,6 +63,7 @@ class URLLoaderFactoryBuilder;
 }  // namespace network
 
 namespace extensions {
+class WebViewGuest;
 
 // Support class for the WebRequest API. Lives on the UI thread. Most of the
 // work is done by ExtensionWebRequestEventRouter below. This class observes
@@ -147,7 +147,8 @@ class WebRequestAPI : public BrowserContextKeyedAPI,
     std::set<std::unique_ptr<Proxy>, base::UniquePtrComparator> proxies_;
 
     // Bi-directional mapping between request ID and Proxy for faster lookup.
-    std::map<content::GlobalRequestID, Proxy*> request_id_to_proxy_map_;
+    std::map<content::GlobalRequestID, raw_ptr<Proxy, CtnExperimental>>
+        request_id_to_proxy_map_;
     std::map<Proxy*, std::set<content::GlobalRequestID>>
         proxy_to_request_id_map_;
   };
@@ -229,7 +230,7 @@ class WebRequestAPI : public BrowserContextKeyedAPI,
       const net::AuthChallengeInfo& auth_info,
       scoped_refptr<net::HttpResponseHeaders> response_headers,
       const content::GlobalRequestID& request_id,
-      bool is_main_frame,
+      bool is_request_for_navigation,
       AuthRequestCallback callback,
       WebViewGuest* web_view_guest);
 
@@ -260,14 +261,6 @@ class WebRequestAPI : public BrowserContextKeyedAPI,
   // installed to support the API.
   bool MayHaveProxies() const;
 
-  // Indicates whether or not WebRequestAPI may have one or more proxies
-  // installed to support intercepting websocket connections for extension
-  // telemetry.
-  // TODO(psarouthakis): This is here for the current implementation, but
-  // will be refactored to live somewhere else so that we don't have to
-  // create a full proxy just for telemetry.
-  bool MayHaveWebsocketProxiesForExtensionTelemetry() const;
-
   // Indicates whether the WebRequestAPI is available to a RenderFrameHost
   // that embeds a WebView instance.
   bool IsAvailableToWebViewEmbedderFrame(
@@ -276,6 +269,26 @@ class WebRequestAPI : public BrowserContextKeyedAPI,
   bool HasExtraHeadersListenerForTesting();
 
  private:
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  //
+  // LINT.IfChange(ProxyDecision)
+  enum class ProxyDecision {
+    // Proxy will not be used.
+    kWillNotProxy = 0,
+    // Proxy will be used for Extensions installed with webRequest API uses.
+    kWillProxyForExtension = 1,
+    // Proxy will be used for WebUI to use the webRequestInternal API.
+    kWillProxyForWebUI = 2,
+    // Proxy will be used for the <webview> permitted to use webRequest API.
+    kWillProxyForEmbedderWebView = 3,
+    // Proxy will be used for the telemetry service.
+    kWillProxyForTelemetry = 4,
+
+    kMaxValue = kWillProxyForTelemetry,
+  };
+  // LINT.ThenChange(/tools/metrics/histograms/metadata/extensions/enums.xml:WebRequestProxyDecision)
+
   friend class BrowserContextKeyedAPIFactory<WebRequestAPI>;
 
   // BrowserContextKeyedAPI support:
@@ -299,7 +312,7 @@ class WebRequestAPI : public BrowserContextKeyedAPI,
   // in ExtensionWebRequestEventRouter, or not, if the owning BrowserContext
   // goes away or the WeakPtr instance bound in the callback is invalidated.
   void UpdateActiveListener(
-      content::BrowserContext* browser_context,
+      void* browser_context_id,
       WebRequestEventRouter::ListenerUpdateType update_type,
       const ExtensionId& extension_id,
       const std::string& sub_event_name,
@@ -314,9 +327,26 @@ class WebRequestAPI : public BrowserContextKeyedAPI,
                           const ExtensionId& extension_id,
                           const std::string& sub_event_name);
 
-  // A count of active extensions for this BrowserContext that use web request
-  // permissions.
+  // Internal implemntation of MaybeProxyURLLoaderFactory that returns a
+  // detailed reason, ProxyDecision, to tell why the proxy is used.
+  ProxyDecision MaybeProxyURLLoaderFactoryInternal(
+      content::BrowserContext* browser_context,
+      content::RenderFrameHost* frame,
+      int render_process_id,
+      content::ContentBrowserClient::URLLoaderFactoryType type,
+      std::optional<int64_t> navigation_id,
+      ukm::SourceIdObj ukm_source_id,
+      network::URLLoaderFactoryBuilder& factory_builder,
+      mojo::PendingRemote<network::mojom::TrustedURLLoaderHeaderClient>*
+          header_client,
+      scoped_refptr<base::SequencedTaskRunner> navigation_response_task_runner,
+      const url::Origin& request_initiator = url::Origin());
+
+  // Counts of active extensions for this BrowserContext that use kWebRequest*,
+  // kDeclarative{Web|Net}Request*, or kWebView permissions.
   int web_request_extension_count_ = 0;
+  int declarative_request_extension_count_ = 0;
+  int web_view_extension_count_ = 0;
 
   const raw_ptr<content::BrowserContext, DanglingUntriaged> browser_context_;
 

@@ -29,6 +29,7 @@
 
 #include <limits>
 #include <memory>
+#include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -54,6 +55,10 @@
     X(maxDynamicStorageBuffersPerPipelineLayout) \
     X(maxSampledTexturesPerShaderStage)          \
     X(maxSamplersPerShaderStage)                 \
+    X(maxStorageBuffersInFragmentStage)          \
+    X(maxStorageTexturesInFragmentStage)         \
+    X(maxStorageBuffersInVertexStage)            \
+    X(maxStorageTexturesInVertexStage)           \
     X(maxStorageBuffersPerShaderStage)           \
     X(maxStorageTexturesPerShaderStage)          \
     X(maxUniformBuffersPerShaderStage)           \
@@ -65,7 +70,6 @@
     X(maxBufferSize)                             \
     X(maxVertexAttributes)                       \
     X(maxVertexBufferArrayStride)                \
-    X(maxInterStageShaderComponents)             \
     X(maxInterStageShaderVariables)              \
     X(maxColorAttachments)                       \
     X(maxColorAttachmentBytesPerSample)          \
@@ -82,48 +86,113 @@ namespace wgpu::binding {
 // wgpu::bindings::GPUAdapter
 // TODO(crbug.com/dawn/1133): This is a stub implementation. Properly implement.
 ////////////////////////////////////////////////////////////////////////////////
-GPUAdapter::GPUAdapter(dawn::native::Adapter a,
+GPUAdapter::GPUAdapter(wgpu::Adapter adapter,
                        const Flags& flags,
                        std::shared_ptr<AsyncRunner> async)
-    : adapter_(a), flags_(flags), async_(async) {}
+    : adapter_(adapter), flags_(flags), async_(async) {}
 
-// TODO(dawn:1133): Avoid the extra copy by making the generator make a virtual method with const
-// std::string&
 interop::Interface<interop::GPUSupportedFeatures> GPUAdapter::getFeatures(Napi::Env env) {
-    wgpu::Adapter adapter(adapter_.Get());
-    size_t count = adapter.EnumerateFeatures(nullptr);
-    std::vector<wgpu::FeatureName> features(count);
-    adapter.EnumerateFeatures(&features[0]);
-    return interop::GPUSupportedFeatures::Create<GPUSupportedFeatures>(env, env,
-                                                                       std::move(features));
+    wgpu::SupportedFeatures features{};
+    adapter_.GetFeatures(&features);
+    return interop::GPUSupportedFeatures::Create<GPUSupportedFeatures>(env, env, features);
 }
 
 interop::Interface<interop::GPUSupportedLimits> GPUAdapter::getLimits(Napi::Env env) {
-    WGPUSupportedLimits limits{};
+    wgpu::SupportedLimits limits{};
+    wgpu::DawnExperimentalSubgroupLimits subgroupLimits{};
+    wgpu::DawnExperimentalImmediateDataLimits immediateDataLimits{};
+
+    auto InsertInChain = [&](wgpu::ChainedStructOut* node) {
+        node->nextInChain = limits.nextInChain;
+        limits.nextInChain = node;
+    };
+
+    wgpu::ChainedStructOut** limitsListTail = &limits.nextInChain;
+    // Query the subgroup limits only if subgroups feature is available on the adapter.
+    if (adapter_.HasFeature(FeatureName::Subgroups)) {
+        InsertInChain(&subgroupLimits);
+    }
+
+    // Query the immediate data limits only if ChromiumExperimentalImmediateData feature
+    // is available on adapter.
+    if (adapter_.HasFeature(FeatureName::ChromiumExperimentalImmediateData)) {
+        InsertInChain(&immediateDataLimits);
+    }
+
     if (!adapter_.GetLimits(&limits)) {
         Napi::Error::New(env, "failed to get adapter limits").ThrowAsJavaScriptException();
     }
 
-    wgpu::SupportedLimits wgpuLimits{};
+    return interop::GPUSupportedLimits::Create<GPUSupportedLimits>(env, limits);
+}
 
-#define COPY_LIMIT(LIMIT) wgpuLimits.limits.LIMIT = limits.limits.LIMIT;
-    FOR_EACH_LIMIT(COPY_LIMIT)
-#undef COPY_LIMIT
+interop::Interface<interop::GPUAdapterInfo> GPUAdapter::getInfo(Napi::Env env) {
+    wgpu::AdapterInfo info = {};
+    wgpu::AdapterPropertiesSubgroups subgroupProperties = {};
+    info.nextInChain = &subgroupProperties;
 
-    return interop::GPUSupportedLimits::Create<GPUSupportedLimits>(env, wgpuLimits);
+    adapter_.GetInfo(&info);
+
+    return interop::GPUAdapterInfo::Create<GPUAdapterInfo>(env, info);
 }
 
 bool GPUAdapter::getIsFallbackAdapter(Napi::Env) {
-    WGPUAdapterProperties adapterProperties = {};
-    adapter_.GetProperties(&adapterProperties);
-    return adapterProperties.adapterType == WGPUAdapterType_CPU;
+    wgpu::AdapterInfo adapterInfo = {};
+    adapter_.GetInfo(&adapterInfo);
+    return adapterInfo.adapterType == wgpu::AdapterType::CPU;
 }
 
 bool GPUAdapter::getIsCompatibilityMode(Napi::Env) {
-    WGPUAdapterProperties adapterProperties = {};
-    adapter_.GetProperties(&adapterProperties);
-    return adapterProperties.compatibilityMode;
+    wgpu::AdapterInfo adapterInfo = {};
+    adapter_.GetInfo(&adapterInfo);
+    return adapterInfo.compatibilityMode;
 }
+
+std::string GPUAdapter::getFeatureLevel(Napi::Env) {
+    wgpu::AdapterInfo adapterInfo = {};
+    // TODO(crbug.com/382291443): Report feature level from wgpu::Adapter.
+    adapter_.GetInfo(&adapterInfo);
+    if (adapterInfo.compatibilityMode) {
+        return "compatibility";
+    }
+    return "core";
+}
+
+namespace {
+// Returns a string representation of the wgpu::ErrorType
+const char* str(wgpu::ErrorType ty) {
+    switch (ty) {
+        case wgpu::ErrorType::NoError:
+            return "no error";
+        case wgpu::ErrorType::Validation:
+            return "validation";
+        case wgpu::ErrorType::OutOfMemory:
+            return "out of memory";
+        case wgpu::ErrorType::Internal:
+            return "internal";
+        case wgpu::ErrorType::Unknown:
+        default:
+            return "unknown";
+    }
+}
+
+// There's something broken with Node when attempting to write more than 65536 bytes to cout.
+// Split the string up into writes of 4k chunks.
+// Likely related: https://github.com/nodejs/node/issues/12921
+void chunkedWrite(wgpu::StringView msg) {
+    while (msg.length != 0) {
+        int n;
+        if (msg.length > 4096) {
+            n = printf("%.4096s", msg.data);
+        } else {
+            n = printf("%.*s", static_cast<int>(msg.length), msg.data);
+        }
+        msg.data += n;
+        msg.length -= n;
+    }
+}
+
+}  // namespace
 
 interop::Promise<interop::Interface<interop::GPUDevice>> GPUAdapter::requestDevice(
     Napi::Env env,
@@ -133,7 +202,7 @@ interop::Promise<interop::Interface<interop::GPUDevice>> GPUAdapter::requestDevi
     Converter conv(env);
     std::vector<wgpu::FeatureName> requiredFeatures;
     for (auto required : descriptor.requiredFeatures) {
-        wgpu::FeatureName feature = wgpu::FeatureName::Undefined;
+        wgpu::FeatureName feature;
 
         // requiredFeatures is a "sequence<GPUFeatureName>" so a Javascript exception should be
         // thrown if one of the strings isn't one of the known features.
@@ -147,21 +216,26 @@ interop::Promise<interop::Interface<interop::GPUDevice>> GPUAdapter::requestDevi
         return {env, interop::kUnusedPromise};
     }
 
-    interop::Promise<interop::Interface<interop::GPUDevice>> promise(env, PROMISE_INFO);
+    auto ctx = std::make_unique<AsyncContext<interop::Interface<interop::GPUDevice>>>(
+        env, PROMISE_INFO, async_);
+    auto promise = ctx->promise;
 
     wgpu::RequiredLimits limits;
-#define COPY_LIMIT(LIMIT)                                                                    \
-    if (descriptor.requiredLimits.count(#LIMIT)) {                                           \
-        using DawnLimitType = decltype(WGPULimits::LIMIT);                                   \
-        DawnLimitType* dawnLimit = &limits.limits.LIMIT;                                     \
-        uint64_t jsLimit = descriptor.requiredLimits[#LIMIT];                                \
-        if (jsLimit > std::numeric_limits<DawnLimitType>::max() - 1) {                       \
-            promise.Reject(                                                                  \
-                binding::Errors::OperationError(env, "Limit \"" #LIMIT "\" out of range.")); \
-            return promise;                                                                  \
-        }                                                                                    \
-        *dawnLimit = jsLimit;                                                                \
-        descriptor.requiredLimits.erase(#LIMIT);                                             \
+#define COPY_LIMIT(LIMIT)                                                                        \
+    if (descriptor.requiredLimits.count(#LIMIT)) {                                               \
+        auto jsLimitVariant = descriptor.requiredLimits[#LIMIT];                                 \
+        if (!std::holds_alternative<interop::UndefinedType>(jsLimitVariant)) {                   \
+            using DawnLimitType = decltype(WGPULimits::LIMIT);                                   \
+            DawnLimitType* dawnLimit = &limits.limits.LIMIT;                                     \
+            uint64_t jsLimit = std::get<interop::GPUSize64>(jsLimitVariant);                     \
+            if (jsLimit > std::numeric_limits<DawnLimitType>::max() - 1) {                       \
+                promise.Reject(                                                                  \
+                    binding::Errors::OperationError(env, "Limit \"" #LIMIT "\" out of range.")); \
+                return promise;                                                                  \
+            }                                                                                    \
+            *dawnLimit = jsLimit;                                                                \
+        }                                                                                        \
+        descriptor.requiredLimits.erase(#LIMIT);                                                 \
     }
     FOR_EACH_LIMIT(COPY_LIMIT)
 #undef COPY_LIMIT
@@ -175,36 +249,65 @@ interop::Promise<interop::Interface<interop::GPUDevice>> GPUAdapter::requestDevi
     desc.requiredFeatures = requiredFeatures.data();
     desc.requiredLimits = &limits;
 
+    // Set the device callbacks.
+    using DeviceLostContext = AsyncContext<interop::Interface<interop::GPUDeviceLostInfo>>;
+    auto device_lost_ctx = new DeviceLostContext(env, PROMISE_INFO, async_);
+    auto device_lost_promise = device_lost_ctx->promise;
+    desc.SetDeviceLostCallback(
+        wgpu::CallbackMode::AllowSpontaneous,
+        [](const wgpu::Device&, wgpu::DeviceLostReason reason, wgpu::StringView message,
+           DeviceLostContext* device_lost_ctx) {
+            std::unique_ptr<DeviceLostContext> ctx(device_lost_ctx);
+            auto r = interop::GPUDeviceLostReason::kDestroyed;
+            switch (reason) {
+                case wgpu::DeviceLostReason::Destroyed:
+                case wgpu::DeviceLostReason::InstanceDropped:
+                    r = interop::GPUDeviceLostReason::kDestroyed;
+                    break;
+                case wgpu::DeviceLostReason::FailedCreation:
+                case wgpu::DeviceLostReason::Unknown:
+                    r = interop::GPUDeviceLostReason::kUnknown;
+                    break;
+            }
+            if (ctx->promise.GetState() == interop::PromiseState::Pending) {
+                ctx->promise.Resolve(interop::GPUDeviceLostInfo::Create<GPUDeviceLostInfo>(
+                    ctx->env, r, std::string(message)));
+            }
+        },
+        device_lost_ctx);
+    desc.SetUncapturedErrorCallback(
+        [](const wgpu::Device&, ErrorType type, wgpu::StringView message) {
+            printf("%s:\n", str(type));
+            chunkedWrite(message);
+        });
+
     // Propagate enabled/disabled dawn features
     TogglesLoader togglesLoader(flags_);
     DawnTogglesDescriptor deviceTogglesDesc = togglesLoader.GetDescriptor();
     desc.nextInChain = &deviceTogglesDesc;
 
-    auto wgpu_device = adapter_.CreateDevice(&desc);
-    if (wgpu_device == nullptr) {
-        promise.Reject(binding::Errors::OperationError(env, "failed to create device"));
-        return promise;
-    }
+    std::unique_ptr<GPUDevice> gpu_device;
+    adapter_.RequestDevice(
+        &desc, wgpu::CallbackMode::AllowSpontaneous,
+        [ctx = std::move(ctx), desc, device_lost_promise, this, &gpu_device](
+            wgpu::RequestDeviceStatus status, wgpu::Device wgpu_device, wgpu::StringView message) {
+            switch (status) {
+                case wgpu::RequestDeviceStatus::Success:
+                    gpu_device = std::make_unique<GPUDevice>(ctx->env, desc, wgpu_device,
+                                                             device_lost_promise, async_);
+                    if (!valid_) {
+                        gpu_device->ForceLoss(wgpu::DeviceLostReason::Unknown,
+                                              "Device was marked as lost due to a stale adapter.");
+                    }
+                    valid_ = false;
 
-    auto gpu_device = std::make_unique<GPUDevice>(env, desc, wgpu_device, async_);
-    if (!valid_) {
-        gpu_device->ForceLoss(interop::GPUDeviceLostReason::kUnknown,
-                              "Device was marked as lost due to a stale adapter.");
-    }
-    valid_ = false;
-
-    promise.Resolve(interop::GPUDevice::Bind(env, std::move(gpu_device)));
-    return promise;
-}
-
-interop::Promise<interop::Interface<interop::GPUAdapterInfo>> GPUAdapter::requestAdapterInfo(
-    Napi::Env env) {
-    interop::Promise<interop::Interface<interop::GPUAdapterInfo>> promise(env, PROMISE_INFO);
-
-    WGPUAdapterProperties adapterProperties = {};
-    adapter_.GetProperties(&adapterProperties);
-
-    promise.Resolve(interop::GPUAdapterInfo::Create<GPUAdapterInfo>(env, adapterProperties));
+                    ctx->promise.Resolve(interop::GPUDevice::Bind(ctx->env, std::move(gpu_device)));
+                    break;
+                default:
+                    ctx->promise.Reject(Errors::OperationError(ctx->env, std::string(message)));
+                    break;
+            }
+        });
     return promise;
 }
 

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ash/system/video_conference/video_conference_tray_controller.h"
 
 #include <string>
@@ -72,6 +77,15 @@ constexpr char kVideoConferenceTrayCameraUseWhileSWDisabledNudgeId[] =
 constexpr char kVideoConferenceTrayBothUseWhileDisabledNudgeId[] =
     "video_conference_tray_nudge_ids.camera_microphone_use_while_disabled";
 
+// Boolean prefs used to determine whether to show the gradient animation on the
+// buttons. When the value is false, it means that we haved showed the animation
+// at some point and the user has clicked on the button in such a way that the
+// animation no longer needs to be displayed again.
+constexpr char kShowImageButtonAnimation[] =
+    "ash.vc.show_inmage_button_animation";
+constexpr char kShowCreateWithAiButtonAnimation[] =
+    "ash.vc.show_create_with_ai_button_animation";
+
 // VC nudge ids vector that is iterated whenever `CloseAllVcNudges()` is
 // called. Please keep in sync whenever adding/removing/updating a nudge id.
 const char* const kNudgeIds[] = {
@@ -127,6 +141,15 @@ VideoConferenceTray* GetVcTrayInActiveWindow() {
   return status_area_widget->video_conference_tray();
 }
 
+PrefService* GetActiveUserPrefService() {
+  DCHECK(Shell::Get()->session_controller()->IsActiveUserSessionStarted());
+
+  auto* pref_service =
+      Shell::Get()->session_controller()->GetActivePrefService();
+  DCHECK(pref_service);
+  return pref_service;
+}
+
 }  // namespace
 
 VideoConferenceTrayController::VideoConferenceTrayController()
@@ -151,6 +174,12 @@ VideoConferenceTrayController::~VideoConferenceTrayController() {
 }
 
 // static
+void VideoConferenceTrayController::RegisterProfilePrefs(
+    PrefRegistrySimple* registry) {
+  registry->RegisterBooleanPref(kShowImageButtonAnimation, true);
+  registry->RegisterBooleanPref(kShowCreateWithAiButtonAnimation, true);
+}
+
 VideoConferenceTrayController* VideoConferenceTrayController::Get() {
   return g_controller_instance;
 }
@@ -288,6 +317,26 @@ void VideoConferenceTrayController::MaybeShowSpeakOnMuteOptInNudge() {
   }
 }
 
+void VideoConferenceTrayController::DismissImageButtonAnimationForever() {
+  GetActiveUserPrefService()->SetBoolean(kShowImageButtonAnimation, false);
+}
+
+void VideoConferenceTrayController::
+    DismissCreateWithAiButtonAnimationForever() {
+  GetActiveUserPrefService()->SetBoolean(kShowCreateWithAiButtonAnimation,
+                                         false);
+}
+
+bool VideoConferenceTrayController::ShouldShowImageButtonAnimation() const {
+  return GetActiveUserPrefService()->GetBoolean(kShowImageButtonAnimation);
+}
+
+bool VideoConferenceTrayController::ShouldShowCreateWithAiButtonAnimation()
+    const {
+  return GetActiveUserPrefService()->GetBoolean(
+      kShowCreateWithAiButtonAnimation);
+}
+
 void VideoConferenceTrayController::OnSpeakOnMuteNudgeOptInAction(bool opt_in) {
   auto* pref_service =
       Shell::Get()->session_controller()->GetActivePrefService();
@@ -308,15 +357,13 @@ void VideoConferenceTrayController::OnSpeakOnMuteNudgeOptInAction(bool opt_in) {
       l10n_util::GetStringUTF16(
           opt_in
               ? IDS_ASH_VIDEO_CONFERENCE_NUDGE_SPEAK_ON_MUTE_OPT_IN_CONFIRMATION_BODY
-              : IDS_ASH_VIDEO_CONFERENCE_NUDGE_SPEAK_ON_MUTE_OPT_OUT_CONFIRMATION_BODY),
-      ToastData::kDefaultToastDuration,
-      /*visible_on_lock_screen=*/false,
-      /*has_dismiss_button=*/true,
-      l10n_util::GetStringUTF16(
-          IDS_ASH_VIDEO_CONFERENCE_NUDGE_SPEAK_ON_MUTE_OPT_IN_CONFIRMATION_BUTTON));
+              : IDS_ASH_VIDEO_CONFERENCE_NUDGE_SPEAK_ON_MUTE_OPT_OUT_CONFIRMATION_BODY));
   toast_data.persist_on_hover = true;
   toast_data.show_on_all_root_windows = true;
-  toast_data.dismiss_callback = base::BindRepeating([]() {
+  toast_data.button_type = ToastData::ButtonType::kTextButton;
+  toast_data.button_text = l10n_util::GetStringUTF16(
+      IDS_ASH_VIDEO_CONFERENCE_NUDGE_SPEAK_ON_MUTE_OPT_IN_CONFIRMATION_BUTTON);
+  toast_data.button_callback = base::BindRepeating([]() {
     Shell::Get()
         ->system_tray_model()
         ->client()
@@ -324,6 +371,14 @@ void VideoConferenceTrayController::OnSpeakOnMuteNudgeOptInAction(bool opt_in) {
   });
 
   ToastManager::Get()->Show(std::move(toast_data));
+}
+
+void VideoConferenceTrayController::OnDlcDownloadStateFetched(
+    bool add_warning,
+    const std::u16string& feature_tile_title) {
+  for (auto& observer : observer_list_) {
+    observer.OnDlcDownloadStateChanged(add_warning, feature_tile_title);
+  }
 }
 
 void VideoConferenceTrayController::CloseAllVcNudges() {
@@ -349,6 +404,30 @@ bool VideoConferenceTrayController::GetHasMicrophonePermissions() const {
   return state_.has_microphone_permission;
 }
 
+void VideoConferenceTrayController::UpdateSidetoneSupportedState() {
+  CrasAudioHandler::Get()->UpdateSidetoneSupportedState();
+}
+
+bool VideoConferenceTrayController::IsSidetoneSupported() const {
+  return CrasAudioHandler::Get()->IsSidetoneSupported();
+}
+
+bool VideoConferenceTrayController::GetSidetoneEnabled() const {
+  return CrasAudioHandler::Get()->GetSidetoneEnabled();
+}
+
+void VideoConferenceTrayController::SetSidetoneEnabled(bool enabled) {
+  CrasAudioHandler::Get()->SetSidetoneEnabled(enabled);
+}
+
+void VideoConferenceTrayController::SetEwmaPowerReportEnabled(bool enabled) {
+  CrasAudioHandler::Get()->SetEwmaPowerReportEnabled(enabled);
+}
+
+double VideoConferenceTrayController::GetEwmaPower() {
+  return CrasAudioHandler::Get()->GetEwmaPower();
+}
+
 bool VideoConferenceTrayController::IsCapturingScreen() const {
   return state_.is_capturing_screen;
 }
@@ -369,14 +448,6 @@ void VideoConferenceTrayController::SetCameraMuted(bool muted) {
     return;
   }
 
-  if (!ash::features::IsCrosPrivacyHubEnabled()) {
-    media::CameraHalDispatcherImpl::GetInstance()
-        ->SetCameraSWPrivacySwitchState(
-            muted ? cros::mojom::CameraPrivacySwitchState::ON
-                  : cros::mojom::CameraPrivacySwitchState::OFF);
-    return;
-  }
-
   // Change user pref to let Privacy Hub enable/disable the camera.
   auto* pref_service =
       Shell::Get()->session_controller()->GetActivePrefService();
@@ -391,22 +462,12 @@ bool VideoConferenceTrayController::GetCameraMuted() {
     return true;
   }
 
-  if (!features::IsCrosPrivacyHubEnabled()) {
-    return camera_muted_by_software_switch_;
-  }
-
   auto* pref_service =
       Shell::Get()->session_controller()->GetActivePrefService();
   return pref_service && !pref_service->GetBoolean(prefs::kUserCameraAllowed);
 }
 
 void VideoConferenceTrayController::SetMicrophoneMuted(bool muted) {
-  if (!ash::features::IsCrosPrivacyHubEnabled()) {
-    CrasAudioHandler::Get()->SetInputMute(
-        /*mute_on=*/muted, CrasAudioHandler::InputMuteChangeMethod::kOther);
-    return;
-  }
-
   // Change user pref to let Privacy Hub enable/disable the microphone.
   auto* pref_service =
       Shell::Get()->session_controller()->GetActivePrefService();
@@ -417,10 +478,6 @@ void VideoConferenceTrayController::SetMicrophoneMuted(bool muted) {
 }
 
 bool VideoConferenceTrayController::GetMicrophoneMuted() {
-  if (!features::IsCrosPrivacyHubEnabled()) {
-    return CrasAudioHandler::Get()->IsInputMuted();
-  }
-
   auto* pref_service =
       Shell::Get()->session_controller()->GetActivePrefService();
   return pref_service &&
@@ -881,7 +938,6 @@ void VideoConferenceTrayController::DisplayUsedWhileDisabledNudge(
       break;
     default:
       NOTREACHED();
-      return;
   }
 
   AnchoredNudgeData nudge_data(
@@ -908,7 +964,6 @@ VideoConferenceTrayController::GetUsedWhileDisabledNudgeType(
       break;
     default:
       NOTREACHED();
-      type = VideoConferenceTrayController::UsedWhileDisabledNudgeType::kCamera;
   }
 
   return type;

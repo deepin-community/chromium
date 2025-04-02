@@ -31,32 +31,36 @@ bool IsValidName(base::StringView str) {
 }
 
 std::optional<Type> ParseType(base::StringView str) {
-  if (str == "BOOL") {
+  if (str.CaseInsensitiveEq("bool")) {
     return Type::kBool;
   }
-  if (str == "INT") {
-    return Type::kInt;
-  }
-  if (str == "UINT") {
-    return Type::kUint;
-  }
-  if (str == "LONG") {
+  if (str.CaseInsensitiveOneOf(
+          {"long", "timestamp", "duration", "id", "joinid", "argsetid"})) {
     return Type::kLong;
   }
-  if (str == "FLOAT") {
-    return Type::kFloat;
-  }
-  if (str == "DOUBLE") {
+  if (str.CaseInsensitiveEq("double")) {
     return Type::kDouble;
   }
-  if (str == "STRING") {
+  if (str.CaseInsensitiveEq("string")) {
     return Type::kString;
   }
-  if (str == "PROTO") {
-    return Type::kProto;
-  }
-  if (str == "BYTES") {
+  if (str.CaseInsensitiveEq("bytes")) {
     return Type::kBytes;
+  }
+
+  // Deprecated types.
+  // TODO(b/380259828): Remove.
+  if (str.CaseInsensitiveEq("int")) {
+    return Type::kInt;
+  }
+  if (str.CaseInsensitiveEq("uint")) {
+    return Type::kUint;
+  }
+  if (str.CaseInsensitiveEq("float")) {
+    return Type::kFloat;
+  }
+  if (str.CaseInsensitiveEq("proto")) {
+    return Type::kProto;
   }
   return std::nullopt;
 }

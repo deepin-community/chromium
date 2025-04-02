@@ -32,7 +32,8 @@ enum LayoutConstant {
   BOOKMARK_BAR_BUTTON_IMAGE_LABEL_PADDING,
 
   // The size of icons used in Download bubbles.
-  // TODO(crbug/1296323): We should be sourcing the size of the file icon from
+  // TODO(crbug.com/40214740): We should be sourcing the size of the file icon
+  // from
   // the layout
   // provider rather than relying on hardcoded constants.
   DOWNLOAD_ICON_SIZE,
@@ -77,8 +78,12 @@ enum LayoutConstant {
   // with the chrome refresh flag.
   LOCATION_BAR_TRAILING_DECORATION_EDGE_PADDING,
 
+  // The padding between trailing edge decorations and the inner views of the
+  // omnibox.
+  LOCATION_BAR_TRAILING_DECORATION_INNER_PADDING,
+
   // The size of the icons used inside the LocationBar.
-  // TODO(crbug.com/1399991): Deprecate this after the size of all location bar
+  // TODO(crbug.com/40883435): Deprecate this after the size of all location bar
   // icons have moved to
   // either `LOCATION_BAR_LEADING_ICON_SIZE` or
   // `LOCATION_BAR_TRAILING_ICON_SIZE`
@@ -90,8 +95,15 @@ enum LayoutConstant {
   // The size of the trailing icons used inside the LocationBar.
   LOCATION_BAR_TRAILING_ICON_SIZE,
 
+  // Additional space beyond TAB_STRIP_PADDING between the tab strip and the
+  // new tab button.
+  NEW_TAB_BUTTON_LEADING_MARGIN,
+
   // The size of icons used in PageInfo bubbles.
   PAGE_INFO_ICON_SIZE,
+
+  // The size of icons in star rating view.
+  STAR_RATING_ICON_SIZE,
 
   // Padding after the tab title.
   TAB_AFTER_TITLE_PADDING,
@@ -134,10 +146,6 @@ enum LayoutConstant {
   // TODO(tbergquist): Remove this after pixel canvas or any deeper fix to
   // non-pixel-aligned drawing goes in.  See https://crbug.com/765723.
   TABSTRIP_TOOLBAR_OVERLAP,
-
-  // The horizontal padding between any right aligned controls and the end of
-  // the TabStripRegionView.
-  TABSTRIP_REGION_VIEW_CONTROL_PADDING,
 
   // The total height, including icons and insets, of buttons in the toolbar.
   TOOLBAR_BUTTON_HEIGHT,

@@ -21,10 +21,14 @@
 #include "chrome/browser/ash/hats/hats_config.h"
 #include "chrome/browser/ash/hats/hats_notification_controller.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/feedback/show_feedback_page.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/common/channel_info.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/intent.h"
@@ -38,7 +42,7 @@
 ChromeMediaAppUIDelegate::ChromeMediaAppUIDelegate(content::WebUI* web_ui)
     : web_ui_(web_ui) {}
 
-ChromeMediaAppUIDelegate::~ChromeMediaAppUIDelegate() {}
+ChromeMediaAppUIDelegate::~ChromeMediaAppUIDelegate() = default;
 
 std::optional<std::string> ChromeMediaAppUIDelegate::OpenFeedbackDialog() {
   Profile* profile = Profile::FromWebUI(web_ui_);
@@ -49,7 +53,7 @@ std::optional<std::string> ChromeMediaAppUIDelegate::OpenFeedbackDialog() {
   // Note that category_tag is the name of the listnr bucket we want our
   // reports to end up in.
   chrome::ShowFeedbackPage(GURL(ash::kChromeUIMediaAppURL), profile,
-                           chrome::kFeedbackSourceMediaApp,
+                           feedback::kFeedbackSourceMediaApp,
                            std::string() /* description_template */,
                            std::string() /* description_placeholder_text */,
                            kMediaAppFeedbackCategoryTag /* category_tag */,
@@ -63,7 +67,7 @@ std::optional<std::string> ChromeMediaAppUIDelegate::OpenFeedbackDialog() {
 void ChromeMediaAppUIDelegate::ToggleBrowserFullscreenMode() {
   Browser* browser = chrome::FindBrowserWithTab(web_ui_->GetWebContents());
   if (browser) {
-    chrome::ToggleFullscreenMode(browser);
+    chrome::ToggleFullscreenMode(browser, /*user_initiated=*/true);
   }
 }
 
@@ -184,4 +188,31 @@ void ChromeMediaAppUIDelegate::EditInPhotosImpl(
             std::move(callback).Run();
           },
           std::move(edit_in_photos_callback), web_contents->GetWeakPtr()));
+}
+
+void ChromeMediaAppUIDelegate::SubmitForm(const GURL& url,
+                                          const std::vector<int8_t>& payload,
+                                          const std::string& header) {
+  Profile* profile = Profile::FromWebUI(web_ui_);
+  NavigateParams navigate_params(
+      profile, url,
+      ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
+                                ui::PAGE_TRANSITION_FROM_API |
+                                ui::PAGE_TRANSITION_FROM_ADDRESS_BAR));
+  navigate_params.window_action = NavigateParams::SHOW_WINDOW;
+  navigate_params.post_data =
+      network::ResourceRequestBody::CreateFromCopyOfBytes(
+          base::as_byte_span(payload));
+  navigate_params.extra_headers = header;
+
+  navigate_params.browser = chrome::FindTabbedBrowser(profile, false);
+  if (!navigate_params.browser &&
+      Browser::GetCreationStatusForProfile(profile) ==
+          Browser::CreationStatus::kOk) {
+    Browser::CreateParams create_params(profile, navigate_params.user_gesture);
+    create_params.should_trigger_session_restore = false;
+    navigate_params.browser = Browser::Create(create_params);
+  }
+
+  Navigate(&navigate_params);
 }

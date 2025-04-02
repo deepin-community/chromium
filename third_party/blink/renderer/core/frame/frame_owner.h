@@ -6,6 +6,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_FRAME_OWNER_H_
 
 #include "third_party/blink/public/common/frame/frame_policy.h"
+#include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/color_scheme.mojom-blink.h"
 #include "third_party/blink/public/mojom/scroll/scrollbar_mode.mojom-blink.h"
 #include "third_party/blink/public/mojom/timing/resource_timing.mojom-blink-forward.h"
@@ -62,6 +63,8 @@ class CORE_EXPORT FrameOwner : public GarbageCollectedMixin {
   virtual bool AllowPaymentRequest() const = 0;
   virtual bool IsDisplayNone() const = 0;
   virtual mojom::blink::ColorScheme GetColorScheme() const = 0;
+  virtual mojom::blink::PreferredColorScheme GetPreferredColorScheme()
+      const = 0;
 
   // Returns whether or not children of the owned frame should be lazily loaded.
   virtual bool ShouldLazyLoadChildren() const = 0;

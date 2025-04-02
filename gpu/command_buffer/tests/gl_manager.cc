@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "gpu/command_buffer/tests/gl_manager.h"
 
 #include <GLES2/gl2.h>
@@ -25,7 +30,6 @@
 #include "gpu/command_buffer/client/transfer_buffer.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/command_buffer/common/context_creation_attribs.h"
-#include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
 #include "gpu/command_buffer/common/sync_token.h"
 #include "gpu/command_buffer/service/command_buffer_direct.h"
 #include "gpu/command_buffer/service/context_group.h"
@@ -80,7 +84,7 @@ class GpuMemoryBufferImplTest : public gfx::GpuMemoryBuffer {
   void* memory(size_t plane) override {
     DCHECK(mapped_);
     DCHECK_LT(plane, gfx::NumberOfPlanesForLinearBufferFormat(format_));
-    return reinterpret_cast<uint8_t*>(&bytes_->data().front()) +
+    return bytes_->as_vector().data() +
            gfx::BufferOffsetForBufferFormat(size_, format_, plane);
   }
   void Unmap() override {
@@ -93,17 +97,11 @@ class GpuMemoryBufferImplTest : public gfx::GpuMemoryBuffer {
     DCHECK_LT(plane, gfx::NumberOfPlanesForLinearBufferFormat(format_));
     return gfx::RowSizeForBufferFormat(size_.width(), format_, plane);
   }
-  gfx::GpuMemoryBufferId GetId() const override {
-    NOTREACHED();
-    return gfx::GpuMemoryBufferId(0);
-  }
+  gfx::GpuMemoryBufferId GetId() const override { NOTREACHED(); }
   gfx::GpuMemoryBufferType GetType() const override {
     return gfx::NATIVE_PIXMAP;
   }
-  gfx::GpuMemoryBufferHandle CloneHandle() const override {
-    NOTREACHED();
-    return gfx::GpuMemoryBufferHandle();
-  }
+  gfx::GpuMemoryBufferHandle CloneHandle() const override { NOTREACHED(); }
   void OnMemoryDump(
       base::trace_event::ProcessMemoryDump* pmd,
       const base::trace_event::MemoryAllocatorDumpGuid& buffer_dump_guid,
@@ -150,17 +148,11 @@ class IOSurfaceGpuMemoryBuffer : public gfx::GpuMemoryBuffer {
     DCHECK_LT(plane, gfx::NumberOfPlanesForLinearBufferFormat(format_));
     return IOSurfaceGetWidthOfPlane(iosurface_.get(), plane);
   }
-  gfx::GpuMemoryBufferId GetId() const override {
-    NOTREACHED();
-    return gfx::GpuMemoryBufferId(0);
-  }
+  gfx::GpuMemoryBufferId GetId() const override { NOTREACHED(); }
   gfx::GpuMemoryBufferType GetType() const override {
     return gfx::IO_SURFACE_BUFFER;
   }
-  gfx::GpuMemoryBufferHandle CloneHandle() const override {
-    NOTREACHED();
-    return gfx::GpuMemoryBufferHandle();
-  }
+  gfx::GpuMemoryBufferHandle CloneHandle() const override { NOTREACHED(); }
   void OnMemoryDump(
       base::trace_event::ProcessMemoryDump* pmd,
       const base::trace_event::MemoryAllocatorDumpGuid& buffer_dump_guid,
@@ -245,8 +237,8 @@ std::unique_ptr<gfx::GpuMemoryBuffer> GLManager::CreateGpuMemoryBuffer(
         new IOSurfaceGpuMemoryBuffer(size, format));
   }
 #endif  // BUILDFLAG(IS_MAC)
-  std::vector<uint8_t> data(gfx::BufferSizeForBufferFormat(size, format), 0);
-  auto bytes = base::RefCountedBytes::TakeVector(&data);
+  auto bytes = base::MakeRefCounted<base::RefCountedBytes>(
+      gfx::BufferSizeForBufferFormat(size, format));
   return base::WrapUnique<gfx::GpuMemoryBuffer>(
       new GpuMemoryBufferImplTest(bytes.get(), size, format));
 }
@@ -275,19 +267,10 @@ void GLManager::InitializeWithWorkaroundsImpl(
   DCHECK(!command_line.HasSwitch(switches::kDisableGLExtensions));
 
   context_type_ = options.context_type;
-  if (options.share_mailbox_manager) {
-    mailbox_manager_ = options.share_mailbox_manager->mailbox_manager();
-  } else if (options.share_group_manager) {
-    mailbox_manager_ = options.share_group_manager->mailbox_manager();
-  } else {
-    mailbox_manager_ = &owned_mailbox_manager_;
-  }
 
   gl::GLShareGroup* share_group = nullptr;
   if (options.share_group_manager) {
     share_group = options.share_group_manager->share_group();
-  } else if (options.share_mailbox_manager) {
-    share_group = options.share_mailbox_manager->share_group();
   }
 
   gles2::ContextGroup* context_group = nullptr;
@@ -324,7 +307,7 @@ void GLManager::InitializeWithWorkaroundsImpl(
     // Always mark the passthrough command decoder as supported so that tests do
     // not unexpectedly use the wrong command decoder
     context_group = new gles2::ContextGroup(
-        gpu_preferences_, true, mailbox_manager_, nullptr /* memory_tracker */,
+        gpu_preferences_, true, nullptr /* memory_tracker */,
         translator_cache_.get(), &completeness_cache_, feature_info,
         options.bind_generates_resource, nullptr /* progress_reporter */,
         gpu_feature_info, discardable_manager_.get(),
@@ -576,12 +559,10 @@ void GLManager::FlushPendingWork() {
 
 uint64_t GLManager::GenerateFenceSyncRelease() {
   NOTREACHED();
-  return 0;
 }
 
 bool GLManager::IsFenceSyncReleased(uint64_t release) {
   NOTREACHED();
-  return false;
 }
 
 void GLManager::SignalSyncToken(const gpu::SyncToken& sync_token,
@@ -595,7 +576,6 @@ void GLManager::WaitSyncToken(const gpu::SyncToken& sync_token) {
 
 bool GLManager::CanWaitUnverifiedSyncToken(const gpu::SyncToken& sync_token) {
   NOTREACHED();
-  return false;
 }
 
 ContextType GLManager::GetContextType() const {

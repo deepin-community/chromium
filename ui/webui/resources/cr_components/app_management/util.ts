@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
+import {assert, assertNotReached} from '//resources/js/assert.js';
 
 import type {App, Permission} from './app_management.mojom-webui.js';
 import {PermissionType, TriState} from './app_management.mojom-webui.js';
@@ -127,10 +127,6 @@ function getUserActionHistogramNameForAppType(appType: AppType): string {
     case AppType.kArc:
       return 'AppManagement.AppDetailViews.ArcApp';
     case AppType.kChromeApp:
-    case AppType.kStandaloneBrowser:
-    case AppType.kStandaloneBrowserChromeApp:
-      // TODO(https://crbug.com/1225848): Figure out appropriate behavior for
-      // Lacros-hosted chrome-apps.
       return 'AppManagement.AppDetailViews.ChromeApp';
     case AppType.kWeb:
       return 'AppManagement.AppDetailViews.WebApp';

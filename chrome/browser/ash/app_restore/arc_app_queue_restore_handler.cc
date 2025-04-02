@@ -8,8 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/metrics/arc_metrics_constants.h"
+#include "ash/root_window_controller.h"
 #include "ash/shell.h"
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
@@ -23,6 +22,7 @@
 #include "chrome/browser/apps/app_service/metrics/app_platform_metrics.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/app_restore/app_restore_arc_task_handler.h"
+#include "chrome/browser/ash/app_restore/app_restore_arc_task_handler_factory.h"
 #include "chrome/browser/ash/app_restore/arc_ghost_window_handler.h"
 #include "chrome/browser/ash/app_restore/arc_window_utils.h"
 #include "chrome/browser/ash/app_restore/full_restore_app_launch_handler.h"
@@ -37,6 +37,8 @@
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/shelf_spinner_controller.h"
 #include "chromeos/ash/components/system/scheduler_configuration_manager_base.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/metrics/arc_metrics_constants.h"
 #include "chromeos/ash/services/cros_healthd/public/cpp/service_connection.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom.h"
 #include "components/app_restore/app_launch_info.h"
@@ -150,8 +152,9 @@ void ArcAppQueueRestoreHandler::RestoreArcApps(
     return;
   }
 
-  window_handler_ = AppRestoreArcTaskHandler::GetForProfile(handler_->profile())
-                        ->window_handler();
+  window_handler_ =
+      AppRestoreArcTaskHandlerFactory::GetForProfile(handler_->profile())
+          ->window_handler();
 
   apps::AppRegistryCache& cache =
       apps::AppServiceProxyFactory::GetForProfile(handler_->profile())
@@ -216,7 +219,6 @@ void ArcAppQueueRestoreHandler::OnArcPlayStoreEnabledChanged(bool enabled) {
 
   StopRestore();
 
-#if BUILDFLAG(ENABLE_WAYLAND_SERVER)
   if (window_handler_) {
     std::set<int32_t> session_ids;
     for (const auto& it : session_id_to_window_id_)
@@ -224,7 +226,6 @@ void ArcAppQueueRestoreHandler::OnArcPlayStoreEnabledChanged(bool enabled) {
     for (auto session_id : session_ids)
       window_handler_->CloseWindow(session_id);
   }
-#endif
 
   app_ids_.clear();
   windows_.clear();
@@ -378,6 +379,16 @@ void ArcAppQueueRestoreHandler::AddWindows(const std::string& app_id) {
 void ArcAppQueueRestoreHandler::PrepareLaunchApps() {
   is_shelf_ready_ = true;
 
+  // Explicit check if the root window controller initialized. b/321719023
+  if (RootWindowController::root_window_controllers().empty()) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE,
+        base::BindOnce(&ArcAppQueueRestoreHandler::PrepareLaunchApps,
+                       weak_ptr_factory_.GetWeakPtr()),
+        kAppLaunchCheckingDelay);
+    return;
+  }
+
   if (app_ids_.empty())
     return;
 
@@ -418,7 +429,8 @@ void ArcAppQueueRestoreHandler::PrepareAppLaunching(const std::string& app_id) {
   }
 
   // Activate ARC in case still not active.
-  arc::ArcSessionManager::Get()->AllowActivation();
+  arc::ArcSessionManager::Get()->AllowActivation(
+      arc::ArcSessionManager::AllowActivationReason::kRestoreApps);
 
   for (const auto& [window_id, app_restore_data] : launch_list) {
     handler_->RecordRestoredAppLaunch(apps::AppTypeName::kArc);
@@ -438,7 +450,6 @@ void ArcAppQueueRestoreHandler::PrepareAppLaunching(const std::string& app_id) {
     session_id_to_window_id_[arc_session_id] = window_id;
 
     bool launch_ghost_window = false;
-#if BUILDFLAG(ENABLE_WAYLAND_SERVER)
     if (window_handler_ &&
         arc::CanLaunchGhostWindowByRestoreData(*app_restore_data) &&
         window_handler_->LaunchArcGhostWindow(app_id, arc_session_id,
@@ -455,7 +466,6 @@ void ArcAppQueueRestoreHandler::PrepareAppLaunching(const std::string& app_id) {
                                              app_info->need_fixup);
       }
     }
-#endif
     RecordArcGhostWindowLaunch(launch_ghost_window);
 
     const auto& file_path = handler_->profile()->GetPath();
@@ -512,8 +522,10 @@ bool ArcAppQueueRestoreHandler::CanLaunchApp() {
   bool is_under_memory_pressure = IsUnderMemoryPressure();
   if (is_under_memory_pressure)
     was_memory_pressured_ = true;
-
-  return !is_under_cpu_usage_limiting && !is_under_memory_pressure;
+  bool is_root_window_controller_initialized =
+      !RootWindowController::root_window_controllers().empty();
+  return !is_under_cpu_usage_limiting && !is_under_memory_pressure &&
+         is_root_window_controller_initialized;
 }
 
 bool ArcAppQueueRestoreHandler::IsUnderMemoryPressure() {
@@ -861,12 +873,10 @@ void ArcAppQueueRestoreHandler::RecordRestoreResult() {
 
   base::UmaHistogramEnumeration(kRestoreArcAppStatesHistogram, restore_state);
 
-#if BUILDFLAG(ENABLE_WAYLAND_SERVER)
   if (window_handler_) {
     base::UmaHistogramCounts100(kGhostWindowPopToArcHistogram,
                                 window_handler_->ghost_window_pop_count());
   }
-#endif
 }
 
 SchedulerConfigurationManager*

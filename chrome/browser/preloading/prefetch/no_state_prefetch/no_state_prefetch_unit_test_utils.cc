@@ -5,6 +5,7 @@
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_unit_test_utils.h"
 
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/chrome_no_state_prefetch_contents_delegate.h"
+#include "chrome/browser/preloading/prefetch/no_state_prefetch/chrome_no_state_prefetch_manager_delegate.h"
 #include "chrome/browser/profiles/profile.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -54,19 +55,21 @@ UnitTestNoStatePrefetchManager::UnitTestNoStatePrefetchManager(Profile* profile)
   set_rate_limit_enabled(false);
 }
 
-UnitTestNoStatePrefetchManager::~UnitTestNoStatePrefetchManager() {}
+UnitTestNoStatePrefetchManager::~UnitTestNoStatePrefetchManager() = default;
 
 void UnitTestNoStatePrefetchManager::Shutdown() {
-  if (next_no_state_prefetch_contents())
+  if (next_no_state_prefetch_contents()) {
     next_no_state_prefetch_contents_->Destroy(FINAL_STATUS_PROFILE_DESTROYED);
+  }
   NoStatePrefetchManager::Shutdown();
 }
 
 void UnitTestNoStatePrefetchManager::MoveEntryToPendingDelete(
     NoStatePrefetchContents* entry,
     FinalStatus final_status) {
-  if (entry == next_no_state_prefetch_contents_.get())
+  if (entry == next_no_state_prefetch_contents_.get()) {
     return;
+  }
   NoStatePrefetchManager::MoveEntryToPendingDelete(entry, final_status);
 }
 
@@ -82,8 +85,9 @@ std::unique_ptr<NoStatePrefetchContents>
 UnitTestNoStatePrefetchManager::FindAndUseEntry(const GURL& url) {
   NoStatePrefetchData* no_state_prefetch_data =
       FindNoStatePrefetchData(url, nullptr);
-  if (!no_state_prefetch_data)
+  if (!no_state_prefetch_data) {
     return nullptr;
+  }
   auto to_erase = FindIteratorForNoStatePrefetchContents(
       no_state_prefetch_data->contents());
   CHECK(to_erase != active_prefetches_.end());
@@ -127,8 +131,9 @@ UnitTestNoStatePrefetchManager::CreateNextNoStatePrefetchContents(
           this, url, ORIGIN_LINK_REL_PRERENDER_CROSSDOMAIN,
           url::Origin::Create(GURL("https://uniquedifferentorigin.com")),
           expected_final_status);
-  for (const GURL& alias : alias_urls)
+  for (const GURL& alias : alias_urls) {
     EXPECT_TRUE(no_state_prefetch_contents->AddAliasURL(alias));
+  }
   return SetNextNoStatePrefetchContents(std::move(no_state_prefetch_contents));
 }
 

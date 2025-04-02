@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include "chrome/browser/ui/webui/privacy_sandbox/privacy_sandbox_internals_handler.h"
+
 #include "base/logging.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
@@ -41,7 +42,7 @@ void PrivacySandboxInternalsHandler::ReadPref(const std::string& pref_name,
 void PrivacySandboxInternalsHandler::ReadContentSettings(
     const ContentSettingsType type,
     ReadContentSettingsCallback callback) {
-  if (!IsKnownEnumValue(type) || type == ContentSettingsType::NUM_TYPES) {
+  if (!IsKnownEnumValue(type)) {
     mojo::ReportBadMessage(
         "ReadContentSettings received invalid ContentSettingsType");
     return;

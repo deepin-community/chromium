@@ -52,7 +52,6 @@ favicon::FaviconService* FaviconServiceFactory::GetForProfile(
 
   // Profile is OffTheRecord without access.
   NOTREACHED() << "This profile is OffTheRecord";
-  return nullptr;
 }
 
 // static
@@ -72,9 +71,12 @@ FaviconServiceFactory::FaviconServiceFactory()
           "FaviconService",
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kOriginalOnly)
-              // TODO(crbug.com/1418376): Check if this service is needed in
+              // TODO(crbug.com/40257657): Check if this service is needed in
               // Guest mode.
               .WithGuest(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOriginalOnly)
               .Build()) {
   DependsOn(HistoryServiceFactory::GetInstance());
 }

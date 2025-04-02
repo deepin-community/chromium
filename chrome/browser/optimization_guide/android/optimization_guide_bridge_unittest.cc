@@ -7,7 +7,6 @@
 #include "base/android/jni_android.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/gmock_callback_support.h"
-#include "chrome/browser/optimization_guide/android/native_j_unittests_jni_headers/OptimizationGuideBridgeNativeUnitTest_jni.h"
 #include "chrome/browser/optimization_guide/chrome_hints_manager.h"
 #include "chrome/browser/optimization_guide/mock_optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
@@ -27,6 +26,10 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/optimization_guide/android/native_j_unittests_jni_headers/OptimizationGuideBridgeNativeUnitTest_jni.h"
+
+using ::testing::_;
 using ::testing::An;
 using ::testing::ByRef;
 using ::testing::DoAll;
@@ -41,11 +44,7 @@ namespace android {
 
 class OptimizationGuideBridgeTest : public testing::Test {
  public:
-  OptimizationGuideBridgeTest()
-      : j_test_(Java_OptimizationGuideBridgeNativeUnitTest_Constructor(
-            base::android::AttachCurrentThread())),
-        env_(base::android::AttachCurrentThread()),
-        profile_manager_(TestingBrowserProcess::GetGlobal()) {}
+  OptimizationGuideBridgeTest() = default;
   ~OptimizationGuideBridgeTest() override = default;
 
   void SetUp() override {
@@ -64,6 +63,9 @@ class OptimizationGuideBridgeTest : public testing::Test {
                                         -> std::unique_ptr<KeyedService> {
                   return std::make_unique<MockOptimizationGuideKeyedService>();
                 })));
+    j_test_ = Java_OptimizationGuideBridgeNativeUnitTest_Constructor(
+        env_,
+        optimization_guide_keyed_service_->GetJavaObject());
   }
 
   void RegisterOptimizationTypes() {
@@ -74,13 +76,13 @@ class OptimizationGuideBridgeTest : public testing::Test {
 
  protected:
   base::android::ScopedJavaGlobalRef<jobject> j_test_;
-  raw_ptr<JNIEnv> env_;
+  raw_ptr<JNIEnv> env_ = base::android::AttachCurrentThread();
   raw_ptr<MockOptimizationGuideKeyedService> optimization_guide_keyed_service_;
 
  private:
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::MainThreadType::UI};
-  TestingProfileManager profile_manager_;
+  TestingProfileManager profile_manager_{TestingBrowserProcess::GetGlobal()};
   raw_ptr<TestingProfile> profile_;
   base::ScopedTempDir temp_dir_;
   std::unique_ptr<TestingPrefServiceSimple> pref_service_;
@@ -111,6 +113,24 @@ TEST_F(OptimizationGuideBridgeTest, CanApplyOptimizationHasHint) {
           ByRef(metadata)));
 
   Java_OptimizationGuideBridgeNativeUnitTest_testCanApplyOptimizationHasHint(
+      env_, j_test_);
+}
+
+TEST_F(OptimizationGuideBridgeTest, SyncCanApplyOptimizationHasHint) {
+  RegisterOptimizationTypes();
+  optimization_guide::proto::LoadingPredictorMetadata hints_metadata;
+  optimization_guide::OptimizationMetadata metadata;
+  metadata.SetAnyMetadataForTesting(hints_metadata);
+  EXPECT_CALL(
+      *optimization_guide_keyed_service_,
+      CanApplyOptimization(GURL("https://example.com/"),
+                           optimization_guide::proto::LOADING_PREDICTOR,
+                           An<optimization_guide::OptimizationMetadata*>()))
+      .WillOnce(
+          DoAll(SetArgPointee<2>(metadata),
+                Return(optimization_guide::OptimizationGuideDecision::kTrue)));
+
+  Java_OptimizationGuideBridgeNativeUnitTest_testSyncCanApplyOptimizationHasHint(
       env_, j_test_);
 }
 
@@ -149,7 +169,8 @@ TEST_F(OptimizationGuideBridgeTest, CanApplyOptimizationOnDemand) {
                                optimization_guide::proto::DEFER_ALL_SCRIPT),
           optimization_guide::proto::CONTEXT_PAGE_INSIGHTS_HUB,
           base::test::IsNotNullCallback(),
-          An<optimization_guide::proto::RequestContextMetadata*>()))
+          An<std::optional<
+              optimization_guide::proto::RequestContextMetadata>>()))
       .WillOnce(DoAll(base::test::RunCallback<3>(GURL("https://example.com/"),
                                                  ByRef(url1_decisions)),
                       base::test::RunCallback<3>(GURL("https://example2.com/"),

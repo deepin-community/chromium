@@ -37,6 +37,13 @@ class LinkCapturingNavigationThrottle : public content::NavigationThrottle {
       ui::PageTransition page_transition,
       ui::PageTransition mask);
 
+  // Inspects the WebContents of the navigation to determine whether, after
+  // successful link capturing, it is a redundant dangling empty browser tab
+  // that should be cleaned up. These dangling tabs result from e.g.
+  // window.open(url) or target="_blank" navigations.
+  static bool IsEmptyDanglingWebContentsAfterLinkCapture(
+      content::NavigationHandle* handle);
+
   using LaunchCallback =
       base::OnceCallback<void(base::OnceClosure on_launch_complete)>;
 
@@ -54,7 +61,8 @@ class LinkCapturingNavigationThrottle : public content::NavigationThrottle {
         Profile* profile,
         content::WebContents* web_contents,
         const GURL& url,
-        bool is_navigation_from_link) = 0;
+        bool is_navigation_from_link,
+        int redirection_chain_size) = 0;
   };
 
   // Possibly creates a navigation throttle that checks if any installed apps
@@ -63,7 +71,9 @@ class LinkCapturingNavigationThrottle : public content::NavigationThrottle {
       content::NavigationHandle* handle,
       std::unique_ptr<Delegate> delegate);
 
-  static base::OnceClosure& GetLinkCaptureLaunchCallbackForTesting();
+  using LaunchCallbackForTesting =
+      base::OnceCallback<void(bool closed_web_contents)>;
+  static LaunchCallbackForTesting& GetLinkCaptureLaunchCallbackForTesting();
 
   LinkCapturingNavigationThrottle(const LinkCapturingNavigationThrottle&) =
       delete;

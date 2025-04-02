@@ -50,7 +50,6 @@ bool AppendArgumentFromJSONValue(const std::string& key,
     case base::Value::Type::BINARY:
     default:
       NOTREACHED() << "improper json type";
-      return false;
   }
   return true;
 }
@@ -220,7 +219,6 @@ bool LocalTestServer::AddCommandLineArguments(
       break;
     default:
       NOTREACHED();
-      return false;
   }
 
   return true;

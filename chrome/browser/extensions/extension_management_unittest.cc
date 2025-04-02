@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/contains.h"
@@ -16,6 +17,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
+#include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/extensions/cws_info_service.h"
 #include "chrome/browser/extensions/extension_management_internal.h"
 #include "chrome/browser/extensions/extension_management_test_util.h"
@@ -23,6 +25,7 @@
 #include "chrome/browser/extensions/standard_management_policy_provider.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/policy/core/common/management/scoped_management_service_override_for_testing.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/extension_prefs.h"
@@ -223,7 +226,7 @@ class ExtensionManagementServiceTest : public testing::Test {
     return GetBlockedAPIPermissions(kNonExistingExtension, update_url);
   }
 
-  void SetExampleDictPref(const base::StringPiece example_dict_preference) {
+  void SetExampleDictPref(std::string_view example_dict_preference) {
     auto result = base::JSONReader::ReadAndReturnValueWithError(
         example_dict_preference,
         base::JSONParserOptions::JSON_ALLOW_TRAILING_COMMAS);
@@ -332,9 +335,13 @@ class ExtensionManagementServiceTest : public testing::Test {
   }
 
   scoped_refptr<const Extension> CreateForcedExtension(const std::string& id) {
-    scoped_refptr<const Extension> extension =
-        CreateExtensionHelper(ManifestLocation::kExternalPolicy, "0.1", id,
-                              kExampleUpdateUrl, Extension::FROM_WEBSTORE);
+    return CreateForcedExtension(id, Extension::FROM_WEBSTORE);
+  }
+
+  scoped_refptr<const Extension> CreateForcedExtension(const std::string& id,
+                                                       int flags) {
+    scoped_refptr<const Extension> extension = CreateExtensionHelper(
+        ManifestLocation::kExternalPolicy, "0.1", id, kExampleUpdateUrl, flags);
     base::Value::Dict forced_list_pref;
     ExternalPolicyLoader::AddExtension(forced_list_pref, id, kExampleUpdateUrl);
     SetPref(true, pref_names::kInstallForceList, forced_list_pref.Clone());
@@ -391,12 +398,12 @@ class MockCWSInfoService : public CWSInfoServiceInterface {
 
 class ExtensionAdminPolicyTest : public ExtensionManagementServiceTest {
  public:
-  ExtensionAdminPolicyTest() {}
-  ~ExtensionAdminPolicyTest() override {}
+  ExtensionAdminPolicyTest() = default;
+  ~ExtensionAdminPolicyTest() override = default;
 
   void SetUpPolicyProvider() {
     provider_ = std::make_unique<StandardManagementPolicyProvider>(
-        extension_management_.get());
+        extension_management_.get(), profile_.get());
   }
 
   void CreateExtension(ManifestLocation location) {
@@ -1201,6 +1208,14 @@ TEST_F(ExtensionManagementServiceTest, ManifestV2Default) {
                 2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
   EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
       3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
+
+  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
+      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
+  // Note: MV3 extension isn't exempt by policy because it's not affected at
+  // all. It's not this class's responsibility to know about the rest of the
+  // criteria; only whether the extension is exempt by policy.
+  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
+      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
 }
 
 TEST_F(ExtensionManagementServiceTest, ManifestV2Disabled) {
@@ -1213,6 +1228,14 @@ TEST_F(ExtensionManagementServiceTest, ManifestV2Disabled) {
   EXPECT_FALSE(extension_management_->IsAllowedManifestVersion(
       2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
   EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
+      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
+
+  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
+      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
+  // Note: MV3 extension isn't exempt by policy because it's not affected at
+  // all. It's not this class's responsibility to know about the rest of the
+  // criteria; only whether the extension is exempt by policy.
+  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
       3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
 }
 
@@ -1227,6 +1250,14 @@ TEST_F(ExtensionManagementServiceTest, ManifestV2Enabled) {
       2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
   EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
       3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
+
+  EXPECT_TRUE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
+      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
+  // Note: MV3 extension isn't exempt by policy because it's not affected at
+  // all. It's not this class's responsibility to know about the rest of the
+  // criteria; only whether the extension is exempt by policy.
+  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
+      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
 }
 
 TEST_F(ExtensionManagementServiceTest, ManifestV2EnabledForForceInstalled) {
@@ -1239,6 +1270,14 @@ TEST_F(ExtensionManagementServiceTest, ManifestV2EnabledForForceInstalled) {
   EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
       3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
 
+  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
+      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
+  // Note: MV3 extension isn't exempt by policy because it's not affected at
+  // all. It's not this class's responsibility to know about the rest of the
+  // criteria; only whether the extension is exempt by policy.
+  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
+      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
+
   base::Value::Dict forced_list_pref;
   ExternalPolicyLoader::AddExtension(forced_list_pref, kTargetExtension,
                                      kExampleUpdateUrl);
@@ -1247,6 +1286,14 @@ TEST_F(ExtensionManagementServiceTest, ManifestV2EnabledForForceInstalled) {
   EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
       2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
   EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
+      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
+
+  EXPECT_TRUE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
+      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
+  // Note: MV3 extension isn't exempt by policy because it's not affected at
+  // all. It's not this class's responsibility to know about the rest of the
+  // criteria; only whether the extension is exempt by policy.
+  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
       3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
 }
 
@@ -1262,6 +1309,15 @@ TEST_F(ExtensionManagementServiceTest, ManifestV2EnabledForExtensionOnly) {
   EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
       2, kTargetExtension, Manifest::Type::TYPE_LOGIN_SCREEN_EXTENSION));
   EXPECT_FALSE(extension_management_->IsAllowedManifestVersion(
+      2, kTargetExtension, Manifest::Type::TYPE_HOSTED_APP));
+
+  EXPECT_TRUE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
+      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
+  EXPECT_TRUE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
+      2, kTargetExtension, Manifest::Type::TYPE_LOGIN_SCREEN_EXTENSION));
+  // Despite being force-installed, hosted apps aren't includede in the
+  // MV2 deprecation, so isn't exempt by policy.
+  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
       2, kTargetExtension, Manifest::Type::TYPE_HOSTED_APP));
 }
 
@@ -1396,6 +1452,90 @@ TEST_F(ExtensionManagementServiceTest, IsFileUrlNavigationAllowed) {
       kTargetExtension));
   EXPECT_EQ(IsFileUrlNavigationAllowed(kTargetExtension), true);
   EXPECT_EQ(IsFileUrlNavigationAllowed(kTargetExtension2), false);
+}
+
+TEST_F(ExtensionManagementServiceTest, IsAllowedByUnpackedDeveloperModePolicy) {
+  base::test::ScopedFeatureList feature_list(
+      extensions_features::kExtensionDisableUnsupportedDeveloper);
+  scoped_refptr<const Extension> unpacked_extension =
+      CreateOffstoreExtension(kNonExistingExtension);
+
+  SetPref(false, prefs::kExtensionsUIDeveloperMode, base::Value(false));
+  EXPECT_FALSE(extension_management_->IsAllowedByUnpackedDeveloperModePolicy(
+      *unpacked_extension));
+
+  SetPref(false, prefs::kExtensionsUIDeveloperMode, base::Value(true));
+  EXPECT_TRUE(extension_management_->IsAllowedByUnpackedDeveloperModePolicy(
+      *unpacked_extension));
+}
+
+TEST_F(ExtensionManagementServiceTest, IsForceInstalledInLowTrustEnvironment) {
+  {
+    // Low trust environment. Verify that the extension is considered
+    // force-installed in a low-trust environment on Windows and Mac.
+    policy::ScopedManagementServiceOverrideForTesting browser_management(
+        policy::ManagementServiceFactory::GetForPlatform(),
+        policy::EnterpriseManagementAuthority::NONE);
+    scoped_refptr<const Extension> forced_extension =
+        CreateForcedExtension(kTargetExtension3, Extension::NO_FLAGS);
+
+    constexpr bool expect_low_trust =
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+        true;
+#else
+        false;
+#endif
+    EXPECT_EQ(extension_management_->IsForceInstalledInLowTrustEnvironment(
+                  *forced_extension),
+              expect_low_trust);
+  }
+  {
+    // High trust environment. Verify that the extension is not considered
+    // force-installed in a low-trust environment.
+    policy::ScopedManagementServiceOverrideForTesting browser_management(
+        policy::ManagementServiceFactory::GetForPlatform(),
+        policy::EnterpriseManagementAuthority::CLOUD_DOMAIN);
+    scoped_refptr<const Extension> forced_extension =
+        CreateForcedExtension(kTargetExtension3, Extension::NO_FLAGS);
+
+    EXPECT_FALSE(extension_management_->IsForceInstalledInLowTrustEnvironment(
+        *forced_extension));
+  }
+}
+
+TEST_F(ExtensionManagementServiceTest,
+       ShouldBlockForceInstalledOffstoreExtension) {
+  {
+    // Low trust environment. Verify that extension is not allowed on
+    // Windows and Mac.
+    policy::ScopedManagementServiceOverrideForTesting browser_management(
+        policy::ManagementServiceFactory::GetForPlatform(),
+        policy::EnterpriseManagementAuthority::NONE);
+    scoped_refptr<const Extension> forced_extension =
+        CreateForcedExtension(kTargetExtension3, Extension::NO_FLAGS);
+
+    bool expect_blocked =
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+        true;
+#else
+        false;
+#endif
+    EXPECT_EQ(extension_management_->ShouldBlockForceInstalledOffstoreExtension(
+                  *forced_extension),
+              expect_blocked);
+  }
+  {
+    // High trust environment. Verify that extension is allowed.
+    policy::ScopedManagementServiceOverrideForTesting browser_management(
+        policy::ManagementServiceFactory::GetForPlatform(),
+        policy::EnterpriseManagementAuthority::CLOUD_DOMAIN);
+    scoped_refptr<const Extension> forced_extension =
+        CreateForcedExtension(kTargetExtension3, Extension::NO_FLAGS);
+
+    EXPECT_FALSE(
+        extension_management_->ShouldBlockForceInstalledOffstoreExtension(
+            *forced_extension));
+  }
 }
 
 // Tests the flag value indicating that extensions are blocklisted by default.

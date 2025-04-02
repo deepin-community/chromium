@@ -5,6 +5,7 @@
 #include "chrome/common/conflicts/module_watcher_win.h"
 
 #include <windows.h>
+
 #include <tlhelp32.h>
 #include <winternl.h>  // For UNICODE_STRING.
 
@@ -155,7 +156,7 @@ ModuleWatcher::~ModuleWatcher() {
   g_module_watcher_instance = nullptr;
 }
 
-ModuleWatcher::ModuleWatcher() {}
+ModuleWatcher::ModuleWatcher() = default;
 
 // Initializes the ModuleWatcher instance.
 void ModuleWatcher::Initialize(OnModuleEventCallback callback) {
@@ -181,7 +182,8 @@ void ModuleWatcher::RegisterDllNotificationCallback() {
       reinterpret_cast<LdrRegisterDllNotificationFunc>(::GetProcAddress(
           ::GetModuleHandle(kNtDll), kLdrRegisterDllNotification));
   if (reg_fn)
-    reg_fn(0, &LoaderNotificationCallback, this, &dll_notification_cookie_);
+    reg_fn(0, &LoaderNotificationCallback, this,
+           &dll_notification_cookie_.AsEphemeralRawAddr());
 }
 
 void ModuleWatcher::UnregisterDllNotificationCallback() {
@@ -254,7 +256,6 @@ void __stdcall ModuleWatcher::LoaderNotificationCallback(
       break;
 
     default:
-      // This is unexpected, but not a reason to crash.
       NOTREACHED() << "Unknown LDR_DLL_NOTIFICATION_REASON: "
                    << notification_reason;
   }

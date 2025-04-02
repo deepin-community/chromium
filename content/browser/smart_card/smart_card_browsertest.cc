@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "base/base_switches.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
@@ -55,6 +56,7 @@ using testing::InSequence;
 using testing::MatchesRegex;
 using testing::Return;
 using testing::StrictMock;
+using testing::WithArg;
 
 namespace content {
 
@@ -182,9 +184,8 @@ class SmartCardTestContentBrowserClient
   bool ShouldUrlUseApplicationIsolationLevel(BrowserContext* browser_context,
                                              const GURL& url) override;
   std::optional<blink::ParsedPermissionsPolicy>
-  GetPermissionsPolicyForIsolatedWebApp(
-      content::BrowserContext* browser_context,
-      const url::Origin& app_origin) override;
+  GetPermissionsPolicyForIsolatedWebApp(WebContents* web_contents,
+                                        const url::Origin& app_origin) override;
 
  private:
   std::unique_ptr<SmartCardDelegate> delegate_;
@@ -227,35 +228,31 @@ class SmartCardTest : public ContentBrowserTest {
       mock_transaction.ExpectEndTransaction(SmartCardDisposition::kReset);
     }
 
-    std::string js_snippet = std::format(R"(
-      (async () => {{
+    std::string js_snippet = base::StringPrintf(R"(
+      (async () => {
         let context = await navigator.smartCard.establishContext();
 
         let connection =
           (await context.connect("Fake reader", "shared",
-            {{preferredProtocols: ["t1"]}})).connection;
+            {preferredProtocols: ["t1"]})).connection;
 
-        let transaction = {};
+        let transaction = %s;
 
         let transactionPromise = connection.startTransaction(transaction);
-        try {{
+        try {
           await transactionPromise;
-        }} catch (e) {{
-          return `startTransaction: ${{e.name}}, ${{e.message}}`;
-        }}
+        } catch (e) {
+          return `startTransaction: ${e.name}, ${e.message}`;
+        }
 
         return "ok";
-      }})())",
-                                         transaction_callback);
+      })())",
+                                                transaction_callback.c_str());
 
     EXPECT_EQ(expected_result, EvalJs(shell(), js_snippet));
   }
 
  private:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
-  }
-
   void SetUpOnMainThread() override {
     ContentBrowserTest::SetUpOnMainThread();
 
@@ -315,15 +312,15 @@ bool SmartCardTestContentBrowserClient::ShouldUrlUseApplicationIsolationLevel(
 
 std::optional<blink::ParsedPermissionsPolicy>
 SmartCardTestContentBrowserClient::GetPermissionsPolicyForIsolatedWebApp(
-    content::BrowserContext* browser_context,
+    WebContents* web_contents,
     const url::Origin& app_origin) {
   blink::ParsedPermissionsPolicyDeclaration coi_decl(
-      blink::mojom::PermissionsPolicyFeature::kCrossOriginIsolated,
+      network::mojom::PermissionsPolicyFeature::kCrossOriginIsolated,
       /*allowed_origins=*/{},
       /*self_if_matches=*/std::nullopt, /*matches_all_origins=*/true,
       /*matches_opaque_src=*/false);
   blink::ParsedPermissionsPolicyDeclaration smart_card_decl(
-      blink::mojom::PermissionsPolicyFeature::kSmartCard,
+      network::mojom::PermissionsPolicyFeature::kSmartCard,
       /*allowed_origins=*/{},
       /*self_if_matches=*/app_origin, /*matches_all_origins=*/false,
       /*matches_opaque_src=*/false);
@@ -882,6 +879,34 @@ IN_PROC_BROWSER_TEST_F(SmartCardTest, GetStatusChange) {
        return `${statesOut[0].readerName}, {${eventStateString}}` +
          `, ${statesOut[0].eventCount}, {${atrString}}`;
      })())"));
+}
+
+IN_PROC_BROWSER_TEST_F(SmartCardTest, GetStatusChangeInterruptedByClose) {
+  std::optional<SmartCardContext::GetStatusChangeCallback> callback_holder;
+  MockSmartCardContextFactory& mock_context_factory =
+      GetFakeSmartCardDelegate().mock_context_factory;
+
+  EXPECT_CALL(mock_context_factory, GetStatusChange)
+      .WillOnce(
+          WithArg<2>([&callback_holder](
+                         SmartCardContext::GetStatusChangeCallback callback) {
+            callback_holder.emplace(std::move(callback));
+          }));
+
+  ASSERT_TRUE(NavigateToURL(shell(), GetIsolatedContextUrl()));
+
+  ASSERT_TRUE(ExecJs(shell(), R"((async () => {
+       let context = await navigator.smartCard.establishContext();
+
+       let readerStates = [{readerName: "Fake Reader",
+                            currentState: {empty: true},
+                            currentCount: 6 }];
+       let promise = context.getStatusChange(
+           readerStates,
+           {timeout: 4321});
+           })())"));
+  ASSERT_NO_FATAL_FAILURE(shell()->Reload());
+  content::WaitForLoadStop(shell()->web_contents());
 }
 
 IN_PROC_BROWSER_TEST_F(SmartCardTest, GetStatusChangeAborted) {
@@ -1614,10 +1639,10 @@ class NoCoiPermissionSmartCardTestContentBrowserClient
  public:
   std::optional<blink::ParsedPermissionsPolicy>
   GetPermissionsPolicyForIsolatedWebApp(
-      content::BrowserContext* browser_context,
+      WebContents* web_contents,
       const url::Origin& app_origin) override {
     return {{blink::ParsedPermissionsPolicyDeclaration(
-        blink::mojom::PermissionsPolicyFeature::kSmartCard,
+        network::mojom::PermissionsPolicyFeature::kSmartCard,
         /*allowed_origins=*/{},
         /*self_if_matches=*/app_origin,
         /*matches_all_origins=*/false, /*matches_opaque_src=*/false)}};

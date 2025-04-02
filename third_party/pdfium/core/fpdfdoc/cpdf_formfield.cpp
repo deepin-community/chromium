@@ -27,9 +27,9 @@
 #include "core/fpdfdoc/cpdf_formcontrol.h"
 #include "core/fpdfdoc/cpdf_generateap.h"
 #include "core/fpdfdoc/cpdf_interactiveform.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/stl_util.h"
-#include "third_party/base/check.h"
-#include "third_party/base/containers/contains.h"
 
 namespace {
 
@@ -52,18 +52,6 @@ RetainPtr<const CPDF_Object> GetFieldAttrRecursive(
 
 bool IsComboOrListField(CPDF_FormField::Type type) {
   switch (type) {
-    case CPDF_FormField::kComboBox:
-    case CPDF_FormField::kListBox:
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool HasOptField(CPDF_FormField::Type type) {
-  switch (type) {
-    case CPDF_FormField::kCheckBox:
-    case CPDF_FormField::kRadioButton:
     case CPDF_FormField::kComboBox:
     case CPDF_FormField::kListBox:
       return true;
@@ -274,7 +262,7 @@ int CPDF_FormField::GetControlIndex(const CPDF_FormControl* pControl) const {
   if (it == controls.end())
     return -1;
 
-  return pdfium::base::checked_cast<int>(it - controls.begin());
+  return pdfium::checked_cast<int>(it - controls.begin());
 }
 
 FormFieldType CPDF_FormField::GetFieldType() const {
@@ -592,14 +580,26 @@ int CPDF_FormField::GetDefaultSelectedItem() const {
   return -1;
 }
 
+bool CPDF_FormField::HasOptField() const {
+  switch (GetType()) {
+    case CPDF_FormField::kCheckBox:
+    case CPDF_FormField::kRadioButton:
+    case CPDF_FormField::kComboBox:
+    case CPDF_FormField::kListBox:
+      return true;
+    default:
+      return false;
+  }
+}
+
 int CPDF_FormField::CountOptions() const {
-  CHECK(HasOptField(GetType()));
+  CHECK(HasOptField());
   RetainPtr<const CPDF_Array> pArray = ToArray(GetFieldAttrInternal("Opt"));
   return pArray ? fxcrt::CollectionSize<int>(*pArray) : 0;
 }
 
 WideString CPDF_FormField::GetOptionText(int index, int sub_index) const {
-  CHECK(HasOptField(GetType()));
+  CHECK(HasOptField());
   RetainPtr<const CPDF_Array> pArray = ToArray(GetFieldAttrInternal("Opt"));
   if (!pArray)
     return WideString();
@@ -691,7 +691,7 @@ bool CPDF_FormField::CheckControl(int iControlIndex,
 
 WideString CPDF_FormField::GetCheckValue(bool bDefault) const {
   DCHECK(GetType() == kCheckBox || GetType() == kRadioButton);
-  WideString csExport = L"Off";
+  auto csExport = WideString::FromASCII("Off");
   int iCount = CountControls();
   for (int i = 0; i < iCount; i++) {
     CPDF_FormControl* pControl = GetControl(i);

@@ -12,15 +12,14 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "chrome/services/sharing/nearby/common/nearby_features.h"
 #include "chrome/services/sharing/nearby/test_support/fake_adapter.h"
+#include "components/cross_device/nearby/nearby_features.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 namespace {
 const char kDeviceAddress1[] = "DeviceAddress1";
@@ -376,5 +375,4 @@ TEST_F(BluetoothClassicMediumTest, TestListenForService_Failure) {
       kNearbySharingServiceName, kNearbySharingServiceUuid.value()));
 }
 
-}  // namespace chrome
-}  // namespace nearby
+}  // namespace nearby::chrome

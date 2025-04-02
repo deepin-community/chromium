@@ -11,9 +11,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom-shared.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/performance_controls/memory_saver_chip_tab_helper.h"
 #include "chrome/browser/ui/performance_controls/performance_controls_metrics.h"
-#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/test_with_browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
@@ -25,6 +25,7 @@
 #include "chrome/browser/ui/views/side_panel/side_panel.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/performance_manager/public/features.h"
@@ -43,8 +44,9 @@
 #include "ui/views/test/button_test_api.h"
 
 namespace {
-constexpr int kMemorySavingsKilobytes = 100 * 1024;
-constexpr int kHighMemorySavingsKilobytes = 300 * 1024;
+constexpr int64_t kMemorySavingsKilobytes = 100 * 1024;
+constexpr int64_t kHighMemorySavingsKilobytes = 300 * 1024;
+constexpr int64_t kVeryHighMemorySavingsKilobytes = 3 * 1024 * 1024;
 }  // namespace
 
 class MemorySaverChipViewTest
@@ -74,9 +76,6 @@ class MemorySaverChipViewTest
   }
 
   base::HistogramTester histogram_tester_;
-
- private:
-  base::test::ScopedFeatureList feature_list_;
 };
 
 // When the previous page has a tab discard state of true, when the icon is
@@ -260,41 +259,26 @@ TEST_F(MemorySaverChipViewTest, ShouldLogMetricsForCelebratoryExpandedChip) {
       MemorySaverChipState::kExpandedWithSavings, 1);
 }
 
-class MemorySaverChipViewWithPerformanceSidePanelTest
-    : public MemorySaverChipViewTest {
- public:
-  MemorySaverChipViewWithPerformanceSidePanelTest() = default;
+// When a tab is proactively discarded with >2Gb memory saving, we should show
+// the expanded chip with savings, and not crash.
+TEST_F(MemorySaverChipViewTest, MoreThan2GbMemorySavings) {
+  // Skip the "education" expansion.
+  SetChipExpandedCount(MemorySaverChipTabHelper::kChipAnimationCount);
 
-  void SetUp() override {
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{performance_manager::features::
-                                  kPerformanceControlsSidePanel},
-        /*disabled_features=*/{});
-    TestWithBrowserView::SetUp();
+  // Add a new tab with a >2GB memory saving.
+  AddNewTab(kVeryHighMemorySavingsKilobytes,
+            ::mojom::LifecycleUnitDiscardReason::PROACTIVE);
 
-    AddNewTab(kMemorySavingsKilobytes,
-              ::mojom::LifecycleUnitDiscardReason::PROACTIVE);
-
-    SetMemorySaverModeEnabled(true);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-TEST_F(MemorySaverChipViewWithPerformanceSidePanelTest, OpensSidePanel) {
+  // Fast-forward time, to exceed the time threshold for the chip to be shown.
+  task_environment()->AdvanceClock(base::Hours(8));
   SetTabDiscardState(0, true);
+
+  // Ensure that the expanded-with-savings chip was shown.
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetWebContentsAt(0);
+  MemorySaverChipTabHelper* const tab_helper =
+      MemorySaverChipTabHelper::FromWebContents(web_contents);
+  EXPECT_EQ(tab_helper->chip_state(),
+            memory_saver::ChipState::EXPANDED_WITH_SAVINGS);
   EXPECT_TRUE(GetPageActionIconView()->GetVisible());
-
-  ASSERT_FALSE(SidePanelUtil::GetSidePanelCoordinatorForBrowser(browser())
-                   ->IsSidePanelShowing());
-
-  PageActionIconView* memory_saver_chip = GetPageActionIconView();
-  ui::MouseEvent e(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                   ui::EventTimeForNow(), 0, 0);
-  views::test::ButtonTestApi test_api(memory_saver_chip);
-  test_api.NotifyClick(e);
-
-  ASSERT_TRUE(SidePanelUtil::GetSidePanelCoordinatorForBrowser(browser())
-                  ->IsSidePanelShowing());
 }

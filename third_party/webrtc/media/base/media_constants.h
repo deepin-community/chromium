@@ -64,6 +64,7 @@ extern const char kCodecParamUseInbandFec[];
 extern const char kCodecParamUseDtx[];
 extern const char kCodecParamMaxAverageBitrate[];
 extern const char kCodecParamMaxPlaybackRate[];
+extern const char kCodecParamPerLayerPictureLossIndication[];
 
 extern const char kParamValueTrue[];
 // Parameters are stored as parameter/value pairs. For parameters who do not
@@ -157,6 +158,7 @@ extern const char kAv1FmtpTier[];
 
 extern const int kDefaultVideoMaxFramerate;
 extern const int kDefaultVideoMaxQpVpx;
+extern const int kDefaultVideoMaxQpAv1;
 extern const int kDefaultVideoMaxQpH26x;
 
 extern const size_t kConferenceMaxNumSpatialLayers;

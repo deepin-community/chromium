@@ -11,7 +11,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "extensions/common/extension_id.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/menus/simple_menu_model.h"
 #include "url/origin.h"
 
 class Browser;
@@ -31,6 +31,13 @@ class SidePanelService;
 class ExtensionContextMenuModel : public ui::SimpleMenuModel,
                                   public ui::SimpleMenuModel::Delegate {
  public:
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kHomePageMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kToggleVisibilityMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kPageAccessMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kPageAccessRunOnClickSubmenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kPageAccessRunOnSiteSubmenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kPageAccessRunOnAllSitesSubmenuItem);
+
   enum MenuEntries {
     HOME_PAGE = 0,
     OPTIONS,
@@ -188,7 +195,7 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
   ContextMenuSource source_;
 
   // The origin used to populate the context menu's content.
-  // TODO(crbug.com/1435117): Web contents may change while the menu is open,
+  // TODO(crbug.com/40265043): Web contents may change while the menu is open,
   // which may affect the context menu contents. We should dynamically update
   // the context menu, or close it when this happens.
   url::Origin origin_;

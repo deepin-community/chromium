@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "third_party/blink/public/platform/media/video_frame_compositor.h"
+#include "third_party/blink/renderer/platform/media/video_frame_compositor.h"
 
 #include <memory>
 
@@ -17,7 +17,6 @@
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "media/base/media_switches.h"
 #include "media/base/video_frame.h"
-#include "third_party/blink/public/platform/web_video_frame_submitter.h"
 
 namespace blink {
 
@@ -117,7 +116,7 @@ void VideoFrameCompositor::OnRendererStateUpdate(bool new_state) {
   if (!auto_open_close_) {
     auto_open_close_ = std::make_unique<
         base::trace_event::AutoOpenCloseEvent<kTracingCategory>>(
-        base::trace_event::AutoOpenCloseEvent<kTracingCategory>::Type::ASYNC,
+        base::trace_event::AutoOpenCloseEvent<kTracingCategory>::Type::kAsync,
         "VideoPlayback");
   }
 
@@ -167,6 +166,12 @@ scoped_refptr<media::VideoFrame> VideoFrameCompositor::GetCurrentFrame() {
 scoped_refptr<media::VideoFrame>
 VideoFrameCompositor::GetCurrentFrameOnAnyThread() {
   base::AutoLock lock(current_frame_lock_);
+
+  // Treat frames vended to external consumers as being rendered. This ensures
+  // that hidden elements that are being driven by WebGL/WebGPU/Canvas rendering
+  // don't mark all frames as dropped.
+  rendered_last_frame_ = true;
+
   return current_frame_;
 }
 
@@ -185,6 +190,7 @@ void VideoFrameCompositor::SetCurrentFrame_Locked(
 
 void VideoFrameCompositor::PutCurrentFrame() {
   DCHECK(task_runner_->BelongsToCurrentThread());
+  base::AutoLock lock(current_frame_lock_);
   rendered_last_frame_ = true;
 }
 
@@ -332,18 +338,21 @@ VideoFrameCompositor::GetLastPresentedFrameMetadata() {
     frame_metadata->presented_frames = presentation_counter_;
   }
 
-  frame_metadata->width = last_frame->visible_rect().width();
-  frame_metadata->height = last_frame->visible_rect().height();
-
-  frame_metadata->media_time = last_frame->timestamp();
-
-  frame_metadata->metadata.MergeMetadataFrom(last_frame->metadata());
+  if (last_frame) {
+    frame_metadata->width = last_frame->visible_rect().width();
+    frame_metadata->height = last_frame->visible_rect().height();
+    frame_metadata->media_time = last_frame->timestamp();
+    frame_metadata->metadata.MergeMetadataFrom(last_frame->metadata());
+  }
 
   {
     base::AutoLock lock(callback_lock_);
     if (callback_) {
       frame_metadata->average_frame_duration =
           callback_->GetPreferredRenderInterval();
+    } else if (last_frame && last_frame->metadata().frame_duration) {
+      frame_metadata->average_frame_duration =
+          *last_frame->metadata().frame_duration;
     }
     frame_metadata->rendering_interval = last_interval_;
   }
@@ -362,10 +371,6 @@ bool VideoFrameCompositor::ProcessNewFrame(
     return false;
   }
 
-  // Set the flag indicating that the current frame is unrendered, if we get a
-  // subsequent PutCurrentFrame() call it will mark it as rendered.
-  rendered_last_frame_ = false;
-
   // TODO(crbug.com/1447318): Add other cases where the frame is not readable.
   bool is_frame_readable = !frame->metadata().dcomp_surface;
 
@@ -374,6 +379,11 @@ bool VideoFrameCompositor::ProcessNewFrame(
   OnNewFramePresentedCB frame_presented_cb;
   {
     base::AutoLock lock(current_frame_lock_);
+
+    // Set the flag indicating that the current frame is unrendered, if we get a
+    // subsequent PutCurrentFrame() call it will mark it as rendered.
+    rendered_last_frame_ = false;
+
     SetCurrentFrame_Locked(std::move(frame), presentation_time);
     frame_presented_cb = std::move(new_presented_frame_cb_);
   }
@@ -424,12 +434,19 @@ bool VideoFrameCompositor::CallRender(base::TimeTicks deadline_min,
                                       base::TimeTicks deadline_max,
                                       RenderingMode mode) {
   DCHECK(task_runner_->BelongsToCurrentThread());
+
+  bool have_unseen_frame;
+  {
+    base::AutoLock lock(current_frame_lock_);
+    have_unseen_frame = !rendered_last_frame_ && HasCurrentFrame();
+  }
+
   base::AutoLock lock(callback_lock_);
 
   if (!callback_) {
     // Even if we no longer have a callback, return true if we have a frame
     // which |client_| hasn't seen before.
-    return !rendered_last_frame_ && GetCurrentFrame();
+    return have_unseen_frame;
   }
 
   DCHECK(rendering_);
@@ -441,8 +458,8 @@ bool VideoFrameCompositor::CallRender(base::TimeTicks deadline_min,
   // also don't signal for mode == kStartup since UpdateCurrentFrame() may occur
   // before the PutCurrentFrame() for the kStartup induced CallRender().
   const bool was_background_rendering = is_background_rendering_;
-  if (!rendered_last_frame_ && GetCurrentFrame() &&
-      mode == RenderingMode::kNormal && !was_background_rendering) {
+  if (have_unseen_frame && mode == RenderingMode::kNormal &&
+      !was_background_rendering) {
     callback_->OnFrameDropped();
   }
 
@@ -473,8 +490,8 @@ void VideoFrameCompositor::OnContextLost() {
   // is not valid any more. current_frame_ should be reset. Now the compositor
   // has no concept of resetting current_frame_, so a black frame is set.
   base::AutoLock lock(current_frame_lock_);
-  if (!current_frame_ || (!current_frame_->HasTextures() &&
-                          !current_frame_->HasGpuMemoryBuffer())) {
+  if (!current_frame_ || (!current_frame_->HasSharedImage() &&
+                          !current_frame_->HasMappableGpuBuffer())) {
     return;
   }
   scoped_refptr<media::VideoFrame> black_frame =

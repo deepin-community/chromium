@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ash/policy/invalidation/affiliated_invalidation_service_provider_impl.h"
 
+#include <stdint.h>
+
 #include <memory>
 #include <string>
 #include <utility>
@@ -24,11 +26,11 @@
 #include "components/invalidation/impl/fake_invalidation_handler.h"
 #include "components/invalidation/impl/fake_invalidation_service.h"
 #include "components/invalidation/impl/fcm_invalidation_service.h"
-#include "components/invalidation/impl/profile_invalidation_provider.h"
+#include "components/invalidation/invalidation_listener.h"
+#include "components/invalidation/profile_invalidation_provider.h"
 #include "components/invalidation/public/invalidation_service.h"
 #include "components/invalidation/public/invalidator_state.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "content/public/browser/browser_context.h"
@@ -48,20 +50,22 @@ namespace {
 const char kAffiliatedUserID1[] = "test_1@example.com";
 const char kAffiliatedUserID2[] = "test_2@example.com";
 const char kUnaffiliatedUserID[] = "test@other_domain.test";
+const int64_t kFakeProjectNumber = 1234567890;
 
-std::unique_ptr<invalidation::InvalidationService>
-CreateInvalidationServiceForSenderId(const std::string& fcm_sender_id) {
+std::variant<std::unique_ptr<invalidation::InvalidationService>,
+             std::unique_ptr<invalidation::InvalidationListener>>
+CreateInvalidationServiceForProjectNumber(int64_t, std::string) {
   std::unique_ptr<invalidation::FakeInvalidationService> invalidation_service(
       new invalidation::FakeInvalidationService);
   invalidation_service->SetInvalidatorState(
-      invalidation::TRANSIENT_INVALIDATION_ERROR);
+      invalidation::InvalidatorState::kDisabled);
   return invalidation_service;
 }
 
 std::unique_ptr<KeyedService> BuildProfileInvalidationProvider(
     content::BrowserContext* context) {
   return std::make_unique<invalidation::ProfileInvalidationProvider>(
-      nullptr, base::BindRepeating(&CreateInvalidationServiceForSenderId));
+      nullptr, base::BindRepeating(&CreateInvalidationServiceForProjectNumber));
 }
 
 void SendInvalidatorStateChangeNotification(
@@ -231,7 +235,8 @@ void AffiliatedInvalidationServiceProviderImplTest::SetUp() {
       ->RegisterTestingFactory(
           base::BindRepeating(&BuildProfileInvalidationProvider));
 
-  provider_ = std::make_unique<AffiliatedInvalidationServiceProviderImpl>();
+  provider_ = std::make_unique<AffiliatedInvalidationServiceProviderImpl>(
+      kFakeProjectNumber);
 }
 
 void AffiliatedInvalidationServiceProviderImplTest::TearDown() {
@@ -241,7 +246,8 @@ void AffiliatedInvalidationServiceProviderImplTest::TearDown() {
 
   invalidation::ProfileInvalidationProviderFactory::GetInstance()
       ->RegisterTestingFactory(
-          BrowserContextKeyedServiceFactory::TestingFactory());
+          invalidation::ProfileInvalidationProviderFactory::
+              GlobalTestingFactory());
   DeviceOAuth2TokenServiceFactory::Shutdown();
   ash::SystemSaltGetter::Shutdown();
   ash::CryptohomeMiscClient::Shutdown();
@@ -287,7 +293,7 @@ void AffiliatedInvalidationServiceProviderImplTest::
   // that the consumer is informed about this.
   EXPECT_EQ(0, consumer_->GetAndClearInvalidationServiceSetCount());
   profile_invalidation_service_->SetInvalidatorState(
-      invalidation::INVALIDATIONS_ENABLED);
+      invalidation::InvalidatorState::kEnabled);
   EXPECT_EQ(1, consumer_->GetAndClearInvalidationServiceSetCount());
   EXPECT_EQ(profile_invalidation_service_, consumer_->GetInvalidationService());
 
@@ -312,7 +318,7 @@ void AffiliatedInvalidationServiceProviderImplTest::
   // Indicate that the per-profile invalidation service has connected. Verify
   // that the consumer is not called back.
   profile_invalidation_service_->SetInvalidatorState(
-      invalidation::INVALIDATIONS_ENABLED);
+      invalidation::InvalidatorState::kEnabled);
   EXPECT_EQ(0, consumer_->GetAndClearInvalidationServiceSetCount());
 
   // Verify that the device-global invalidation service still exists.
@@ -329,8 +335,8 @@ void AffiliatedInvalidationServiceProviderImplTest::
   // Indicate that the device-global invalidation service has connected. Verify
   // that the consumer is informed about this.
   EXPECT_EQ(0, consumer_->GetAndClearInvalidationServiceSetCount());
-  SendInvalidatorStateChangeNotification(device_invalidation_service_,
-                                         invalidation::INVALIDATIONS_ENABLED);
+  SendInvalidatorStateChangeNotification(
+      device_invalidation_service_, invalidation::InvalidatorState::kEnabled);
   EXPECT_EQ(1, consumer_->GetAndClearInvalidationServiceSetCount());
   EXPECT_EQ(device_invalidation_service_, consumer_->GetInvalidationService());
 }
@@ -343,7 +349,7 @@ void AffiliatedInvalidationServiceProviderImplTest::
   // that the consumer is informed about this.
   EXPECT_EQ(0, consumer_->GetAndClearInvalidationServiceSetCount());
   profile_invalidation_service_->SetInvalidatorState(
-      invalidation::INVALIDATION_CREDENTIALS_REJECTED);
+      invalidation::InvalidatorState::kDisabled);
   EXPECT_EQ(1, consumer_->GetAndClearInvalidationServiceSetCount());
   EXPECT_EQ(nullptr, consumer_->GetInvalidationService());
 
@@ -362,9 +368,13 @@ AffiliatedInvalidationServiceProviderImplTest::GetProfileInvalidationService(
               ->GetServiceForBrowserContext(profile, create));
   if (!invalidation_provider)
     return nullptr;
+  auto invalidation_service =
+      invalidation_provider->GetInvalidationServiceOrListener(
+          kFakeProjectNumber);
+  CHECK(std::holds_alternative<invalidation::InvalidationService*>(
+      invalidation_service));
   return static_cast<invalidation::FakeInvalidationService*>(
-      invalidation_provider->GetInvalidationServiceForCustomSender(
-          kPolicyFCMInvalidationSenderID));
+      std::get<invalidation::InvalidationService*>(invalidation_service));
 }
 
 // No consumers are registered with the
@@ -409,8 +419,7 @@ TEST_F(AffiliatedInvalidationServiceProviderImplTest,
   // Verify that the consumer is informed about this.
   EXPECT_EQ(0, consumer_->GetAndClearInvalidationServiceSetCount());
   SendInvalidatorStateChangeNotification(
-      device_invalidation_service_,
-      invalidation::INVALIDATION_CREDENTIALS_REJECTED);
+      device_invalidation_service_, invalidation::InvalidatorState::kDisabled);
   EXPECT_EQ(1, consumer_->GetAndClearInvalidationServiceSetCount());
   EXPECT_EQ(nullptr, consumer_->GetInvalidationService());
 
@@ -478,7 +487,7 @@ TEST_F(AffiliatedInvalidationServiceProviderImplTest,
 }
 
 // Verifies that every InvalidationService state except
-// |invalidation::INVALIDATIONS_ENABLED| are treated as disconnected.
+// |invalidation::InvalidatorState::kEnabled| are treated as disconnected.
 TEST_F(AffiliatedInvalidationServiceProviderImplTest,
        FlipInvalidationServiceState) {
   consumer_ = std::make_unique<FakeConsumer>(provider_.get(), "consumer");
@@ -486,21 +495,15 @@ TEST_F(AffiliatedInvalidationServiceProviderImplTest,
   // Create and make |profile_invalidation_service_| enabled.
   LogInAsAffiliatedUserAndConnectInvalidationService();
 
-  for (const auto disconnect_state :
-       {invalidation::TRANSIENT_INVALIDATION_ERROR,
-        invalidation::DEFAULT_INVALIDATION_ERROR,
-        invalidation::INVALIDATION_CREDENTIALS_REJECTED,
-        invalidation::INVALIDATOR_SHUTTING_DOWN, invalidation::STOPPED}) {
-    profile_invalidation_service_->SetInvalidatorState(disconnect_state);
-    EXPECT_EQ(1, consumer_->GetAndClearInvalidationServiceSetCount());
-    EXPECT_FALSE(consumer_->GetInvalidationService());
+  profile_invalidation_service_->SetInvalidatorState(
+      invalidation::InvalidatorState::kDisabled);
+  EXPECT_EQ(1, consumer_->GetAndClearInvalidationServiceSetCount());
+  EXPECT_FALSE(consumer_->GetInvalidationService());
 
-    profile_invalidation_service_->SetInvalidatorState(
-        invalidation::INVALIDATIONS_ENABLED);
-    EXPECT_EQ(1, consumer_->GetAndClearInvalidationServiceSetCount());
-    EXPECT_EQ(profile_invalidation_service_,
-              consumer_->GetInvalidationService());
-  }
+  profile_invalidation_service_->SetInvalidatorState(
+      invalidation::InvalidatorState::kEnabled);
+  EXPECT_EQ(1, consumer_->GetAndClearInvalidationServiceSetCount());
+  EXPECT_EQ(profile_invalidation_service_, consumer_->GetInvalidationService());
 }
 
 // A consumer is registered with the AffiliatedInvalidationServiceProviderImpl.
@@ -589,7 +592,7 @@ TEST_F(AffiliatedInvalidationServiceProviderImplTest,
   // Indicate that the second user's per-profile invalidation service has
   // connected. Verify that the consumer is not called back.
   second_profile_invalidation_service->SetInvalidatorState(
-      invalidation::INVALIDATIONS_ENABLED);
+      invalidation::InvalidatorState::kEnabled);
   EXPECT_EQ(0, consumer_->GetAndClearInvalidationServiceSetCount());
 
   // Indicate that the first user's per-profile invalidation service has
@@ -598,7 +601,7 @@ TEST_F(AffiliatedInvalidationServiceProviderImplTest,
   // user's.
   EXPECT_EQ(0, consumer_->GetAndClearInvalidationServiceSetCount());
   profile_invalidation_service_->SetInvalidatorState(
-      invalidation::INVALIDATION_CREDENTIALS_REJECTED);
+      invalidation::InvalidatorState::kDisabled);
   EXPECT_EQ(1, consumer_->GetAndClearInvalidationServiceSetCount());
   EXPECT_EQ(second_profile_invalidation_service,
             consumer_->GetInvalidationService());
@@ -688,7 +691,7 @@ TEST_F(AffiliatedInvalidationServiceProviderImplTest, NoServiceAfterShutdown) {
   // Indicate that the second user's per-profile invalidation service has
   // connected. Verify that the consumer is not called back.
   second_profile_invalidation_service->SetInvalidatorState(
-      invalidation::INVALIDATIONS_ENABLED);
+      invalidation::InvalidatorState::kEnabled);
   EXPECT_EQ(0, consumer_->GetAndClearInvalidationServiceSetCount());
 
   // Verify that the device-global invalidation service still does not exist.

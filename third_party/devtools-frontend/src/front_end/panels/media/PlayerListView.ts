@@ -8,8 +8,8 @@ import * as IconButton from '../../ui/components/icon_button/icon_button.js';
 import * as UI from '../../ui/legacy/legacy.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 
-import {type MainView, type TriggerDispatcher} from './MainView.js';
-import {type PlayerEvent} from './MediaModel.js';
+import type {MainView, TriggerDispatcher} from './MainView.js';
+import type {PlayerEvent} from './MediaModel.js';
 import playerListViewStyles from './playerListView.css.js';
 import {PlayerPropertyKeys} from './PlayerPropertiesView.js';
 
@@ -53,8 +53,7 @@ export class PlayerListView extends UI.Widget.VBox implements TriggerDispatcher 
 
   constructor(mainContainer: MainView) {
     super(true);
-
-    this.element.setAttribute('jslog', `${VisualLogging.pane('player-list')}`);
+    this.registerRequiredCSS(playerListViewStyles);
 
     this.playerEntryFragments = new Map();
     this.playerEntriesWithHostnameFrameTitle = new Set();
@@ -99,12 +98,15 @@ export class PlayerListView extends UI.Widget.VBox implements TriggerDispatcher 
   private rightClickPlayer(playerID: string, event: Event): boolean {
     const contextMenu = new UI.ContextMenu.ContextMenu(event);
     contextMenu.headerSection().appendItem(
-        i18nString(UIStrings.hidePlayer), this.mainContainer.markPlayerForDeletion.bind(this.mainContainer, playerID));
+        i18nString(UIStrings.hidePlayer), this.mainContainer.markPlayerForDeletion.bind(this.mainContainer, playerID),
+        {jslogContext: 'hide-player'});
     contextMenu.headerSection().appendItem(
         i18nString(UIStrings.hideAllOthers),
-        this.mainContainer.markOtherPlayersForDeletion.bind(this.mainContainer, playerID));
+        this.mainContainer.markOtherPlayersForDeletion.bind(this.mainContainer, playerID),
+        {jslogContext: 'hide-all-others'});
     contextMenu.headerSection().appendItem(
-        i18nString(UIStrings.savePlayerInfo), this.mainContainer.exportPlayerData.bind(this.mainContainer, playerID));
+        i18nString(UIStrings.savePlayerInfo), this.mainContainer.exportPlayerData.bind(this.mainContainer, playerID),
+        {jslogContext: 'save-player-info'});
     void contextMenu.show();
     return true;
   }
@@ -224,7 +226,7 @@ export class PlayerListView extends UI.Widget.VBox implements TriggerDispatcher 
     // title from the FrameUrl though, since the page location itself might not
     // have any relevance to the video being played, and would be shared by all
     // videos on the page.
-    if (property.name === PlayerPropertyKeys.FrameUrl) {
+    if (property.name === PlayerPropertyKeys.FRAME_URL) {
       const frameTitle = new URL(property.value).hostname;
       this.formatAndEvaluate(playerID, this.setMediaElementFrameTitle, frameTitle, 1, 20);
       return;
@@ -236,7 +238,7 @@ export class PlayerListView extends UI.Widget.VBox implements TriggerDispatcher 
     // junk, or it might be super long. If it's empty, or 1 character, It's
     // preferable to just drop it. Titles longer than 20 will have the first
     // 17 characters kept and an elipsis appended.
-    if (property.name === PlayerPropertyKeys.FrameTitle && property.value) {
+    if (property.name === PlayerPropertyKeys.FRAME_TITLE && property.value) {
       this.formatAndEvaluate(playerID, this.setMediaElementFrameTitle, property.value, 1, 20);
       return;
     }
@@ -248,10 +250,5 @@ export class PlayerListView extends UI.Widget.VBox implements TriggerDispatcher 
 
   onMessage(_playerID: string, _message: Protocol.Media.PlayerMessage): void {
     // TODO(tmathmeyer) show a message count number next to the player name.
-  }
-
-  override wasShown(): void {
-    super.wasShown();
-    this.registerCSSFiles([playerListViewStyles]);
   }
 }

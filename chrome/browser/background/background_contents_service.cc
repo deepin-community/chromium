@@ -26,6 +26,7 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/notifications/notification_common.h"
 #include "chrome/browser/notifications/notification_display_service.h"
+#include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
@@ -43,9 +44,9 @@
 #include "extensions/browser/image_loader.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/extension_icon_set.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/extension_set.h"
+#include "extensions/common/icons/extension_icon_set.h"
 #include "extensions/common/manifest_handlers/background_info.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "extensions/grit/extensions_browser_resources.h"
@@ -78,7 +79,7 @@ void CloseBalloon(const std::string& extension_id, Profile* profile) {
   if (g_disable_close_balloon_for_testing)
     return;
 
-  NotificationDisplayService::GetForProfile(profile)->Close(
+  NotificationDisplayServiceFactory::GetForProfile(profile)->Close(
       NotificationHandler::Type::TRANSIENT,
       kCrashedNotificationPrefix + extension_id);
 }
@@ -105,7 +106,7 @@ class CrashNotificationDelegate : public message_center::NotificationDelegate {
   }
 
  private:
-  ~CrashNotificationDelegate() override {}
+  ~CrashNotificationDelegate() override = default;
 
   // Static to prevent accidental use of members as *this might get destroyed.
   static void HandleClick(bool is_hosted_app,
@@ -361,7 +362,6 @@ void BackgroundContentsService::OnExtensionUnloaded(
     }
   }
   NOTREACHED() << "Undefined UnloadedExtensionReason.";
-  return ShutdownAssociatedBackgroundContents(extension->id());
 }
 
 void BackgroundContentsService::OnExtensionUninstalled(
@@ -745,7 +745,7 @@ void BackgroundContentsService::NotificationImageReady(
     scoped_refptr<message_center::NotificationDelegate> delegate,
     const gfx::Image& icon) {
   NotificationDisplayService* notification_service =
-      NotificationDisplayService::GetForProfile(profile_);
+      NotificationDisplayServiceFactory::GetForProfile(profile_);
   CHECK(notification_service);
 
   if (g_browser_process->IsShuttingDown()) {
@@ -790,7 +790,7 @@ void BackgroundContentsService::ShowBalloon(const Extension* extension) {
   extension_misc::ExtensionIcons size(extension_misc::EXTENSION_ICON_LARGE);
   extensions::ExtensionResource resource =
       extensions::IconsInfo::GetIconResource(extension, size,
-                                             ExtensionIconSet::MATCH_SMALLER);
+                                             ExtensionIconSet::Match::kSmaller);
   // We can't just load the image in the Observe method below because, despite
   // what this method is called, it may call the callback synchronously.
   // However, it's possible that the extension went away during the interim,

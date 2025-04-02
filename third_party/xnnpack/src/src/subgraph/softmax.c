@@ -4,19 +4,20 @@
 // LICENSE file in the root directory of this source tree.
 
 #include <assert.h>
-#include <math.h>
+#include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#include <xnnpack.h>
-#include <xnnpack/log.h>
-#include <xnnpack/operator.h>
-#include <xnnpack/params.h>
-#include <xnnpack/subgraph-validation.h>
-#include <xnnpack/reshape-helpers.h>
-#include <xnnpack/subgraph.h>
-#include <xnnpack/subgraph-validation.h>
-
+#include "xnnpack.h"
+#include "xnnpack/common.h"
+#include "xnnpack/log.h"
+#include "xnnpack/node-type.h"
+#include "xnnpack/operator-type.h"
+#include "xnnpack/operator.h"
+#include "xnnpack/reshape-helpers.h"
+#include "xnnpack/subgraph-validation.h"
+#include "xnnpack/subgraph.h"
+#include "pthreadpool.h"
 
 static enum xnn_status create_softmax_operator(
   const struct xnn_node* node,
@@ -29,8 +30,12 @@ static enum xnn_status create_softmax_operator(
   assert(node->num_inputs == 1);
   assert(node->num_outputs == 1);
 
+  const uint32_t input_id = node->inputs[0];
+  assert(input_id != XNN_INVALID_VALUE_ID);
+  assert(input_id < num_values);
+  const struct xnn_value *input_value = &values[input_id];
   enum xnn_status status;
-  switch (node->compute_type) {
+  switch (input_value->datatype) {
     case xnn_datatype_fp32:
       status = xnn_create_softmax_nc_f32(
         node->flags,
@@ -151,14 +156,8 @@ enum xnn_status xnn_define_softmax(
     return status;
   }
 
-  if (input_value->shape.num_dims < 1) {
-    xnn_log_error(
-      "failed to define %s operator with input ID #%" PRIu32 ": number of dimensions must be at least 1",
-      xnn_node_type_to_string(xnn_node_type_softmax), input_id);
-    return xnn_status_invalid_parameter;
-  }
-
   switch (input_value->datatype) {
+    case xnn_datatype_fp16:
     case xnn_datatype_fp32:
       break;
     default:
@@ -180,12 +179,9 @@ enum xnn_status xnn_define_softmax(
     return status;
   }
 
-  status = xnn_subgraph_check_all_dims_match(xnn_node_type_softmax, input_id, input_value, output_id, output_value);
-  if (status != xnn_status_success) {
-    return status;
-  }
-
   switch (output_value->datatype) {
+    case xnn_datatype_fp16:
+      break;
     case xnn_datatype_fp32:
       break;
     default:
@@ -202,7 +198,6 @@ enum xnn_status xnn_define_softmax(
   }
 
   node->type = xnn_node_type_softmax;
-  node->compute_type = xnn_compute_type_fp32;
   node->num_inputs = 1;
   node->inputs[0] = input_id;
   node->num_outputs = 1;

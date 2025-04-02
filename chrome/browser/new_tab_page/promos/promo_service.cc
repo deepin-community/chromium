@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "chrome/browser/new_tab_page/promos/promo_service.h"
 
 #include <utility>
@@ -318,7 +323,7 @@ void PromoService::BlocklistPromo(const std::string& promo_id) {
     promo_data_ = PromoData();
     promo_status_ = Status::OK_BUT_BLOCKED;
     NotifyObservers();
-    // TODO(crbug.com/1003508): hide promos on existing, already-opened NTPs.
+    // TODO(crbug.com/40098612): hide promos on existing, already-opened NTPs.
   }
 }
 

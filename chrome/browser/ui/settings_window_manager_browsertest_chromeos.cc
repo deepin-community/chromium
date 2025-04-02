@@ -4,9 +4,10 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+
 #include "ash/webui/settings/public/constants/routes.mojom.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/apps/app_service/app_launch_params.h"
@@ -23,7 +24,6 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
-#include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
@@ -42,7 +42,7 @@ namespace {
 // Return the number of windows that hosts OS Settings.
 size_t GetNumberOfSettingsWindows() {
   auto* browser_list = BrowserList::GetInstance();
-  return base::ranges::count_if(*browser_list, [](Browser* browser) {
+  return std::ranges::count_if(*browser_list, [](Browser* browser) {
     return ash::IsBrowserForSystemWebApp(browser,
                                          ash::SystemWebAppType::SETTINGS);
   });
@@ -76,8 +76,9 @@ class SettingsWindowManagerTest : public InProcessBrowserTest {
   void CloseNonDefaultBrowsers() {
     std::list<Browser*> browsers_to_close;
     for (Browser* b : *BrowserList::GetInstance()) {
-      if (b != browser())
+      if (b != browser()) {
         browsers_to_close.push_back(b);
+      }
     }
     for (std::list<Browser*>::iterator iter = browsers_to_close.begin();
          iter != browsers_to_close.end(); ++iter) {
@@ -107,7 +108,7 @@ IN_PROC_BROWSER_TEST_F(SettingsWindowManagerTest, OpenSettingsWindow) {
 
   // Open the settings again: no new window.
   settings_manager_->ShowOSSettings(browser()->profile());
-  // TODO(https://crbug.com/1517134): Remove this once we can wait for the
+  // TODO(crbug.com/41490117): Remove this once we can wait for the
   // ShowOSSettings call correctly.
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(settings_browser,

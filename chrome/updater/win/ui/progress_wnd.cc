@@ -4,15 +4,15 @@
 
 #include "chrome/updater/win/ui/progress_wnd.h"
 
+#include <algorithm>
+#include <array>
 #include <memory>
 #include <string>
 
-#include "base/check.h"
 #include "base/check_op.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/process/launch.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions_win.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_util_win.h"
@@ -33,49 +33,9 @@ namespace updater::ui {
 
 namespace {
 
-// The current UI shows to the user only one completion type, even though
-// there could be multiple applications in a bundle, where each application
-// could have a different completion type. The following array lists the
-// completion codes from low priority to high priority. The completion type
-// with highest priority will be shown to the user.
-constexpr CompletionCodes kCompletionCodesActionPriority[] = {
-    CompletionCodes::COMPLETION_CODE_EXIT_SILENTLY,
-    CompletionCodes::COMPLETION_CODE_EXIT_SILENTLY_ON_LAUNCH_COMMAND,
-    CompletionCodes::COMPLETION_CODE_SUCCESS,
-    CompletionCodes::COMPLETION_CODE_LAUNCH_COMMAND,
-    CompletionCodes::COMPLETION_CODE_RESTART_BROWSER_NOTICE_ONLY,
-    CompletionCodes::COMPLETION_CODE_RESTART_ALL_BROWSERS_NOTICE_ONLY,
-    CompletionCodes::COMPLETION_CODE_RESTART_BROWSER,
-    CompletionCodes::COMPLETION_CODE_RESTART_ALL_BROWSERS,
-    CompletionCodes::COMPLETION_CODE_REBOOT_NOTICE_ONLY,
-    CompletionCodes::COMPLETION_CODE_REBOOT,
-    CompletionCodes::COMPLETION_CODE_ERROR,
-    CompletionCodes::COMPLETION_CODE_INSTALL_FINISHED_BEFORE_CANCEL,
-};
-
-// |kCompletionCodesActionPriority| must have all the values in enumeration
-// CompletionCodes. The enumeration value starts from 1 so the array size
-// should match the last value in the enumeration.
-static_assert(
-    std::size(kCompletionCodesActionPriority) ==
-        static_cast<size_t>(
-            CompletionCodes::COMPLETION_CODE_INSTALL_FINISHED_BEFORE_CANCEL),
-    "completion code is missing");
-
-int GetPriority(CompletionCodes code) {
-  for (size_t i = 0; i < std::size(kCompletionCodesActionPriority); ++i) {
-    if (kCompletionCodesActionPriority[i] == code) {
-      return i;
-    }
-  }
-
-  NOTREACHED();
-  return -1;
-}
-
 // Returns true if all apps are cancelled or if the range is empty.
 bool AreAllAppsCanceled(const std::vector<AppCompletionInfo>& apps_info) {
-  return base::ranges::all_of(apps_info, [](const AppCompletionInfo& app_info) {
+  return std::ranges::all_of(apps_info, [](const AppCompletionInfo& app_info) {
     return app_info.is_canceled;
   });
 }
@@ -162,7 +122,6 @@ LRESULT ProgressWnd::OnInitDialog(UINT message,
                                   WPARAM w_param,
                                   LPARAM l_param,
                                   BOOL& handled) {
-  // TODO(crbug.com/1010653): remove this when the bug is fixed.
   HideWindowChildren(*this);
 
   InitializeDialog();
@@ -265,7 +224,6 @@ LRESULT ProgressWnd::OnClickedButton(WORD notify_code,
         default:
           NOTREACHED();
       }
-      break;
     default:
       NOTREACHED();
   }
@@ -292,7 +250,6 @@ LRESULT ProgressWnd::OnInstallStopped(UINT msg,
       break;
     default:
       NOTREACHED();
-      break;
   }
 
   handled = true;
@@ -338,21 +295,17 @@ void ProgressWnd::OnWaitingToDownload(const std::string& app_id,
   if (!IsWindow()) {
     return;
   }
-
   cur_state_ = States::STATE_WAITING_TO_DOWNLOAD;
-
-  // TODO(crbug.com/1314812) Waiting to download is not utilized. Adding a
-  // placeholder for IDS_WAITING_TO_DOWNLOAD.
   SetDlgItemText(IDC_INSTALLER_STATE_TEXT, L"");
-
   ChangeControlState();
 }
 
 // May be called repeatedly during download.
-void ProgressWnd::OnDownloading(const std::string& app_id,
-                                const std::u16string& app_name,
-                                int time_remaining_ms,
-                                int pos) {
+void ProgressWnd::OnDownloading(
+    const std::string& app_id,
+    const std::u16string& app_name,
+    const std::optional<base::TimeDelta> time_remaining,
+    int pos) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!IsWindow()) {
     return;
@@ -364,28 +317,23 @@ void ProgressWnd::OnDownloading(const std::string& app_id,
 
   std::wstring s;
 
-  // TODO(crbug.com/1016921): use base::TimeDelta.
-  int time_remaining_sec = CeilingDivide(time_remaining_ms, kMsPerSec);
   if (is_canceled_) {
     s = GetLocalizedString(IDS_CANCELING_BASE);
-  } else if (time_remaining_ms < 0) {
+  } else if (!time_remaining) {
     s = GetLocalizedString(IDS_DOWNLOADING_BASE);
-  } else if (time_remaining_ms == 0) {
+  } else if (!time_remaining->InSeconds()) {
     s = GetLocalizedString(IDS_DOWNLOADING_COMPLETED_BASE);
-  } else if (time_remaining_sec < kSecPerMin) {
+  } else if (!time_remaining->InMinutes()) {
     // Less than one minute remaining.
     s = GetLocalizedStringF(IDS_DOWNLOADING_SHORT_BASE,
-                            base::NumberToWString(time_remaining_sec));
-  } else if (time_remaining_sec < kSecondsPerHour) {
+                            base::NumberToWString(time_remaining->InSeconds()));
+  } else if (!time_remaining->InHours()) {
     // Less than one hour remaining.
-    int time_remaining_minute = CeilingDivide(time_remaining_sec, kSecPerMin);
     s = GetLocalizedStringF(IDS_DOWNLOADING_LONG_BASE,
-                            base::NumberToWString(time_remaining_minute));
+                            base::NumberToWString(time_remaining->InMinutes()));
   } else {
-    int time_remaining_hour =
-        CeilingDivide(time_remaining_sec, kSecondsPerHour);
     s = GetLocalizedStringF(IDS_DOWNLOADING_VERY_LONG_BASE,
-                            base::NumberToWString(time_remaining_hour));
+                            base::NumberToWString(time_remaining->InHours()));
   }
 
   // Reduces flicker by only updating the control if the text has changed.
@@ -405,30 +353,19 @@ void ProgressWnd::OnDownloading(const std::string& app_id,
 
 void ProgressWnd::OnWaitingRetryDownload(const std::string& app_id,
                                          const std::u16string& app_name,
-                                         const base::Time& next_retry_time) {
+                                         base::Time next_retry_time) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!IsWindow()) {
     return;
   }
 
   cur_state_ = States::STATE_WAITING_TO_DOWNLOAD;
-
-  // Display the next retry time interval if |next_retry_time| is in the future.
-  const auto retry_time_in_sec =
-      (next_retry_time - base::Time::NowFromSystemTime()).InSeconds();
-  if (retry_time_in_sec > 0) {
-    // TODO(crbug.com/1314812) Retry download is not utilized. Adding a
-    // placeholder for IDS_DOWNLOAD_RETRY_BASE.
-    std::wstring s;
-    SetDlgItemText(IDC_INSTALLER_STATE_TEXT, s.c_str());
-    ChangeControlState();
-  }
+  SetDlgItemText(IDC_INSTALLER_STATE_TEXT, L"");
+  ChangeControlState();
 }
 
-// TODO(crbug.com/1290331): handle the install cancellation.
 void ProgressWnd::OnWaitingToInstall(const std::string& app_id,
-                                     const std::u16string& app_name,
-                                     bool* /*can_start_install*/) {
+                                     const std::u16string& app_name) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!IsWindow()) {
     return;
@@ -443,10 +380,11 @@ void ProgressWnd::OnWaitingToInstall(const std::string& app_id,
 }
 
 // May be called repeatedly during install.
-void ProgressWnd::OnInstalling(const std::string& app_id,
-                               const std::u16string& app_name,
-                               int time_remaining_ms,
-                               int pos) {
+void ProgressWnd::OnInstalling(
+    const std::string& app_id,
+    const std::u16string& app_name,
+    const std::optional<base::TimeDelta> time_remaining,
+    int pos) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!IsWindow()) {
     return;
@@ -503,7 +441,7 @@ CompletionCodes ProgressWnd::GetBundleCompletionCode(
 
   return info.apps_info.empty()
              ? kCompletionCodesActionPriority[0]
-             : base::ranges::max_element(
+             : std::ranges::max_element(
                    info.apps_info,
                    [](const auto& app_info1, const auto& app_info2) {
                      return GetPriority(app_info1.completion_code) <
@@ -642,8 +580,10 @@ void ProgressWnd::OnComplete(const ObserverCompletionInfo& observer_info) {
 }
 
 HRESULT ProgressWnd::ChangeControlState() {
-  for (const auto& ctl : ctls_) {
-    SetControlAttributes(ctl.id, ctl.attr[static_cast<size_t>(cur_state_)]);
+  for (const ControlState& ctl : ctls_) {
+    const size_t i = static_cast<size_t>(cur_state_);
+    CHECK_LE(i, std::size(ctl.attr));
+    SetControlAttributes(ctl.id, ctl.attr[i]);
   }
   return S_OK;
 }

@@ -7,11 +7,6 @@
 #include <optional>
 
 #include "ash/accelerators/accelerator_controller_impl.h"
-#include "ash/components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_session.h"
 #include "ash/public/cpp/accelerators.h"
 #include "ash/shell.h"
 #include "base/feature_list.h"
@@ -25,6 +20,11 @@
 #include "chrome/browser/ash/arc/vmm/arc_vmm_swap_scheduler.h"
 #include "chrome/browser/ash/arc/vmm/arcvm_working_set_trim_executor.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_session.h"
 #include "ui/base/accelerators/accelerator.h"
 
 namespace arc {
@@ -47,9 +47,6 @@ class ArcVmmManagerFactory
   ArcVmmManagerFactory() = default;
   ~ArcVmmManagerFactory() override = default;
 };
-
-// The minimal time interval for two successful ARCVM memory shrink request.
-const base::TimeDelta kMinimalShrinkMemoryInterval = base::Minutes(10);
 
 }  // namespace
 
@@ -137,7 +134,7 @@ void ArcVmmManager::SetSwapState(SwapState state) {
     // The disable request will be sent immediately so the verify is
     // unnecessarily.
     SendSwapRequest(op, base::DoNothing());
-    enabled_state_heartbeat_timer_.Reset();
+    enabled_state_heartbeat_timer_.Stop();
     return;
   }
 
@@ -156,14 +153,14 @@ void ArcVmmManager::SetSwapState(SwapState state) {
   // Reset the timer anyway since the enable state and force enable state may
   // overwrite each other.
   enabled_state_heartbeat_timer_.Start(
-      FROM_HERE, kEnabledStateHeartbeatInterval,
+      FROM_HERE, kVmmSwapTrimInterval.Get(),
       base::BindRepeating(&ArcVmmManager::SetSwapState,
                           weak_ptr_factory_.GetWeakPtr(), state));
 
   // Enable or ForceEnable need shrink ARCVM memory first.
   if (!last_shrink_timestamp_ ||
       base::Time::Now() - last_shrink_timestamp_.value() >
-          kMinimalShrinkMemoryInterval) {
+          kVmmSwapMinShrinkInterval.Get()) {
     last_shrink_timestamp_ = base::Time::Now();
     last_shrink_result_ = false;
     // Following attempts to enable vmm-swap will be ignored until
@@ -244,7 +241,8 @@ void ArcVmmManager::SendSwapRequest(
       request,
       base::BindOnce(
           [](vm_tools::concierge::SwapOperation op, base::OnceClosure cb,
-             std::optional<vm_tools::concierge::SwapVmResponse> response) {
+             std::optional<vm_tools::concierge::SuccessFailureResponse>
+                 response) {
             if (!response.has_value()) {
               LOG(ERROR) << "Failed to receive SwapVm response.";
             } else if (!response->success()) {
@@ -293,7 +291,7 @@ void ArcVmmManager::SendAggressiveBalloonRequest(
       request,
       base::BindOnce(
           [](bool enabled, base::OnceClosure cb,
-             std::optional<vm_tools::concierge::AggressiveBalloonResponse>
+             std::optional<vm_tools::concierge::SuccessFailureResponse>
                  response) {
             if (!response.has_value()) {
               LOG(ERROR) << "Failed to receive aggressive ballon response.";
@@ -396,7 +394,6 @@ class ArcVmmManager::AcceleratorTarget : public ui::AcceleratorTarget {
       manager_->SetSwapState(SwapState::DISABLE);
     } else {
       NOTREACHED();
-      return false;
     }
     return true;
   }

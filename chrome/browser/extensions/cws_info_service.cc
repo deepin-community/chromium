@@ -4,6 +4,8 @@
 
 #include "chrome/browser/extensions/cws_info_service.h"
 
+#include <string_view>
+
 #include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/queue.h"
@@ -29,6 +31,7 @@
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/pref_names.h"
+#include "google_apis/common/api_key_request_util.h"
 #include "google_apis/google_api_keys.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_status_code.h"
@@ -154,12 +157,6 @@ void RecordNetworkHistograms(const network::SimpleURLLoader* url_loader) {
 }  // namespace
 
 namespace extensions {
-
-// Allow periodic retrieval of extensions metadata from the Chrome Web Store
-// (CWS). This is effectively a kill-switch for the feature.
-BASE_FEATURE(kCWSInfoService,
-             "CWSInfoService",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Increase the frequency of periodic retrieval of extensions metadata from
 // CWS. This feature is used only for testing purposes.
@@ -426,8 +423,7 @@ void CWSInfoService::SendRequest() {
   resource_request->method = "POST";
   resource_request->load_flags = net::LOAD_DISABLE_CACHE;
   resource_request->headers.SetHeader("X-HTTP-Method-Override", "GET");
-  resource_request->headers.SetHeader("X-Goog-Api-Key",
-                                      google_apis::GetAPIKey());
+  google_apis::AddAPIKeyToRequest(*resource_request, google_apis::GetAPIKey());
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
 
   url_loader_ = network::SimpleURLLoader::Create(std::move(resource_request),
@@ -550,7 +546,7 @@ static_assert(static_cast<int>(CWSInfoService::CWSViolationType::kUnknown) == 4,
 CWSInfoService::CWSViolationType CWSInfoService::GetViolationTypeFromString(
     const std::string& violation_type_str) {
   static constexpr auto violation_type_str_map =
-      base::MakeFixedFlatMap<base::StringPiece,
+      base::MakeFixedFlatMap<std::string_view,
                              CWSInfoService::CWSViolationType>(
           {{"none", CWSInfoService::CWSViolationType::kNone},
            {"malware", CWSInfoService::CWSViolationType::kMalware},
@@ -558,7 +554,7 @@ CWSInfoService::CWSViolationType CWSInfoService::GetViolationTypeFromString(
            {"minor-policy-violation",
             CWSInfoService::CWSViolationType::kMinorPolicy}});
 
-  const auto* it = violation_type_str_map.find(violation_type_str);
+  const auto it = violation_type_str_map.find(violation_type_str);
   return it != violation_type_str_map.end() ? it->second
                                             : CWSViolationType::kUnknown;
 }

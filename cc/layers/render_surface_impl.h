@@ -8,18 +8,17 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <optional>
 #include "base/memory/raw_ptr.h"
 #include "cc/cc_export.h"
 #include "cc/layers/draw_mode.h"
 #include "cc/layers/layer_collections.h"
 #include "cc/trees/occlusion.h"
 #include "cc/trees/property_tree.h"
-#include "cc/view_transition/view_transition_element_id.h"
 #include "components/viz/common/quads/compositor_render_pass.h"
 #include "components/viz/common/quads/shared_quad_state.h"
 #include "components/viz/common/surfaces/subtree_capture_id.h"
@@ -136,8 +135,7 @@ class CC_EXPORT RenderSurfaceImpl {
   // After this is called for all clip-escaping layers,
   // `common_ancestor_clip_id_` is the lowest common ancestor of OwningEffect's
   // clip node and all contributing layers' clips. It will be used as the
-  // render surface's clip. For now this is behind the
-  // RenderSurfaceCommonAncestorClip feature.
+  // render surface's clip.
   void set_common_ancestor_clip_id(int id) {
     DCHECK_NE(id, ClipTreeIndex());
     DCHECK(id < ClipTreeIndex() || id == kInvalidPropertyNodeId);
@@ -148,18 +146,8 @@ class CC_EXPORT RenderSurfaceImpl {
                ? ClipTreeIndex()
                : common_ancestor_clip_id_;
   }
-
-  // TODO(wangxianzhu): Remove this when removing the
-  // RenderSurfaceCommonAncestorClip feature.
-  void set_has_contributing_layer_that_escapes_clip(
-      bool contributing_layer_escapes_clip) {
-    has_contributing_layer_that_escapes_clip_ = contributing_layer_escapes_clip;
-  }
   bool has_contributing_layer_that_escapes_clip() const {
-    return common_ancestor_clip_id_ != kInvalidPropertyNodeId ||
-           // TODO(wangxianzhu): Remove this when removing the
-           // RenderSurfaceCommonAncestorClip feature.
-           has_contributing_layer_that_escapes_clip_;
+    return common_ancestor_clip_id_ != kInvalidPropertyNodeId;
   }
 
   void set_is_render_surface_list_member(bool is_render_surface_list_member) {
@@ -268,8 +256,6 @@ class CC_EXPORT RenderSurfaceImpl {
   const EffectNode* OwningEffectNode() const;
   EffectNode* OwningEffectNodeMutableForTest() const;
 
-  const ViewTransitionElementId& GetViewTransitionElementId() const;
-
  private:
   void SetContentRect(const gfx::Rect& content_rect);
   gfx::Rect CalculateClippedAccumulatedContentRect();
@@ -286,6 +272,10 @@ class CC_EXPORT RenderSurfaceImpl {
   raw_ptr<LayerTreeImpl> layer_tree_impl_;
   ElementId id_;
   int effect_tree_index_;
+
+  // A unique id in the same namespace as `Layer::layer_id_`, so viz can
+  // identify `RenderPassDrawQuads` across the frame, similarly to other quads.
+  uint32_t layer_id_ = 0;
 
   // Container for properties that render surfaces need to compute before they
   // can be drawn.
@@ -334,10 +324,6 @@ class CC_EXPORT RenderSurfaceImpl {
   // ancestor of the effect's clip node and the clip nodes of all contributing
   // layers. Otherwise `ClipTreeIndex()` is already the common ancestor clip.
   int common_ancestor_clip_id_ = kInvalidPropertyNodeId;
-  // Is used to decide if the surface is clipped.
-  // TODO(wangxianzhu): Remove this when removing the
-  // RenderSurfaceCommonAncestorClip feature.
-  bool has_contributing_layer_that_escapes_clip_ : 1 = false;
 
   bool surface_property_changed_ : 1 = false;
   bool ancestor_property_changed_ : 1 = false;
@@ -354,6 +340,11 @@ class CC_EXPORT RenderSurfaceImpl {
       nearest_occlusion_immune_ancestor_ = nullptr;
 
   std::unique_ptr<DamageTracker> damage_tracker_;
+
+  // A ViewTransitionContentLayer only knows its final visible drawable rect
+  // once its originating surface's content rect has been computed. So we defer
+  // adding this contribution until that is complete.
+  std::vector<LayerImpl*> deferred_contributing_layers_;
 };
 
 }  // namespace cc

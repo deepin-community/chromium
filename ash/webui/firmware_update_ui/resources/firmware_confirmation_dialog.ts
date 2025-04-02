@@ -8,7 +8,7 @@ import 'chrome://resources/mojo/mojo/public/mojom/base/string16.mojom-webui.js';
 import './icons.html.js';
 import './firmware_shared.css.js';
 import './firmware_shared_fonts.css.js';
-import './strings.m.js';
+import '/strings.m.js';
 
 import {I18nMixin, I18nMixinInterface} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {mojoString16ToString} from 'chrome://resources/js/mojo_type_util.js';
@@ -17,7 +17,6 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 import {getTemplate} from './firmware_confirmation_dialog.html.js';
 import {FirmwareUpdate} from './firmware_update.mojom-webui.js';
 import {OpenConfirmationDialogEventDetail, OpenUpdateDialogEventDetail} from './firmware_update_types.js';
-import {isTrustedReportsFirmwareEnabled} from './firmware_update_utils.js';
 
 /**
  * @fileoverview
@@ -48,17 +47,11 @@ export class FirmwareConfirmationDialogElement extends
         type: Boolean,
         value: false,
       },
-
-      shouldShowDisclaimer: {
-        type: Boolean,
-        value: false,
-      },
     };
   }
 
   update: FirmwareUpdate;
   open: boolean = false;
-  private shouldShowDisclaimer: boolean = false;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -66,8 +59,6 @@ export class FirmwareConfirmationDialogElement extends
         'open-confirmation-dialog',
         (e) => this.onOpenConfirmationDialog(
             e as CustomEvent<OpenConfirmationDialogEventDetail>));
-
-    this.shouldShowDisclaimer = isTrustedReportsFirmwareEnabled();
   }
 
   protected openUpdateDialog(): void {
@@ -87,6 +78,22 @@ export class FirmwareConfirmationDialogElement extends
   protected computeTitle(): string {
     return this.i18n(
         'confirmationTitle', mojoString16ToString(this.update.deviceName));
+  }
+
+  protected computeDisclaimer(): string {
+    if (this.update.needsReboot) {
+      return this.i18n('confirmationDisclaimerForUEFI');
+    } else {
+      return this.i18n('confirmationDisclaimer');
+    }
+  }
+
+  protected computeDialog(): string {
+    if (this.update.needsReboot) {
+      return this.i18n('updatingInfoForUEFI');
+    } else {
+      return this.i18n('updatingInfo');
+    }
   }
 
   /** Event callback for 'open-confirmation-dialog'. */

@@ -4,8 +4,9 @@
 
 #include "ui/aura/env.h"
 
+#include <vector>
+
 #include "base/command_line.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
@@ -91,8 +92,7 @@ class EventObserverAdapter : public ui::EventHandler,
 // Env, public:
 
 Env::~Env() {
-  for (EnvObserver& observer : observers_)
-    observer.OnWillDestroyEnv();
+  observers_.Notify(&EnvObserver::OnWillDestroyEnv);
 
   if (this == g_primary_instance)
     g_primary_instance = nullptr;
@@ -264,20 +264,17 @@ bool Env::Init() {
 }
 
 void Env::NotifyWindowInitialized(Window* window) {
-  for (EnvObserver& observer : observers_)
-    observer.OnWindowInitialized(window);
+  observers_.Notify(&EnvObserver::OnWindowInitialized, window);
 }
 
 void Env::NotifyHostInitialized(WindowTreeHost* host) {
   window_tree_hosts_.push_back(host);
-  for (EnvObserver& observer : observers_)
-    observer.OnHostInitialized(host);
+  observers_.Notify(&EnvObserver::OnHostInitialized, host);
 }
 
 void Env::NotifyHostDestroyed(WindowTreeHost* host) {
-  base::Erase(window_tree_hosts_, host);
-  for (EnvObserver& observer : observers_)
-    observer.OnHostDestroyed(host);
+  std::erase(window_tree_hosts_, host);
+  observers_.Notify(&EnvObserver::OnHostDestroyed, host);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -297,7 +294,6 @@ std::unique_ptr<ui::EventTargetIterator> Env::GetChildIterator() const {
 
 ui::EventTargeter* Env::GetEventTargeter() {
   NOTREACHED();
-  return nullptr;
 }
 
 }  // namespace aura

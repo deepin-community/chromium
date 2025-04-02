@@ -165,6 +165,10 @@ class CONTENT_EXPORT WebBluetoothServiceImpl
                            TwoWatchAdvertisementsReqFail);
   FRIEND_TEST_ALL_PREFIXES(WebBluetoothServiceImplTest,
                            SecWatchAdvertisementsReqAfterFirstSuccess);
+  FRIEND_TEST_ALL_PREFIXES(WebBluetoothServiceImplTestWithBaseAdapter,
+                           EmulatedAdapterRemovalRestoresOriginalAdapter);
+  FRIEND_TEST_ALL_PREFIXES(WebBluetoothServiceImplTest,
+                           ServiceDestroyedDuringAdapterAcquisition);
 
 #if PAIR_BLUETOOTH_ON_DEMAND()
   FRIEND_TEST_ALL_PREFIXES(WebBluetoothServiceImplTest,
@@ -175,6 +179,8 @@ class CONTENT_EXPORT WebBluetoothServiceImpl
 
   friend class FrameConnectedBluetoothDevicesTest;
   friend class WebBluetoothServiceImplTest;
+  friend class WebBluetoothServiceImplTestWithBaseAdapter;
+
   using PrimaryServicesRequestCallback =
       base::OnceCallback<void(device::BluetoothDevice*)>;
   using ScanFilters = std::vector<blink::mojom::WebBluetoothLeScanFilterPtr>;
@@ -254,7 +260,7 @@ class CONTENT_EXPORT WebBluetoothServiceImpl
       RemoteCharacteristicReadValueCallback callback) override;
   void RemoteCharacteristicWriteValue(
       const std::string& characteristic_instance_id,
-      const std::vector<uint8_t>& value,
+      base::span<const uint8_t> value,
       blink::mojom::WebBluetoothWriteType write_type,
       RemoteCharacteristicWriteValueCallback callback) override;
   void RemoteCharacteristicStartNotifications(
@@ -280,7 +286,7 @@ class CONTENT_EXPORT WebBluetoothServiceImpl
       RemoteDescriptorReadValueCallback callback) override;
   void RemoteDescriptorWriteValue(
       const std::string& descriptor_instance_id,
-      const std::vector<uint8_t>& value,
+      base::span<const uint8_t> value,
       RemoteDescriptorWriteValueCallback callback) override;
   void RequestScanningStart(
       mojo::PendingAssociatedRemote<

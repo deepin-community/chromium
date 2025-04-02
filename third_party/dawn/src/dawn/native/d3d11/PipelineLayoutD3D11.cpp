@@ -64,7 +64,7 @@ MaybeError PipelineLayout::Initialize(Device* device) {
             const BindingInfo& bindingInfo = bgl->GetBindingInfo(bindingIndex);
             MatchVariant(
                 bindingInfo.bindingLayout,
-                [&](const BufferBindingLayout& layout) {
+                [&](const BufferBindingInfo& layout) {
                     switch (layout.type) {
                         case wgpu::BufferBindingType::Uniform:
                             mIndexInfo[group][bindingIndex] = constantBufferIndex++;
@@ -77,17 +77,23 @@ MaybeError PipelineLayout::Initialize(Device* device) {
                         case wgpu::BufferBindingType::ReadOnlyStorage:
                             mIndexInfo[group][bindingIndex] = shaderResourceViewIndex++;
                             break;
+                        case wgpu::BufferBindingType::BindingNotUsed:
                         case wgpu::BufferBindingType::Undefined:
                             DAWN_UNREACHABLE();
                     }
                 },
-                [&](const SamplerBindingLayout&) {
+                [&](const SamplerBindingInfo&) {
                     mIndexInfo[group][bindingIndex] = samplerIndex++;
                 },
-                [&](const TextureBindingLayout&) {
+                [&](const StaticSamplerBindingInfo&) {
+                    // Static samplers are implemented in the frontend on
+                    // D3D11.
+                    DAWN_UNREACHABLE();
+                },
+                [&](const TextureBindingInfo&) {
                     mIndexInfo[group][bindingIndex] = shaderResourceViewIndex++;
                 },
-                [&](const StorageTextureBindingLayout& layout) {
+                [&](const StorageTextureBindingInfo& layout) {
                     switch (layout.access) {
                         case wgpu::StorageTextureAccess::ReadWrite:
                         case wgpu::StorageTextureAccess::WriteOnly:
@@ -97,10 +103,12 @@ MaybeError PipelineLayout::Initialize(Device* device) {
                         case wgpu::StorageTextureAccess::ReadOnly:
                             mIndexInfo[group][bindingIndex] = shaderResourceViewIndex++;
                             break;
+                        case wgpu::StorageTextureAccess::BindingNotUsed:
                         case wgpu::StorageTextureAccess::Undefined:
                             DAWN_UNREACHABLE();
                     }
-                });
+                },
+                [](const InputAttachmentBindingInfo&) { DAWN_UNREACHABLE(); });
         }
     }
     mUnusedUAVBindingCount = unorderedAccessViewIndex;

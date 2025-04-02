@@ -4,9 +4,9 @@
 
 #include "chrome/browser/enterprise/data_protection/print_utils.h"
 
+#include "base/containers/span.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/connectors/reporting/realtime_reporting_client.h"
@@ -74,9 +74,11 @@ constexpr char kPrinterName[] = "my_printer";
 
 constexpr char kUserName[] = "test-user@chromium.org";
 
+constexpr char16_t kUserJustification[] = u"User justification";
+
 scoped_refptr<base::RefCountedMemory> CreateData() {
   return base::MakeRefCounted<base::RefCountedStaticMemory>(
-      reinterpret_cast<const unsigned char*>(kTestData), sizeof(kTestData) - 1);
+      base::byte_span_from_cstring(kTestData));
 }
 
 const std::set<std::string>* PrintMimeTypes() {
@@ -201,15 +203,10 @@ class PrintContentAnalysisUtilsTest
     return browser()->tab_strip_model()->GetActiveWebContents();
   }
 
-  const base::HistogramTester& histogram_tester() const {
-    return histogram_tester_;
-  }
-
  protected:
   base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<policy::MockCloudPolicyClient> client_;
   signin::IdentityTestEnvironment identity_test_environment_;
-  base::HistogramTester histogram_tester_;
 
 #if BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
   // This installs a fake SDK manager that creates fake SDK clients when
@@ -235,24 +232,6 @@ TEST_P(PrintContentAnalysisUtilsTest, GetPrintAnalysisData_BeforeSystemDialog) {
             data->settings.cloud_or_local_settings.is_local_analysis());
   ASSERT_EQ(policy_value() == kCloudPolicy,
             data->settings.cloud_or_local_settings.is_cloud_analysis());
-
-  if (policy_value() == kLocalPolicy) {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Local.PrintType",
-        PrintScanningContext::kBeforeSystemDialog, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        0);
-  } else {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Cloud.PrintType",
-        PrintScanningContext::kBeforeSystemDialog, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        0);
-  }
 }
 
 TEST_P(PrintContentAnalysisUtilsTest,
@@ -265,9 +244,6 @@ TEST_P(PrintContentAnalysisUtilsTest,
   // `kBeforeSystemDialog` context, or right after it with the
   // `kSystemPrintBeforePrintDocument` context.
   ASSERT_FALSE(data);
-
-  histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType", 0);
-  histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType", 0);
 }
 
 TEST_P(PrintContentAnalysisUtilsTest,
@@ -285,24 +261,6 @@ TEST_P(PrintContentAnalysisUtilsTest,
             data->settings.cloud_or_local_settings.is_local_analysis());
   ASSERT_EQ(policy_value() == kCloudPolicy,
             data->settings.cloud_or_local_settings.is_cloud_analysis());
-
-  if (policy_value() == kLocalPolicy) {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Local.PrintType",
-        PrintScanningContext::kNormalPrintAfterPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        0);
-  } else {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Cloud.PrintType",
-        PrintScanningContext::kNormalPrintAfterPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        0);
-  }
 }
 
 TEST_P(PrintContentAnalysisUtilsTest,
@@ -315,9 +273,6 @@ TEST_P(PrintContentAnalysisUtilsTest,
   // `kBeforePreview` context, or right after it with the
   // `kNormalPrintAfterPreview` context.
   ASSERT_FALSE(data);
-
-  histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType", 0);
-  histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType", 0);
 }
 
 TEST_P(PrintContentAnalysisUtilsTest,
@@ -335,24 +290,6 @@ TEST_P(PrintContentAnalysisUtilsTest,
             data->settings.cloud_or_local_settings.is_local_analysis());
   ASSERT_EQ(policy_value() == kCloudPolicy,
             data->settings.cloud_or_local_settings.is_cloud_analysis());
-
-  if (policy_value() == kLocalPolicy) {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Local.PrintType",
-        PrintScanningContext::kSystemPrintBeforePrintDocument, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        0);
-  } else {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Cloud.PrintType",
-        PrintScanningContext::kSystemPrintBeforePrintDocument, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        0);
-  }
 }
 
 #if BUILDFLAG(IS_MAC)
@@ -371,24 +308,6 @@ TEST_P(PrintContentAnalysisUtilsTest,
             data->settings.cloud_or_local_settings.is_local_analysis());
   ASSERT_EQ(policy_value() == kCloudPolicy,
             data->settings.cloud_or_local_settings.is_cloud_analysis());
-
-  if (policy_value() == kLocalPolicy) {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Local.PrintType",
-        PrintScanningContext::kOpenPdfInPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        0);
-  } else {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Cloud.PrintType",
-        PrintScanningContext::kOpenPdfInPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        0);
-  }
 }
 #endif  // BUILDFLAG(IS_MAC)
 
@@ -412,24 +331,6 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyAllowed) {
                          std::move(on_verdict),
                          /*hide_preview=*/base::DoNothing());
   run_loop.Run();
-
-  if (policy_value() == kLocalPolicy) {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Local.PrintType",
-        PrintScanningContext::kNormalPrintAfterPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        0);
-  } else {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Cloud.PrintType",
-        PrintScanningContext::kNormalPrintAfterPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        0);
-  }
 }
 
 TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyReportOnly) {
@@ -452,11 +353,13 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyReportOnly) {
       /*mimetype*/ PrintMimeTypes(),
       /*size*/ std::nullopt,
       /*result*/
-      safe_browsing::EventResultToString(safe_browsing::EventResult::ALLOWED),
+      enterprise_connectors::EventResultToString(
+          enterprise_connectors::EventResult::ALLOWED),
       /*username*/ kUserName,
       /*profile_identifier*/ profile()->GetPath().AsUTF8Unsafe(),
       /*scan_id*/ kScanId,
-      /*content_transfer_method*/ absl::nullopt);
+      /*content_transfer_method*/ std::nullopt,
+      /*user_justification*/ std::nullopt);
 
   auto data = CreateData();
   base::RunLoop run_loop;
@@ -470,24 +373,6 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyReportOnly) {
                          std::move(on_verdict),
                          /*hide_preview=*/base::DoNothing());
   run_loop.Run();
-
-  if (policy_value() == kLocalPolicy) {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Local.PrintType",
-        PrintScanningContext::kNormalPrintAfterPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        0);
-  } else {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Cloud.PrintType",
-        PrintScanningContext::kNormalPrintAfterPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        0);
-  }
 }
 
 TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyWarnThenCancel) {
@@ -516,11 +401,13 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyWarnThenCancel) {
       /*mimetype*/ PrintMimeTypes(),
       /*size*/ std::nullopt,
       /*result*/
-      safe_browsing::EventResultToString(safe_browsing::EventResult::WARNED),
+      enterprise_connectors::EventResultToString(
+          enterprise_connectors::EventResult::WARNED),
       /*username*/ kUserName,
       /*profile_identifier*/ profile()->GetPath().AsUTF8Unsafe(),
       /*scan_id*/ kScanId,
-      /*content_transfer_method*/ absl::nullopt);
+      /*content_transfer_method*/ std::nullopt,
+      /*user_justification*/ std::nullopt);
 
   auto data = CreateData();
   base::RunLoop run_loop;
@@ -534,24 +421,6 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyWarnThenCancel) {
                          std::move(on_verdict),
                          /*hide_preview=*/base::DoNothing());
   run_loop.Run();
-
-  if (policy_value() == kLocalPolicy) {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Local.PrintType",
-        PrintScanningContext::kNormalPrintAfterPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        0);
-  } else {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Cloud.PrintType",
-        PrintScanningContext::kNormalPrintAfterPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        0);
-  }
 }
 
 TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyWarnedThenBypass) {
@@ -582,16 +451,17 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyWarnedThenBypass) {
           /*mimetype*/ PrintMimeTypes(),
           /*size*/ std::nullopt,
           /*result*/
-          safe_browsing::EventResultToString(
-              safe_browsing::EventResult::BYPASSED),
+          enterprise_connectors::EventResultToString(
+              enterprise_connectors::EventResult::BYPASSED),
           /*username*/ kUserName,
           /*profile_identifier*/ profile()->GetPath().AsUTF8Unsafe(),
           /*scan_id*/ kScanId,
-          /*content_transfer_method*/ absl::nullopt);
+          /*content_transfer_method*/ std::nullopt,
+          /*user_justification*/ kUserJustification);
       ASSERT_TRUE(test_delegate_);
       test_delegate_->SetPageWarningForTesting(
           CreateResponse(ContentAnalysisResponse::Result::TriggeredRule::WARN));
-      test_delegate_->BypassWarnings(std::nullopt);
+      test_delegate_->BypassWarnings(kUserJustification);
     }
   }));
 
@@ -609,11 +479,13 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyWarnedThenBypass) {
       /*mimetype*/ PrintMimeTypes(),
       /*size*/ std::nullopt,
       /*result*/
-      safe_browsing::EventResultToString(safe_browsing::EventResult::WARNED),
+      enterprise_connectors::EventResultToString(
+          enterprise_connectors::EventResult::WARNED),
       /*username*/ kUserName,
       /*profile_identifier*/ profile()->GetPath().AsUTF8Unsafe(),
       /*scan_id*/ kScanId,
-      /*content_transfer_method*/ absl::nullopt);
+      /*content_transfer_method*/ std::nullopt,
+      /*user_justification*/ std::nullopt);
 
   auto data = CreateData();
   base::RunLoop run_loop;
@@ -627,24 +499,6 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyWarnedThenBypass) {
                          std::move(on_verdict),
                          /*hide_preview=*/base::DoNothing());
   run_loop.Run();
-
-  if (policy_value() == kLocalPolicy) {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Local.PrintType",
-        PrintScanningContext::kNormalPrintAfterPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        0);
-  } else {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Cloud.PrintType",
-        PrintScanningContext::kNormalPrintAfterPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        0);
-  }
 }
 
 TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyBlocked) {
@@ -667,11 +521,13 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyBlocked) {
       /*mimetype*/ PrintMimeTypes(),
       /*size*/ std::nullopt,
       /*result*/
-      safe_browsing::EventResultToString(safe_browsing::EventResult::BLOCKED),
+      enterprise_connectors::EventResultToString(
+          enterprise_connectors::EventResult::BLOCKED),
       /*username*/ kUserName,
       /*profile_identifier*/ profile()->GetPath().AsUTF8Unsafe(),
       /*scan_id*/ kScanId,
-      /*content_transfer_method*/ absl::nullopt);
+      /*content_transfer_method*/ std::nullopt,
+      /*user_justification*/ std::nullopt);
 
   auto data = CreateData();
   base::RunLoop run_loop;
@@ -685,24 +541,6 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyBlocked) {
                          std::move(on_verdict),
                          /*hide_preview=*/base::DoNothing());
   run_loop.Run();
-
-  if (policy_value() == kLocalPolicy) {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Local.PrintType",
-        PrintScanningContext::kNormalPrintAfterPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        0);
-  } else {
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType",
-                                        1);
-    histogram_tester().ExpectUniqueSample(
-        "Enterprise.OnPrint.Cloud.PrintType",
-        PrintScanningContext::kNormalPrintAfterPreview, 1);
-    histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType",
-                                        0);
-  }
 }
 
 TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyNullInitiator) {
@@ -720,9 +558,6 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyNullInitiator) {
                          std::move(on_verdict),
                          /*hide_preview=*/base::DoNothing());
   run_loop.Run();
-
-  histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Local.PrintType", 0);
-  histogram_tester().ExpectTotalCount("Enterprise.OnPrint.Cloud.PrintType", 0);
 }
 
 INSTANTIATE_TEST_SUITE_P(

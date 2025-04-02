@@ -18,18 +18,26 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
+#include "perfetto/base/logging.h"
 #include "perfetto/trace_processor/basic_types.h"
 #include "src/trace_processor/db/column/data_layer.h"
+#include "src/trace_processor/db/column/storage_layer.h"
 #include "src/trace_processor/db/column/types.h"
 
 namespace perfetto::trace_processor::column {
 
 // Dummy storage. Used for columns that are not supposed to have operations done
 // on them.
-class DummyStorage final : public DataLayer {
+class DummyStorage final : public StorageLayer {
  public:
+  StoragePtr GetStoragePtr() override { PERFETTO_FATAL("Shouldn't be called"); }
+
+  std::unique_ptr<DataLayerChain> MakeChain();
+
+ private:
   class ChainImpl : public DataLayerChain {
    public:
     ChainImpl() = default;
@@ -38,34 +46,27 @@ class DummyStorage final : public DataLayer {
                                     SqlValue,
                                     uint32_t) const override;
 
-    UniqueSearchResult UniqueSearch(FilterOp,
-                                    SqlValue,
-                                    uint32_t*) const override;
-
     SearchValidationResult ValidateSearchConstraints(FilterOp,
                                                      SqlValue) const override;
 
     RangeOrBitVector SearchValidated(FilterOp, SqlValue, Range) const override;
 
-    RangeOrBitVector IndexSearchValidated(FilterOp,
-                                          SqlValue,
-                                          Indices) const override;
+    void IndexSearchValidated(FilterOp, SqlValue, Indices&) const override;
 
-    Range OrderedIndexSearchValidated(FilterOp,
-                                      SqlValue,
-                                      Indices) const override;
+    void StableSort(Token* start, Token* end, SortDirection) const override;
 
-    void StableSort(SortToken* start,
-                    SortToken* end,
-                    SortDirection) const override;
+    void Distinct(Indices&) const override;
 
-    void Serialize(StorageProto*) const override;
+    std::optional<Token> MaxElement(Indices&) const override;
+
+    std::optional<Token> MinElement(Indices&) const override;
+
+    SqlValue Get_AvoidUsingBecauseSlow(uint32_t index) const override;
 
     uint32_t size() const override;
 
     std::string DebugString() const override { return "DummyStorage"; }
   };
-  std::unique_ptr<DataLayerChain> MakeChain();
 };
 
 }  // namespace perfetto::trace_processor::column

@@ -4,15 +4,16 @@
 
 #include "ash/system/notification_center/notification_grouping_controller.h"
 
+#include <algorithm>
+
 #include "ash/system/notification_center/ash_message_popup_collection.h"
-#include "ash/system/notification_center/views/ash_notification_view.h"
 #include "ash/system/notification_center/message_center_utils.h"
 #include "ash/system/notification_center/metrics_utils.h"
 #include "ash/system/notification_center/notification_center_tray.h"
+#include "ash/system/notification_center/views/ash_notification_view.h"
 #include "ash/system/notification_center/views/notification_center_view.h"
 #include "ash/system/notification_center/views/notification_list_view.h"
 #include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/message_center/message_center_types.h"
@@ -152,8 +153,8 @@ void NotificationGroupingController::PopulateGroupParent(
                 ->GetMessageViewForNotificationId(notification_id)
           : nullptr;
 
-  // TODO(crbug/1277765) Need this check to fix crbug/1275765. However, this
-  // should not be necessary if the message center bubble is initialized
+  // TODO(crbug.com/40809802) Need this check to fix crbug/1275765. However,
+  // this should not be necessary if the message center bubble is initialized
   // properly. Need to monitor for empty group notifications if this check is
   // hit and fix the root cause.
   if (!parent_view) {
@@ -298,7 +299,7 @@ NotificationGroupingController::CreateCopyForParentNotification(
         parent_notification.delegate()->GetDelegateForParentCopy());
   }
   copy->set_vector_small_image(parent_notification.parent_vector_small_image());
-  copy->set_small_image(parent_notification.small_image());
+  copy->SetSmallImage(parent_notification.small_image());
 
   if (parent_notification.accent_color_id().has_value()) {
     copy->set_accent_color_id(parent_notification.accent_color_id().value());
@@ -446,8 +447,7 @@ void NotificationGroupingController::OnNotificationRemoved(
     auto grouped_notifications =
         grouped_notification_list_->GetGroupedNotificationsForParent(
             notification_id);
-    base::ranges::copy(grouped_notifications,
-                       std::back_inserter(to_be_deleted));
+    std::ranges::copy(grouped_notifications, std::back_inserter(to_be_deleted));
     grouped_notification_list_->ClearGroupedNotification(notification_id);
 
     for (const auto& id : to_be_deleted) {

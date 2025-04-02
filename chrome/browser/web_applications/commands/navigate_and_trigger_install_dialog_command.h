@@ -13,6 +13,7 @@
 #include "chrome/browser/web_applications/commands/web_app_command.h"
 #include "chrome/browser/web_applications/locks/noop_lock.h"
 #include "components/webapps/browser/installable/installable_logging.h"
+#include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/common/web_app_id.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom-forward.h"
 #include "url/gurl.h"
@@ -23,13 +24,16 @@ namespace content {
 class WebContents;
 }
 
+namespace webapps {
+class WebAppUrlLoader;
+enum class WebAppUrlLoaderResult;
+}  // namespace webapps
+
 namespace web_app {
 
 class AppLock;
 class WebAppDataRetriever;
-class WebAppUrlLoader;
 class WebAppUiManager;
-enum class WebAppUrlLoaderResult;
 
 enum class NavigateAndTriggerInstallDialogCommandResult {
   kFailure,
@@ -37,6 +41,7 @@ enum class NavigateAndTriggerInstallDialogCommandResult {
   kDialogShown,
   kShutdown
 };
+
 // The navigation will always succeed. The `result` indicates whether the
 // command was able to trigger the install dialog.
 using NavigateAndTriggerInstallDialogCommandCallback = base::OnceCallback<void(
@@ -53,9 +58,10 @@ class NavigateAndTriggerInstallDialogCommand
       const GURL& install_url,
       const GURL& origin_url,
       bool is_renderer_initiated,
+      webapps::WebappInstallSource source,
       NavigateAndTriggerInstallDialogCommandCallback callback,
       base::WeakPtr<WebAppUiManager> ui_manager,
-      std::unique_ptr<WebAppUrlLoader> url_loader,
+      std::unique_ptr<webapps::WebAppUrlLoader> url_loader,
       std::unique_ptr<WebAppDataRetriever> data_retriever,
       Profile* profile);
   ~NavigateAndTriggerInstallDialogCommand() override;
@@ -67,12 +73,11 @@ class NavigateAndTriggerInstallDialogCommand
  private:
   bool IsWebContentsDestroyed();
 
-  void OnUrlLoaded(WebAppUrlLoaderResult result);
+  void OnUrlLoaded(webapps::WebAppUrlLoaderResult result);
   void OnInstallabilityChecked(blink::mojom::ManifestPtr opt_manifest,
-                               const GURL& manifest_url,
                                bool valid_manifest_for_web_app,
                                webapps::InstallableStatusCode error_code);
-  void OnAppLockGranted(std::unique_ptr<AppLock> app_lock);
+  void OnAppLockGranted();
 
   std::unique_ptr<AppLock> app_lock_;
   std::unique_ptr<NoopLock> noop_lock_;
@@ -80,9 +85,10 @@ class NavigateAndTriggerInstallDialogCommand
   const GURL install_url_;
   const GURL origin_url_;
   const bool is_renderer_initiated_;
+  const webapps::WebappInstallSource source_;
 
   base::WeakPtr<WebAppUiManager> ui_manager_;
-  const std::unique_ptr<WebAppUrlLoader> url_loader_;
+  const std::unique_ptr<webapps::WebAppUrlLoader> url_loader_;
   const std::unique_ptr<WebAppDataRetriever> data_retriever_;
   raw_ptr<Profile> profile_ = nullptr;
 

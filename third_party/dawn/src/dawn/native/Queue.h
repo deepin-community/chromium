@@ -66,14 +66,14 @@ class QueueBase : public ApiObjectBase, public ExecutionQueueBase {
   public:
     ~QueueBase() override;
 
-    static Ref<QueueBase> MakeError(DeviceBase* device, const char* label);
+    static Ref<QueueBase> MakeError(DeviceBase* device, StringView label);
 
     ObjectType GetType() const override;
+    void FormatLabel(absl::FormatSink* s) const override;
 
     // Dawn API
     void APISubmit(uint32_t commandCount, CommandBufferBase* const* commands);
-    void APIOnSubmittedWorkDone(WGPUQueueWorkDoneCallback callback, void* userdata);
-    Future APIOnSubmittedWorkDoneF(const QueueWorkDoneCallbackInfo& callbackInfo);
+    Future APIOnSubmittedWorkDone(const WGPUQueueWorkDoneCallbackInfo& callbackInfo);
     void APIWriteBuffer(BufferBase* buffer, uint64_t bufferOffset, const void* data, size_t size);
     void APIWriteTexture(const ImageCopyTexture* destination,
                          const void* data,
@@ -110,9 +110,20 @@ class QueueBase : public ApiObjectBase, public ExecutionQueueBase {
 
   protected:
     QueueBase(DeviceBase* device, const QueueDescriptor* descriptor);
-    QueueBase(DeviceBase* device, ObjectBase::ErrorTag tag, const char* label);
+    QueueBase(DeviceBase* device, ObjectBase::ErrorTag tag, StringView label);
 
     void DestroyImpl() override;
+
+    virtual MaybeError SubmitImpl(uint32_t commandCount, CommandBufferBase* const* commands) = 0;
+    virtual MaybeError WriteBufferImpl(BufferBase* buffer,
+                                       uint64_t bufferOffset,
+                                       const void* data,
+                                       size_t size);
+    virtual MaybeError WriteTextureImpl(const ImageCopyTexture& destination,
+                                        const void* data,
+                                        size_t dataSize,
+                                        const TextureDataLayout& dataLayout,
+                                        const Extent3D& writeSize);
 
   private:
     MaybeError WriteTextureInternal(const ImageCopyTexture* destination,
@@ -129,19 +140,8 @@ class QueueBase : public ApiObjectBase, public ExecutionQueueBase {
                                                      const Extent3D* copySize,
                                                      const CopyTextureForBrowserOptions* options);
 
-    virtual MaybeError SubmitImpl(uint32_t commandCount, CommandBufferBase* const* commands) = 0;
-    virtual MaybeError WriteBufferImpl(BufferBase* buffer,
-                                       uint64_t bufferOffset,
-                                       const void* data,
-                                       size_t size);
-    virtual MaybeError WriteTextureImpl(const ImageCopyTexture& destination,
-                                        const void* data,
-                                        size_t dataSize,
-                                        const TextureDataLayout& dataLayout,
-                                        const Extent3D& writeSize);
-
     MaybeError ValidateSubmit(uint32_t commandCount, CommandBufferBase* const* commands) const;
-    MaybeError ValidateOnSubmittedWorkDone(wgpu::QueueWorkDoneStatus* status) const;
+    MaybeError ValidateOnSubmittedWorkDone() const;
     MaybeError ValidateWriteTexture(const ImageCopyTexture* destination,
                                     size_t dataSize,
                                     const TextureDataLayout& dataLayout,

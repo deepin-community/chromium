@@ -35,7 +35,6 @@
 #include "ash/ambient/ui/ambient_view_delegate.h"
 #include "ash/ambient/util/ambient_util.h"
 #include "ash/assistant/model/assistant_interaction_model.h"
-#include "ash/constants/ash_features.h"
 #include "ash/login/ui/lock_screen.h"
 #include "ash/public/cpp/ambient/ambient_backend_controller.h"
 #include "ash/public/cpp/ambient/ambient_client.h"
@@ -77,8 +76,10 @@
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/base/user_activity/user_activity_detector.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -151,10 +152,7 @@ PrefService* GetActivePrefService() {
   if (GetPrimaryUserPrefService()) {
     return GetPrimaryUserPrefService();
   }
-  if (ash::features::IsAmbientModeManagedScreensaverEnabled()) {
-    return GetSigninPrefService();
-  }
-  return nullptr;
+  return GetSigninPrefService();
 }
 
 bool IsUserAmbientModeEnabled() {
@@ -170,8 +168,7 @@ bool IsUserAmbientModeEnabled() {
 bool IsAmbientModeManagedScreensaverEnabled() {
   PrefService* pref_service = GetActivePrefService();
 
-  return ash::features::IsAmbientModeManagedScreensaverEnabled() &&
-         !chromeos::IsKioskSession() && pref_service &&
+  return !chromeos::IsKioskSession() && pref_service &&
          pref_service->GetBoolean(
              ambient::prefs::kAmbientModeManagedScreensaverEnabled);
 }
@@ -190,10 +187,6 @@ class AmbientWidgetDelegate : public views::WidgetDelegate {
 };
 
 void RecordManagedScreensaverEnabledPref() {
-  if (!ash::features::IsAmbientModeManagedScreensaverEnabled()) {
-    return;
-  }
-
   if (PrefService* pref_service = GetActivePrefService();
       pref_service &&
       pref_service->IsManagedPreference(
@@ -301,9 +294,7 @@ void AmbientController::OnAmbientUiVisibilityChanged(
       if (IsChargerConnected()) {
         // Requires wake lock to prevent display from sleeping.
         AcquireWakeLock();
-        if (ash::features::IsScreenSaverDurationEnabled()) {
-          StartTimerToReleaseWakeLock();
-        }
+        StartTimerToReleaseWakeLock();
       }
       // Observes the |PowerStatus| on the battery charging status change for
       // the current ambient session.
@@ -450,13 +441,9 @@ void AmbientController::OnActiveUserPrefServiceChanged(
   }
 
   bool ambient_mode_allowed = AmbientClient::Get()->IsAmbientModeAllowed();
-  bool managed_screensaver_flag_enabled =
-      ash::features::IsAmbientModeManagedScreensaverEnabled();
 
-  if (ambient_mode_allowed || managed_screensaver_flag_enabled) {
-    pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
-    pref_change_registrar_->Init(pref_service);
-  }
+  pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
+  pref_change_registrar_->Init(pref_service);
 
   if (ambient_mode_allowed) {
     pref_change_registrar_->Add(
@@ -465,27 +452,19 @@ void AmbientController::OnActiveUserPrefServiceChanged(
                             weak_ptr_factory_.GetWeakPtr()));
   }
 
-  if (managed_screensaver_flag_enabled) {
-    screensaver_images_policy_handler_ =
-        ScreensaverImagesPolicyHandler::Create(pref_service);
+  screensaver_images_policy_handler_ =
+      ScreensaverImagesPolicyHandler::Create(pref_service);
 
-    pref_change_registrar_->Add(
-        ambient::prefs::kAmbientModeManagedScreensaverEnabled,
-        base::BindRepeating(&AmbientController::OnEnabledPrefChanged,
-                            weak_ptr_factory_.GetWeakPtr()));
-  }
+  pref_change_registrar_->Add(
+      ambient::prefs::kAmbientModeManagedScreensaverEnabled,
+      base::BindRepeating(&AmbientController::OnEnabledPrefChanged,
+                          weak_ptr_factory_.GetWeakPtr()));
 
-  if (ambient_mode_allowed || managed_screensaver_flag_enabled) {
-    OnEnabledPrefChanged();
-  }
+  OnEnabledPrefChanged();
 }
 
 void AmbientController::OnSigninScreenPrefServiceInitialized(
     PrefService* pref_service) {
-  if (!ash::features::IsAmbientModeManagedScreensaverEnabled()) {
-    return;
-  }
-
   screensaver_images_policy_handler_ =
       ScreensaverImagesPolicyHandler::Create(pref_service);
 
@@ -508,20 +487,11 @@ void AmbientController::OnPowerStatusChanged() {
     return;
   }
 
-  if (ash::features::IsScreenSaverDurationEnabled()) {
-    // TODO(b/300158227): There is a pending decision of whether we should
-    // reacquire wake lock when the power is reconnected before screen saver
-    // goes off. We make this change only to make sure that wake lock should
-    // never be acquired while on battery.
-    if (!IsChargerConnected()) {
-      ReleaseWakeLock();
-    }
-    return;
-  }
-
-  if (IsChargerConnected()) {
-    AcquireWakeLock();
-  } else {
+  // TODO(b/300158227): There is a pending decision of whether we should
+  // reacquire wake lock when the power is reconnected before screen saver
+  // goes off. We make this change only to make sure that wake lock should
+  // never be acquired while on battery.
+  if (!IsChargerConnected()) {
     ReleaseWakeLock();
   }
 }
@@ -626,11 +596,11 @@ void AmbientController::OnUserActivity(const ui::Event* event) {
 
 void AmbientController::OnKeyEvent(ui::KeyEvent* event) {
   // Prevent dispatching key press event to the login UI.
-  event->StopPropagation();
-  // |DismissUI| only on |ET_KEY_PRESSED|. Otherwise it won't be possible to
-  // start the preview by pressing "enter" key. It'll be cancelled immediately
-  // on |ET_KEY_RELEASED|.
-  if (event->type() == ui::ET_KEY_PRESSED) {
+  MaybeStopUiEventPropagation(event);
+  // |DismissUI| only on |EventType::kKeyPressed|. Otherwise it won't be
+  // possible to start the preview by pressing "enter" key. It'll be cancelled
+  // immediately on |EventType::kKeyReleased|.
+  if (event->type() == ui::EventType::kKeyPressed) {
     DismissUI();
   }
 }
@@ -638,7 +608,7 @@ void AmbientController::OnKeyEvent(ui::KeyEvent* event) {
 void AmbientController::OnMouseEvent(ui::MouseEvent* event) {
   // |DismissUI| on actual mouse move only if the screen saver widget is shown
   // (images are downloaded).
-  if (event->type() == ui::ET_MOUSE_MOVED) {
+  if (event->type() == ui::EventType::kMouseMoved) {
     MaybeDismissUIOnMouseMove();
     last_mouse_event_was_move_ = true;
     return;
@@ -646,7 +616,7 @@ void AmbientController::OnMouseEvent(ui::MouseEvent* event) {
 
   // Prevent dispatching mouse event to the windows behind screen saver.
   // Let move event pass through, so that it clears hover states.
-  event->StopPropagation();
+  MaybeStopUiEventPropagation(event);
   if (event->IsAnyButton()) {
     DismissUI();
   }
@@ -655,7 +625,7 @@ void AmbientController::OnMouseEvent(ui::MouseEvent* event) {
 
 void AmbientController::OnTouchEvent(ui::TouchEvent* event) {
   // Prevent dispatching touch event to the windows behind screen saver.
-  event->StopPropagation();
+  MaybeStopUiEventPropagation(event);
   DismissUI();
 }
 
@@ -749,7 +719,6 @@ void AmbientController::SetScreenSaverDuration(int minutes) {
 }
 
 void AmbientController::StartTimerToReleaseWakeLock() {
-  CHECK(ash::features::IsScreenSaverDurationEnabled());
   CHECK(!screensaver_running_timer_.IsRunning());
 
   auto* pref_service = GetPrimaryUserPrefService();
@@ -858,10 +827,7 @@ PrefChangeRegistrar* AmbientController::GetActivePrefChangeRegistrar() {
     return pref_change_registrar_.get();
   }
 
-  if (ash::features::IsAmbientModeManagedScreensaverEnabled()) {
-    return sign_in_pref_change_registrar_.get();
-  }
-  return nullptr;
+  return sign_in_pref_change_registrar_.get();
 }
 
 void AmbientController::AddManagedScreensaverPolicyPrefObservers() {
@@ -1110,7 +1076,7 @@ void AmbientController::RequestAccessToken(
   if (IsAmbientModeManagedScreensaverEnabled()) {
     // Consume the callback to be resilient against dependencies on the callback
     // in the future.
-    std::move(callback).Run("", "");
+    std::move(callback).Run(GaiaId(), "");
     return;
   }
   access_token_controller_.RequestAccessToken(std::move(callback),
@@ -1170,12 +1136,12 @@ std::unique_ptr<views::Widget> AmbientController::CreateWidget(
   auto* widget_delegate = new AmbientWidgetDelegate();
   widget_delegate->SetInitiallyFocusedView(container_view.get());
 
-  views::Widget::InitParams params;
-  params.type = views::Widget::InitParams::TYPE_WINDOW_FRAMELESS;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   params.name = GetWidgetName();
-  params.show_state = ui::SHOW_STATE_FULLSCREEN;
+  params.show_state = ui::mojom::WindowShowState::kFullscreen;
   params.parent = container;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.delegate = widget_delegate;
   params.visible_on_all_workspaces = true;
 
@@ -1340,6 +1306,16 @@ void AmbientController::OnReadyStateChanged(bool is_ready) {
   // In case the ready state changes on the login/lock screen we should re-show
   // the ambient mode.
   OnLoginLockStateChanged(GetLockScreenState());
+}
+
+void AmbientController::MaybeStopUiEventPropagation(ui::Event* event) {
+  // If ambient resources are still be loading and the UI has not started
+  // rendering yet (which is usually just a few seconds), UI events such as
+  // key presses should still be propagated to the current UI (ex: the lock
+  // screen).
+  if (IsShowing()) {
+    event->StopPropagation();
+  }
 }
 
 }  // namespace ash

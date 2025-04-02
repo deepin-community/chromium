@@ -38,7 +38,7 @@ class HintCacheTest : public ProtoDatabaseProviderTestBase,
   HintCacheTest(const HintCacheTest&) = delete;
   HintCacheTest& operator=(const HintCacheTest&) = delete;
 
-  ~HintCacheTest() override {}
+  ~HintCacheTest() override = default;
 
   void SetUp() override { ProtoDatabaseProviderTestBase::SetUp(); }
 
@@ -137,7 +137,7 @@ class HintCacheTest : public ProtoDatabaseProviderTestBase,
 
   proto::Hint CreateHintForURL(
       const GURL& url,
-      std::optional<int> cache_duration_in_secs = std::optional<int>()) {
+      std::optional<int> cache_duration_in_secs = std::nullopt) {
     proto::Hint hint;
     hint.set_key(url.spec());
     hint.set_key_representation(proto::FULL_URL);

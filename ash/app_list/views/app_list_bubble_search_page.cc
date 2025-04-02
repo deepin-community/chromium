@@ -7,7 +7,6 @@
 #include <memory>
 
 #include "ash/app_list/views/app_list_search_view.h"
-#include "ash/app_list/views/search_notifier_controller.h"
 #include "ash/bubble/bubble_constants.h"
 #include "base/check_op.h"
 #include "base/time/time.h"
@@ -23,7 +22,7 @@ namespace {
 
 // The animation spec says 40 dips up over 250ms, but the opacity animation
 // renders the view invisible after 50ms, so animate the visible fraction.
-constexpr int kHideAnimationVerticalOffset = -40 * 250 / 50;
+constexpr int kHideAnimationVerticalOffset = -40 * 50 / 250;
 
 // Duration for the hide animation (both transform and opacity).
 constexpr base::TimeDelta kHideAnimationDuration = base::Milliseconds(50);
@@ -43,18 +42,6 @@ AppListBubbleSearchPage::AppListBubbleSearchPage(
 }
 
 AppListBubbleSearchPage::~AppListBubbleSearchPage() = default;
-
-void AppListBubbleSearchPage::VisibilityChanged(View* starting_from,
-                                                bool is_visible) {
-  auto* notifier_controller = search_view_->search_notifier_controller();
-  if (starting_from == this && notifier_controller) {
-    notifier_controller->UpdateNotifierVisibility(is_visible);
-    if (search_view_->search_notifier_view() &&
-        !notifier_controller->ShouldShowPrivacyNotice()) {
-      search_view_->RemoveSearchNotifierView();
-    }
-  }
-}
 
 void AppListBubbleSearchPage::AnimateShowPage() {
   // If skipping animations, just update visibility.

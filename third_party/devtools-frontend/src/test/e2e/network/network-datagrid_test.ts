@@ -5,23 +5,26 @@
 import {assert} from 'chai';
 
 import {unregisterAllServiceWorkers} from '../../conductor/hooks.js';
-import {type BrowserAndPages} from '../../conductor/puppeteer-state.js';
+import type {BrowserAndPages} from '../../conductor/puppeteer-state.js';
 import {
   click,
   getBrowserAndPages,
+  hasClass,
   pressKey,
   step,
   waitFor,
   waitForElementWithTextContent,
   waitForFunction,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
+  clearTextFilter,
   getAllRequestNames,
   navigateToNetworkTab,
   selectRequestByName,
   setCacheDisabled,
+  setInvert,
   setPersistLog,
+  setTextFilter,
   waitForSelectedRequestChange,
   waitForSomeRequestsToAppear,
 } from '../helpers/network-helpers.js';
@@ -43,7 +46,7 @@ async function getRequestRowInfo(frontend: BrowserAndPages['frontend'], name: st
   return {status: statusColumn[index], time: timeColumn[index], type: typeColumn[index]};
 }
 
-describe('The Network Tab', async function() {
+describe('The Network Tab', function() {
   if (this.timeout() !== 0.0) {
     // These tests take some time on slow windows machines.
     this.timeout(10000);
@@ -54,12 +57,15 @@ describe('The Network Tab', async function() {
 
   beforeEach(async () => {
     await navigateToNetworkTab('empty.html');
+    await setTextFilter('favicon.ico');
+    await setInvert(true);
     await setCacheDisabled(true);
     await setPersistLog(false);
   });
 
   afterEach(async () => {
     await unregisterAllServiceWorkers();
+    await clearTextFilter();
   });
 
   it('can click on checkbox label to toggle checkbox', async () => {
@@ -71,7 +77,7 @@ describe('The Network Tab', async function() {
     const checkbox = await waitFor('[title^="Disable cache"]');
     const checked = await checkbox.evaluate(box => (box as HTMLInputElement).checked);
 
-    assert.strictEqual(checked, false, 'The disable cache checkbox should be unchecked');
+    assert.isFalse(checked, 'The disable cache checkbox should be unchecked');
   });
 
   it('shows Last-Modified', async () => {
@@ -161,19 +167,20 @@ describe('The Network Tab', async function() {
     // Open the raw response HTML
     await click('[aria-label="Response"]');
     // Disable pretty printing
-    await waitFor('[aria-label="Pretty print"]');
-    await Promise.all([
-      click('[aria-label="Pretty print"]'),
-      waitFor('[aria-label="Pretty print"][aria-pressed="true"]'),
-    ]);
+    const prettyPrintButton = await waitFor('[title="Pretty print"]');
+    if (await hasClass(prettyPrintButton, 'toggled')) {
+      await click('[title="Pretty print"]');
+    }
+    // await new Promise<void>(resolve => setTimeout(resolve, 25000));
+    assert.isFalse(await hasClass(prettyPrintButton, 'toggled'));
     // Wait for the raw response editor to show up
     const codeMirrorEditor = await waitFor('[aria-label="Code editor"]');
 
     const htmlRawResponse = await codeMirrorEditor.evaluate(editor => editor.textContent);
 
-    assert.strictEqual(
+    assert.include(
         htmlRawResponse,
-        '<html>    <body>The following word is written using cyrillic letters and should look like "SUCCESS": SU\u0421\u0421\u0415SS.</body></html>');
+        '<body>The following word is written using cyrillic letters and should look like "SUCCESS": SU\u0421\u0421\u0415SS.</body>');
   });
 
   it('the correct MIME type when resources came from HTTP cache', async () => {
@@ -274,7 +281,7 @@ describe('The Network Tab', async function() {
       const expectedValues = JSON.stringify(['Remote Address Space', 'Local', 'Local']);
       await waitForFunction(async () => {
         const remoteAddressSpaceValues = await frontend.$$eval(
-            'pierce/.remoteaddress-space-column',
+            'pierce/.remote-address-space-column',
             cells => cells.map(element => element.textContent),
         );
         return JSON.stringify(remoteAddressSpaceValues) === expectedValues;
@@ -413,7 +420,7 @@ describe('The Network Tab', async function() {
     await waitForSomeRequestsToAppear(3);
 
     const updatedRequestNames = await getAllRequestNames();
-    assert.deepStrictEqual(updatedRequestNames, ['xhr.html', 'image.svg', 'image.svg']);
+    assert.deepEqual(updatedRequestNames, ['xhr.html', 'image.svg', 'image.svg']);
   });
 
   it('displays focused background color when request is selected via keyboard navigation', async () => {
@@ -429,7 +436,7 @@ describe('The Network Tab', async function() {
       return document.querySelector('.network-log-grid tbody tr.selected')?.getAttribute('style');
     });
 
-    assert.deepStrictEqual(await getSelectedRequestBgColor(), 'background-color: var(--color-grid-focus-selected);');
+    assert.deepEqual(await getSelectedRequestBgColor(), 'background-color: var(--color-grid-focus-selected);');
   });
 
   it('shows the request panel when clicked during a websocket message (https://crbug.com/1222382)', async () => {

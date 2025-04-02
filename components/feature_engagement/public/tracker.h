@@ -38,11 +38,14 @@ class ProtoDatabaseProvider;
 namespace feature_engagement {
 
 class Configuration;
+class FeatureActivation;
 class Tracker;
 class SessionController;
 
-// Creates a Tracker that is usable for a demo mode.
-std::unique_ptr<Tracker> CreateDemoModeTracker(std::string chosen_feature_name);
+// Creates a Tracker that is usable for a demo mode. `feature_activation`
+// decides which features are enabled.
+std::unique_ptr<Tracker> CreateDemoModeTracker(
+    FeatureActivation feature_activation);
 
 // A handle for the display lock. While this is unreleased, no in-product help
 // can be displayed.
@@ -155,11 +158,11 @@ class Tracker : public KeyedService, public base::SupportsUserData {
   // The |background_task_runner| will be used for all disk reads and writes.
   // If `configuration_providers` is not specified, a default set of providers
   // will be provided.
-  static Tracker* Create(
+  static std::unique_ptr<Tracker> Create(
       const base::FilePath& storage_dir,
       const scoped_refptr<base::SequencedTaskRunner>& background_task_runner,
       leveldb_proto::ProtoDatabaseProvider* db_provider,
-      base::WeakPtr<TrackerEventExporter> event_exporter,
+      std::unique_ptr<TrackerEventExporter> event_exporter,
       const ConfigurationProviderList& configuration_providers =
           GetDefaultConfigurationProviders(),
       std::unique_ptr<SessionController> session_controller =
@@ -300,6 +303,16 @@ class Tracker : public KeyedService, public base::SupportsUserData {
   // will still be invoked with the result. The callback is guaranteed to be
   // invoked exactly one time.
   virtual void AddOnInitializedCallback(OnInitializedCallback callback) = 0;
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Updates the config of a specific feature after initialization. The new
+  // config will replace the existing cofig.
+  // Calling this method requires the Tracker to already have been initialized.
+  // See IsInitialized() and AddOnInitializedCallback(...) for how to ensure
+  // the call to this is delayed.
+  virtual void UpdateConfig(const base::Feature& feature,
+                            const ConfigurationProvider* provider) = 0;
+#endif
 
   // Returns the configuration associated with the tracker for testing purposes.
   virtual const Configuration* GetConfigurationForTesting() const = 0;

@@ -40,6 +40,7 @@ android_library("java") {
     "//chrome/browser/flags:java",
     "//chrome/browser/password_manager/android:java",
     "//chrome/browser/password_manager/android:java_resources",
+    "//chrome/browser/password_manager/android/shared_ui:ui_java",
     "//components/browser_ui/strings/android:browser_ui_strings_grd",
     "//third_party/android_deps:material_design_java",
     "//third_party/androidx:androidx_annotation_annotation_java",

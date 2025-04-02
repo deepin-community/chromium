@@ -25,21 +25,26 @@
 
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 
+#include <array>
+
 #include "base/trace_event/trace_event.h"
 #include "third_party/blink/renderer/core/clipboard/clipboard_mime_types.h"
 #include "third_party/blink/renderer/core/clipboard/data_object.h"
 #include "third_party/blink/renderer/core/clipboard/data_transfer.h"
+#include "third_party/blink/renderer/core/clipboard/data_transfer_access_policy.h"
 #include "third_party/blink/renderer/core/clipboard/system_clipboard.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/range.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/text.h"
+#include "third_party/blink/renderer/core/editing/commands/editing_commands_utilities.h"
 #include "third_party/blink/renderer/core/editing/editing_strategy.h"
 #include "third_party/blink/renderer/core/editing/editor.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
+#include "third_party/blink/renderer/core/editing/ime/edit_context.h"
+#include "third_party/blink/renderer/core/editing/ime/input_method_controller.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator.h"
 #include "third_party/blink/renderer/core/editing/local_caret_rect.h"
 #include "third_party/blink/renderer/core/editing/plain_text_range.h"
@@ -57,20 +62,33 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_select_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
+#include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/html/html_br_element.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
+#include "third_party/blink/renderer/core/html/html_dlist_element.h"
+#include "third_party/blink/renderer/core/html/html_embed_element.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/html/html_li_element.h"
+#include "third_party/blink/renderer/core/html/html_object_element.h"
+#include "third_party/blink/renderer/core/html/html_olist_element.h"
 #include "third_party/blink/renderer/core/html/html_paragraph_element.h"
 #include "third_party/blink/renderer/core/html/html_span_element.h"
+#include "third_party/blink/renderer/core/html/html_table_caption_element.h"
 #include "third_party/blink/renderer/core/html/html_table_cell_element.h"
+#include "third_party/blink/renderer/core/html/html_table_col_element.h"
+#include "third_party/blink/renderer/core/html/html_table_element.h"
+#include "third_party/blink/renderer/core/html/html_table_row_element.h"
+#include "third_party/blink/renderer/core/html/html_table_section_element.h"
 #include "third_party/blink/renderer/core/html/html_ulist_element.h"
 #include "third_party/blink/renderer/core/html/image_document.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html_element_factory.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
+#include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_image.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/svg/svg_image_element.h"
@@ -88,12 +106,11 @@ using mojom::blink::FormControlType;
 namespace {
 
 std::ostream& operator<<(std::ostream& os, PositionMoveType type) {
-  static const char* const kTexts[] = {"CodeUnit", "BackwardDeletion",
-                                       "GraphemeCluster"};
-  auto* const* const it = std::begin(kTexts) + static_cast<size_t>(type);
-  DCHECK_GE(it, std::begin(kTexts)) << "Unknown PositionMoveType value";
-  DCHECK_LT(it, std::end(kTexts)) << "Unknown PositionMoveType value";
-  return os << *it;
+  static const std::array<const char*, 3> kTexts = {
+      "CodeUnit", "BackwardDeletion", "GraphemeCluster"};
+  DCHECK_LT(static_cast<size_t>(type), kTexts.size())
+      << "Unknown PositionMoveType value";
+  return os << kTexts[static_cast<size_t>(type)];
 }
 
 UChar WhitespaceRebalancingCharToAppend(const String& string,
@@ -196,17 +213,30 @@ static bool HasEditableLevel(const Node& node, EditableLevel editable_level) {
   for (const Node& ancestor : NodeTraversal::InclusiveAncestorsOf(node)) {
     if (!(ancestor.IsHTMLElement() || ancestor.IsDocumentNode()))
       continue;
-
-    const ComputedStyle* style = ancestor.GetComputedStyle();
-    if (!style)
-      continue;
-    switch (style->UsedUserModify()) {
-      case EUserModify::kReadOnly:
+    if (const ComputedStyle* style =
+            GetComputedStyleForElementOrLayoutObject(ancestor)) {
+      switch (style->UsedUserModify()) {
+        case EUserModify::kReadOnly:
+          return false;
+        case EUserModify::kReadWrite:
+          return true;
+        case EUserModify::kReadWritePlaintextOnly:
+          return editable_level != kRichlyEditable;
+      }
+    }
+    // An inert subtree should not contain any content or controls which are
+    // critical to understanding or using aspects of the page which are not in
+    // the inert state. Content in an inert subtree will not be perceivable by
+    // all users, or interactive. See
+    // https://html.spec.whatwg.org/multipage/interaction.html#the-inert-attribute.
+    // To prevent the invisible inert element being overlooked, the
+    // inert attribute of the element is considered when style is not present.
+    // See https://issues.chromium.org/issues/41490809.
+    if (RuntimeEnabledFeatures::InertElementNonEditableEnabled()) {
+      const Element* element = DynamicTo<Element>(ancestor);
+      if (element && element->IsInertRoot()) {
         return false;
-      case EUserModify::kReadWrite:
-        return true;
-      case EUserModify::kReadWritePlaintextOnly:
-        return editable_level != kRichlyEditable;
+      }
     }
   }
 
@@ -513,11 +543,8 @@ PositionTemplate<Strategy> FirstEditablePositionAfterPositionInRootAlgorithm(
   // - If `non_editable_node` is not the last child, we will bypass the next
   //   editable sibling position. See http://crbug.com/1334557 for more details.
   bool need_obtain_next =
-      RuntimeEnabledFeatures::GetNextSiblingPositionWhenLastChildEnabled()
-          ? non_editable_node && editable_position.AnchorNode() &&
-                non_editable_node == editable_position.AnchorNode()->lastChild()
-          : non_editable_node && non_editable_node->IsDescendantOf(
-                                     editable_position.AnchorNode());
+      non_editable_node && editable_position.AnchorNode() &&
+      non_editable_node == editable_position.AnchorNode()->lastChild();
   if (need_obtain_next) {
     // Make sure not to move out of |highest_root|
     const PositionTemplate<Strategy> boundary =
@@ -528,9 +555,7 @@ PositionTemplate<Strategy> FirstEditablePositionAfterPositionInRootAlgorithm(
     // `position`, so use `NextCandidate` here.
     // See http://crbug.com/1406207 for more details.
     const PositionTemplate<Strategy> next_candidate =
-        RuntimeEnabledFeatures::NextSiblingPositionUseNextCandidateEnabled()
-            ? NextCandidate(editable_position)
-            : NextVisuallyDistinctCandidate(editable_position);
+        NextCandidate(editable_position);
     editable_position = next_candidate.IsNotNull()
                             ? std::min(boundary, next_candidate)
                             : boundary;
@@ -767,7 +792,6 @@ PositionTemplate<Strategy> NextPositionOfAlgorithm(
       case PositionMoveType::kBackwardDeletion:
         NOTREACHED() << "BackwardDeletion is only available for prevPositionOf "
                      << "functions.";
-        return PositionTemplate<Strategy>::EditingPositionOf(node, offset + 1);
       case PositionMoveType::kGraphemeCluster:
         return PositionTemplate<Strategy>::EditingPositionOf(
             node, NextGraphemeBoundaryOf(*node, offset));
@@ -794,8 +818,7 @@ PositionInFlatTree NextPositionOf(const PositionInFlatTree& position,
 
 bool IsEnclosingBlock(const Node* node) {
   return node && node->GetLayoutObject() &&
-         !node->GetLayoutObject()->IsInline() &&
-         !node->GetLayoutObject()->IsRubyText();
+         !node->GetLayoutObject()->IsInline();
 }
 
 // TODO(yosin) Deploy this in all of the places where |enclosingBlockFlow()| and
@@ -872,6 +895,18 @@ TextDirection PrimaryDirectionOf(const Node& node) {
   }
 
   return primary_direction;
+}
+
+const ComputedStyle* GetComputedStyleForElementOrLayoutObject(
+    const Node& node) {
+  if (const auto* element = DynamicTo<Element>(node)) {
+    return element->GetComputedStyle();
+  }
+  // Text nodes and Document.
+  if (LayoutObject* layout_object = node.GetLayoutObject()) {
+    return layout_object->Style();
+  }
+  return nullptr;
 }
 
 String StringWithRebalancedWhitespace(const String& string,
@@ -968,8 +1003,7 @@ bool IsHTMLListElement(const Node* n) {
 }
 
 bool IsListItem(const Node* n) {
-  return n && n->GetLayoutObject() &&
-         n->GetLayoutObject()->IsListItemIncludingNG();
+  return n && n->GetLayoutObject() && n->GetLayoutObject()->IsListItem();
 }
 
 bool IsListItemTag(const Node* n) {
@@ -1116,6 +1150,13 @@ bool IsTableCell(const Node* node) {
   return r ? r->IsTableCell() : IsA<HTMLTableCellElement>(*node);
 }
 
+bool IsTablePartElement(const Node* n) {
+  return n &&
+         (IsA<HTMLTableCellElement>(*n) || IsA<HTMLTableCaptionElement>(*n) ||
+          IsA<HTMLTableColElement>(*n) || IsA<HTMLTableSectionElement>(*n) ||
+          IsA<HTMLTableRowElement>(*n));
+}
+
 HTMLElement* CreateDefaultParagraphElement(Document& document) {
   switch (document.GetFrame()->GetEditor().DefaultParagraphSeparator()) {
     case EditorParagraphSeparator::kIsDiv:
@@ -1125,22 +1166,25 @@ HTMLElement* CreateDefaultParagraphElement(Document& document) {
   }
 
   NOTREACHED();
-  return nullptr;
 }
 
 bool IsTabHTMLSpanElement(const Node* node) {
-  if (!IsA<HTMLSpanElement>(node))
+  const auto* span = DynamicTo<HTMLSpanElement>(node);
+  if (!span) {
     return false;
-  const Node* const first_child = NodeTraversal::FirstChild(*node);
+  }
+  const Node* const first_child = NodeTraversal::FirstChild(*span);
   auto* first_child_text_node = DynamicTo<Text>(first_child);
-  if (!first_child_text_node)
+  if (!first_child_text_node) {
     return false;
-  if (!first_child_text_node->data().Contains('\t'))
+  }
+  if (!first_child_text_node->data().Contains('\t')) {
     return false;
+  }
   // TODO(editing-dev): Hoist the call of UpdateStyleAndLayoutTree to callers.
   // See crbug.com/590369 for details.
-  node->GetDocument().UpdateStyleAndLayoutTree();
-  const ComputedStyle* style = node->GetComputedStyle();
+  span->GetDocument().UpdateStyleAndLayoutTree();
+  const ComputedStyle* style = span->GetComputedStyle();
   return style && style->WhiteSpace() == EWhiteSpace::kPre;
 }
 
@@ -1271,6 +1315,30 @@ PositionWithAffinity AdjustForEditingBoundary(const Position& position) {
   return AdjustForEditingBoundary(PositionWithAffinity(position));
 }
 
+Position ComputePlaceholderToCollapseAt(const Position& insertion_pos) {
+  Position placeholder;
+  // We want to remove preserved newlines and brs that will collapse (and thus
+  // become unnecessary) when content is inserted just before them.
+  // FIXME: We shouldn't really have to do this, but removing placeholders is a
+  // workaround for 9661.
+  // If the caret is just before a placeholder, downstream will normalize the
+  // caret to it.
+  Position downstream(MostForwardCaretPosition(insertion_pos));
+  if (LineBreakExistsAtPosition(downstream)) {
+    // FIXME: This doesn't handle placeholders at the end of anonymous blocks.
+    VisiblePosition caret = CreateVisiblePosition(insertion_pos);
+    if (IsEndOfBlock(caret) && IsStartOfParagraph(caret)) {
+      placeholder = downstream;
+    }
+    // Don't remove the placeholder yet, otherwise the block we're inserting
+    // into would collapse before we get a chance to insert into it.  We check
+    // for a placeholder now, though, because doing so requires the creation of
+    // a VisiblePosition, and if we did that post-insertion it would force a
+    // layout.
+  }
+  return placeholder;
+}
+
 Position ComputePositionForNodeRemoval(const Position& position,
                                        const Node& node) {
   if (position.IsNull())
@@ -1311,7 +1379,6 @@ Position ComputePositionForNodeRemoval(const Position& position,
       return Position::InParentBeforeNode(node);
   }
   NOTREACHED() << "We should handle all PositionAnchorType";
-  return position;
 }
 
 bool IsMailHTMLBlockquoteElement(const Node* node) {
@@ -1460,14 +1527,11 @@ bool IsRenderedAsNonInlineTableImageOrHR(const Node* node) {
   if (!node)
     return false;
   LayoutObject* layout_object = node->GetLayoutObject();
-  if (!layout_object) {
+  if (!layout_object || layout_object->IsInline()) {
     return false;
   }
-  bool is_hr = RuntimeEnabledFeatures::RubyInlinifyEnabled()
-                   ? (layout_object->IsHR() && !layout_object->IsInline())
-                   : layout_object->IsHR();
-  return (layout_object->IsTable() && !layout_object->IsInline()) ||
-         (layout_object->IsImage() && !layout_object->IsInline()) || is_hr;
+  return layout_object->IsTable() || layout_object->IsImage() ||
+         layout_object->IsHR();
 }
 
 bool IsNonTableCellHTMLBlockElement(const Node* node) {
@@ -1604,6 +1668,67 @@ DispatchEventResult DispatchBeforeInputDataTransfer(
         TargetRangesForInputEvent(*target));
   }
   return target->DispatchEvent(*before_input_event);
+}
+
+void InsertTextAndSendInputEventsOfTypeInsertReplacementText(
+    LocalFrame& frame,
+    const String& replacement,
+    bool allow_edit_context) {
+  // TODO(editing-dev): The use of UpdateStyleAndLayout
+  // needs to be audited.  See http://crbug.com/590369 for more details.
+  frame.GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kSpellCheck);
+
+  Document& current_document = *frame.GetDocument();
+
+  // Dispatch 'beforeinput'.
+  Element* const target = FindEventTargetFrom(
+      frame, frame.Selection().ComputeVisibleSelectionInDOMTree());
+
+  // Copy the original target text into a string, in case the 'beforeinput'
+  // event handler modifies the text.
+  const String before_input_target_string = target->GetInnerTextWithoutUpdate();
+
+  DataTransfer* const data_transfer = DataTransfer::Create(
+      DataTransfer::DataTransferType::kInsertReplacementText,
+      DataTransferAccessPolicy::kReadable,
+      DataObject::CreateFromString(replacement));
+
+  const bool is_canceled =
+      DispatchBeforeInputDataTransfer(
+          target, InputEvent::InputType::kInsertReplacementText,
+          data_transfer) != DispatchEventResult::kNotCanceled;
+
+  // 'beforeinput' event handler may destroy target frame.
+  if (current_document != frame.GetDocument()) {
+    return;
+  }
+
+  // If the 'beforeinput' event handler has modified the input text, then the
+  // replacement text shouldn't be inserted.
+  if (target->innerText() != before_input_target_string) {
+    return;
+  }
+
+  // When allowed, insert the text into the active edit context if it exists.
+  if (auto* edit_context =
+          frame.GetInputMethodController().GetActiveEditContext()) {
+    if (allow_edit_context) {
+      edit_context->InsertText(replacement);
+    }
+    return;
+  }
+
+  // TODO(editing-dev): The use of UpdateStyleAndLayout
+  // needs to be audited.  See http://crbug.com/590369 for more details.
+  frame.GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kSpellCheck);
+
+  if (is_canceled) {
+    return;
+  }
+
+  frame.GetEditor().InsertTextWithoutSendingTextEvent(
+      replacement, false, nullptr,
+      InputEvent::InputType::kInsertReplacementText);
 }
 
 // |IsEmptyNonEditableNodeInEditable()| is introduced for fixing

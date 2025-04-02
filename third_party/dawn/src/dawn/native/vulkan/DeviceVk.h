@@ -39,7 +39,7 @@
 #include "dawn/native/Commands.h"
 #include "dawn/native/Device.h"
 #include "dawn/native/dawn_platform.h"
-#include "dawn/native/vulkan/CommandRecordingContext.h"
+#include "dawn/native/vulkan/CommandRecordingContextVk.h"
 #include "dawn/native/vulkan/DescriptorSetAllocator.h"
 #include "dawn/native/vulkan/Forward.h"
 #include "dawn/native/vulkan/VulkanFunctions.h"
@@ -59,7 +59,8 @@ class Device final : public DeviceBase {
   public:
     static ResultOrError<Ref<Device>> Create(AdapterBase* adapter,
                                              const UnpackedPtr<DeviceDescriptor>& descriptor,
-                                             const TogglesState& deviceToggles);
+                                             const TogglesState& deviceToggles,
+                                             Ref<DeviceBase::DeviceLostEvent>&& lostEvent);
     ~Device() override;
 
     MaybeError Initialize(const UnpackedPtr<DeviceDescriptor>& descriptor);
@@ -117,6 +118,7 @@ class Device final : public DeviceBase {
     float GetTimestampPeriodInNS() const override;
 
     void SetLabelImpl() override;
+    void PerformIdleTasksImpl() override;
 
     void OnDebugMessage(std::string message);
 
@@ -126,7 +128,8 @@ class Device final : public DeviceBase {
   private:
     Device(AdapterBase* adapter,
            const UnpackedPtr<DeviceDescriptor>& descriptor,
-           const TogglesState& deviceToggles);
+           const TogglesState& deviceToggles,
+           Ref<DeviceBase::DeviceLostEvent>&& lostEvent);
 
     ResultOrError<Ref<BindGroupBase>> CreateBindGroupImpl(
         const BindGroupDescriptor* descriptor) override;
@@ -141,44 +144,41 @@ class Device final : public DeviceBase {
     ResultOrError<Ref<SamplerBase>> CreateSamplerImpl(const SamplerDescriptor* descriptor) override;
     ResultOrError<Ref<ShaderModuleBase>> CreateShaderModuleImpl(
         const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
+        const std::vector<tint::wgsl::Extension>& internalExtensions,
         ShaderModuleParseResult* parseResult,
         OwnedCompilationMessages* compilationMessages) override;
     ResultOrError<Ref<SwapChainBase>> CreateSwapChainImpl(
         Surface* surface,
         SwapChainBase* previousSwapChain,
-        const SwapChainDescriptor* descriptor) override;
+        const SurfaceConfiguration* config) override;
     ResultOrError<Ref<TextureBase>> CreateTextureImpl(
         const UnpackedPtr<TextureDescriptor>& descriptor) override;
     ResultOrError<Ref<TextureViewBase>> CreateTextureViewImpl(
         TextureBase* texture,
-        const TextureViewDescriptor* descriptor) override;
+        const UnpackedPtr<TextureViewDescriptor>& descriptor) override;
     Ref<ComputePipelineBase> CreateUninitializedComputePipelineImpl(
         const UnpackedPtr<ComputePipelineDescriptor>& descriptor) override;
     Ref<RenderPipelineBase> CreateUninitializedRenderPipelineImpl(
         const UnpackedPtr<RenderPipelineDescriptor>& descriptor) override;
     Ref<PipelineCacheBase> GetOrCreatePipelineCacheImpl(const CacheKey& key) override;
-    void InitializeComputePipelineAsyncImpl(Ref<ComputePipelineBase> computePipeline,
-                                            WGPUCreateComputePipelineAsyncCallback callback,
-                                            void* userdata) override;
-    void InitializeRenderPipelineAsyncImpl(Ref<RenderPipelineBase> renderPipeline,
-                                           WGPUCreateRenderPipelineAsyncCallback callback,
-                                           void* userdata) override;
-
-    ResultOrError<wgpu::TextureUsage> GetSupportedSurfaceUsageImpl(
-        const Surface* surface) const override;
+    void InitializeComputePipelineAsyncImpl(Ref<CreateComputePipelineAsyncEvent> event) override;
+    void InitializeRenderPipelineAsyncImpl(Ref<CreateRenderPipelineAsyncEvent> event) override;
 
     ResultOrError<Ref<SharedTextureMemoryBase>> ImportSharedTextureMemoryImpl(
         const SharedTextureMemoryDescriptor* baseDescriptor) override;
     ResultOrError<Ref<SharedFenceBase>> ImportSharedFenceImpl(
         const SharedFenceDescriptor* baseDescriptor) override;
 
-    ResultOrError<VulkanDeviceKnobs> CreateDevice(VkPhysicalDevice vkPhysicalDevice);
+    ResultOrError<VulkanDeviceKnobs> CreateDevice(wgpu::FeatureLevel featureLevel,
+                                                  VkPhysicalDevice vkPhysicalDevice);
 
     MaybeError CheckDebugLayerAndGenerateErrors();
     void AppendDebugLayerMessages(ErrorData* error) override;
     void CheckDebugMessagesAfterDestruction() const;
 
     void DestroyImpl() override;
+    MaybeError GetAHardwareBufferPropertiesImpl(void* handle, AHardwareBufferProperties* properties)
+        const override;
 
     // To make it easier to use fn it is a public const member. However
     // the Device is allowed to mutate them through these private methods.
@@ -188,7 +188,8 @@ class Device final : public DeviceBase {
     VkDevice mVkDevice = VK_NULL_HANDLE;
     uint32_t mMainQueueFamily = 0;
 
-    SerialQueue<ExecutionSerial, Ref<DescriptorSetAllocator>>
+    // Entries can be appended without holding the device mutex.
+    MutexProtected<SerialQueue<ExecutionSerial, Ref<DescriptorSetAllocator>>>
         mDescriptorAllocatorsPendingDeallocation;
     std::unique_ptr<MutexProtected<FencedDeleter>> mDeleter;
     std::unique_ptr<MutexProtected<ResourceMemoryAllocator>> mResourceMemoryAllocator;
@@ -200,6 +201,8 @@ class Device final : public DeviceBase {
     // For capturing messages generated by the Vulkan debug layer.
     const std::string mDebugPrefix;
     std::vector<std::string> mDebugMessages;
+
+    Ref<PipelineCache> mMonolithicPipelineCache;
 
     MaybeError ImportExternalImage(const ExternalImageDescriptorVk* descriptor,
                                    ExternalMemoryHandle memoryHandle,

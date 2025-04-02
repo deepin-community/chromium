@@ -7,6 +7,7 @@ import * as Host from '../../../../core/host/host.js';
 import * as i18n from '../../../../core/i18n/i18n.js';
 import * as Platform from '../../../../core/platform/platform.js';
 import * as Diff from '../../../../third_party/diff/diff.js';
+import * as IconButton from '../../../components/icon_button/icon_button.js';
 import * as UI from '../../legacy.js';
 
 import {FilteredListWidget, Provider, registerProvider} from './FilteredListWidget.js';
@@ -29,6 +30,10 @@ const UIStrings = {
    * @description Text for command suggestion of run a command
    */
   command: 'Command',
+  /**
+   * @description Text for help title of run command menu
+   */
+  runCommand: 'Run command',
   /**
    * @description Hint text to indicate that a selected command is deprecated
    */
@@ -62,6 +67,7 @@ export class CommandMenu {
       keys,
       title,
       shortcut,
+      jslogContext,
       executeHandler,
       availableHandler,
       userActionCode,
@@ -77,7 +83,8 @@ export class CommandMenu {
         executeHandler();
       };
     }
-    return new Command(category, title, keys, shortcut, handler, availableHandler, deprecationWarning, isPanelOrDrawer);
+    return new Command(
+        category, title, keys, shortcut, jslogContext, handler, availableHandler, deprecationWarning, isPanelOrDrawer);
   }
 
   static createSettingCommand<V>(setting: Common.Settings.Setting<V>, title: Common.UIString.LocalizedString, value: V):
@@ -94,6 +101,7 @@ export class CommandMenu {
       keys: tags,
       title,
       shortcut: '',
+      jslogContext: Platform.StringUtilities.toKebabCase(`${setting.name}-${value}`),
       executeHandler: () => {
         if (setting.deprecation?.disabled &&
             (!setting.deprecation?.experiment || setting.deprecation.experiment.isEnabled())) {
@@ -112,7 +120,6 @@ export class CommandMenu {
         }
       },
       availableHandler,
-      userActionCode: undefined,
       deprecationWarning: setting.deprecation?.warning,
     });
 
@@ -140,6 +147,7 @@ export class CommandMenu {
       keys: action.tags() || '',
       title: action.title(),
       shortcut,
+      jslogContext: action.id(),
       executeHandler: action.execute.bind(action),
       userActionCode,
       availableHandler: undefined,
@@ -161,7 +169,7 @@ export class CommandMenu {
 
     const executeHandler = (): Promise<void> => {
       if (id === 'issues-pane') {
-        Host.userMetrics.issuesPanelOpenedFrom(Host.UserMetrics.IssueOpener.CommandMenu);
+        Host.userMetrics.issuesPanelOpenedFrom(Host.UserMetrics.IssueOpener.COMMAND_MENU);
       }
       return UI.ViewManager.ViewManager.instance().showView(id, /* userGesture */ true);
     };
@@ -171,6 +179,7 @@ export class CommandMenu {
       keys: tags,
       title,
       shortcut: '',
+      jslogContext: id,
       executeHandler,
       userActionCode,
       availableHandler: undefined,
@@ -185,7 +194,7 @@ export class CommandMenu {
         locations.set(name, category);
       }
     }
-    const views = UI.ViewManager.getRegisteredViewExtensions();
+    const views = UI.ViewManager.getRegisteredViewExtensions(Common.Settings.Settings.instance().getHostConfig());
     for (const view of views) {
       const viewLocation = view.location();
       const category = viewLocation && locations.get(viewLocation);
@@ -197,13 +206,12 @@ export class CommandMenu {
         title: view.commandPrompt(),
         tags: view.tags() || '',
         category,
-        userActionCode: undefined,
         id: view.viewId(),
       };
       this.commandsInternal.push(CommandMenu.createRevealViewCommand(options));
     }
     // Populate allowlisted settings.
-    const settingsRegistrations = Common.Settings.getRegisteredSettings();
+    const settingsRegistrations = Common.Settings.Settings.instance().getRegisteredSettings();
     for (const settingRegistration of settingsRegistrations) {
       const options = settingRegistration.options;
       if (!options || !settingRegistration.category) {
@@ -238,6 +246,7 @@ export interface CreateCommandOptions {
   keys: string;
   title: Common.UIString.LocalizedString;
   shortcut: string;
+  jslogContext: string;
   executeHandler: () => void;
   availableHandler?: () => boolean;
   userActionCode?: number;
@@ -254,7 +263,7 @@ export class CommandMenuProvider extends Provider {
   private commands: Command[];
 
   constructor(commandsForTest: Command[] = []) {
-    super();
+    super('command');
     this.commands = commandsForTest;
   }
 
@@ -268,9 +277,7 @@ export class CommandMenuProvider extends Provider {
       if (!category) {
         continue;
       }
-
-      const options: ActionCommandOptions = {action, userActionCode: undefined};
-      this.commands.push(CommandMenu.createActionCommand(options));
+      this.commands.push(CommandMenu.createActionCommand({action}));
     }
 
     for (const command of allCommands) {
@@ -321,6 +328,8 @@ export class CommandMenuProvider extends Provider {
     const command = this.commands[itemIndex];
 
     titleElement.removeChildren();
+    const icon = IconButton.Icon.create(categoryIcons[command.category]);
+    titleElement.parentElement?.parentElement?.insertBefore(icon, titleElement.parentElement);
     UI.UIUtils.createTextChild(titleElement, command.title);
     FilteredListWidget.highlightRanges(titleElement, query, true);
 
@@ -328,20 +337,21 @@ export class CommandMenuProvider extends Provider {
 
     const deprecationWarning = command.deprecationWarning;
     if (deprecationWarning) {
-      const deprecatedTagElement = (titleElement.parentElement?.createChild('span', 'deprecated-tag') as HTMLElement);
+      const deprecatedTagElement = titleElement.parentElement?.createChild('span', 'deprecated-tag');
       if (deprecatedTagElement) {
         deprecatedTagElement.textContent = i18nString(UIStrings.deprecated);
         deprecatedTagElement.title = deprecationWarning;
       }
     }
-    const tagElement = (titleElement.parentElement?.parentElement?.createChild('span', 'tag') as HTMLElement);
+    const tagElement = titleElement.parentElement?.parentElement?.createChild('span', 'tag');
     if (!tagElement) {
       return;
     }
-    const index = Platform.StringUtilities.hashCode(command.category) % MaterialPaletteColors.length;
-    tagElement.style.backgroundColor = MaterialPaletteColors[index];
-    tagElement.style.color = '#fff';
     tagElement.textContent = command.category;
+  }
+
+  override jslogContextAt(itemIndex: number): string {
+    return this.commands[itemIndex].jslogContext;
   }
 
   override selectItem(itemIndex: number|null, _promptValue: string): void {
@@ -357,31 +367,35 @@ export class CommandMenuProvider extends Provider {
   }
 }
 
-export const MaterialPaletteColors = [
-  '#F44336',
-  '#E91E63',
-  '#9C27B0',
-  '#673AB7',
-  '#3F51B5',
-  '#03A9F4',
-  '#00BCD4',
-  '#009688',
-  '#4CAF50',
-  '#8BC34A',
-  '#CDDC39',
-  '#FFC107',
-  '#FF9800',
-  '#FF5722',
-  '#795548',
-  '#9E9E9E',
-  '#607D8B',
-];
+const categoryIcons: {[key: string]: string} = {
+  Appearance: 'palette',
+  Console: 'terminal',
+  Debugger: 'bug',
+  Drawer: 'keyboard-full',
+  Elements: 'code',
+  Global: 'global',
+  Grid: 'grid-on',
+  Help: 'help',
+  Mobile: 'devices',
+  Navigation: 'refresh',
+  Network: 'arrow-up-down',
+  Panel: 'frame',
+  Performance: 'performance',
+  Persistence: 'override',
+  Recorder: 'record-start',
+  Rendering: 'tonality',
+  Resources: 'bin',
+  Screenshot: 'photo-camera',
+  Settings: 'gear',
+  Sources: 'label',
+};
 
 export class Command {
   readonly category: Common.UIString.LocalizedString;
   readonly title: Common.UIString.LocalizedString;
   readonly key: string;
   readonly shortcut: string;
+  readonly jslogContext: string;
   readonly deprecationWarning?: Platform.UIString.LocalizedString;
   readonly isPanelOrDrawer?: PanelOrDrawer;
 
@@ -390,12 +404,13 @@ export class Command {
 
   constructor(
       category: Common.UIString.LocalizedString, title: Common.UIString.LocalizedString, key: string, shortcut: string,
-      executeHandler: () => unknown, availableHandler?: () => boolean,
+      jslogContext: string, executeHandler: () => unknown, availableHandler?: () => boolean,
       deprecationWarning?: Platform.UIString.LocalizedString, isPanelOrDrawer?: PanelOrDrawer) {
     this.category = category;
     this.title = title;
     this.key = category + '\0' + title + '\0' + key;
     this.shortcut = shortcut;
+    this.jslogContext = jslogContext;
     this.#executeHandler = executeHandler;
     this.#availableHandler = availableHandler;
     this.deprecationWarning = deprecationWarning;
@@ -422,8 +437,8 @@ export class ShowActionDelegate implements UI.ActionRegistration.ActionDelegate 
 registerProvider({
   prefix: '>',
   iconName: 'chevron-right',
-  iconWidth: '20px',
   provider: () => Promise.resolve(new CommandMenuProvider()),
+  helpTitle: () => i18nString(UIStrings.runCommand),
   titlePrefix: () => i18nString(UIStrings.run),
   titleSuggestion: () => i18nString(UIStrings.command),
 });

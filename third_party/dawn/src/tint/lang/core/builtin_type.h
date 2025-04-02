@@ -39,7 +39,7 @@
 
 #include <cstdint>
 
-#include "src/tint/utils/traits/traits.h"
+#include "src/tint/utils/rtti/traits.h"
 
 namespace tint::core {
 
@@ -79,6 +79,7 @@ enum class BuiltinType : uint8_t {
     kF16,
     kF32,
     kI32,
+    kInputAttachment,
     kMat2X2,
     kMat2X2F,
     kMat2X2H,
@@ -109,6 +110,9 @@ enum class BuiltinType : uint8_t {
     kPtr,
     kSampler,
     kSamplerComparison,
+    kSubgroupMatrixLeft,
+    kSubgroupMatrixResult,
+    kSubgroupMatrixRight,
     kTexture1D,
     kTexture2D,
     kTexture2DArray,
@@ -195,6 +199,7 @@ constexpr std::string_view kBuiltinTypeStrings[] = {
     "f16",
     "f32",
     "i32",
+    "input_attachment",
     "mat2x2",
     "mat2x2f",
     "mat2x2h",
@@ -225,6 +230,9 @@ constexpr std::string_view kBuiltinTypeStrings[] = {
     "ptr",
     "sampler",
     "sampler_comparison",
+    "subgroup_matrix_left",
+    "subgroup_matrix_result",
+    "subgroup_matrix_right",
     "texture_1d",
     "texture_2d",
     "texture_2d_array",

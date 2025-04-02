@@ -103,6 +103,7 @@ class CONTENT_EXPORT IdlConvert {
     Type type() const { return static_cast<Type>(value_.index()); }
 
     bool is_success() const { return type() == Type::kSuccess; }
+    bool is_timeout() const { return type() == Type::kTimeout; }
 
     // Serializes the conversion error message. This can only be called if
     // the status is not a success.
@@ -174,6 +175,13 @@ class CONTENT_EXPORT IdlConvert {
                         std::initializer_list<std::string_view> error_subject,
                         v8::Local<v8::Value> value,
                         int32_t& out);
+
+  // For values that should be converted to WebIDL "unsigned long" type.
+  static Status Convert(v8::Isolate* isolate,
+                        std::string_view error_prefix,
+                        std::initializer_list<std::string_view> error_subject,
+                        v8::Local<v8::Value> value,
+                        uint32_t& out);
 
   // For values that should be converted to WebIDL "(bigint or long)" type.
   static Status Convert(v8::Isolate* isolate,

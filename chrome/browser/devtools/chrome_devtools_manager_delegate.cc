@@ -10,6 +10,8 @@
 #include "base/command_line.h"
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
+#include "base/not_fatal_until.h"
+#include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -30,8 +32,10 @@
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
+#include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_tab_helper.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/common/chrome_switches.h"
@@ -74,6 +78,38 @@ const char ChromeDevToolsManagerDelegate::kTypeBackgroundPage[] =
 const char ChromeDevToolsManagerDelegate::kTypePage[] = "page";
 
 namespace {
+
+std::optional<std::string> GetIsolatedWebAppNameAndVersion(
+    content::WebContents* web_contents) {
+  const webapps::AppId* app_id =
+      web_app::WebAppTabHelper::GetAppId(web_contents);
+  if (!app_id) {
+    return std::nullopt;
+  }
+  const web_app::WebAppProvider* provider =
+      web_app::WebAppProvider::GetForWebContents(web_contents);
+  if (!provider) {
+    return std::nullopt;
+  }
+  // In this case we will not modify any data and reading stale data is
+  // fine, since the app will already be installed and open in the case
+  // it needs to be checked in DevTools.
+  const web_app::WebAppRegistrar& registrar = provider->registrar_unsafe();
+  const web_app::WebApp* web_app = registrar.GetAppById(*app_id);
+
+  if (web_app && registrar.IsIsolated(*app_id)) {
+    // Version is a key part of IWA so should be displayed in inspect tool
+    return base::StrCat({registrar.GetAppShortName(*app_id), " (",
+                         web_app->isolation_data()->version().GetString(),
+                         ")"});
+  }
+
+  return std::nullopt;
+}
+
+bool IsIsolatedWebApp(content::WebContents* web_contents) {
+  return GetIsolatedWebAppNameAndVersion(web_contents).has_value();
+}
 
 bool GetExtensionInfo(content::WebContents* wc,
                       std::string* name,
@@ -125,8 +161,7 @@ policy::DeveloperToolsPolicyHandler::Availability GetDevToolsAvailability(
 #if BUILDFLAG(IS_CHROMEOS)
   // On ChromeOS disable dev tools for captive portal signin windows to prevent
   // them from being used for general navigation.
-  if (chromeos::features::IsCaptivePortalPopupWindowEnabled() &&
-      availability != Availability::kDisallowed) {
+  if (availability != Availability::kDisallowed) {
     const PrefService::Preference* const captive_portal_pref =
         profile->GetPrefs()->FindPreference(
             chromeos::prefs::kCaptivePortalSignin);
@@ -226,13 +261,16 @@ void ChromeDevToolsManagerDelegate::HandleCommand(
     // This should not happen, but happens. NOTREACHED tries to get
     // a repro in some test.
     NOTREACHED();
-    return;
   }
   it->second->HandleCommand(message, std::move(callback));
 }
 
 std::string ChromeDevToolsManagerDelegate::GetTargetType(
     content::WebContents* web_contents) {
+  if (IsIsolatedWebApp(web_contents)) {
+    return ChromeDevToolsManagerDelegate::kTypeApp;
+  }
+
   if (base::Contains(AllTabContentses(), web_contents))
     return DevToolsAgentHost::kTypePage;
 
@@ -251,10 +289,16 @@ std::string ChromeDevToolsManagerDelegate::GetTargetType(
 
 std::string ChromeDevToolsManagerDelegate::GetTargetTitle(
     content::WebContents* web_contents) {
+  if (auto iwa_name_version = GetIsolatedWebAppNameAndVersion(web_contents)) {
+    return *iwa_name_version;
+  }
+
   std::string extension_name;
   std::string extension_type;
-  if (!GetExtensionInfo(web_contents, &extension_name, &extension_type))
+  if (!GetExtensionInfo(web_contents, &extension_name, &extension_type)) {
     return std::string();
+  }
+
   return extension_name;
 }
 
@@ -273,8 +317,9 @@ bool ChromeDevToolsManagerDelegate::AllowInspectingRenderFrameHost(
   if (auto* web_app_provider =
           web_app::WebAppProvider::GetForWebApps(profile)) {
     std::optional<webapps::AppId> app_id =
-        web_app_provider->registrar_unsafe().FindAppWithUrlInScope(
-            rfh->GetMainFrame()->GetLastCommittedURL());
+        web_app_provider->registrar_unsafe().FindBestAppWithUrlInScope(
+            rfh->GetMainFrame()->GetLastCommittedURL(),
+            web_app::WebAppFilter::InstalledInChrome());
     if (app_id) {
       const auto* web_app =
           web_app_provider->registrar_unsafe().GetAppById(app_id.value());
@@ -347,7 +392,6 @@ bool ChromeDevToolsManagerDelegate::AllowInspection(
       return true;
     default:
       NOTREACHED() << "Unknown developer tools policy";
-      return true;
   }
 }
 
@@ -363,11 +407,19 @@ bool ChromeDevToolsManagerDelegate::AllowInspection(
       return false;
     case Availability::kAllowed:
       return true;
-    case Availability::kDisallowedForForceInstalledExtensions:
-      return !web_app || !web_app->IsKioskInstalledApp();
+    case Availability::kDisallowedForForceInstalledExtensions: {
+      if (!web_app) {
+        return true;
+      }
+      // DevTools should be blocked for Kiosk apps and policy-installed IWAs.
+      if (web_app->IsKioskInstalledApp() ||
+          web_app->IsIwaPolicyInstalledApp()) {
+        return false;
+      }
+      return true;
+    }
     default:
       NOTREACHED() << "Unknown developer tools policy";
-      return true;
   }
 }
 
@@ -451,7 +503,7 @@ void ChromeDevToolsManagerDelegate::UpdateDeviceDiscovery() {
     auto it1 = remote_locations.begin();
     auto it2 = remote_locations_.begin();
     while (it1 != remote_locations.end()) {
-      DCHECK(it2 != remote_locations_.end());
+      CHECK(it2 != remote_locations_.end(), base::NotFatalUntil::M130);
       if (!(*it1).Equals(*it2))
         equals = false;
       ++it1;

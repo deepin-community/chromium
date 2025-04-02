@@ -12,10 +12,12 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
+#include <cstdint>
 #include <functional>
 #include <memory>
 
 #include <gtest/gtest.h>
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "llvm/ADT/StringRef.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
@@ -40,7 +42,7 @@ using ::mlir::OwningOpRef;
 using ::mlir::PassManager;
 using ::tensorflow::monitoring::testing::CellReader;
 
-StatusOr<OwningOpRef<ModuleOp>> GetMlirModuleFromString(
+absl::StatusOr<OwningOpRef<ModuleOp>> GetMlirModuleFromString(
     absl::string_view module_string, MLIRContext* context) {
   mlir::DialectRegistry mlir_registry;
   RegisterAllTensorFlowDialects(mlir_registry);

@@ -140,7 +140,7 @@ void SkiaOutputSurfaceImplTest::CopyRequestCallbackOnGpuThread(
   UnblockMainThread();
 }
 
-// TODO(crbug.com/1462855): Re-enable this test
+// TODO(crbug.com/40922049): Re-enable this test
 #if defined(MEMORY_SANITIZER)
 #define MAYBE_EndPaint DISABLED_EndPaint
 #else
@@ -227,7 +227,7 @@ TEST_F(SkiaOutputSurfaceImplTest, SupportsColorSpaceChange) {
     output_surface_->SwapBuffers(std::move(frame));
     output_surface_->Flush();
 
-    // TODO(crbug.com/1474022): We should not need to poll in this test.
+    // TODO(crbug.com/40279197): We should not need to poll in this test.
     while (!run_loop.AnyQuitCalled()) {
       run_loop.RunUntilIdle();
       output_surface_->CheckAsyncWorkCompletionForTesting();
@@ -235,7 +235,7 @@ TEST_F(SkiaOutputSurfaceImplTest, SupportsColorSpaceChange) {
   }
 }
 
-// TODO(crbug.com/1462855): Re-enable this test
+// TODO(crbug.com/40922049): Re-enable this test
 #if defined(MEMORY_SANITIZER)
 #define MAYBE_CopyOutputBitmapSupportedColorSpace \
   DISABLED_CopyOutputBitmapSupportedColorSpace
@@ -294,8 +294,9 @@ TEST_F(SkiaOutputSurfaceImplTest, CopyOutputBitmapUnsupportedColorSpace) {
   output_surface_->Reshape(reshape_params);
 
   constexpr gfx::Rect output_rect(0, 0, 10, 10);
-  const gfx::ColorSpace color_space = gfx::ColorSpace::CreatePiecewiseHDR(
-      gfx::ColorSpace::PrimaryID::BT2020, 0.5, 1.5);
+  const gfx::ColorSpace color_space =
+      gfx::ColorSpace(gfx::ColorSpace::PrimaryID::BT2020,
+                      gfx::ColorSpace::TransferID::LOG_SQRT);
   base::RunLoop run_loop;
   std::unique_ptr<CopyOutputResult> result;
   auto request = std::make_unique<CopyOutputRequest>(

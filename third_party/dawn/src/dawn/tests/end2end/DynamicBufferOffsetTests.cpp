@@ -43,8 +43,20 @@ constexpr uint32_t kBindingSize = 8;
 
 class DynamicBufferOffsetTests : public DawnTest {
   protected:
+    wgpu::RequiredLimits GetRequiredLimits(const wgpu::SupportedLimits& supported) override {
+        // TODO(crbug.com/383593270): Enable all the limits.
+        wgpu::RequiredLimits required = {};
+        required.limits.maxStorageBuffersInFragmentStage =
+            supported.limits.maxStorageBuffersInFragmentStage;
+        required.limits.maxStorageBuffersPerShaderStage =
+            supported.limits.maxStorageBuffersPerShaderStage;
+        return required;
+    }
+
     void SetUp() override {
         DawnTest::SetUp();
+
+        DAWN_SUPPRESS_TEST_IF(GetSupportedLimits().limits.maxStorageBuffersInFragmentStage < 1);
 
         mMinUniformBufferOffsetAlignment =
             GetSupportedLimits().limits.minUniformBufferOffsetAlignment;
@@ -409,6 +421,9 @@ TEST_P(DynamicBufferOffsetTests, InheritDynamicOffsetsRenderPipeline) {
     // TODO(crbug.com/1497726): Remove when test is no longer flaky on M2
     // devices.
     DAWN_SUPPRESS_TEST_IF(IsApple());
+    // TODO(crbug.com/40287156): Remove when test is no longer flaky on Pixel 6
+    DAWN_SUPPRESS_TEST_IF(IsVulkan() && IsAndroid() && IsARM());
+
     // Using default pipeline and setting dynamic offsets
     wgpu::RenderPipeline pipeline = CreateRenderPipeline();
     wgpu::RenderPipeline testPipeline = CreateRenderPipeline(true);

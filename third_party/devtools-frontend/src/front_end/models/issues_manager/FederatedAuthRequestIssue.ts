@@ -7,11 +7,10 @@ import type * as SDK from '../../core/sdk/sdk.js';
 import * as Protocol from '../../generated/protocol.js';
 
 import {Issue, IssueCategory, IssueKind} from './Issue.js';
-
 import {
-  resolveLazyDescription,
-  type MarkdownIssueDescription,
   type LazyMarkdownIssueDescription,
+  type MarkdownIssueDescription,
+  resolveLazyDescription,
 } from './MarkdownIssueDescription.js';
 
 const UIStrings = {
@@ -41,7 +40,7 @@ export class FederatedAuthRequestIssue extends Issue {
   }
 
   getCategory(): IssueCategory {
-    return IssueCategory.Other;
+    return IssueCategory.OTHER;
   }
 
   details(): Protocol.Audits.FederatedAuthRequestIssueDetails {
@@ -61,7 +60,7 @@ export class FederatedAuthRequestIssue extends Issue {
   }
 
   getKind(): IssueKind {
-    return IssueKind.PageError;
+    return IssueKind.PAGE_ERROR;
   }
 
   static fromInspectorIssue(issuesModel: SDK.IssuesModel.IssuesModel, inspectorIssue: Protocol.Audits.InspectorIssue):

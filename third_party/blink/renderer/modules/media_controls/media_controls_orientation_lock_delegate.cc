@@ -282,7 +282,6 @@ MediaControlsOrientationLockDelegate::ComputeOrientationLock() const {
   }
 
   NOTREACHED();
-  return device::mojom::blink::ScreenOrientationLockType::LANDSCAPE;
 }
 
 MediaControlsOrientationLockDelegate::DeviceOrientationType

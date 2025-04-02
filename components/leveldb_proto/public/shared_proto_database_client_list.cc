@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "components/leveldb_proto/public/shared_proto_database_client_list.h"
 
 #include <stddef.h>
@@ -126,7 +131,6 @@ std::string SharedProtoDatabaseClientList::ProtoDbTypeToString(
       return "ClientCertificatesDatabase";
     case ProtoDbType::LAST:
       NOTREACHED();
-      return std::string();
   }
 }
 

@@ -35,6 +35,7 @@ import * as Root from '../../core/root/root.js';
 import * as VisualLogging from '../visual_logging/visual_logging.js';
 
 import {ActionRegistry} from './ActionRegistry.js';
+import type {Key, Modifier} from './KeyboardShortcut.js';
 import {ShortcutRegistry} from './ShortcutRegistry.js';
 import {SoftContextMenu, type SoftContextMenuDescriptor} from './SoftContextMenu.js';
 import {deepElementFromEvent} from './UIUtils.js';
@@ -42,29 +43,37 @@ import {deepElementFromEvent} from './UIUtils.js';
 export class Item {
   private readonly typeInternal: string;
   protected readonly label: string|undefined;
+  protected accelerator?: Host.InspectorFrontendHostAPI.AcceleratorDescriptor;
+  protected readonly previewFeature: boolean;
   protected disabled: boolean|undefined;
   private readonly checked: boolean|undefined;
+  protected isDevToolsPerformanceMenuItem: boolean;
   protected contextMenu: ContextMenu|null;
   protected idInternal: number|undefined;
   customElement?: Element;
   private shortcut?: string;
   #tooltip: Common.UIString.LocalizedString|undefined;
-  #jslogContext: string|undefined;
+  protected jslogContext: string|undefined;
 
   constructor(
-      contextMenu: ContextMenu|null, type: 'checkbox'|'item'|'separator'|'subMenu', label?: string, disabled?: boolean,
-      checked?: boolean, tooltip?: Platform.UIString.LocalizedString, jslogContext?: string) {
+      contextMenu: ContextMenu|null, type: 'checkbox'|'item'|'separator'|'subMenu', label?: string,
+      isPreviewFeature?: boolean, disabled?: boolean, checked?: boolean,
+      accelerator?: Host.InspectorFrontendHostAPI.AcceleratorDescriptor, tooltip?: Platform.UIString.LocalizedString,
+      jslogContext?: string) {
     this.typeInternal = type;
     this.label = label;
+    this.previewFeature = Boolean(isPreviewFeature);
+    this.accelerator = accelerator;
     this.disabled = disabled;
     this.checked = checked;
+    this.isDevToolsPerformanceMenuItem = false;
     this.contextMenu = contextMenu;
     this.idInternal = undefined;
     this.#tooltip = tooltip;
     if (type === 'item' || type === 'checkbox') {
       this.idInternal = contextMenu ? contextMenu.nextId() : 0;
     }
-    this.#jslogContext = jslogContext;
+    this.jslogContext = jslogContext;
   }
 
   id(): number {
@@ -76,6 +85,10 @@ export class Item {
 
   type(): string {
     return this.typeInternal;
+  }
+
+  isPreviewFeature(): boolean {
+    return this.previewFeature;
   }
 
   isEnabled(): boolean {
@@ -93,17 +106,24 @@ export class Item {
           type: 'item',
           id: this.idInternal,
           label: this.label,
+          isExperimentalFeature: this.previewFeature,
           enabled: !this.disabled,
           checked: undefined,
           subItems: undefined,
           tooltip: this.#tooltip,
-          jslogContext: this.#jslogContext,
+          jslogContext: this.jslogContext,
         };
         if (this.customElement) {
           result.element = this.customElement;
         }
         if (this.shortcut) {
           result.shortcut = this.shortcut;
+        }
+        if (this.accelerator) {
+          result.accelerator = this.accelerator;
+          if (this.isDevToolsPerformanceMenuItem) {
+            result.isDevToolsPerformanceMenuItem = true;
+          }
         }
         return result;
       }
@@ -126,7 +146,7 @@ export class Item {
           enabled: !this.disabled,
           subItems: undefined,
           tooltip: this.#tooltip,
-          jslogContext: this.#jslogContext,
+          jslogContext: this.jslogContext,
         };
         if (this.customElement) {
           result.element = this.customElement;
@@ -137,13 +157,25 @@ export class Item {
     throw new Error('Invalid item type:' + this.typeInternal);
   }
 
+  setAccelerator(key: Key, modifiers: Modifier[]): void {
+    const modifierSum = modifiers.reduce((result, modifier) => result + modifier.value, 0);
+    this.accelerator = {keyCode: key.code, modifiers: modifierSum};
+  }
+
+  // This influences whether accelerators will be shown for native menus on Mac.
+  // Use this ONLY for performance menus and ONLY where accelerators are critical
+  // for a smooth user journey and heavily context dependent.
+  setIsDevToolsPerformanceMenuItem(isDevToolsPerformanceMenuItem: boolean): void {
+    this.isDevToolsPerformanceMenuItem = isDevToolsPerformanceMenuItem;
+  }
+
   setShortcut(shortcut: string): void {
     this.shortcut = shortcut;
   }
 }
 
 export class Section {
-  private readonly contextMenu: ContextMenu|null;
+  readonly contextMenu: ContextMenu|null;
   readonly items: Item[];
   constructor(contextMenu: ContextMenu|null) {
     this.contextMenu = contextMenu;
@@ -151,13 +183,16 @@ export class Section {
   }
 
   appendItem(label: string, handler: () => void, options?: {
+    accelerator?: Host.InspectorFrontendHostAPI.AcceleratorDescriptor,
+    isPreviewFeature?: boolean,
     disabled?: boolean,
     additionalElement?: Element,
     tooltip?: Platform.UIString.LocalizedString,
     jslogContext?: string,
   }): Item {
     const item = new Item(
-        this.contextMenu, 'item', label, options?.disabled, undefined, options?.tooltip, options?.jslogContext);
+        this.contextMenu, 'item', label, options?.isPreviewFeature, options?.disabled, undefined, options?.accelerator,
+        options?.tooltip, options?.jslogContext);
     if (options?.additionalElement) {
       item.customElement = options?.additionalElement;
     }
@@ -169,7 +204,8 @@ export class Section {
   }
 
   appendCustomItem(element: Element, jslogContext?: string): Item {
-    const item = new Item(this.contextMenu, 'item', undefined, undefined, undefined, undefined, jslogContext);
+    const item = new Item(
+        this.contextMenu, 'item', undefined, undefined, undefined, undefined, undefined, undefined, jslogContext);
     item.customElement = element;
     this.items.push(item);
     return item;
@@ -206,27 +242,33 @@ export class Section {
     return item;
   }
 
-  appendCheckboxItem(
-      label: string, handler: () => void, checked?: boolean, disabled?: boolean, additionalElement?: Element,
-      tooltip?: Platform.UIString.LocalizedString, jslogContext?: string): Item {
-    const item = new Item(this.contextMenu, 'checkbox', label, disabled, checked, tooltip, jslogContext);
+  appendCheckboxItem(label: string, handler: () => void, options?: {
+    checked?: boolean,
+    disabled?: boolean,
+    additionalElement?: Element,
+    tooltip?: Platform.UIString.LocalizedString,
+    jslogContext?: string,
+  }): Item {
+    const item = new Item(
+        this.contextMenu, 'checkbox', label, undefined, options?.disabled, options?.checked, undefined,
+        options?.tooltip, options?.jslogContext);
     this.items.push(item);
     if (this.contextMenu) {
       this.contextMenu.setHandler(item.id(), handler);
     }
-    if (additionalElement) {
-      item.customElement = additionalElement;
+    if (options?.additionalElement) {
+      item.customElement = options.additionalElement;
     }
     return item;
   }
 }
 
 export class SubMenu extends Item {
-  private readonly sections: Map<string, Section>;
+  readonly sections: Map<string, Section>;
   private readonly sectionList: Section[];
 
   constructor(contextMenu: ContextMenu|null, label?: string, disabled?: boolean, jslogContext?: string) {
-    super(contextMenu, 'subMenu', label, disabled, undefined, undefined, jslogContext);
+    super(contextMenu, 'subMenu', label, undefined, disabled, undefined, undefined, undefined, jslogContext);
     this.sections = new Map();
     this.sectionList = [];
   }
@@ -236,6 +278,9 @@ export class SubMenu extends Item {
   }
 
   section(name?: string): Section {
+    if (!name) {
+      name = 'default';
+    }
     let section: Section|(Section | null | undefined) = name ? this.sections.get(name) : null;
     if (!section) {
       section = new Section(this.contextMenu);
@@ -297,10 +342,14 @@ export class SubMenu extends Item {
     const result: Host.InspectorFrontendHostAPI.ContextMenuDescriptor|SoftContextMenuDescriptor = {
       type: 'subMenu',
       label: this.label,
+      accelerator: this.accelerator,
+      isDevToolsPerformanceMenuItem: this.accelerator ? this.isDevToolsPerformanceMenuItem : undefined,
+      isExperimentalFeature: this.previewFeature,
       enabled: !this.disabled,
       subItems: [],
       id: undefined,
       checked: undefined,
+      jslogContext: this.jslogContext,
     };
 
     const nonEmptySections = this.sectionList.filter(section => Boolean(section.items.length));
@@ -366,7 +415,6 @@ export interface ContextMenuOptions {
   onSoftMenuClosed?: () => void;
   x?: number;
   y?: number;
-  jsLogContext?: string;
 }
 
 export class ContextMenu extends SubMenu {
@@ -385,6 +433,7 @@ export class ContextMenu extends SubMenu {
   private contextMenuLabel?: string;
   private openHostedMenu: Host.InspectorFrontendHostAPI.ContextMenuDescriptor[]|null;
   private eventTarget: EventTarget|null;
+  private loggableParent: Element|null = null;
 
   constructor(event: Event, options: ContextMenuOptions = {}) {
     super(null);
@@ -399,14 +448,19 @@ export class ContextMenu extends SubMenu {
     this.x = options.x === undefined ? mouseEvent.x : options.x;
     this.y = options.y === undefined ? mouseEvent.y : options.y;
     this.onSoftMenuClosed = options.onSoftMenuClosed;
-    this.jsLogContext = options.jsLogContext;
     this.handlers = new Map();
     this.idInternal = 0;
     this.openHostedMenu = null;
 
-    const target = deepElementFromEvent(event);
+    let target = (deepElementFromEvent(event) || event.target) as Element | null;
     if (target) {
       this.appendApplicableItems((target as Object));
+      while (target instanceof Element && !target.hasAttribute('jslog')) {
+        target = target.parentElementOrShadowHost() ?? null;
+      }
+      if (target instanceof Element) {
+        this.loggableParent = target;
+      }
     }
   }
 
@@ -499,17 +553,17 @@ export class ContextMenu extends SubMenu {
   }
 
   private innerShow(): void {
-    const menuObject = this.buildMenuDescriptors();
-
     if (!this.eventTarget) {
       return;
     }
+
+    const menuObject = this.buildMenuDescriptors();
     const ownerDocument = (this.eventTarget as HTMLElement).ownerDocument;
     if (this.useSoftMenu || ContextMenu.useSoftMenu ||
         Host.InspectorFrontendHost.InspectorFrontendHostInstance.isHostedMode()) {
       this.softMenu = new SoftContextMenu(
           (menuObject as SoftContextMenuDescriptor[]), this.itemSelected.bind(this), this.keepOpen, undefined,
-          this.onSoftMenuClosed);
+          this.onSoftMenuClosed, this.loggableParent);
       // let soft context menu focus on the first item when the event is triggered by a non-mouse event
       // add another check of button value to differentiate mouse event with 'shift + f10' keyboard event
       const isMouseEvent =
@@ -529,11 +583,7 @@ export class ContextMenu extends SubMenu {
         Host.InspectorFrontendHost.InspectorFrontendHostInstance.events.addEventListener(
             Host.InspectorFrontendHostAPI.Events.ContextMenuItemSelected, this.onItemSelected, this);
       }
-      const visualElement = VisualLogging.menu();
-      if (this.jsLogContext) {
-        visualElement.context(this.jsLogContext);
-      }
-      VisualLogging.registerLoggable(menuObject, `${visualElement}`, null);
+      VisualLogging.registerLoggable(menuObject, `${VisualLogging.menu()}`, this.loggableParent);
       this.registerLoggablesWithin(menuObject);
       this.openHostedMenu = menuObject;
       // showContextMenuAtPoint call above synchronously issues a clear event for previous context menu (if any),
@@ -560,6 +610,13 @@ export class ContextMenu extends SubMenu {
     }
   }
 
+  invokeHandler(id: number): void {
+    const handler = this.handlers.get(id);
+    if (handler) {
+      handler.call(this);
+    }
+  }
+
   private buildMenuDescriptors(): (SoftContextMenuDescriptor|Host.InspectorFrontendHostAPI.ContextMenuDescriptor)[] {
     return super.buildDescriptor().subItems as (
                SoftContextMenuDescriptor | Host.InspectorFrontendHostAPI.ContextMenuDescriptor)[];
@@ -570,10 +627,7 @@ export class ContextMenu extends SubMenu {
   }
 
   private itemSelected(id: number): void {
-    const handler = this.handlers.get(id);
-    if (handler) {
-      handler.call(this);
-    }
+    this.invokeHandler(id);
     if (this.openHostedMenu) {
       const itemWithId = (items: Host.InspectorFrontendHostAPI.ContextMenuDescriptor[],
                           id: number): Host.InspectorFrontendHostAPI.ContextMenuDescriptor|null => {
@@ -602,6 +656,9 @@ export class ContextMenu extends SubMenu {
         Host.InspectorFrontendHostAPI.Events.ContextMenuCleared, this.menuCleared, this);
     Host.InspectorFrontendHost.InspectorFrontendHostInstance.events.removeEventListener(
         Host.InspectorFrontendHostAPI.Events.ContextMenuItemSelected, this.onItemSelected, this);
+    if (this.openHostedMenu) {
+      void VisualLogging.logResize(this.openHostedMenu, new DOMRect(0, 0, 0, 0));
+    }
     this.openHostedMenu = null;
     if (!this.keepOpen) {
       this.onSoftMenuClosed?.();
@@ -630,8 +687,6 @@ export class ContextMenu extends SubMenu {
 
   private static pendingMenu: ContextMenu|null = null;
   private static useSoftMenu = false;
-  // TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration
-  // eslint-disable-next-line @typescript-eslint/naming-convention
   static readonly groupWeights =
       ['header', 'new', 'reveal', 'edit', 'clipboard', 'debug', 'view', 'default', 'override', 'save', 'footer'];
 }

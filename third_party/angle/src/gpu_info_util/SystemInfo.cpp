@@ -45,6 +45,7 @@ std::string VendorName(VendorID vendor)
         case kVendorID_NVIDIA:
             return "NVIDIA";
         case kVendorID_Qualcomm:
+        case kVendorID_Qualcomm_DXGI:
             return "Qualcomm";
         case kVendorID_VeriSilicon:
             return "VeriSilicon";
@@ -265,7 +266,7 @@ void GetDualGPUInfo(SystemInfo *info)
     // determined correctly.  A potential solution is to create an OpenGL context and parse
     // GL_VENDOR.  Currently, our test infrastructure is relying on this information and incorrectly
     // applies test expectations on dual-GPU systems when the Intel GPU is active.
-    // http://anglebug.com/6174.
+    // http://anglebug.com/40644803.
     int active    = 0;
     bool hasIntel = false;
     for (size_t i = 0; i < info->gpus.size(); ++i)
@@ -347,27 +348,6 @@ void PrintSystemInfo(const SystemInfo &info)
         std::cout << "Machine Model Version: " << info.machineModelVersion << "\n";
     }
     std::cout << std::endl;
-}
-
-VersionInfo ParseNvidiaDriverVersion(uint32_t version)
-{
-    return {
-        version >> 22,         // major
-        version >> 14 & 0xff,  // minor
-        version >> 6 & 0xff,   // subMinor
-        version & 0x3f         // patch
-    };
-}
-
-VersionInfo ParseMesaDriverVersion(uint32_t version)
-{
-    // Mesa uses VK_MAKE_VERSION
-    return {
-        version >> 22 & 0x7F,
-        version >> 12 & 0x3FF,
-        version & 0xFFF,
-        0,
-    };
 }
 
 uint64_t GetSystemDeviceIdFromParts(uint32_t highPart, uint32_t lowPart)

@@ -318,12 +318,73 @@ bool ValidateGetQueryObjectui64vRobustANGLE(const Context *context,
                                             const GLsizei *length,
                                             GLuint64 *params);
 
-bool ValidateUniformCommonBase(const Context *context,
-                               angle::EntryPoint entryPoint,
-                               const Program *program,
-                               UniformLocation location,
-                               GLsizei count,
-                               const LinkedUniform **uniformOut);
+ANGLE_INLINE bool ValidateUniformCommonBase(const Context *context,
+                                            angle::EntryPoint entryPoint,
+                                            const Program *program,
+                                            UniformLocation location,
+                                            GLsizei count,
+                                            const LinkedUniform **uniformOut)
+{
+    // TODO(Jiajia): Add image uniform check in future.
+    if (count < 0)
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, err::kNegativeCount);
+        return false;
+    }
+
+    if (!program)
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, err::kInvalidProgramName);
+        return false;
+    }
+
+    if (!program->isLinked())
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, err::kProgramNotLinked);
+        return false;
+    }
+
+    if (location.value == -1)
+    {
+        // Silently ignore the uniform command
+        return false;
+    }
+
+    const ProgramExecutable &executable = program->getExecutable();
+    const auto &uniformLocations        = executable.getUniformLocations();
+    size_t castedLocation               = static_cast<size_t>(location.value);
+    if (castedLocation >= uniformLocations.size())
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, err::kInvalidUniformLocation);
+        return false;
+    }
+
+    const auto &uniformLocation = uniformLocations[castedLocation];
+    if (uniformLocation.ignored)
+    {
+        // Silently ignore the uniform command
+        return false;
+    }
+
+    if (!uniformLocation.used())
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, err::kInvalidUniformLocation);
+        return false;
+    }
+
+    const LinkedUniform &uniform = executable.getUniformByIndex(uniformLocation.index);
+
+    // attempting to write an array to a non-array uniform is an INVALID_OPERATION
+    if (count > 1 && !uniform.isArray())
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, err::kInvalidUniformCount);
+        return false;
+    }
+
+    *uniformOut = &uniform;
+    return true;
+}
+
 bool ValidateUniform1ivValue(const Context *context,
                              angle::EntryPoint entryPoint,
                              GLenum uniformType,
@@ -771,12 +832,6 @@ ANGLE_INLINE bool ValidateIntegerVertexFormat(const Context *context,
         context->getStateCache().getIntegerVertexAttribTypeValidation(type));
 }
 
-bool ValidateWebGLFramebufferAttachmentClearType(const Context *context,
-                                                 angle::EntryPoint entryPoint,
-                                                 GLint drawbuffer,
-                                                 const GLenum *validComponentTypes,
-                                                 size_t validComponentTypeCount);
-
 ANGLE_INLINE bool ValidateColorMasksForSharedExponentColorBuffers(const BlendStateExt &blendState,
                                                                   const Framebuffer *framebuffer)
 {
@@ -867,6 +922,15 @@ bool ValidateTexStorage2DMultisampleBase(const Context *context,
                                          GLint internalFormat,
                                          GLsizei width,
                                          GLsizei height);
+
+bool ValidateTexStorage3DMultisampleBase(const Context *context,
+                                         angle::EntryPoint entryPoint,
+                                         TextureType target,
+                                         GLsizei samples,
+                                         GLenum internalformat,
+                                         GLsizei width,
+                                         GLsizei height,
+                                         GLsizei depth);
 
 bool ValidateGetTexLevelParameterBase(const Context *context,
                                       angle::EntryPoint entryPoint,
@@ -1151,15 +1215,22 @@ ANGLE_INLINE bool ValidateDrawElementsCommon(const Context *context,
 
     ASSERT(isPow2(GetDrawElementsTypeSize(type)) && GetDrawElementsTypeSize(type) > 0);
 
-    if (context->isWebGL())
-    {
-        GLuint typeBytes = GetDrawElementsTypeSize(type);
+    const State &state         = context->getState();
+    const VertexArray *vao     = state.getVertexArray();
+    Buffer *elementArrayBuffer = vao->getElementArrayBuffer();
+    GLuint typeBytes           = GetDrawElementsTypeSize(type);
 
+    if (elementArrayBuffer != nullptr)
+    {
         if ((reinterpret_cast<uintptr_t>(indices) & static_cast<uintptr_t>(typeBytes - 1)) != 0)
         {
-            // [WebGL 1.0] Section 6.4 Buffer Offset and Stride Requirements
+            // [WebGL 1.0] Section 6.4 Buffer Offset and Stride Requirements:
             // The offset arguments to drawElements and [...], must be a multiple of the size of the
             // data type passed to the call, or an INVALID_OPERATION error is generated.
+            // [GLES 3.2] Section 6.3:
+            // Clients must align data elements consistently with the requirements of the
+            // client platform, with an additional base-level requirement that an offset within a
+            // buffer to a datum comprising N basic machine units be a multiple of N.
             ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, err::kOffsetMustBeMultipleOfType);
             return false;
         }
@@ -1190,10 +1261,6 @@ ANGLE_INLINE bool ValidateDrawElementsCommon(const Context *context,
     {
         return false;
     }
-
-    const State &state         = context->getState();
-    const VertexArray *vao     = state.getVertexArray();
-    Buffer *elementArrayBuffer = vao->getElementArrayBuffer();
 
     if (!elementArrayBuffer)
     {
@@ -1243,7 +1310,7 @@ ANGLE_INLINE bool ValidateDrawElementsCommon(const Context *context,
     {
         // Use the parameter buffer to retrieve and cache the index range.
         // TODO: this calculation should take basevertex into account for
-        // glDrawElementsInstancedBaseVertexBaseInstanceEXT.  http://anglebug.com/8448
+        // glDrawElementsInstancedBaseVertexBaseInstanceEXT.  http://anglebug.com/41481166
         IndexRange indexRange{IndexRange::Undefined()};
         ANGLE_VALIDATION_TRY(vao->getIndexRange(context, type, count, indices, &indexRange));
 

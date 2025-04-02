@@ -2,16 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import './xf_button.js';
+import './xf_circular_progress.js';
+import './xf_display_panel.js';
+import './xf_panel_item.js';
+
 import {assert} from 'chrome://resources/js/assert.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chromeos/chai_assert.js';
 
 import {waitUntil} from '../../common/js/test_error_reporting.js';
 import {mockPluralStringProxy} from '../../common/js/unittest_util.js';
 
-import {PanelButton} from './xf_button.js';
-import {CircularProgress} from './xf_circular_progress.js';
-import {DisplayPanel} from './xf_display_panel.js';
-import {PanelItem, PanelType} from './xf_panel_item.js';
+import type {PanelButton} from './xf_button.js';
+import type {CircularProgress} from './xf_circular_progress.js';
+import type {DisplayPanel} from './xf_display_panel.js';
+import type {PanelItem} from './xf_panel_item.js';
+import {PanelType} from './xf_panel_item.js';
 
 let displayPanel: DisplayPanel;
 
@@ -127,7 +133,7 @@ export async function testDisplayPanelChangingPanelTypes(done: VoidCallback) {
 
   // Check the progress panel text container has correct aria role.
   const textHost =
-      panelItem.shadowRoot!.querySelector<HTMLDivElement>('.xf-panel-text')!;
+      panelItem.shadowRoot!.querySelector<HTMLElement>('.xf-panel-text')!;
   assertEquals('alert', textHost.getAttribute('role'));
 
   // Change the panel item to an error panel.
@@ -223,7 +229,7 @@ export function testFilesDisplayPanelErrorText() {
   const panelItem = displayPanel.addPanelItem('testpanel');
 
   const text =
-      panelItem.shadowRoot!.querySelector<HTMLDivElement>('.xf-panel-text')!;
+      panelItem.shadowRoot!.querySelector<HTMLElement>('.xf-panel-text')!;
 
   // To work with screen readers, the text element should have aria role
   // 'alert'.
@@ -255,7 +261,7 @@ export async function testFilesDisplayPanelInfo(done: VoidCallback) {
   panelItem.dataset['extraButtonText'] = 'Extra button';
 
   const text =
-      panelItem.shadowRoot!.querySelector<HTMLDivElement>('.xf-panel-text')!;
+      panelItem.shadowRoot!.querySelector<HTMLElement>('.xf-panel-text')!;
 
   // To work with screen readers, the text element should have aria role
   // 'alert'.
@@ -357,7 +363,7 @@ export function testFilesDisplayPanelMixedSummary() {
 
   // Verify a summary panel item is created and shows the error indicator.
   const summaryContainer =
-      displayPanel.shadowRoot!.querySelector<HTMLDivElement>('#summary')!;
+      displayPanel.shadowRoot!.querySelector<HTMLElement>('#summary')!;
   let summaryPanelItem =
       summaryContainer.querySelector<PanelItem>('xf-panel-item')!;
   assertEquals(PanelType.SUMMARY, summaryPanelItem.panelType);
@@ -466,7 +472,7 @@ export async function testFilesDisplayPanelMixedProgress() {
 
   // Verify a summary panel item is created with the correct average.
   const summaryContainer =
-      displayPanel.shadowRoot!.querySelector<HTMLDivElement>('#summary')!;
+      displayPanel.shadowRoot!.querySelector<HTMLElement>('#summary')!;
   const summaryPanelItem =
       summaryContainer.querySelector<PanelItem>('xf-panel-item')!;
   assertEquals(PanelType.SUMMARY, summaryPanelItem.panelType);
@@ -520,12 +526,12 @@ export async function disabledTestFilesDisplayPanelSummaryPanel(
 
   // Confirm multiple progress panel items are hidden by default.
   const panelContainer =
-      displayPanel.shadowRoot!.querySelector<HTMLDivElement>('#panels')!;
+      displayPanel.shadowRoot!.querySelector<HTMLElement>('#panels')!;
   assertTrue(panelContainer.hasAttribute('hidden'));
 
   // Confirm multiple progress panels cause creation of a summary panel.
   const summaryContainer =
-      displayPanel.shadowRoot!.querySelector<HTMLDivElement>('#summary')!;
+      displayPanel.shadowRoot!.querySelector<HTMLElement>('#summary')!;
   let summaryPanelItem =
       summaryContainer.querySelector<PanelItem>('xf-panel-item')!;
   assertEquals(summaryPanelItem.panelType, PanelType.SUMMARY);
@@ -591,13 +597,13 @@ export function testFilesDisplayPanelTransferDetailsSummary(
   panel2.panelType = PanelType.PROGRESS;
 
   const panelContainer =
-      displayPanel.shadowRoot!.querySelector<HTMLDivElement>('#panels')!;
+      displayPanel.shadowRoot!.querySelector<HTMLElement>('#panels')!;
   assertTrue(panelContainer.hasAttribute('hidden'));
 
   const summaryContainer =
-      displayPanel.shadowRoot!.querySelector<HTMLDivElement>('#summary')!;
+      displayPanel.shadowRoot!.querySelector<HTMLElement>('#summary')!;
   const summaryPanelItem =
-      summaryContainer.querySelector<HTMLDivElement>('#summary-panel')!;
+      summaryContainer.querySelector<HTMLElement>('#summary-panel')!;
 
   // Check summary panel has both detailed-panel and detailed-summary attribute.
   assertEquals(
@@ -605,9 +611,8 @@ export function testFilesDisplayPanelTransferDetailsSummary(
   assertEquals('', summaryPanelItem.getAttribute('detailed-summary'));
 
   // Trigger expand of the summary panel by summary label.
-  const summaryLabel =
-      summaryPanelItem.shadowRoot!.querySelector<HTMLDivElement>(
-          '.xf-panel-text')!;
+  const summaryLabel = summaryPanelItem.shadowRoot!.querySelector<HTMLElement>(
+      '.xf-panel-text')!;
   summaryLabel.click();
 
   // Confirm the panel container is no longer hidden.

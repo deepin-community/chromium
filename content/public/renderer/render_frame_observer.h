@@ -9,6 +9,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/read_only_shared_memory_region.h"
@@ -23,13 +24,12 @@
 #include "services/network/public/mojom/url_response_head.mojom-forward.h"
 #include "third_party/blink/public/common/loader/loading_behavior_flag.h"
 #include "third_party/blink/public/common/performance/performance_timeline_constants.h"
-#include "third_party/blink/public/common/responsiveness_metrics/user_interaction_latency.h"
 #include "third_party/blink/public/common/subresource_load_metrics.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/common/use_counter/use_counter_feature.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-shared.h"
+#include "third_party/blink/public/mojom/frame/lifecycle.mojom.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-shared.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/public/web/web_meaningful_layout.h"
 #include "third_party/blink/public/web/web_navigation_type.h"
 #include "ui/accessibility/ax_mode.h"
@@ -42,7 +42,6 @@ namespace blink {
 class WebDocumentLoader;
 class WebElement;
 class WebFormElement;
-class WebSecurityOrigin;
 class WebString;
 class WebURLRequest;
 class WebWorkerFetchContext;
@@ -94,6 +93,10 @@ class CONTENT_EXPORT RenderFrameObserver
   virtual void WasHidden() {}
   virtual void WasShown() {}
 
+  // Called when the RenderFrame's visibility status changes.
+  virtual void OnFrameVisibilityChanged(
+      blink::mojom::FrameVisibility render_status) {}
+
   // Navigation callbacks.
   //
   // Each navigation starts with a DidStartNavigation call. Then it may be
@@ -127,7 +130,7 @@ class CONTENT_EXPORT RenderFrameObserver
       blink::WebDocumentLoader* document_loader) {}
 
   // Called when a RenderFrame's page lifecycle state gets updated.
-  virtual void DidSetPageLifecycleState() {}
+  virtual void DidSetPageLifecycleState(bool restoring_from_bfcache) {}
 
   // These match the Blink API notifications. These will not be called for the
   // initial empty document, since that already exists before an observer for a
@@ -152,8 +155,8 @@ class CONTENT_EXPORT RenderFrameObserver
   virtual void DidChangeScrollOffset() {}
   virtual void WillSubmitForm(const blink::WebFormElement& form) {}
   virtual void DidMatchCSS(
-      const blink::WebVector<blink::WebString>& newly_matching_selectors,
-      const blink::WebVector<blink::WebString>& stopped_matching_selectors) {}
+      const std::vector<blink::WebString>& newly_matching_selectors,
+      const std::vector<blink::WebString>& stopped_matching_selectors) {}
 
   // Called when the RenderFrame creates a FencedFrame and provides the
   // RemoteFrameToken to identify the `blink::RemoteFrame` to the inner
@@ -213,15 +216,16 @@ class CONTENT_EXPORT RenderFrameObserver
   // then keyup). Each of these events has an input to next frame latency. This
   // reports the timings of the max input-to-frame latency for each interaction.
   // `max_event_start` is when input was received, `max_event_end` is when
-  // the next frame was presented, and `max_event_queued_main_thread` is when
-  // input was queued on main thread. See
+  // the next frame was presented, `max_event_queued_main_thread` is when the
+  // input was queued and `max_event_commit_finish` is when the next commit
+  // finished after event has been processed. See
   // https://web.dev/inp/#whats-in-an-interaction for more detailed motivation
   // and explanation.
   virtual void DidObserveUserInteraction(
       base::TimeTicks max_event_start,
-      base::TimeTicks max_event_end,
       base::TimeTicks max_event_queued_main_thread,
-      blink::UserInteractionType interaction_type,
+      base::TimeTicks max_event_commit_finish,
+      base::TimeTicks max_event_end,
       uint64_t interaction_offset) {}
 
   // Notification when the First Scroll Delay becomes available.
@@ -311,9 +315,6 @@ class CONTENT_EXPORT RenderFrameObserver
   // Called when script in the page calls window.print().
   virtual void ScriptedPrint(bool user_initiated) {}
 
-  // Called when draggable regions change.
-  virtual void DraggableRegionsChanged() {}
-
   // Called when a worker fetch context will be created.
   virtual void WillCreateWorkerFetchContext(blink::WebWorkerFetchContext*) {}
 
@@ -375,11 +376,6 @@ class CONTENT_EXPORT RenderFrameObserver
   virtual bool SetUpSmoothnessReporting(
       base::ReadOnlySharedMemoryRegion& shared_memory);
 
-  // Notifies the observers of the origins for which subresource redirect
-  // optimizations can be preloaded.
-  virtual void PreloadSubresourceOptimizationsForOrigins(
-      const std::vector<blink::WebSecurityOrigin>& origins) {}
-
 #if BUILDFLAG(CONTENT_ENABLE_LEGACY_IPC)
   // IPC::Listener implementation.
   bool OnMessageReceived(const IPC::Message& message) override;
@@ -409,7 +405,7 @@ class CONTENT_EXPORT RenderFrameObserver
   // can null out its pointer.
   void RenderFrameGone();
 
-  raw_ptr<RenderFrame, ExperimentalRenderer> render_frame_;
+  raw_ptr<RenderFrame> render_frame_;
 
 #if BUILDFLAG(CONTENT_ENABLE_LEGACY_IPC)
   // The routing ID of the associated RenderFrame.

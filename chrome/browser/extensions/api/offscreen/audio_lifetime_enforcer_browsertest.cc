@@ -8,15 +8,22 @@
 
 #include "base/run_loop.h"
 #include "base/test/bind.h"
-#include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/extensions/extension_platform_apitest.h"
 #include "chrome/browser/extensions/extension_util.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/version_info/channel.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/offscreen_document_host.h"
+#include "extensions/browser/process_manager.h"
 #include "extensions/common/extension.h"
 #include "extensions/test/test_extension_dir.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/extensions/extension_apitest.h"
+#endif
 
 namespace extensions {
 
@@ -72,7 +79,13 @@ class AudioWaiter : public content::WebContentsObserver {
 
 }  // namespace
 
-class AudioLifetimeEnforcerBrowserTest : public ExtensionApiTest {
+#if BUILDFLAG(IS_ANDROID)
+using ExtensionApiTestBase = ExtensionPlatformApiTest;
+#else
+using ExtensionApiTestBase = ExtensionApiTest;
+#endif
+
+class AudioLifetimeEnforcerBrowserTest : public ExtensionApiTestBase {
  public:
   AudioLifetimeEnforcerBrowserTest() = default;
   ~AudioLifetimeEnforcerBrowserTest() override = default;
@@ -87,7 +100,7 @@ class AudioLifetimeEnforcerBrowserTest : public ExtensionApiTest {
     content::TestNavigationObserver navigation_observer(url);
     navigation_observer.StartWatchingNewWebContents();
     auto offscreen_document = std::make_unique<OffscreenDocumentHost>(
-        extension, site_instance.get(), url);
+        extension, site_instance.get(), profile(), url);
     offscreen_document->CreateRendererSoon();
     navigation_observer.Wait();
     EXPECT_TRUE(navigation_observer.last_navigation_succeeded());

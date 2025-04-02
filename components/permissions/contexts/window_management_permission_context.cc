@@ -19,7 +19,7 @@ WindowManagementPermissionContext::WindowManagementPermissionContext(
     : PermissionContextBase(
           browser_context,
           ContentSettingsType::WINDOW_MANAGEMENT,
-          blink::mojom::PermissionsPolicyFeature::kWindowManagement) {}
+          network::mojom::PermissionsPolicyFeature::kWindowManagement) {}
 
 WindowManagementPermissionContext::~WindowManagementPermissionContext() =
     default;
@@ -29,7 +29,7 @@ ContentSetting WindowManagementPermissionContext::GetPermissionStatusInternal(
     content::RenderFrameHost* render_frame_host,
     const GURL& requesting_origin,
     const GURL& embedding_origin) const {
-  // TODO(crbug.com/897300): Add window-placement support on Android.
+  // TODO(crbug.com/40092782): Add window-management support on Android.
   NOTIMPLEMENTED_LOG_ONCE();
   return CONTENT_SETTING_BLOCK;
 }

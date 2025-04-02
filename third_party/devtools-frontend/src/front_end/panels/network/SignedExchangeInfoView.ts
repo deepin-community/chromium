@@ -4,15 +4,14 @@
 
 import * as Host from '../../core/host/host.js';
 import * as i18n from '../../core/i18n/i18n.js';
-
-import signedExchangeInfoTreeStyles from './signedExchangeInfoTree.css.js';
-import signedExchangeInfoViewStyles from './signedExchangeInfoView.css.js';
-
 import type * as SDK from '../../core/sdk/sdk.js';
+import * as Protocol from '../../generated/protocol.js';
 import * as IconButton from '../../ui/components/icon_button/icon_button.js';
 import * as Components from '../../ui/legacy/components/utils/utils.js';
 import * as UI from '../../ui/legacy/legacy.js';
-import * as Protocol from '../../generated/protocol.js';
+
+import signedExchangeInfoTreeStyles from './signedExchangeInfoTree.css.js';
+import signedExchangeInfoViewStyles from './signedExchangeInfoView.css.js';
 
 const UIStrings = {
   /**
@@ -107,13 +106,14 @@ export class SignedExchangeInfoView extends UI.Widget.VBox {
 
   constructor(request: SDK.NetworkRequest.NetworkRequest) {
     super();
+    this.registerRequiredCSS(signedExchangeInfoViewStyles);
     console.assert(request.signedExchangeInfo() !== null);
     const signedExchangeInfo = (request.signedExchangeInfo() as Protocol.Network.SignedExchangeInfo);
 
     this.element.classList.add('signed-exchange-info-view');
 
     const root = new UI.TreeOutline.TreeOutlineInShadow();
-    root.registerCSSFiles([signedExchangeInfoTreeStyles]);
+    root.registerRequiredCSS(signedExchangeInfoTreeStyles);
     root.element.classList.add('signed-exchange-info-tree');
     root.setFocusable(false);
     root.makeDense();
@@ -155,7 +155,8 @@ export class SignedExchangeInfoView extends UI.Widget.VBox {
       const redirectDestination = request.redirectDestination();
       const requestURLElement = this.formatHeader(i18nString(UIStrings.requestUrl), header.requestUrl);
       if (redirectDestination) {
-        const viewRequestLink = Components.Linkifier.Linkifier.linkifyRevealable(redirectDestination, 'View request');
+        const viewRequestLink = Components.Linkifier.Linkifier.linkifyRevealable(
+            redirectDestination, 'View request', undefined, undefined, undefined, 'redirect-destination-request');
         viewRequestLink.classList.add('header-toggle');
         requestURLElement.appendChild(viewRequestLink);
       }
@@ -254,10 +255,6 @@ export class SignedExchangeInfoView extends UI.Widget.VBox {
       valueElement.classList.add('error-field');
     }
     return fragment;
-  }
-  override wasShown(): void {
-    super.wasShown();
-    this.registerCSSFiles([signedExchangeInfoViewStyles]);
   }
 }
 

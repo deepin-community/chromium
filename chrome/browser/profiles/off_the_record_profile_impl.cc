@@ -45,6 +45,7 @@
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/prefs/pref_service_syncable_util.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
+#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/reduce_accept_language/reduce_accept_language_factory.h"
@@ -99,17 +100,10 @@
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/preferences/preferences.h"
+#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/constants/pref_names.h"
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/preferences.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/startup/browser_params_proxy.h"
 #endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -134,12 +128,13 @@ using content::HostZoomMap;
 namespace {
 
 profile_metrics::BrowserProfileType ComputeOffTheRecordProfileType(
-    const Profile::OTRProfileID* otr_profile_id,
+    const Profile::OTRProfileID& otr_profile_id,
     const Profile* parent_profile) {
   DCHECK(!parent_profile->IsOffTheRecord());
 
-  if (*otr_profile_id != Profile::OTRProfileID::PrimaryID())
+  if (otr_profile_id != Profile::OTRProfileID::PrimaryID()) {
     return profile_metrics::BrowserProfileType::kOtherOffTheRecordProfile;
+  }
 
   switch (profile_metrics::GetBrowserProfileType(parent_profile)) {
     case profile_metrics::BrowserProfileType::kRegular:
@@ -155,7 +150,6 @@ profile_metrics::BrowserProfileType ComputeOffTheRecordProfileType(
     case profile_metrics::BrowserProfileType::kOtherOffTheRecordProfile:
       NOTREACHED();
   }
-  return profile_metrics::BrowserProfileType::kOtherOffTheRecordProfile;
 }
 
 }  // namespace
@@ -163,8 +157,8 @@ profile_metrics::BrowserProfileType ComputeOffTheRecordProfileType(
 OffTheRecordProfileImpl::OffTheRecordProfileImpl(
     Profile* real_profile,
     const OTRProfileID& otr_profile_id)
-    : profile_(real_profile),
-      otr_profile_id_(otr_profile_id),
+    : Profile(&otr_profile_id),
+      profile_(real_profile),
       start_time_(base::Time::Now()),
       key_(std::make_unique<ProfileKey>(profile_->GetPath(),
                                         profile_->GetProfileKey())) {
@@ -175,9 +169,15 @@ OffTheRecordProfileImpl::OffTheRecordProfileImpl(
         profile_, ProfileKeepAliveOrigin::kOffTheRecordProfile);
   }
 
-  prefs_ = CreateIncognitoPrefServiceSyncable(
-      PrefServiceSyncableFromProfile(profile_),
-      CreateExtensionPrefStore(profile_, true));
+  if (otr_profile_id.IsDevTools()) {
+    prefs_ =
+        CreateAutomationPrefService(PrefServiceSyncableFromProfile(profile_),
+                                    CreateExtensionPrefStore(profile_, true));
+  } else {
+    prefs_ = CreateIncognitoPrefServiceSyncable(
+        PrefServiceSyncableFromProfile(profile_),
+        CreateExtensionPrefStore(profile_, true));
+  }
 
   key_->SetPrefs(prefs_.get());
   SimpleKeyMap::GetInstance()->Associate(this, key_.get());
@@ -185,7 +185,7 @@ OffTheRecordProfileImpl::OffTheRecordProfileImpl(
   // Register on BrowserContext.
   user_prefs::UserPrefs::Set(this, prefs_.get());
   profile_metrics::SetBrowserProfileType(
-      this, ComputeOffTheRecordProfileType(&otr_profile_id_, profile_));
+      this, ComputeOffTheRecordProfileType(otr_profile_id, profile_));
 }
 
 void OffTheRecordProfileImpl::Init() {
@@ -240,13 +240,11 @@ void OffTheRecordProfileImpl::Init() {
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
-  if (chromeos::features::IsCaptivePortalPopupWindowEnabled()) {
-    if (otr_profile_id_.IsCaptivePortal()) {
-      // Set a pref to indicate that the Profile's PrefService is associated
-      // with a captive portal signin window. We use a pref for this because
-      // proxy configuration is associated with the PrefService, not a Profile.
-      GetPrefs()->SetBoolean(chromeos::prefs::kCaptivePortalSignin, true);
-    }
+  if (otr_profile_id_->IsCaptivePortal()) {
+    // Set a pref to indicate that the Profile's PrefService is associated
+    // with a captive portal signin window. We use a pref for this because
+    // proxy configuration is associated with the PrefService, not a Profile.
+    GetPrefs()->SetBoolean(chromeos::prefs::kCaptivePortalSignin, true);
   }
 #endif
 }
@@ -284,7 +282,7 @@ OffTheRecordProfileImpl::~OffTheRecordProfileImpl() {
   // other profile-related destroy notifications are dispatched.
   ShutdownStoragePartitions();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Bypass profile lifetime recording for ChromeOS helper profiles (sign-in,
   // lockscreen, etc).
   if (!ash::ProfileHelper::IsUserProfile(profile_))
@@ -357,31 +355,12 @@ OffTheRecordProfileImpl::GetIOTaskRunner() {
   return profile_->GetIOTaskRunner();
 }
 
-bool OffTheRecordProfileImpl::IsOffTheRecord() {
-  return true;
-}
-
-bool OffTheRecordProfileImpl::IsOffTheRecord() const {
-  return true;
-}
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-bool OffTheRecordProfileImpl::IsMainProfile() const {
-  return chromeos::BrowserParamsProxy::Get()->SessionType() ==
-             crosapi::mojom::SessionType::kGuestSession &&
-         profile_->IsMainProfile();
-}
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
-const Profile::OTRProfileID& OffTheRecordProfileImpl::GetOTRProfileID() const {
-  return otr_profile_id_;
-}
-
 Profile* OffTheRecordProfileImpl::GetOffTheRecordProfile(
     const OTRProfileID& otr_profile_id,
     bool create_if_needed) {
-  if (otr_profile_id_ == otr_profile_id)
+  if (otr_profile_id_.value() == otr_profile_id) {
     return this;
+  }
   return profile_->GetOffTheRecordProfile(otr_profile_id, create_if_needed);
 }
 
@@ -398,8 +377,9 @@ void OffTheRecordProfileImpl::DestroyOffTheRecordProfile(
 
 bool OffTheRecordProfileImpl::HasOffTheRecordProfile(
     const OTRProfileID& otr_profile_id) {
-  if (otr_profile_id_ == otr_profile_id)
+  if (otr_profile_id_.value() == otr_profile_id) {
     return true;
+  }
   return profile_->HasOffTheRecordProfile(otr_profile_id);
 }
 
@@ -421,14 +401,12 @@ OffTheRecordProfileImpl::GetExtensionSpecialStoragePolicy() {
 }
 
 bool OffTheRecordProfileImpl::IsChild() const {
-  // TODO(treib): If we ever allow incognito for child accounts, evaluate
-  // whether we want to just return false here.
   return profile_->IsChild();
 }
 
 bool OffTheRecordProfileImpl::AllowsBrowserWindows() const {
   return profile_->AllowsBrowserWindows() &&
-         otr_profile_id_.AllowsBrowserWindows();
+         otr_profile_id_->AllowsBrowserWindows();
 }
 
 PrefService* OffTheRecordProfileImpl::GetPrefs() {
@@ -449,7 +427,7 @@ OffTheRecordProfileImpl::GetPolicySchemaRegistryService() {
   return nullptr;
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 policy::UserCloudPolicyManagerAsh*
 OffTheRecordProfileImpl::GetUserCloudPolicyManagerAsh() {
   return GetOriginalProfile()->GetUserCloudPolicyManagerAsh();
@@ -463,7 +441,10 @@ policy::ProfileCloudPolicyManager*
 OffTheRecordProfileImpl::GetProfileCloudPolicyManager() {
   return GetOriginalProfile()->GetProfileCloudPolicyManager();
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
+policy::CloudPolicyManager* OffTheRecordProfileImpl::GetCloudPolicyManager() {
+  return GetOriginalProfile()->GetCloudPolicyManager();
+}
 
 scoped_refptr<network::SharedURLLoaderFactory>
 OffTheRecordProfileImpl::GetURLLoaderFactory() {
@@ -607,7 +588,7 @@ bool OffTheRecordProfileImpl::WasCreatedByVersionOrLater(
   return profile_->WasCreatedByVersionOrLater(version);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void OffTheRecordProfileImpl::ChangeAppLocale(const std::string& locale,
                                               AppLocaleChangedVia) {}
 
@@ -617,7 +598,8 @@ void OffTheRecordProfileImpl::InitChromeOSPreferences() {
   // The incognito profile shouldn't have Chrome OS's preferences.
   // The preferences are associated with the regular user profile.
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 bool OffTheRecordProfileImpl::IsNewProfile() const {
   return profile_->IsNewProfile();
@@ -632,15 +614,20 @@ void OffTheRecordProfileImpl::SetCreationTimeForTesting(
   start_time_ = creation_time;
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // Special case of the OffTheRecordProfileImpl which is used while Guest
 // session in CrOS.
 class GuestSessionProfile : public OffTheRecordProfileImpl {
  public:
   explicit GuestSessionProfile(Profile* real_profile)
       : OffTheRecordProfileImpl(real_profile, OTRProfileID::PrimaryID()) {
-    profile_metrics::SetBrowserProfileType(
-        this, profile_metrics::BrowserProfileType::kGuest);
+    if (new_guest_profile_impl_) {
+      CHECK_EQ(profile_metrics::BrowserProfileType::kGuest,
+               profile_metrics::GetBrowserProfileType(this));
+    } else {
+      profile_metrics::SetBrowserProfileType(
+          this, profile_metrics::BrowserProfileType::kGuest);
+    }
   }
 
   void InitChromeOSPreferences() override {
@@ -660,7 +647,7 @@ std::unique_ptr<Profile> Profile::CreateOffTheRecordProfile(
     Profile* parent,
     const OTRProfileID& otr_profile_id) {
   std::unique_ptr<OffTheRecordProfileImpl> profile;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (parent->IsGuestSession() && otr_profile_id == OTRProfileID::PrimaryID())
     profile = std::make_unique<GuestSessionProfile>(parent);
 #endif

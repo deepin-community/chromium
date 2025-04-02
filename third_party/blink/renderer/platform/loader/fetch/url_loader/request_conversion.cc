@@ -4,6 +4,8 @@
 
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/request_conversion.h"
 
+#include <string_view>
+
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe.h"
@@ -47,13 +49,15 @@ constexpr char kCorsExemptRequestedWithHeaderName[] = "X-Requested-With";
 
 // TODO(yhirano) Dedupe this and the same-name function in
 // web_url_request_util.cc.
-std::string TrimLWSAndCRLF(const base::StringPiece& input) {
-  base::StringPiece string = net::HttpUtil::TrimLWS(input);
-  const char* begin = string.data();
-  const char* end = string.data() + string.size();
-  while (begin < end && (end[-1] == '\r' || end[-1] == '\n'))
-    --end;
-  return std::string(base::StringPiece(begin, end - begin));
+std::string TrimLWSAndCRLF(const std::string_view& input) {
+  std::string_view string = net::HttpUtil::TrimLWS(input);
+  size_t last_crlf = string.size();
+  while (last_crlf > 0 &&
+         (string[last_crlf - 1] == '\r' || string[last_crlf - 1] == '\n')) {
+    --last_crlf;
+  }
+  string.remove_suffix(string.size() - last_crlf);
+  return std::string(string);
 }
 
 mojom::ResourceType RequestContextToResourceType(
@@ -151,11 +155,9 @@ mojom::ResourceType RequestContextToResourceType(
     case mojom::blink::RequestContextType::FRAME:
     case mojom::blink::RequestContextType::IFRAME:
       NOTREACHED();
-      return mojom::ResourceType::kSubResource;
 
     default:
       NOTREACHED();
-      return mojom::ResourceType::kSubResource;
   }
 }
 
@@ -164,7 +166,7 @@ void PopulateResourceRequestBody(const EncodedFormData& src,
   for (const auto& element : src.Elements()) {
     switch (element.type_) {
       case FormDataElement::kData:
-        dest->AppendBytes(element.data_.data(), element.data_.size());
+        dest->AppendCopyOfBytes(base::as_byte_span(element.data_));
         break;
       case FormDataElement::kEncodedFile:
         if (element.file_length_ == -1) {
@@ -181,9 +183,9 @@ void PopulateResourceRequestBody(const EncodedFormData& src,
         }
         break;
       case FormDataElement::kEncodedBlob: {
-        DCHECK(element.optional_blob_data_handle_);
+        CHECK(element.blob_data_handle_);
         mojo::Remote<mojom::blink::Blob> blob_remote(
-            element.optional_blob_data_handle_->CloneBlobRemote());
+            element.blob_data_handle_->CloneBlobRemote());
         mojo::PendingRemote<network::mojom::blink::DataPipeGetter>
             data_pipe_getter_remote;
         blob_remote->AsDataPipeGetter(
@@ -247,9 +249,6 @@ scoped_refptr<network::ResourceRequestBody> NetworkResourceRequestBodyFor(
     dest_body->SetToChunkedDataPipe(
         ToCrossVariantMojoType(std::move(stream_body)),
         network::ResourceRequestBody::ReadOnlyOnce(true));
-  }
-  if (dest_body) {
-    dest_body->SetAllowHTTP1ForStreamingUpload(false);
   }
   return dest_body;
 }
@@ -327,6 +326,10 @@ void PopulateResourceRequest(const ResourceRequestHead& src,
   dest->credentials_mode = src.GetCredentialsMode();
   dest->redirect_mode = src.GetRedirectMode();
   dest->fetch_integrity = src.GetFetchIntegrity().Utf8();
+  dest->expected_signatures.reserve(src.GetExpectedSignatures().size());
+  for (const String& signature : src.GetExpectedSignatures()) {
+    dest->expected_signatures.push_back(signature.Utf8());
+  }
   if (src.GetWebBundleTokenParams().has_value()) {
     dest->web_bundle_token_params =
         std::make_optional(network::ResourceRequest::WebBundleTokenParams(
@@ -409,17 +412,16 @@ void PopulateResourceRequest(const ResourceRequestHead& src,
     dest->load_flags |= net::LOAD_DO_NOT_USE_EMBEDDED_IDENTITY;
   }
 
-  dest->has_storage_access = src.GetHasStorageAccess();
+  dest->storage_access_api_status = src.GetStorageAccessApiStatus();
 
   dest->attribution_reporting_support = src.GetAttributionReportingSupport();
 
   dest->attribution_reporting_eligibility =
       src.GetAttributionReportingEligibility();
 
-  dest->attribution_reporting_runtime_features =
-      src.GetAttributionReportingRuntimeFeatures();
-
   dest->attribution_reporting_src_token = src.GetAttributionSrcToken();
+
+  dest->keepalive_token = src.GetKeepaliveToken();
 
   dest->shared_dictionary_writer_enabled = src.SharedDictionaryWriterEnabled();
 

@@ -31,7 +31,9 @@ namespace ash {
 namespace {
 
 // The highlight radius of the button.
-constexpr int kButtonHighlightRadiusDp = 16;
+// The large pill buttons height is 36 and the radius should be half of that.
+constexpr int kButtonHighlightRadiusDp = 18;
+constexpr int kButtonHighlightWidthDp = 1;
 
 }  // namespace
 
@@ -50,22 +52,20 @@ LoginShelfButton::LoginShelfButton(PressedCallback callback,
   SetFocusPainter(nullptr);
 
   views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
-  SetBorder(std::make_unique<views::HighlightBorder>(
-      kButtonHighlightRadiusDp,
-      views::HighlightBorder::Type::kHighlightBorderNoShadow));
+  SetBorder(views::CreateThemedRoundedRectBorder(
+      kButtonHighlightWidthDp, kButtonHighlightRadiusDp,
+      ui::kColorCrosSystemHighlight));
+  // PillButton has some custom tooltip logic that runs, but we don't want here.
+  SetUseLabelAsDefaultTooltip(false);
+  UpdateTooltipText(label());
+  label()->AddDisplayTextTruncationCallback(base::BindRepeating(
+      &LoginShelfButton::UpdateTooltipText, weak_ptr_factory_.GetWeakPtr()));
 }
 
 LoginShelfButton::~LoginShelfButton() = default;
 
 int LoginShelfButton::text_resource_id() const {
   return text_resource_id_;
-}
-
-std::u16string LoginShelfButton::GetTooltipText(const gfx::Point& p) const {
-  if (label()->IsDisplayTextTruncated()) {
-    return label()->GetText();
-  }
-  return std::u16string();
 }
 
 void LoginShelfButton::OnFocus() {
@@ -118,6 +118,14 @@ void LoginShelfButton::SetIsActive(bool is_active) {
 
 bool LoginShelfButton::GetIsActive() const {
   return is_active_;
+}
+
+void LoginShelfButton::UpdateTooltipText(views::Label* label) {
+  if (label->IsDisplayTextTruncated()) {
+    SetTooltipText(GetText());
+  } else {
+    SetTooltipText(std::u16string());
+  }
 }
 
 BEGIN_METADATA(LoginShelfButton)

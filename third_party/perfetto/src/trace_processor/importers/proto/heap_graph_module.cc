@@ -19,9 +19,9 @@
 #include "src/trace_processor/importers/common/parser_types.h"
 #include "src/trace_processor/importers/common/process_tracker.h"
 #include "src/trace_processor/importers/proto/heap_graph_tracker.h"
-#include "src/trace_processor/importers/proto/profiler_util.h"
 #include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/types/trace_processor_context.h"
+#include "src/trace_processor/util/profiler_util.h"
 
 #include "protos/perfetto/trace/profiling/deobfuscation.pbzero.h"
 #include "protos/perfetto/trace/profiling/heap_graph.pbzero.h"
@@ -104,6 +104,10 @@ void HeapGraphModule::ParseHeapGraph(uint32_t seq_id,
     }
     obj.self_size = object.self_size();
     obj.type_id = object.type_id();
+    obj.heap_type = object.has_heap_type_delta()
+                        ? protos::pbzero::HeapGraphObject::HeapType(
+                              object.heap_type_delta())
+                        : heap_graph_tracker->GetLastObjectHeapType(seq_id);
 
     // Even though the field is named reference_field_id_base, it has always
     // been used as a base for reference_object_id.

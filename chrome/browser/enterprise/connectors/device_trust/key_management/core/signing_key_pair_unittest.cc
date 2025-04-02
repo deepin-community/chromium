@@ -34,7 +34,7 @@ void ValidateSigningKey(SigningKeyPair* key_pair,
 
   // Signing should work.
   auto signed_data = key_pair->key()->SignSlowly(
-      base::as_bytes(base::make_span("data to sign")));
+      base::byte_span_with_nul_from_cstring("data to sign"));
   ASSERT_TRUE(signed_data.has_value());
   ASSERT_GT(signed_data->size(), 0u);
 }
@@ -43,7 +43,7 @@ std::unique_ptr<crypto::UnexportableSigningKey> GenerateSigningKey(
     BPKUR::KeyTrustLevel trust_level) {
   std::unique_ptr<crypto::UnexportableKeyProvider> provider;
   if (trust_level == BPKUR::CHROME_BROWSER_HW_KEY) {
-    provider = crypto::GetUnexportableKeyProvider();
+    provider = crypto::GetUnexportableKeyProvider(/*config=*/{});
   } else {
     provider = std::make_unique<ECSigningKeyProvider>();
   }

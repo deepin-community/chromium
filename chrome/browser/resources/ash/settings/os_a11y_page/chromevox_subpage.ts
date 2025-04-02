@@ -11,10 +11,11 @@
 import 'chrome://resources/ash/common/cr_elements/localized_link/localized_link.js';
 import 'chrome://resources/ash/common/cr_elements/cr_shared_vars.css.js';
 import '../settings_shared.css.js';
+import './ax_annotations_section.js';
 import './bluetooth_braille_display_ui.js';
 
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
-import {CrInputElement} from 'chrome://resources/ash/common/cr_elements/cr_input/cr_input.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
+import type {CrInputElement} from 'chrome://resources/ash/common/cr_elements/cr_input/cr_input.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -23,12 +24,14 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 import {assertExhaustive} from '../assert_extras.js';
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteOriginMixin} from '../common/route_origin_mixin.js';
-import {DropdownMenuOptionList, SettingsDropdownMenuElement} from '../controls/settings_dropdown_menu.js';
-import {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
-import {Route, Router, routes} from '../router.js';
+import type {DropdownMenuOptionList, SettingsDropdownMenuElement} from '../controls/settings_dropdown_menu.js';
+import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
+import type {Route} from '../router.js';
+import {Router, routes} from '../router.js';
 
 import {getTemplate} from './chromevox_subpage.html.js';
-import {ChromeVoxSubpageBrowserProxy, ChromeVoxSubpageBrowserProxyImpl} from './chromevox_subpage_browser_proxy.js';
+import type {ChromeVoxSubpageBrowserProxy} from './chromevox_subpage_browser_proxy.js';
+import {ChromeVoxSubpageBrowserProxyImpl} from './chromevox_subpage_browser_proxy.js';
 
 export {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 
@@ -300,7 +303,7 @@ export class SettingsChromeVoxSubpageElement extends
             'mediaStoppedPlaying',
             'menuEnd',
             'menuItemSelected',
-            'menuListValueChanged',
+            'menuListValueChangedDeprecated',
             'menuPopupEnd',
             'menuPopupStart',
             'menuStart',
@@ -326,6 +329,12 @@ export class SettingsChromeVoxSubpageElement extends
             'valueInTextFieldChanged',
           ];
         },
+      },
+
+      mainNodeAnnotationsFeatureEnabled_: {
+        type: String,
+        value: loadTimeData.getBoolean('mainNodeAnnotationsEnabled'),
+        readOnly: true,
       },
     };
   }

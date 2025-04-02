@@ -14,11 +14,11 @@
 #include "chrome/browser/web_applications/test/web_app_icon_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test_observers.h"
+#include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/common/chrome_features.h"
-#include "components/sync/base/features.h"
 #include "components/sync/base/time.h"
 #include "components/sync/service/sync_service_impl.h"
 #include "content/public/test/browser_test.h"
@@ -79,16 +79,6 @@ class TwoClientGeneratedIconFixSyncTest : public WebAppsSyncTestBase {
 
   void SetUpOnMainThread() override {
     WebAppsSyncTestBase::SetUpOnMainThread();
-    ASSERT_TRUE(SetupClients());
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    // Apps sync is controlled by a dedicated preference on Lacros,
-    // corresponding to the Apps toggle in OS Sync settings.
-    // Enable the Apps toggle for both clients.
-    if (base::FeatureList::IsEnabled(syncer::kSyncChromeOSAppsToggleSharing)) {
-      GetSyncService(0)->GetUserSettings()->SetAppsSyncEnabledByOs(true);
-      GetSyncService(1)->GetUserSettings()->SetAppsSyncEnabledByOs(true);
-    }
-#endif
     ASSERT_TRUE(SetupSync());
   }
 
@@ -101,10 +91,10 @@ class TwoClientGeneratedIconFixSyncTest : public WebAppsSyncTestBase {
     WebAppTestInstallObserver install_observer{destination};
 
     // Install on source profile.
-    auto info = std::make_unique<WebAppInstallInfo>();
+    auto info = WebAppInstallInfo::CreateWithStartUrlForTesting(
+        GURL("https://example.com"));
     info->title = u"Test name";
     info->description = u"Test description";
-    info->start_url = GURL("https://example.com");
     info->manifest_icons.emplace_back(
         apps::IconInfo(GURL("https://example.com/icon.png"), 256));
     webapps::AppId app_id = test::InstallWebApp(source, std::move(info));

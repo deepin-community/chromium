@@ -44,15 +44,22 @@ namespace blink {
 //
 // [1] https://drafts.csswg.org/css-variables/#invalid-at-computed-value-time
 class CORE_EXPORT StyleVariables {
-  USING_FAST_MALLOC(StyleVariables);
+  DISALLOW_NEW();
 
  public:
-  using DataMap = HashMap<AtomicString, scoped_refptr<CSSVariableData>>;
+  using DataMap = HeapHashMap<AtomicString, Member<CSSVariableData>>;
   using ValueMap = HeapHashMap<AtomicString, Member<const CSSValue>>;
 
-  StyleVariables();
-  StyleVariables(const StyleVariables&);
-  StyleVariables& operator=(const StyleVariables&);
+  StyleVariables() = default;
+  StyleVariables(const StyleVariables&) = default;
+  StyleVariables(StyleVariables&&) = default;
+  StyleVariables& operator=(const StyleVariables&) = default;
+  StyleVariables& operator=(StyleVariables&&) = default;
+
+  void Trace(Visitor* visitor) const {
+    visitor->Trace(data_);
+    visitor->Trace(values_);
+  }
 
   bool operator==(const StyleVariables& other) const;
   bool operator!=(const StyleVariables& other) const {
@@ -64,18 +71,18 @@ class CORE_EXPORT StyleVariables {
 
   OptionalValue GetValue(const AtomicString&) const;
   OptionalData GetData(const AtomicString&) const;
-  void SetData(const AtomicString&, scoped_refptr<CSSVariableData>);
+  void SetData(const AtomicString&, CSSVariableData*);
   void SetValue(const AtomicString&, const CSSValue*);
 
   bool IsEmpty() const;
   void CollectNames(HashSet<AtomicString>&) const;
 
   const DataMap& Data() const { return data_; }
-  const ValueMap& Values() const { return *values_; }
+  const ValueMap& Values() const { return values_; }
 
  private:
   DataMap data_;
-  Persistent<ValueMap> values_;
+  ValueMap values_;
 
   // Cache for speeding up operator==. Some pages tend to set large numbers
   // of custom properties on elements high up in the DOM, and the sets of
@@ -91,7 +98,9 @@ class CORE_EXPORT StyleVariables {
   // obscure) case where the other side has been deallocated and a newly
   // constructed object has reused its address, since it will be constructed
   // with a nullptr partner.
-  mutable const StyleVariables* equality_cache_partner_ = nullptr;
+  //
+  // `equality_cache_partner_` should never be dereferenced.
+  mutable const void* equality_cache_partner_ = nullptr;
   mutable bool equality_cached_result_;
 
   friend CORE_EXPORT std::ostream& operator<<(std::ostream& stream,

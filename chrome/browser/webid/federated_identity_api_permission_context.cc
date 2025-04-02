@@ -50,7 +50,6 @@ FederatedIdentityApiPermissionContext::GetApiPermissionStatus(
       return PermissionStatus::BLOCKED_SETTINGS;
     default:
       NOTREACHED();
-      return PermissionStatus::BLOCKED_SETTINGS;
   }
 
   if (permission_autoblocker_->IsEmbargoed(
@@ -97,4 +96,9 @@ bool FederatedIdentityApiPermissionContext::HasThirdPartyCookiesAccess(
       net::SiteForCookies::FromOrigin(relying_party_embedder),
       /*top_frame_origin=*/relying_party_embedder,
       host.GetCookieSettingOverrides());
+}
+
+bool FederatedIdentityApiPermissionContext::
+    AreThirdPartyCookiesEnabledInSettings() const {
+  return !cookie_settings_->ShouldBlockThirdPartyCookies();
 }

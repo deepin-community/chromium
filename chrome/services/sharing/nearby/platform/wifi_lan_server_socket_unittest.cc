@@ -24,8 +24,7 @@
 #include "services/network/public/mojom/tcp_socket.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 namespace {
 
@@ -54,7 +53,7 @@ class WifiLanServerSocketTest : public testing::Test {
         std::move(fake_tcp_server_socket),
         tcp_server_socket.InitWithNewPipeAndPassReceiver());
 
-    mojo::PendingRemote<sharing::mojom::FirewallHole> firewall_hole;
+    mojo::PendingRemote<::sharing::mojom::FirewallHole> firewall_hole;
     firewall_hole_self_owned_receiver_ref_ = mojo::MakeSelfOwnedReceiver(
         std::make_unique<ash::nearby::FakeFirewallHole>(),
         firewall_hole.InitWithNewPipeAndPassReceiver());
@@ -115,7 +114,7 @@ class WifiLanServerSocketTest : public testing::Test {
       fake_tcp_server_socket_;
   mojo::SelfOwnedReceiverRef<network::mojom::TCPServerSocket>
       tcp_server_socket_self_owned_receiver_ref_;
-  mojo::SelfOwnedReceiverRef<sharing::mojom::FirewallHole>
+  mojo::SelfOwnedReceiverRef<::sharing::mojom::FirewallHole>
       firewall_hole_self_owned_receiver_ref_;
   std::unique_ptr<WifiLanServerSocket> wifi_lan_server_socket_;
 };
@@ -278,5 +277,4 @@ TEST_F(WifiLanServerSocketTest, Disconnect_WhileWaitingForAccept_FirewallHole) {
   run_loop.Run();
 }
 
-}  // namespace chrome
-}  // namespace nearby
+}  // namespace nearby::chrome

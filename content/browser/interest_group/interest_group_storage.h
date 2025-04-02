@@ -39,11 +39,14 @@ struct BiddingAndAuctionServerKey;
 // within the same sequence.
 class CONTENT_EXPORT InterestGroupStorage {
  public:
-  static constexpr base::TimeDelta kHistoryLength = base::Days(30);
   static constexpr base::TimeDelta kMaintenanceInterval = base::Hours(1);
-  static constexpr base::TimeDelta kIdlePeriod = base::Seconds(30);
-  // Store a KAnon key after its corresponding interest group or ad is
-  // no longer present for this amount longer.
+  // Gets the default time the database waits idle before maintenance is
+  // triggered.
+  //
+  // NOTE: This is the default value, which can be overridden by
+  // CreateWithIdlePeriodForTesting().
+  static constexpr base::TimeDelta kDefaultIdlePeriod = base::Seconds(30);
+  // How long to store a k-anon key's last join time.
   static constexpr base::TimeDelta kAdditionalKAnonStoragePeriod =
       base::Days(1);
   // After a successful interest group update, delay the next update until
@@ -65,9 +68,12 @@ class CONTENT_EXPORT InterestGroupStorage {
   // Joins an interest group. If the interest group does not exist, a new one
   // is created based on the provided group information. If the interest group
   // exists, the existing interest group is overwritten. In either case a join
-  // record for this interest group is created.
-  void JoinInterestGroup(const blink::InterestGroup& group,
-                         const GURL& main_frame_joining_url);
+  // record for this interest group is created. Returns the necessary
+  // information for a k-anon update if the join was successful, or nullopt if
+  // not.
+  std::optional<InterestGroupKanonUpdateParameter> JoinInterestGroup(
+      const blink::InterestGroup& group,
+      const GURL& main_frame_joining_url);
   // Remove the interest group if it exists.
   void LeaveInterestGroup(const blink::InterestGroupKey& group_key,
                           const url::Origin& main_frame);
@@ -80,6 +86,9 @@ class CONTENT_EXPORT InterestGroupStorage {
       const std::set<std::string>& interest_groups_to_keep,
       const url::Origin& main_frame_origin);
 
+  // Gets lockout for sending forDebuggingOnly reports.
+  std::optional<base::Time> GetDebugReportLockout();
+
   // Gets lockout and cooldowns for sending forDebuggingOnly reports.
   std::optional<DebugReportLockoutAndCooldowns>
   GetDebugReportLockoutAndCooldowns(base::flat_set<url::Origin> origins);
@@ -88,9 +97,16 @@ class CONTENT_EXPORT InterestGroupStorage {
   // `update`.
   //
   // If it fails for any reason (e.g., the interest group does not exist, or the
-  // data in `update` is not valid), returns false.
-  bool UpdateInterestGroup(const blink::InterestGroupKey& group_key,
-                           InterestGroupUpdate update);
+  // data in `update` is not valid), returns nullopt. Otherwise, returns the
+  // information required a k-anon update.
+  std::optional<InterestGroupKanonUpdateParameter> UpdateInterestGroup(
+      const blink::InterestGroupKey& group_key,
+      InterestGroupUpdate update);
+
+  // Allows the interest group specified by `group_key` to be updated if it was
+  // last updated before `update_if_older_than`.
+  void AllowUpdateIfOlderThan(blink::InterestGroupKey group_key,
+                              base::TimeDelta update_if_older_than);
   // Report that updating of the interest group with owner `owner` and name
   // `name` failed. With the exception of parse failures, the rate limit
   // duration for failed updates is shorter than for those that succeed -- for
@@ -112,13 +128,25 @@ class CONTENT_EXPORT InterestGroupStorage {
   void RecordDebugReportCooldown(const url::Origin& origin,
                                  base::Time cooldown_start,
                                  DebugReportCooldownType cooldown_type);
-  // Records K-anonymity.
-  void UpdateKAnonymity(const StorageInterestGroup::KAnonymityData& data);
+
+  // Records a K-anonymity update for an interest group. If
+  // `replace_existing_values` is true, this update will store the new
+  // `update_time` and `positive_hashed_values`, replacing the interest
+  // group's existing update time and keys. If `replace_existing_values` is
+  // false, `positive_hashed_keys` will be added to the existing positive keys
+  // without updating the stored update time.  No value is stored if
+  // `update_time` is older than the `update_time` already stored in the
+  // database.
+  void UpdateKAnonymity(const blink::InterestGroupKey& interest_group_key,
+                        const std::vector<std::string>& positive_hashed_keys,
+                        const base::Time update_time,
+                        bool replace_existing_values);
 
   // Gets the last time that the key was reported to the k-anonymity server.
-  std::optional<base::Time> GetLastKAnonymityReported(const std::string& key);
+  std::optional<base::Time> GetLastKAnonymityReported(
+      const std::string& hashed_key);
   // Updates the last time that the key was reported to the k-anonymity server.
-  void UpdateLastKAnonymityReported(const std::string& key);
+  void UpdateLastKAnonymityReported(const std::string& hashed_key);
 
   // Gets a single interest group.
   std::optional<StorageInterestGroup> GetInterestGroup(
@@ -137,11 +165,6 @@ class CONTENT_EXPORT InterestGroupStorage {
   std::vector<InterestGroupUpdateParameter> GetInterestGroupsForUpdate(
       const url::Origin& owner,
       size_t groups_limit);
-
-  // Gets all KAnonymityData for ads part of the interest group specified by
-  // `interest_group_key`.
-  std::vector<StorageInterestGroup::KAnonymityData> GetKAnonymityDataForUpdate(
-      blink::InterestGroupKey interest_group_key);
 
   // Gets a list of all interest group joining origins. Each joining origin
   // will only appear once.
@@ -186,9 +209,40 @@ class CONTENT_EXPORT InterestGroupStorage {
   std::pair<base::Time, std::vector<BiddingAndAuctionServerKey>>
   GetBiddingAndAuctionServerKeys(const url::Origin& coordinator);
 
+  // Returns various resource limits, as configured by feature params.
+  static size_t MaxOwnerRegularInterestGroups();
+  static size_t MaxOwnerNegativeInterestGroups();
+  static size_t MaxOwnerStorageSize();
+
   base::Time GetLastMaintenanceTimeForTesting() const;
 
+  static int GetCurrentVersionNumberForTesting();
+
+  // Creates an instance where the idle period is set to `idle_period` instead
+  // of kDefaultIdlePeriod.
+  static std::unique_ptr<InterestGroupStorage> CreateWithIdlePeriodForTesting(
+      const base::FilePath& path,
+      base::TimeDelta idle_period);
+
+  // Resets the internal idle timer without performing any database operation.
+  //
+  // Technically, this test hook isn't necessary, since tests could just call
+  // GetAllInterestGroupOwners() and throw away the result, but this method is
+  // *much* more performant (due to not doing any I/O), especially when calling
+  // in a loop.
+  //
+  // NOTE: This just calls EnsureDBInitialized() internally.
+  void ResetIdleTimerForTesting();
+
  private:
+  // Private constructor that allows changing the idle period, used by
+  // CreateWithIdlePeriodForTesting().
+  //
+  // `idle_period` may be optionally specified to override in tests the default
+  // time the database waits idle before maintenance is triggered
+  // (kDefaultIdlePeriod).
+  InterestGroupStorage(const base::FilePath& path, base::TimeDelta idle_period);
+
   bool EnsureDBInitialized();
   bool InitializeDB();
   bool InitializeSchema();

@@ -209,6 +209,12 @@ TrustedTypePolicy* TrustedTypePolicyFactory::createPolicy(
   UseCounter::Count(GetExecutionContext(),
                     WebFeature::kTrustedTypesCreatePolicy);
 
+  // Count policy creation with empty names.
+  if (policy_name.empty()) {
+    UseCounter::Count(GetExecutionContext(),
+                      WebFeature::kTrustedTypesCreatePolicyWithEmptyName);
+  }
+
   // TT requires two validity checks: One against the CSP, and one for the
   // default policy. Use |disallowed| (and |violation_details|) to aggregate
   // these, so we can have unified error handling.
@@ -259,9 +265,12 @@ TrustedTypePolicy* TrustedTypePolicyFactory::createPolicy(
         disallowed_because_of_duplicate_name
             ? "Policy with name \"" + policy_name + "\" already exists."
             : "Policy \"" + policy_name + "\" disallowed.";
-    exception_state.ThrowTypeError(message);
-    MaybeAssociateExceptionMetaData(exception_state, "issueId",
+    v8::Isolate* isolate = GetExecutionContext()->GetIsolate();
+    TryRethrowScope rethrow_scope(isolate, exception_state);
+    auto exception = V8ThrowException::CreateTypeError(isolate, message);
+    MaybeAssociateExceptionMetaData(exception, "issueId",
                                     IdentifiersFactory::IdFromToken(issue_id));
+    V8ThrowException::ThrowException(isolate, exception);
     return nullptr;
   }
 
@@ -289,40 +298,22 @@ TrustedTypePolicyFactory::TrustedTypePolicyFactory(ExecutionContext* context)
       empty_html_(MakeGarbageCollected<TrustedHTML>("")),
       empty_script_(MakeGarbageCollected<TrustedScript>("")) {}
 
-const WrapperTypeInfo*
-TrustedTypePolicyFactory::GetWrapperTypeInfoFromScriptValue(
-    ScriptState* script_state,
-    const ScriptValue& script_value) {
-  v8::Local<v8::Value> value = script_value.V8Value();
-  if (value.IsEmpty() || !value->IsObject() ||
-      !V8DOMWrapper::IsWrapper(script_state->GetIsolate(), value))
-    return nullptr;
-  v8::Local<v8::Object> object = value.As<v8::Object>();
-  return ToWrapperTypeInfo(object);
-}
-
 bool TrustedTypePolicyFactory::isHTML(ScriptState* script_state,
                                       const ScriptValue& script_value) {
-  const WrapperTypeInfo* wrapper_type_info =
-      GetWrapperTypeInfoFromScriptValue(script_state, script_value);
-  return wrapper_type_info &&
-         wrapper_type_info->Equals(V8TrustedHTML::GetWrapperTypeInfo());
+  return V8TrustedHTML::HasInstance(script_state->GetIsolate(),
+                                    script_value.V8Value());
 }
 
 bool TrustedTypePolicyFactory::isScript(ScriptState* script_state,
                                         const ScriptValue& script_value) {
-  const WrapperTypeInfo* wrapper_type_info =
-      GetWrapperTypeInfoFromScriptValue(script_state, script_value);
-  return wrapper_type_info &&
-         wrapper_type_info->Equals(V8TrustedScript::GetWrapperTypeInfo());
+  return V8TrustedScript::HasInstance(script_state->GetIsolate(),
+                                      script_value.V8Value());
 }
 
 bool TrustedTypePolicyFactory::isScriptURL(ScriptState* script_state,
                                            const ScriptValue& script_value) {
-  const WrapperTypeInfo* wrapper_type_info =
-      GetWrapperTypeInfoFromScriptValue(script_state, script_value);
-  return wrapper_type_info &&
-         wrapper_type_info->Equals(V8TrustedScriptURL::GetWrapperTypeInfo());
+  return V8TrustedScriptURL::HasInstance(script_state->GetIsolate(),
+                                         script_value.V8Value());
 }
 
 TrustedHTML* TrustedTypePolicyFactory::emptyHTML() const {
@@ -365,7 +356,7 @@ String TrustedTypePolicyFactory::getAttributeType(
       attributeName.LowerASCII(), tagNS, attributeNS));
 }
 
-ScriptValue TrustedTypePolicyFactory::getTypeMapping(
+ScriptObject TrustedTypePolicyFactory::getTypeMapping(
     ScriptState* script_state) const {
   return getTypeMapping(script_state, String());
 }
@@ -428,21 +419,21 @@ void PopulateTypeMapping(
 
 }  // anonymous namespace
 
-ScriptValue TrustedTypePolicyFactory::getTypeMapping(ScriptState* script_state,
-                                                     const String& ns) const {
+ScriptObject TrustedTypePolicyFactory::getTypeMapping(ScriptState* script_state,
+                                                      const String& ns) const {
   // Create three-deep dictionary of properties, like so:
   // {tagname: { ["attributes"|"properties"]: { attribute: type }}}
-
+  v8::Isolate* isolate = script_state->GetIsolate();
   if (!ns.empty())
-    return ScriptValue::CreateNull(script_state->GetIsolate());
+    return ScriptObject::CreateNull(isolate);
 
-  v8::HandleScope handle_scope(script_state->GetIsolate());
-  v8::Local<v8::Object> top = v8::Object::New(script_state->GetIsolate());
+  v8::HandleScope handle_scope(isolate);
+  v8::Local<v8::Object> top = v8::Object::New(isolate);
   PopulateTypeMapping(script_state, top, GetAttributeTypeVector(),
-                      V8String(script_state->GetIsolate(), "attributes"));
+                      V8String(isolate, "attributes"));
   PopulateTypeMapping(script_state, top, GetPropertyTypeVector(),
-                      V8String(script_state->GetIsolate(), "properties"));
-  return ScriptValue(script_state->GetIsolate(), top);
+                      V8String(isolate, "properties"));
+  return ScriptObject(isolate, top);
 }
 
 void TrustedTypePolicyFactory::CountTrustedTypeAssignmentError() {

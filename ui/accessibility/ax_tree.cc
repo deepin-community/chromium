@@ -7,28 +7,34 @@
 #include <stddef.h>
 
 #include <numeric>
+#include <tuple>
 #include <utility>
 
 #include "base/auto_reset.h"
+#include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/containers/adapters.h"
 #include "base/containers/contains.h"
-#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
+#include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
+#include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/timer/elapsed_timer.h"
 #include "components/crash/core/common/crash_key.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_event.h"
 #include "ui/accessibility/ax_language_detection.h"
 #include "ui/accessibility/ax_node.h"
+#include "ui/accessibility/ax_node_id_forward.h"
 #include "ui/accessibility/ax_node_position.h"
 #include "ui/accessibility/ax_role_properties.h"
 #include "ui/accessibility/ax_selection.h"
@@ -36,20 +42,63 @@
 #include "ui/accessibility/ax_tree_observer.h"
 #include "ui/gfx/geometry/transform.h"
 
+#define ACCESSIBILITY_TREE_UNSERIALIZE_ERROR_HISTOGRAM(enum_value) \
+  base::UmaHistogramEnumeration(                                   \
+      "Accessibility.Reliability.Tree.UnserializeError", enum_value)
+
 namespace ui {
 
 namespace {
 
-std::string TreeToStringHelper(const AXNode* node, int indent, bool verbose) {
-  if (!node)
+// This is the list of reverse relations that are computed.
+// This purposely does not include relations such as kRadioGroupIds where
+// the reverse relation is not interesting to consumers.
+constexpr ax::mojom::IntListAttribute kReverseRelationIntListAttributes[] = {
+    ax::mojom::IntListAttribute::kControlsIds,
+    ax::mojom::IntListAttribute::kDetailsIds,
+    ax::mojom::IntListAttribute::kDescribedbyIds,
+    ax::mojom::IntListAttribute::kErrormessageIds,
+    ax::mojom::IntListAttribute::kFlowtoIds,
+    ax::mojom::IntListAttribute::kLabelledbyIds};
+constexpr ax::mojom::IntAttribute kReverseRelationIntAttributes[] = {
+    ax::mojom::IntAttribute::kActivedescendantId};
+
+std::string TreeToStringHelper(const AXNode* node,
+                               int indent,
+                               bool verbose,
+                               int& max_items) {
+  if (!node || max_items == 0) {
     return "";
+  }
+
+  std::string str = base::StrCat(
+      {std::string(2 * indent, ' '), node->data().ToString(verbose), "\n"});
+
+  if (max_items > 0 && --max_items == 0) {
+    return str;
+  }
 
   return std::accumulate(
-      node->children().cbegin(), node->children().cend(),
-      std::string(2 * indent, ' ') + node->data().ToString(verbose) + "\n",
-      [indent, verbose](const std::string& str, const ui::AXNode* child) {
-        return str + TreeToStringHelper(child, indent + 1, verbose);
+      node->children().cbegin(), node->children().cend(), std::move(str),
+      [indent, verbose, &max_items](std::string str,
+                                   const AXNode* child) mutable {
+        str.append(TreeToStringHelper(child, indent + 1, verbose, max_items));
+        return str;
       });
+}
+
+// Return a formatted, indented, string representation of the tree, with each
+// node on its own line.
+// To stringify the entire tree, pass in max_items = -1.
+// This method is used to help diagnose inconsistent tree states. Limiting the
+// max number of items avoids out of memory errors and excessive logging.
+constexpr int kMaxItemsToStringify = 200;
+
+std::string TreeToString(const AXNode* node,
+                         int indent,
+                         bool verbose,
+                         int max_items = kMaxItemsToStringify) {
+  return TreeToStringHelper(node, indent, verbose, max_items);
 }
 
 template <typename K, typename V>
@@ -78,38 +127,72 @@ std::map<K, V> MapFromKeyValuePairs(std::vector<std::pair<K, V>> pairs) {
 // a call to the callback with the value changing from the previous value to
 // |empty_value|, and similarly when an attribute is added.
 template <typename K, typename V, typename F>
-void CallIfAttributeValuesChanged(const std::vector<std::pair<K, V>>& pairs1,
-                                  const std::vector<std::pair<K, V>>& pairs2,
+void CallIfAttributeValuesChanged(const std::vector<std::pair<K, V>>& old_pairs,
+                                  const std::vector<std::pair<K, V>>& new_pairs,
                                   const V& empty_value,
                                   F callback) {
   // Fast path - if they both have the same keys in the same order.
-  if (KeyValuePairsKeysMatch(pairs1, pairs2)) {
-    for (size_t i = 0; i < pairs1.size(); ++i) {
-      if (pairs1[i].second != pairs2[i].second)
-        callback(pairs1[i].first, pairs1[i].second, pairs2[i].second);
+  if (KeyValuePairsKeysMatch(old_pairs, new_pairs)) {
+    for (size_t i = 0; i < old_pairs.size(); ++i) {
+      const auto& old_entry = old_pairs[i];
+      const auto& new_entry = new_pairs[i];
+      if (old_entry.second != new_entry.second) {
+        callback(old_entry.first, old_entry.second, new_entry.second);
+      }
     }
     return;
   }
 
   // Slower path - they don't have the same keys in the same order, so
-  // check all keys against each other, using maps to prevent this from
-  // becoming O(n^2) as the size grows.
-  auto map1 = MapFromKeyValuePairs(pairs1);
-  auto map2 = MapFromKeyValuePairs(pairs2);
-  for (size_t i = 0; i < pairs1.size(); ++i) {
-    const auto& new_iter = map2.find(pairs1[i].first);
-    if (pairs1[i].second != empty_value && new_iter == map2.end())
-      callback(pairs1[i].first, pairs1[i].second, empty_value);
-  }
-
-  for (size_t i = 0; i < pairs2.size(); ++i) {
-    const auto& iter = map1.find(pairs2[i].first);
-    if (pairs2[i].second == empty_value && iter == map1.end())
+  // check all keys against each other.
+  using VectorOfPairs = std::vector<std::pair<K, V>>&;
+  auto comp = [](const auto& lhs, const auto& rhs) {
+    return lhs.first < rhs.first;
+  };
+  std::sort(const_cast<VectorOfPairs>(old_pairs).begin(),
+            const_cast<VectorOfPairs>(old_pairs).end(), comp);
+  std::sort(const_cast<VectorOfPairs>(new_pairs).begin(),
+            const_cast<VectorOfPairs>(new_pairs).end(), comp);
+  for (size_t old_i = 0, new_i = 0;
+       old_i < old_pairs.size() || new_i < new_pairs.size();) {
+    // If we reached the end of one of the vectors.
+    if (old_i >= old_pairs.size()) {
+      const auto& new_pair = new_pairs[new_i];
+      if (new_pair.second != empty_value) {
+        callback(new_pair.first, empty_value, new_pair.second);
+      }
+      new_i++;
       continue;
-    if (iter == map1.end())
-      callback(pairs2[i].first, empty_value, pairs2[i].second);
-    else if (iter->second != pairs2[i].second)
-      callback(pairs2[i].first, iter->second, pairs2[i].second);
+    } else if (new_i >= new_pairs.size()) {
+      const auto& old_pair = old_pairs[old_i];
+      if (old_pair.second != empty_value) {
+        callback(old_pair.first, old_pair.second, empty_value);
+      }
+      old_i++;
+      continue;
+    }
+
+    const auto& old_pair = old_pairs[old_i];
+    const auto& new_pair = new_pairs[new_i];
+    if (old_pair.first == new_pair.first) {
+      if (old_pair.second != new_pair.second) {
+        callback(old_pair.first, old_pair.second, new_pair.second);
+      }
+      old_i++;
+      new_i++;
+    } else if (old_pair.first < new_pair.first) {
+      // This means `new_pairs` has no key for `old_pair.first`.
+      if (old_pair.second != empty_value) {
+        callback(old_pair.first, old_pair.second, empty_value);
+      }
+      old_i++;
+    } else {
+      // This means `old_pairs` has no key for `new_pair.first`.
+      if (new_pair.second != empty_value) {
+        callback(new_pair.first, empty_value, new_pair.second);
+      }
+      new_i++;
+    }
   }
 }
 
@@ -220,7 +303,7 @@ struct PendingStructureChanges {
   // is that an update may request destruction of a subtree rooted at an
   // AXID more than once, not that a specific subtree is being destroyed
   // more than once.
-  int32_t destroy_subtree_count;
+  int32_t destroy_subtree_count = 0;
 
   // Keep track of the number of times this node will be destroyed.
   // An example of when this count may be larger than 1 is if updates were
@@ -228,7 +311,7 @@ struct PendingStructureChanges {
   // again within the same |AXTreeUpdate|. The important takeaway here is that
   // an AXID may request destruction more than once, not that a specific node
   // is being destroyed more than once.
-  int32_t destroy_node_count;
+  int32_t destroy_node_count = 0;
 
   // Keep track of the number of times this node will be created.
   // An example of when this count may be larger than 1 is if updates were
@@ -236,7 +319,7 @@ struct PendingStructureChanges {
   // again within the same |AXTreeUpdate|. The important takeaway here is that
   // an AXID may request creation more than once, not that a specific node is
   // being created more than once.
-  int32_t create_node_count;
+  int32_t create_node_count = 0;
 
   // Keep track of whether this node exists in the tree as of the last pending
   // update that was processed.
@@ -270,15 +353,8 @@ enum class AXTreePendingStructureStatus {
 // Intermediate state to keep track of during a tree update.
 struct AXTreeUpdateState {
   AXTreeUpdateState(const AXTree& tree, const AXTreeUpdate& pending_tree_update)
-      : pending_update_status(AXTreePendingStructureStatus::kNotStarted),
-        root_will_be_created(false),
-        pending_tree_update(pending_tree_update),
-        tree(tree) {}
+      : pending_tree_update(pending_tree_update), tree(tree) {}
 
-  // Returns whether this update removes |node|.
-  bool IsRemovedNode(const AXNode* node) const {
-    return base::Contains(removed_node_ids, node->id());
-  }
   // Returns whether this update creates a node marked by |node_id|.
   bool IsCreatedNode(AXNodeID node_id) const {
     return base::Contains(new_node_ids, node_id);
@@ -294,17 +370,12 @@ struct AXTreeUpdateState {
     DCHECK_EQ(AXTreePendingStructureStatus::kComplete, pending_update_status)
         << "This method should not be called before pending changes have "
            "finished computing.";
-    PendingStructureChanges* data = GetPendingStructureChanges(node->id());
-    if (!data)
-      return false;
-    // In order to know if the node will be reparented during the update,
-    // we check if either the node will be destroyed or has been destroyed at
-    // least once during the update.
-    // Since this method is only allowed to be called after calculating all
-    // pending structure changes, |node_exists| tells us if the node should
-    // exist after all updates have been applied.
-    return (data->DoesNodeExpectNodeWillBeDestroyed() || IsRemovedNode(node)) &&
-           data->node_exists;
+    return IsReparentedNode(node->id());
+  }
+
+  // Returns whether this update reparents the node represented by `node_data`.
+  bool IsReparentedNode(const AXNodeID node_id) const {
+    return reparenting_node_ids.contains(node_id);
   }
 
   // Returns true if the node should exist in the tree but doesn't have
@@ -341,7 +412,7 @@ struct AXTreeUpdateState {
     DCHECK_EQ(AXTreePendingStructureStatus::kComputing, pending_update_status)
         << "This method should only be called while computing pending changes, "
            "before updates are made to the tree.";
-    static base::NoDestructor<ui::AXNodeData> empty_data;
+    static base::NoDestructor<AXNodeData> empty_data;
     PendingStructureChanges* data = GetPendingStructureChanges(node_id);
     return (data && data->last_known_data) ? *data->last_known_data
                                            : *empty_data;
@@ -430,6 +501,12 @@ struct AXTreeUpdateState {
     data->parent_node_id = std::nullopt;
     if (pending_root_id == node_id)
       pending_root_id = std::nullopt;
+
+    // This node may have been flagged for reparenting previously. It is now
+    // deleted (possibly again).
+    reparenting_node_ids.erase(node_id);
+    deleting_node_ids.insert(node_id);
+
     return true;
   }
 
@@ -471,6 +548,15 @@ struct AXTreeUpdateState {
     ++data->create_node_count;
     data->node_exists = true;
     data->parent_node_id = parent_node_id;
+
+    if (data->destroy_node_count > 0) {
+      // This node was destroyed by a previous update. This means a reparenting.
+      reparenting_node_ids.insert(node_id);
+
+      // This also means the node isn't going to be deleted after all.
+      deleting_node_ids.erase(node_id);
+    }
+
     return true;
   }
 
@@ -521,7 +607,8 @@ struct AXTreeUpdateState {
 
   // Indicates the status for calculating what changes will occur during
   // an update before the update applies changes.
-  AXTreePendingStructureStatus pending_update_status;
+  AXTreePendingStructureStatus pending_update_status =
+      AXTreePendingStructureStatus::kNotStarted;
 
   // Keeps track of the existing tree's root node id when calculating what
   // changes will occur during an update before the update applies changes.
@@ -531,7 +618,7 @@ struct AXTreeUpdateState {
   // This may occur either when the root node does not exist before applying
   // updates to the tree (new tree), or if the root is the |node_id_to_clear|
   // and will be destroyed before applying AXNodeData updates to the tree.
-  bool root_will_be_created;
+  bool root_will_be_created = false;
 
   // During an update, this keeps track of all node IDs that have been
   // implicitly referenced as part of this update, but haven't been updated yet.
@@ -556,12 +643,11 @@ struct AXTreeUpdateState {
   // Keeps track of new nodes created during this update.
   std::set<AXNodeID> new_node_ids;
 
-  // Keeps track of any nodes removed. Nodes are removed when their AXID no
-  // longer exist in the parent |child_ids| list, or the node is part of to the
-  // subtree of the AXID that was explicitally cleared with |node_id_to_clear|.
-  // Used to identify re-parented nodes. A re-parented occurs when any AXID
-  // is first removed from the tree then added to the tree again.
-  std::set<AXNodeID> removed_node_ids;
+  // Nodes expected to be deleted.
+  std::set<AXNodeID> deleting_node_ids;
+
+  // Nodes expected to be reparented.
+  std::set<AXNodeID> reparenting_node_ids;
 
   // Maps between a node id and its pending update information.
   std::map<AXNodeID, std::unique_ptr<PendingStructureChanges>>
@@ -580,7 +666,7 @@ struct AXTreeUpdateState {
   std::optional<AXTreeData> new_tree_data;
 
   // Keep track of the pending tree update to help create useful error messages.
-  // TODO(crbug.com/1156601) Revert this once we have the crash data we need
+  // TODO(crbug.com/40736019) Revert this once we have the crash data we need
   // (crrev.com/c/2892259).
   const raw_ref<const AXTreeUpdate> pending_tree_update;
 
@@ -762,6 +848,8 @@ AXTree::~AXTree() {
   // observer list will already be destroyed. To avoid that problem, free
   // language detection manager before.
   language_detection_manager.reset();
+
+  CHECK(observers_.empty());
 }
 
 void AXTree::AddObserver(AXTreeObserver* observer) {
@@ -785,8 +873,9 @@ const AXTreeData& AXTree::data() const {
 }
 
 AXNode* AXTree::GetFromId(AXNodeID id) const {
-  if (id == ui::kInvalidAXNodeID)
+  if (id == kInvalidAXNodeID) {
     return nullptr;
+  }
   auto iter = id_map_.find(id);
   return iter != id_map_.end() ? iter->second.get() : nullptr;
 }
@@ -798,7 +887,11 @@ void AXTree::Destroy() {
   if (!root_)
     return;
 
-  RecursivelyNotifyNodeDeletedForTreeTeardown(root_);
+  std::set<AXNodeID> deleting_node_ids;
+  RecursivelyNotifyNodeWillBeDeletedForTreeTeardown(*root_, deleting_node_ids);
+
+  observers_.Notify(&AXTreeObserver::OnAtomicUpdateStarting, this,
+                    deleting_node_ids, std::set<AXNodeID>{});
 
   {
     ScopedTreeUpdateInProgressStateSetter tree_update_in_progress(*this);
@@ -839,7 +932,7 @@ gfx::RectF AXTree::RelativeToTreeBoundsInternal(const AXNode* node,
     // bad state.
     if (bounds.IsEmpty() && !GetTreeUpdateInProgressState() &&
         allow_recursion) {
-      for (ui::AXNode* child : node->children()) {
+      for (AXNode* child : node->children()) {
         gfx::RectF child_bounds = RelativeToTreeBoundsInternal(
             child, gfx::RectF(), /*offscreen=*/nullptr, clip_bounds,
             skip_container_offset,
@@ -872,12 +965,12 @@ gfx::RectF AXTree::RelativeToTreeBoundsInternal(const AXNode* node,
     gfx::RectF container_bounds = container->data().relative_bounds.bounds;
     bounds.Offset(container_bounds.x(), container_bounds.y());
 
-    int scroll_x = 0;
-    int scroll_y = 0;
-    if (container->GetIntAttribute(ax::mojom::IntAttribute::kScrollX,
-                                   &scroll_x) &&
-        container->GetIntAttribute(ax::mojom::IntAttribute::kScrollY,
-                                   &scroll_y)) {
+    if (container->HasIntAttribute(ax::mojom::IntAttribute::kScrollX) &&
+        container->HasIntAttribute(ax::mojom::IntAttribute::kScrollY)) {
+      int scroll_x =
+          container->GetIntAttribute(ax::mojom::IntAttribute::kScrollX);
+      int scroll_y =
+          container->GetIntAttribute(ax::mojom::IntAttribute::kScrollY);
       bounds.Offset(-scroll_x, -scroll_y);
     }
 
@@ -950,7 +1043,7 @@ gfx::RectF AXTree::RelativeToTreeBoundsInternal(const AXNode* node,
     }
 
     if (ancestor && allow_recursion) {
-      bool ignore_offscreen;
+      bool ignore_offscreen = false;
       ancestor_bounds = RelativeToTreeBoundsInternal(
           ancestor, gfx::RectF(), &ignore_offscreen, clip_bounds,
           skip_container_offset,
@@ -1036,24 +1129,22 @@ const std::set<AXTreeID> AXTree::GetAllChildTreeIds() const {
 }
 
 bool AXTree::Unserialize(const AXTreeUpdate& update) {
-#if DCHECK_IS_ON()
+#if AX_FAIL_FAST_BUILD() && !defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
   for (const auto& new_data : update.nodes)
-    DCHECK(new_data.id != kInvalidAXNodeID)
+    CHECK(new_data.id != kInvalidAXNodeID)
         << "AXTreeUpdate contains invalid node: " << update.ToString();
   if (update.tree_data.tree_id != AXTreeIDUnknown() &&
       data_.tree_id != AXTreeIDUnknown()) {
-    DCHECK_EQ(update.tree_data.tree_id, data_.tree_id)
+    CHECK_EQ(update.tree_data.tree_id, data_.tree_id)
         << "Tree id mismatch between tree update and this tree.";
   }
-#endif
+#endif  // AX_FAIL_FAST_BUILD()
 
   event_data_ = std::make_unique<AXEvent>();
   event_data_->event_from = update.event_from;
   event_data_->event_from_action = update.event_from_action;
   event_data_->event_intents = update.event_intents;
-  base::ScopedClosureRunner clear_event_data(base::BindOnce(
-      [](std::unique_ptr<AXEvent>* event_data) { event_data->reset(); },
-      &event_data_));
+  absl::Cleanup clear_event_data = [this] { event_data_.reset(); };
 
   AXTreeUpdateState update_state(*this, update);
   const AXNodeID old_root_id = root_ ? root_->id() : kInvalidAXNodeID;
@@ -1081,7 +1172,7 @@ bool AXTree::Unserialize(const AXTreeUpdate& update) {
           NotifySubtreeWillBeReparentedOrDeleted(node, &update_state);
         }
         if (data->DoesNodeExpectNodeWillBeDestroyed()) {
-          NotifyNodeWillBeReparentedOrDeleted(node, &update_state);
+          NotifyNodeWillBeReparentedOrDeleted(*node, update_state);
         }
       }
     }
@@ -1101,23 +1192,24 @@ bool AXTree::Unserialize(const AXTreeUpdate& update) {
     }
 
     AXNode* node = GetFromId(new_data.id);
-    if (node &&
+
+    // For performance, skip text deletion/insertion events on ignored nodes.
+    if (node && !new_data.IsIgnored() && !node->data().IsIgnored() &&
         notified_node_attributes_will_change.insert(new_data.id).second) {
-      for (AXTreeObserver& observer : observers_) {
-        if (new_data.HasIntListAttribute(
-                ax::mojom::IntListAttribute::kTextOperationStartOffsets)) {
-          DCHECK(new_data.HasIntListAttribute(
-              ax::mojom::IntListAttribute::kTextOperationStartOffsets));
-          DCHECK(new_data.HasIntListAttribute(
-              ax::mojom::IntListAttribute::kTextOperationEndOffsets));
-          DCHECK(new_data.HasIntListAttribute(
-              ax::mojom::IntListAttribute::kTextOperationStartAnchorIds));
-          DCHECK(new_data.HasIntListAttribute(
-              ax::mojom::IntListAttribute::kTextOperationEndAnchorIds));
-          DCHECK(new_data.HasIntListAttribute(
-              ax::mojom::IntListAttribute::kTextOperations));
-          observer.OnTextDeletionOrInsertion(*node, new_data);
-        }
+      if (new_data.HasIntListAttribute(
+              ax::mojom::IntListAttribute::kTextOperationStartOffsets)) {
+        DCHECK(new_data.HasIntListAttribute(
+            ax::mojom::IntListAttribute::kTextOperationStartOffsets));
+        DCHECK(new_data.HasIntListAttribute(
+            ax::mojom::IntListAttribute::kTextOperationEndOffsets));
+        DCHECK(new_data.HasIntListAttribute(
+            ax::mojom::IntListAttribute::kTextOperationStartAnchorIds));
+        DCHECK(new_data.HasIntListAttribute(
+            ax::mojom::IntListAttribute::kTextOperationEndAnchorIds));
+        DCHECK(new_data.HasIntListAttribute(
+            ax::mojom::IntListAttribute::kTextOperations));
+        observers_.Notify(&AXTreeObserver::OnTextDeletionOrInsertion, *node,
+                          new_data);
       }
       NotifyNodeAttributesWillChange(
           node, update_state,
@@ -1142,12 +1234,14 @@ bool AXTree::Unserialize(const AXTreeUpdate& update) {
           !base::Contains(update_state.ignored_state_changed_ids,
                           node->parent()->id()) ||
           node->IsIgnored() != node->parent()->IsIgnored();
-      for (AXTreeObserver& observer : observers_) {
-        observer.OnIgnoredWillChange(this, node, will_be_ignored,
-                                     is_root_of_ignored_change);
-      }
+      observers_.Notify(&AXTreeObserver::OnIgnoredWillChange, this, node,
+                        will_be_ignored, is_root_of_ignored_change);
     }
   }
+
+  observers_.Notify(&AXTreeObserver::OnAtomicUpdateStarting, this,
+                    update_state.deleting_node_ids,
+                    update_state.reparenting_node_ids);
 
   // Now that we have finished sending events for changes that will  happen,
   // set update state to true. |tree_update_in_progress_| gets set back to
@@ -1202,7 +1296,7 @@ bool AXTree::Unserialize(const AXTreeUpdate& update) {
         // If the tree doesn't exists any more because the root has just been
         // replaced, there is nothing more to clear.
         if (root_) {
-          for (ui::AXNode* child : cleared_node->children()) {
+          for (AXNode* child : cleared_node->children()) {
             DestroySubtree(child, &update_state);
           }
           std::vector<raw_ptr<AXNode, VectorExperimental>> children;
@@ -1226,7 +1320,7 @@ bool AXTree::Unserialize(const AXTreeUpdate& update) {
     if (!root_) {
       ACCESSIBILITY_TREE_UNSERIALIZE_ERROR_HISTOGRAM(
           AXTreeUnserializeError::kNoRoot);
-      RecordError(update_state, "Tree has no root.");
+      RecordError(update_state, "Tree has no root.", true);
       return false;
     }
 
@@ -1293,10 +1387,10 @@ bool AXTree::Unserialize(const AXTreeUpdate& update) {
           // whose parent happens to be new only because it has been reparented.
           // Note that we also need to check for the special case when we update
           // the root without replacing it.
-          bool is_subtree = !node->parent() ||
-                            !update_state.IsCreatedNode(node->parent()) ||
-                            update_state.IsRemovedNode(node->parent()) ||
-                            (node->parent() == root_ && root_updated);
+          bool is_subtree =
+              !node->parent() || !update_state.IsCreatedNode(node->parent()) ||
+              update_state.IsReparentedNode(node->parent()->id()) ||
+              (node->parent() == root_ && root_updated);
           change = is_subtree ? AXTreeObserver::SUBTREE_CREATED
                               : AXTreeObserver::NODE_CREATED;
         }
@@ -1352,8 +1446,8 @@ bool AXTree::Unserialize(const AXTreeUpdate& update) {
     // the tree data changed. We must do this after updating nodes in case the
     // root has been replaced, so observers have the most up-to-date
     // information.
-    for (AXTreeObserver& observer : observers_)
-      observer.OnTreeDataChanged(this, *update_state.old_tree_data, data_);
+    observers_.Notify(&AXTreeObserver::OnTreeDataChanged, this,
+                      *update_state.old_tree_data, data_);
   }
 
   // Now that the unignored cached values are up to date, notify observers of
@@ -1370,10 +1464,8 @@ bool AXTree::Unserialize(const AXTreeUpdate& update) {
 
   // Now that the unignored cached values are up to date, notify observers of
   // the nodes that were deleted from the tree but not reparented.
-  for (AXNodeID node_id : update_state.removed_node_ids) {
-    if (!update_state.IsCreatedNode(node_id)) {
-      NotifyNodeHasBeenDeleted(node_id);
-    }
+  for (AXNodeID node_id : update_state.deleting_node_ids) {
+    NotifyNodeHasBeenDeleted(node_id);
   }
 
   // Now that the unignored cached values are up to date, notify observers of
@@ -1401,38 +1493,23 @@ bool AXTree::Unserialize(const AXTreeUpdate& update) {
     }
 
     // |OnNodeChanged| should be fired for all nodes that have been updated.
-    for (AXTreeObserver& observer : observers_)
-      observer.OnNodeChanged(this, node);
+    observers_.Notify(&AXTreeObserver::OnNodeChanged, this, node);
   }
 
-  for (AXTreeObserver& observer : observers_)
-    observer.OnAtomicUpdateFinished(this, root_->id() != old_root_id, changes);
+  observers_.Notify(&AXTreeObserver::OnAtomicUpdateFinished, this,
+                    root_->id() != old_root_id, changes);
 
-#if DCHECK_IS_ON()
+#if AX_FAIL_FAST_BUILD()
   CheckTreeConsistency(update);
 #endif
 
   return true;
 }
 
-#if DCHECK_IS_ON()
+#if AX_FAIL_FAST_BUILD()
 void AXTree::CheckTreeConsistency(const AXTreeUpdate& update) {
   // Return early if no expected node count was supplied.
   if (!update.tree_checks || !update.tree_checks->node_count) {
-    return;
-  }
-
-  // Do not check pages with child trees.
-  // Required to pass PDFExtensionAccessibilityTreeDumpTest tests.
-  if (has_plugin_) {
-    return;
-  }
-  for (const auto& node_data : update.nodes) {
-    if (node_data.role == ax::mojom::Role::kEmbeddedObject) {
-      has_plugin_ = true;
-    }
-  }
-  if (has_plugin_) {
     return;
   }
 
@@ -1441,18 +1518,17 @@ void AXTree::CheckTreeConsistency(const AXTreeUpdate& update) {
     return;
   }
 
-  DCHECK(root_);
+  CHECK(root_);
   std::ostringstream msg;
   msg << "After a tree update, there is a tree inconsistency.\n"
       << "\n* Number of ids mapped: " << id_map_.size()
       << "\n* Serializer's node count: " << update.tree_checks->node_count
       << "\n* Slow nodes count: " << root_->GetSubtreeCount()
-      << "\n* AXTreeUpdate: "
-      << TreeToStringHelper(root_, 0, /*verbose*/ false);
+      << "\n* AXTreeUpdate: " << TreeToString(root_, 0, /*verbose*/ false);
 
-  DCHECK(false) << msg.str();
+  NOTREACHED() << msg.str();
 }
-#endif
+#endif  // AX_FAIL_FAST_BUILD()
 
 AXTableInfo* AXTree::GetTableInfo(const AXNode* const_table_node) const {
   DCHECK(!GetTreeUpdateInProgressState());
@@ -1489,8 +1565,7 @@ AXTableInfo* AXTree::GetTableInfo(const AXNode* const_table_node) const {
 }
 
 std::string AXTree::ToString(bool verbose) const {
-  return "AXTree" + data_.ToString() + "\n" +
-         TreeToStringHelper(root_, 0, verbose);
+  return "AXTree" + data_.ToString() + "\n" + TreeToString(root_, 0, verbose);
 }
 
 AXNode* AXTree::CreateNode(AXNode* parent,
@@ -1612,6 +1687,7 @@ bool AXTree::ComputePendingChanges(const AXTreeUpdate& update,
 
   // Populate |update_state| with all of the changes that will be performed
   // on the tree during the update.
+  int number_of_inline_textboxes = 0;
   for (const AXNodeData& new_data : update_state->updated_nodes) {
     if (new_data.id == kInvalidAXNodeID)
       continue;
@@ -1622,6 +1698,18 @@ bool AXTree::ComputePendingChanges(const AXTreeUpdate& update,
           AXTreePendingStructureStatus::kFailed;
       return false;
     }
+    if (new_data.role == ax::mojom::Role::kInlineTextBox) {
+      number_of_inline_textboxes++;
+    }
+  }
+
+  // Track the number of inline text boxes for each AXTreeUpdate.
+  base::UmaHistogramBoolean("Accessibility.InlineTextBoxes.PresentInUpdate",
+                            number_of_inline_textboxes > 0);
+
+  if (number_of_inline_textboxes > 0) {
+    base::UmaHistogramCounts1000("Accessibility.InlineTextBoxes.Count",
+                                 number_of_inline_textboxes);
   }
 
   update_state->pending_update_status = AXTreePendingStructureStatus::kComplete;
@@ -1805,6 +1893,7 @@ bool AXTree::UpdateNode(const AXNodeData& src,
   // and this is a serious error.
   AXNode* node = GetFromId(src.id);
   if (node) {
+    // Node is changing.
     update_state->pending_node_ids.erase(node->id());
     UpdateReverseRelations(node, src);
     if (!update_state->IsCreatedNode(node) ||
@@ -1814,6 +1903,7 @@ bool AXTree::UpdateNode(const AXNodeData& src,
     }
     node->SetData(src);
   } else {
+    // Node is created.
     if (!is_new_root) {
       ACCESSIBILITY_TREE_UNSERIALIZE_ERROR_HISTOGRAM(
           AXTreeUnserializeError::kNotInTree);
@@ -1824,7 +1914,7 @@ bool AXTree::UpdateNode(const AXNodeData& src,
     }
 
     node = CreateNode(nullptr, src.id, 0, update_state);
-    UpdateReverseRelations(node, src);
+    UpdateReverseRelations(node, src, /*is_new_node*/ true);
     node->SetData(src);
   }
 
@@ -1887,38 +1977,46 @@ void AXTree::NotifySubtreeWillBeReparentedOrDeleted(
 }
 
 void AXTree::NotifyNodeWillBeReparentedOrDeleted(
-    AXNode* node,
-    const AXTreeUpdateState* update_state) {
+    AXNode& node,
+    const AXTreeUpdateState& update_state) {
   DCHECK(!GetTreeUpdateInProgressState());
 
-  AXNodeID id = node->id();
+  AXNodeID id = node.id();
   if (id == kInvalidAXNodeID)
     return;
 
   table_info_map_.erase(id);
 
-  bool notify_reparented = update_state->IsReparentedNode(node);
+  bool notify_reparented = update_state.IsReparentedNode(&node);
 
   for (AXTreeObserver& observer : observers_) {
-    if (notify_reparented)
-      observer.OnNodeWillBeReparented(this, node);
-    else
-      observer.OnNodeWillBeDeleted(this, node);
+    if (notify_reparented) {
+      observer.OnNodeWillBeReparented(this, &node);
+    } else {
+      observer.OnNodeWillBeDeleted(this, &node);
+    }
   }
 
   DCHECK(table_info_map_.find(id) == table_info_map_.end())
       << "Table info should never be recreated during node deletion";
 }
 
-void AXTree::RecursivelyNotifyNodeDeletedForTreeTeardown(AXNode* node) {
+void AXTree::RecursivelyNotifyNodeWillBeDeletedForTreeTeardown(
+    AXNode& node,
+    std::set<AXNodeID>& deleted_nodes) {
+  // TODO(crbug.com/366332767): Migrate tree observers to listen for tree
+  // teardown by observing AXTreeManager.
   DCHECK(!GetTreeUpdateInProgressState());
-  if (node->id() == kInvalidAXNodeID)
+  if (node.id() == kInvalidAXNodeID) {
     return;
+  }
 
-  for (AXTreeObserver& observer : observers_)
-    observer.OnNodeDeleted(this, node->id());
-  for (ui::AXNode* child : node->children()) {
-    RecursivelyNotifyNodeDeletedForTreeTeardown(child);
+  deleted_nodes.insert(node.id());
+
+  observers_.Notify(&AXTreeObserver::OnNodeWillBeDeleted, this, &node);
+  for (ui::AXNode* child : node.children()) {
+    RecursivelyNotifyNodeWillBeDeletedForTreeTeardown(CHECK_DEREF(child),
+                                                      deleted_nodes);
   }
 }
 
@@ -1928,8 +2026,7 @@ void AXTree::NotifyNodeHasBeenDeleted(AXNodeID node_id) {
   if (node_id == kInvalidAXNodeID)
     return;
 
-  for (AXTreeObserver& observer : observers_)
-    observer.OnNodeDeleted(this, node_id);
+  observers_.Notify(&AXTreeObserver::OnNodeDeleted, this, node_id);
 }
 
 void AXTree::NotifyNodeHasBeenReparentedOrCreated(
@@ -1941,21 +2038,17 @@ void AXTree::NotifyNodeHasBeenReparentedOrCreated(
 
   bool is_reparented = update_state->IsReparentedNode(node);
 
-  for (AXTreeObserver& observer : observers_) {
-    if (is_reparented) {
-      observer.OnNodeReparented(this, node);
-    } else {
-      observer.OnNodeCreated(this, node);
-    }
+  if (is_reparented) {
+    observers_.Notify(&AXTreeObserver::OnNodeReparented, this, node);
+  } else {
+    observers_.Notify(&AXTreeObserver::OnNodeCreated, this, node);
   }
 }
 
 void AXTree::NotifyChildTreeConnectionChanged(AXNode* node,
                                               AXTree* child_tree) {
   DCHECK(node->tree() == this);
-  for (AXTreeObserver& observer : observers_) {
-    observer.OnChildTreeConnectionChanged(node);
-  }
+  observers_.Notify(&AXTreeObserver::OnChildTreeConnectionChanged, node);
 }
 
 void AXTree::NotifyNodeAttributesWillChange(
@@ -1969,8 +2062,8 @@ void AXTree::NotifyNodeAttributesWillChange(
   if (new_data.id == kInvalidAXNodeID)
     return;
 
-  for (AXTreeObserver& observer : observers_)
-    observer.OnNodeDataWillChange(this, old_data, new_data);
+  observers_.Notify(&AXTreeObserver::OnNodeDataWillChange, this, old_data,
+                    new_data);
 }
 
 void AXTree::NotifyNodeAttributesHaveBeenChanged(
@@ -1994,17 +2087,23 @@ void AXTree::NotifyNodeAttributesHaveBeenChanged(
     return;
   }
 
-  for (AXTreeObserver& observer : observers_)
-    observer.OnNodeDataChanged(this, old_data, new_data);
-
-  if (old_data.role != new_data.role) {
-    for (AXTreeObserver& observer : observers_)
-      observer.OnRoleChanged(this, node, old_data.role, new_data.role);
-  }
+  observers_.Notify(&AXTreeObserver::OnNodeDataChanged, this, old_data,
+                    new_data);
 
   if (base::Contains(update_state.ignored_state_changed_ids, new_data.id)) {
-    for (AXTreeObserver& observer : observers_)
-      observer.OnIgnoredChanged(this, node, node->IsIgnored());
+    observers_.Notify(&AXTreeObserver::OnIgnoredChanged, this, node,
+                      node->IsIgnored());
+  }
+
+  // For performance reasons, it is better to skip processing and firing of
+  // events related to property changes for ignored nodes.
+  if (old_data.IsIgnored() || new_data.IsIgnored()) {
+    return;
+  }
+
+  if (old_data.role != new_data.role) {
+    observers_.Notify(&AXTreeObserver::OnRoleChanged, this, node, old_data.role,
+                      new_data.role);
   }
 
   if (old_data.state != new_data.state) {
@@ -2016,8 +2115,8 @@ void AXTree::NotifyNodeAttributesHaveBeenChanged(
         continue;
 
       if (old_data.HasState(state) != new_data.HasState(state)) {
-        for (AXTreeObserver& observer : observers_)
-          observer.OnStateChanged(this, node, state, new_data.HasState(state));
+        observers_.Notify(&AXTreeObserver::OnStateChanged, this, node, state,
+                          new_data.HasState(state));
       }
     }
   }
@@ -2026,10 +2125,8 @@ void AXTree::NotifyNodeAttributesHaveBeenChanged(
                                       const std::string& old_string,
                                       const std::string& new_string) {
     DCHECK_NE(old_string, new_string);
-    for (AXTreeObserver& observer : observers_) {
-      observer.OnStringAttributeChanged(this, node, attr, old_string,
-                                        new_string);
-    }
+    observers_.Notify(&AXTreeObserver::OnStringAttributeChanged, this, node,
+                      attr, old_string, new_string);
   };
   CallIfAttributeValuesChanged(old_data.string_attributes,
                                new_data.string_attributes, std::string(),
@@ -2039,8 +2136,8 @@ void AXTree::NotifyNodeAttributesHaveBeenChanged(
                                     const bool& old_bool,
                                     const bool& new_bool) {
     DCHECK_NE(old_bool, new_bool);
-    for (AXTreeObserver& observer : observers_)
-      observer.OnBoolAttributeChanged(this, node, attr, new_bool);
+    observers_.Notify(&AXTreeObserver::OnBoolAttributeChanged, this, node, attr,
+                      new_bool);
   };
   CallIfAttributeValuesChanged(old_data.bool_attributes,
                                new_data.bool_attributes, false, bool_callback);
@@ -2049,8 +2146,8 @@ void AXTree::NotifyNodeAttributesHaveBeenChanged(
                                      const float& old_float,
                                      const float& new_float) {
     DCHECK_NE(old_float, new_float);
-    for (AXTreeObserver& observer : observers_)
-      observer.OnFloatAttributeChanged(this, node, attr, old_float, new_float);
+    observers_.Notify(&AXTreeObserver::OnFloatAttributeChanged, this, node,
+                      attr, old_float, new_float);
   };
   CallIfAttributeValuesChanged(old_data.float_attributes,
                                new_data.float_attributes, 0.0f, float_callback);
@@ -2058,8 +2155,8 @@ void AXTree::NotifyNodeAttributesHaveBeenChanged(
   auto int_callback = [this, node](ax::mojom::IntAttribute attr,
                                    const int& old_int, const int& new_int) {
     DCHECK_NE(old_int, new_int);
-    for (AXTreeObserver& observer : observers_)
-      observer.OnIntAttributeChanged(this, node, attr, old_int, new_int);
+    observers_.Notify(&AXTreeObserver::OnIntAttributeChanged, this, node, attr,
+                      old_int, new_int);
   };
   CallIfAttributeValuesChanged(old_data.int_attributes, new_data.int_attributes,
                                0, int_callback);
@@ -2068,9 +2165,8 @@ void AXTree::NotifyNodeAttributesHaveBeenChanged(
                               ax::mojom::IntListAttribute attr,
                               const std::vector<int32_t>& old_intlist,
                               const std::vector<int32_t>& new_intlist) {
-    for (AXTreeObserver& observer : observers_)
-      observer.OnIntListAttributeChanged(this, node, attr, old_intlist,
-                                         new_intlist);
+    observers_.Notify(&AXTreeObserver::OnIntListAttributeChanged, this, node,
+                      attr, old_intlist, new_intlist);
   };
   CallIfAttributeValuesChanged(old_data.intlist_attributes,
                                new_data.intlist_attributes,
@@ -2080,92 +2176,76 @@ void AXTree::NotifyNodeAttributesHaveBeenChanged(
       [this, node](ax::mojom::StringListAttribute attr,
                    const std::vector<std::string>& old_stringlist,
                    const std::vector<std::string>& new_stringlist) {
-        for (AXTreeObserver& observer : observers_)
-          observer.OnStringListAttributeChanged(this, node, attr,
-                                                old_stringlist, new_stringlist);
+        observers_.Notify(&AXTreeObserver::OnStringListAttributeChanged, this,
+                          node, attr, old_stringlist, new_stringlist);
       };
   CallIfAttributeValuesChanged(old_data.stringlist_attributes,
                                new_data.stringlist_attributes,
                                std::vector<std::string>(), stringlist_callback);
 }
 
-void AXTree::UpdateReverseRelations(AXNode* node, const AXNodeData& new_data) {
+void AXTree::UpdateReverseRelations(AXNode* node,
+                                    const AXNodeData& new_data,
+                                    bool is_new_node) {
   DCHECK(GetTreeUpdateInProgressState());
   const AXNodeData& old_data = node->data();
-  int id = new_data.id;
-  auto int_callback = [this, id](ax::mojom::IntAttribute attr,
-                                 const int& old_id, const int& new_id) {
-    if (!IsNodeIdIntAttribute(attr))
-      return;
+  // This is the id of the source node, which does not change between the old
+  // and the new data.
+  int id = node->id();
 
-    // Remove old_id -> id from the map, and clear map keys if their
-    // values are now empty.
-    auto& map = int_reverse_relations_[attr];
-    if (map.find(old_id) != map.end()) {
-      map[old_id].erase(id);
-      if (map[old_id].empty())
-        map.erase(old_id);
+  for (const auto& attr : kReverseRelationIntAttributes) {
+    int32_t old_relation_target_id = old_data.GetIntAttribute(attr);
+    int32_t new_relation_target_id = new_data.GetIntAttribute(attr);
+    if (is_new_node || old_relation_target_id != new_relation_target_id) {
+      auto& map = int_reverse_relations_[attr];
+      if (!is_new_node) {
+        // Remove stale values from map.
+        if (map.find(old_relation_target_id) != map.end()) {
+          map[old_relation_target_id].erase(id);
+          if (map[old_relation_target_id].empty()) {
+            map.erase(old_relation_target_id);
+          }
+        }
+      }
+      int_reverse_relations_[attr][new_relation_target_id].insert(id);
     }
+  }
 
-    // Add new_id -> id to the map, unless new_id is zero indicating that
-    // we're only removing a relation.
-    if (new_id)
-      map[new_id].insert(id);
-  };
-  CallIfAttributeValuesChanged(old_data.int_attributes, new_data.int_attributes,
-                               0, int_callback);
-
-  auto intlist_callback = [this, id](ax::mojom::IntListAttribute attr,
-                                     const std::vector<int32_t>& old_idlist,
-                                     const std::vector<int32_t>& new_idlist) {
-    if (!IsNodeIdIntListAttribute(attr))
-      return;
-
-    auto& map = intlist_reverse_relations_[attr];
-    for (AXNodeID old_id : old_idlist) {
-      if (map.find(old_id) != map.end()) {
-        map[old_id].erase(id);
-        if (map[old_id].empty())
-          map.erase(old_id);
+  for (const auto& attr : kReverseRelationIntListAttributes) {
+    const std::vector<int32_t>& old_idlist = old_data.GetIntListAttribute(attr);
+    const std::vector<int32_t>& new_idlist = new_data.GetIntListAttribute(attr);
+    if (is_new_node || old_idlist != new_idlist) {
+      auto& map = intlist_reverse_relations_[attr];
+      if (!is_new_node) {
+        // Remove stale values from map.
+        for (AXNodeID old_relation_target_id : old_idlist) {
+          if (map.find(old_relation_target_id) != map.end()) {
+            map[old_relation_target_id].erase(id);
+            if (map[old_relation_target_id].empty()) {
+              map.erase(old_relation_target_id);
+            }
+          }
+        }
+      }
+      for (AXNodeID new_relation_target_id : new_idlist) {
+        map[new_relation_target_id].insert(id);
       }
     }
-    for (AXNodeID new_id : new_idlist)
-      intlist_reverse_relations_[attr][new_id].insert(id);
-  };
-  CallIfAttributeValuesChanged(old_data.intlist_attributes,
-                               new_data.intlist_attributes,
-                               std::vector<AXNodeID>(), intlist_callback);
+  }
 
-  auto string_callback = [this, id](ax::mojom::StringAttribute attr,
-                                    const std::string& old_string,
-                                    const std::string& new_string) {
-    if (attr == ax::mojom::StringAttribute::kChildTreeId) {
-      // Remove old_string -> id from the map, and clear map keys if
-      // their values are now empty.
-      AXTreeID old_ax_tree_id = AXTreeID::FromString(old_string);
-      const auto& iter = child_tree_id_reverse_map_.find(old_ax_tree_id);
-      // TODO(accessibility) How can there be more than one child tree owner id
-      // for a given tree id? Should we be using DCHECKs to assert that?
-      if (iter != child_tree_id_reverse_map_.end()) {
-        std::set<AXNodeID>& node_ids_for_tree_id = iter->second;
-        node_ids_for_tree_id.erase(id);
-        // Remove entry from map if there are no ids left.
-        if (node_ids_for_tree_id.empty())
-          child_tree_id_reverse_map_.erase(iter);
-      }
+  // Update child tree id reverse map.
+  std::optional<AXTreeID> old_tree_id = old_data.GetChildTreeID();
+  std::optional<AXTreeID> new_tree_id = new_data.GetChildTreeID();
+  if (old_tree_id == new_tree_id) {
+    return;
+  }
 
-      // Add new_string -> id to the map, unless new_id is zero indicating that
-      // we're only removing a relation.
-      if (!new_string.empty()) {
-        AXTreeID new_ax_tree_id = AXTreeID::FromString(new_string);
-        child_tree_id_reverse_map_[new_ax_tree_id].insert(id);
-      }
-    }
-  };
-
-  CallIfAttributeValuesChanged(old_data.string_attributes,
-                               new_data.string_attributes, std::string(),
-                               string_callback);
+  if (old_tree_id) {
+    child_tree_id_reverse_map_[*old_tree_id].erase(id);
+  }
+  if (new_tree_id) {
+    child_tree_id_reverse_map_[*new_tree_id].insert(id);
+  }
 }
 
 bool AXTree::ValidatePendingChangesComplete(
@@ -2260,15 +2340,20 @@ void AXTree::DestroyNodeAndSubtree(AXNode* node,
   DCHECK(!update_state || update_state->GetPendingDestroyNodeCount(id) > 0);
 
   // Clear out any reverse relations.
-  AXNodeData empty_data;
-  empty_data.id = id;
-  UpdateReverseRelations(node, empty_data);
+  static base::NoDestructor<AXNodeData> empty_data;
+  UpdateReverseRelations(node, *empty_data);
 
   auto iter = id_map_.find(id);
-  DCHECK(iter != id_map_.end());
+  CHECK(iter != id_map_.end(), base::NotFatalUntil::M130);
   std::unique_ptr<AXNode> node_to_delete = std::move(iter->second);
   id_map_.erase(iter);
   node = nullptr;
+
+  if (!update_state) {
+    // `update_state` will only be nullptr when destroying the entire tree. This
+    // is then our last chance to notify that the nodes were deleted.
+    observers_.Notify(&AXTreeObserver::OnNodeDeleted, this, id);
+  }
 
   for (ui::AXNode* child : node_to_delete->children()) {
     DestroyNodeAndSubtree(child, update_state);
@@ -2276,7 +2361,6 @@ void AXTree::DestroyNodeAndSubtree(AXNode* node,
   if (update_state) {
     update_state->pending_node_ids.erase(id);
     update_state->DecrementPendingDestroyNodeCount(id);
-    update_state->removed_node_ids.insert(id);
     update_state->new_node_ids.erase(id);
     update_state->node_data_changed_ids.erase(id);
     if (update_state->IsReparentedNode(node_to_delete.get())) {
@@ -2461,10 +2545,12 @@ void AXTree::RecursivelyPopulateOrderedSetItemsMap(
     // However, in the collapsed container case (e.g. a combobox), items can
     // still be chosen/navigated. However, the options in these collapsed
     // containers are historically marked invisible. Therefore, in that case,
-    // count the invisible items. Only check 2 levels up, as combobox containers
+    // count the invisible items. Only check 3 levels up, as combobox containers
     // are never higher.
     if (child->data().IsInvisible() && !IsCollapsed(local_parent) &&
-        !IsCollapsed(local_parent->parent())) {
+        !IsCollapsed(local_parent->parent()) &&
+        (!local_parent->parent() ||
+         !IsCollapsed(local_parent->parent()->parent()))) {
       continue;
     }
 
@@ -2551,6 +2637,7 @@ void AXTree::ComputeSetSizePosInSetAndCache(const AXNode& node,
   // role::kRadioButton are special cases and do not necessarily need to be
   // contained in an ordered set.
   if (node.GetRole() != ax::mojom::Role::kComment &&
+      node.GetRole() != ax::mojom::Role::kDisclosureTriangle &&
       node.GetRole() != ax::mojom::Role::kDisclosureTriangleGrouped &&
       node.GetRole() != ax::mojom::Role::kRadioButton &&
       !node.SetRoleMatchesItemRole(ordered_set) && !node.IsOrderedSet()) {
@@ -2813,8 +2900,8 @@ void AXTree::NotifyTreeManagerWillBeRemoved(AXTreeID previous_tree_id) {
   if (previous_tree_id == AXTreeIDUnknown())
     return;
 
-  for (AXTreeObserver& observer : observers_)
-    observer.OnTreeManagerWillBeRemoved(previous_tree_id);
+  observers_.Notify(&AXTreeObserver::OnTreeManagerWillBeRemoved,
+                    previous_tree_id);
 }
 
 void AXTree::RecordError(const AXTreeUpdateState& update_state,
@@ -2829,24 +2916,28 @@ void AXTree::RecordError(const AXTreeUpdateState& update_state,
   // Suppress fatal error logging in builds that target fuzzing, as fuzzers
   // generate invalid trees by design to shake out bugs.
   is_fatal = false;
-#elif defined(AX_FAIL_FAST_BUILD)
+#elif AX_FAIL_FAST_BUILD()
   // In fast-failing-builds, crash immediately with a full message, otherwise
-  // rely on AccessibilityFatalError(), which will not crash until multiple
-  // errors occur.
+  // rely on UnrecoverableAccessibilityError(), which will not crash until
+  // multiple errors occur.
   // TODO(accessibility) Make AXTree errors fatal in Canary and Dev builds, as
   // they indicate fundamental problems in part of the engine. They are much
   // less frequent than in the past -- it should not be highimpact on users.
   is_fatal = true;
 #endif
 
+  std::string tree_str = TreeToString(root_, 0, false);
+
   std::ostringstream verbose_error;
   verbose_error << new_error << "\n** Pending tree update **\n"
-                << update_state.pending_tree_update->ToString(
-                       /*verbose*/ false)
+                << update_state.pending_tree_update
+                       ->ToString(
+                           /*verbose*/ false)
+                       .substr(0, 1000)
                 << "** Root **\n"
                 << root() << "\n** AXTreeData **\n"
                 << data_.ToString() + "\n** AXTree **\n"
-                << TreeToStringHelper(root_, 0, false).substr(0, 1000);
+                << tree_str.substr(0, 2000);
 
   LOG_IF(FATAL, is_fatal) << verbose_error.str();
 
@@ -2865,8 +2956,7 @@ void AXTree::RecordError(const AXTreeUpdateState& update_state,
   base::debug::SetCrashKeyString(ax_tree_error_key, new_error);
   base::debug::SetCrashKeyString(ax_tree_update_key,
                                  update_state.pending_tree_update->ToString());
-  base::debug::SetCrashKeyString(ax_tree_key,
-                                 TreeToStringHelper(root_, 0, false));
+  base::debug::SetCrashKeyString(ax_tree_key, tree_str);
   base::debug::SetCrashKeyString(ax_tree_data_key, data_.ToString());
   LOG(ERROR) << verbose_error.str();
 }

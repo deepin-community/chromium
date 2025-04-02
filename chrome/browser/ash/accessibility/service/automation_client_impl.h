@@ -11,6 +11,7 @@
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "services/accessibility/public/mojom/automation.mojom.h"
 #include "services/accessibility/public/mojom/automation_client.mojom.h"
+#include "ui/accessibility/ax_location_and_scroll_updates.h"
 
 namespace ash {
 
@@ -29,7 +30,8 @@ class AutomationClientImpl : public ax::mojom::AutomationClient,
   void BindAutomationClient(
       mojo::PendingReceiver<ax::mojom::AutomationClient> automation_client);
 
-  void Disable();
+  // ax::mojom::AutomationClient:
+  void Disable() override;
 
  private:
   friend class AccessibilityServiceClientTest;
@@ -38,19 +40,23 @@ class AutomationClientImpl : public ax::mojom::AutomationClient,
   // back to the OS.
   // ax::mojom::AutomationClient:
   void Enable(EnableCallback callback) override;
-  // TODO(crbug.com/1355633): Override from ax::mojom::AutomationClient:
-  void EnableTree(const ui::AXTreeID& tree_id);
-  void PerformAction(const ui::AXActionData& data);
+  void PerformAction(const ui::AXActionData& data) override;
+  void EnableChildTree(const ui::AXTreeID& tree_id) override;
 
   // Receive accessibility information from AutomationEventRouter in ash and
   // forward it along to the service.
   // extensions::AutomationEventRouterInterface:
-  void DispatchAccessibilityEvents(const ui::AXTreeID& tree_id,
-                                   std::vector<ui::AXTreeUpdate> updates,
-                                   const gfx::Point& mouse_location,
-                                   std::vector<ui::AXEvent> events) override;
+  void DispatchAccessibilityEvents(
+      const ui::AXTreeID& tree_id,
+      const std::vector<ui::AXTreeUpdate>& updates,
+      const gfx::Point& mouse_location,
+      const std::vector<ui::AXEvent>& events) override;
   void DispatchAccessibilityLocationChange(
-      const content::AXLocationChangeNotificationDetails& details) override;
+      const ui::AXTreeID& tree_id,
+      const ui::AXLocationChange& details) override;
+  void DispatchAccessibilityScrollChange(
+      const ui::AXTreeID& tree_id,
+      const ui::AXScrollChange& details) override;
   void DispatchTreeDestroyedEvent(ui::AXTreeID tree_id) override;
   void DispatchActionResult(const ui::AXActionData& data,
                             bool result,

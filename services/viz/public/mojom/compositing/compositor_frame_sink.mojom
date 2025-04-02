@@ -12,8 +12,8 @@ import "services/viz/public/mojom/compositing/layer_context.mojom";
 import "services/viz/public/mojom/compositing/local_surface_id.mojom";
 import "services/viz/public/mojom/compositing/frame_timing_details.mojom";
 import "services/viz/public/mojom/compositing/returned_resource.mojom";
+import "services/viz/public/mojom/compositing/thread.mojom";
 import "services/viz/public/mojom/hit_test/hit_test_region_list.mojom";
-import "gpu/ipc/common/mailbox.mojom";
 
 // Tags the frame sink with the type of source producing its content.
 enum CompositorFrameSinkType {
@@ -65,10 +65,10 @@ interface CompositorFrameSink {
   // DidReceiveCompositorFrameAck() asynchronously when the frame has been
   // processed in order to unthrottle the next frame.
   //
-  // TODO(crbug.com/1141980): Investigate whether it's possible to alter the
+  // TODO(crbug.com/40154480): Investigate whether it's possible to alter the
   // CompositorFrame structure to be less likely to exceed soft message size
   // limits and remove [UnlimitedSize] here.
-  [UnlimitedSize]
+  [EstimateSize, UnlimitedSize]
   SubmitCompositorFrame(LocalSurfaceId local_surface_id,
                         CompositorFrame frame,
                         HitTestRegionList? hit_test_region_list,
@@ -87,22 +87,9 @@ interface CompositorFrameSink {
   // CompositorFrame was produced as a result of it.
   DidNotProduceFrame(BeginFrameAck ack);
 
-  // Informs the display compositor that the client allocated a shared bitmap.
-  // The |id| can then be used in subsequent CompositorFrames given to
-  // SubmitCompositorFrame. The |id| is a Mailbox type which doubles as a
-  // SharedBitmapId for this case.
-  DidAllocateSharedBitmap(mojo_base.mojom.ReadOnlySharedMemoryRegion region,
-                          gpu.mojom.Mailbox id);
-
-  // Informs the display compositor that the client deleted a shared bitmap. This
-  // allows the service to free the shared memory that was previously given to it
-  // via DidAllocateSharedBitmap(). The |id| is a Mailbox type which doubles as a
-  // SharedBitmapId for this case.
-  DidDeleteSharedBitmap(gpu.mojom.Mailbox id);
-
-  // This should be called atmost once for the lifetime of this frame sink. Once
-  // the value has been set to anything other than kUnspecified, subsequent calls
-  // are silently ignored.
+  // This should be called at most once for the lifetime of this frame sink.
+  // Once the value has been set to anything other than kUnspecified, subsequent
+  // calls are silently ignored.
   InitializeCompositorFrameSinkType(CompositorFrameSinkType type);
 
   // Binds to the LayerContext interface for this frame sink. Once this is bound
@@ -116,7 +103,7 @@ interface CompositorFrameSink {
   // production. This is used on Android PerformanceHint API to dynamically
   // adjust performance to allow power saving.
   [EnableIf=is_android]
-  SetThreadIds(array<int32> thread_ids);
+  SetThreads(array<Thread> threads);
 };
 
 interface CompositorFrameSinkClient {

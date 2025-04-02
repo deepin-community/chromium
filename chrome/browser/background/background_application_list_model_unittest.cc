@@ -19,7 +19,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
-#include "chrome/browser/extensions/permissions_updater.h"
+#include "chrome/browser/extensions/permissions/permissions_updater.h"
 #include "chrome/test/base/testing_profile.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
@@ -52,8 +52,8 @@ base::FilePath bogus_file_pathname(const std::string& name) {
 class BackgroundApplicationListModelTest
     : public extensions::ExtensionServiceTestBase {
  public:
-  BackgroundApplicationListModelTest() {}
-  ~BackgroundApplicationListModelTest() override {}
+  BackgroundApplicationListModelTest() = default;
+  ~BackgroundApplicationListModelTest() override = default;
 
  protected:
   // extensions::ExtensionServiceTestBase:
@@ -452,7 +452,6 @@ TEST_F(BackgroundApplicationListModelTest, RandomTest) {
         break;
       default:
         NOTREACHED();
-        break;
     }
   }
 }

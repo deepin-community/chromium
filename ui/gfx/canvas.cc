@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "ui/gfx/canvas.h"
 
 #include <cmath>
@@ -16,7 +21,6 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
-#include "third_party/skia/include/effects/SkDashPathEffect.h"
 #include "third_party/skia/include/effects/SkGradientShader.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/insets_f.h"
@@ -479,7 +483,7 @@ SkBitmap Canvas::GetBitmap() const {
   return bitmap_.value();
 }
 
-bool Canvas::IntersectsClipRect(const SkRect& rect) {
+bool Canvas::IntersectsClipRect(const SkRect& rect) const {
   SkRect clip;
   return canvas_->getLocalClipBounds(&clip) && clip.intersects(rect);
 }
@@ -499,7 +503,8 @@ void Canvas::DrawImageIntHelper(const ImageSkiaRep& image_rep,
   DLOG_ASSERT(src_x + src_w < std::numeric_limits<int16_t>::max() &&
               src_y + src_h < std::numeric_limits<int16_t>::max());
   if (src_w <= 0 || src_h <= 0) {
-    NOTREACHED() << "Attempting to draw bitmap from an empty rect!";
+    DUMP_WILL_BE_NOTREACHED()
+        << "Attempting to draw bitmap from an empty rect!";
     return;
   }
 

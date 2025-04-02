@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "pdf/test/test_pdfium_engine.h"
 
 #include <stdint.h>
@@ -14,7 +19,6 @@
 #include "base/values.h"
 #include "pdf/document_attachment_info.h"
 #include "pdf/document_metadata.h"
-#include "pdf/pdf_engine.h"
 #include "pdf/pdfium/pdfium_engine.h"
 #include "pdf/pdfium/pdfium_form_filler.h"
 
@@ -29,7 +33,7 @@ const uint8_t TestPDFiumEngine::kLoadedData[];
 // static
 const uint8_t TestPDFiumEngine::kSaveData[];
 
-TestPDFiumEngine::TestPDFiumEngine(PDFEngine::Client* client)
+TestPDFiumEngine::TestPDFiumEngine(PDFiumEngineClient* client)
     : PDFiumEngine(client, PDFiumFormFiller::ScriptOption::kNoJavaScript) {}
 
 TestPDFiumEngine::~TestPDFiumEngine() = default;

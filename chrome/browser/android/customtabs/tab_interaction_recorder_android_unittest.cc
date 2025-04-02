@@ -12,11 +12,11 @@
 #include "base/test/mock_callback.h"
 #include "chrome/browser/ui/tab_helpers.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
-#include "components/autofill/core/browser/autofill_manager.h"
-#include "components/autofill/core/browser/autofill_test_utils.h"
-#include "components/autofill/core/browser/test_autofill_client.h"
-#include "components/autofill/core/browser/test_autofill_driver.h"
-#include "components/autofill/core/browser/test_browser_autofill_manager.h"
+#include "components/autofill/core/browser/foundations/autofill_manager.h"
+#include "components/autofill/core/browser/foundations/test_autofill_client.h"
+#include "components/autofill/core/browser/foundations/test_autofill_driver.h"
+#include "components/autofill/core/browser/foundations/test_browser_autofill_manager.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "content/public/browser/navigation_entry.h"
@@ -39,17 +39,19 @@ using ::autofill::test::CreateTestAddressFormData;
 using ::testing::_;
 using ::testing::NiceMock;
 
-void OnTextFieldDidChangeForAutofillManager(AutofillManager& autofill_manager) {
+void OnTextFieldValueChangedForAutofillManager(
+    AutofillManager& autofill_manager) {
   FormData form = CreateTestAddressFormData();
-  autofill_manager.OnTextFieldDidChange(form, form.fields.front(), gfx::RectF(),
-                                        base::TimeTicks::Now());
+  autofill_manager.OnTextFieldValueChanged(
+      form, form.fields().front().global_id(), base::TimeTicks::Now());
 }
 
 void OnFormsSeenForAutofillManager(AutofillManager& autofill_manager,
                                    content::RenderFrameHost* rfh) {
   FormData form = CreateTestAddressFormData();
   if (rfh) {
-    form.host_frame = autofill::LocalFrameToken(rfh->GetFrameToken().value());
+    form.set_host_frame(
+        autofill::LocalFrameToken(rfh->GetFrameToken().value()));
   }
   autofill_manager.OnFormsSeen({form}, {});
 }
@@ -61,9 +63,9 @@ class AutofillObserverImplTest : public testing::Test {
 
   void SetUp() override {
     client_.SetPrefs(autofill::test::PrefServiceForTesting());
-    driver_ = std::make_unique<TestAutofillDriver>();
+    driver_ = std::make_unique<TestAutofillDriver>(&client_);
     driver_->set_autofill_manager(
-        std::make_unique<TestBrowserAutofillManager>(driver_.get(), &client_));
+        std::make_unique<TestBrowserAutofillManager>(driver_.get()));
   }
 
  protected:
@@ -87,11 +89,11 @@ TEST_F(AutofillObserverImplTest, TestFormInteraction) {
   AutofillObserverImpl observer(id, &autofill_manager(), callback.Get());
 
   EXPECT_CALL(callback, Run(id));
-  OnTextFieldDidChangeForAutofillManager(autofill_manager());
+  OnTextFieldValueChangedForAutofillManager(autofill_manager());
 
   // Observer should no longer get notified after the first interaction.
   EXPECT_CALL(callback, Run(id)).Times(0);
-  OnTextFieldDidChangeForAutofillManager(autofill_manager());
+  OnTextFieldValueChangedForAutofillManager(autofill_manager());
 }
 
 TEST_F(AutofillObserverImplTest, TestNoFormInteraction) {
@@ -127,9 +129,9 @@ class TabInteractionRecorderAndroidTest
     ChromeRenderViewHostTestHarness::SetUp();
 
     client_.SetPrefs(autofill::test::PrefServiceForTesting());
-    driver_ = std::make_unique<TestAutofillDriver>();
+    driver_ = std::make_unique<TestAutofillDriver>(&client_);
     driver_->set_autofill_manager(
-        std::make_unique<TestBrowserAutofillManager>(driver_.get(), &client_));
+        std::make_unique<TestBrowserAutofillManager>(driver_.get()));
   }
 
   std::unique_ptr<content::WebContents> CreateTestWebContents() {
@@ -167,7 +169,7 @@ TEST_F(TabInteractionRecorderAndroidTest, HadFormInteraction) {
   EXPECT_FALSE(helper->has_form_interactions_in_session());
   EXPECT_EQ(nullptr, FormInteractionData::GetForCurrentDocument(
                    contents->GetPrimaryMainFrame()));
-  OnTextFieldDidChangeForAutofillManager(autofill_manager());
+  OnTextFieldValueChangedForAutofillManager(autofill_manager());
   EXPECT_TRUE(helper->has_form_interactions_in_session());
   EXPECT_TRUE(FormInteractionData::GetForCurrentDocument(
                   contents->GetPrimaryMainFrame())
@@ -185,7 +187,7 @@ TEST_F(TabInteractionRecorderAndroidTest, HadFormInteractionThenNavigation) {
   EXPECT_FALSE(helper->has_form_interactions_in_session());
   EXPECT_EQ(nullptr, FormInteractionData::GetForCurrentDocument(
                          contents->GetPrimaryMainFrame()));
-  OnTextFieldDidChangeForAutofillManager(autofill_manager());
+  OnTextFieldValueChangedForAutofillManager(autofill_manager());
   EXPECT_TRUE(helper->has_form_interactions_in_session());
   EXPECT_TRUE(FormInteractionData::GetForCurrentDocument(
                   contents->GetPrimaryMainFrame())
@@ -253,7 +255,7 @@ TEST_F(TabInteractionRecorderAndroidTest, ResetInteractions) {
   helper->DidGetUserInteraction(blink::WebTouchEvent());
   EXPECT_EQ(nullptr, FormInteractionData::GetForCurrentDocument(
                    contents->GetPrimaryMainFrame()));
-  OnTextFieldDidChangeForAutofillManager(autofill_manager());
+  OnTextFieldValueChangedForAutofillManager(autofill_manager());
   EXPECT_TRUE(FormInteractionData::GetForCurrentDocument(
                   contents->GetPrimaryMainFrame())
                   ->FormInteractionData::GetHasFormInteractionData());
@@ -274,7 +276,7 @@ TEST_F(TabInteractionRecorderAndroidTest, ResetInteractions) {
   EXPECT_FALSE(helper->HadFormInteractionInActivePage(env));
 }
 
-// TODO(crbug.com/1523245): Re-enable this test.
+// TODO(crbug.com/41496197): Re-enable this test.
 TEST_F(TabInteractionRecorderAndroidTest, DISABLED_TestFormSeen) {
   std::unique_ptr<content::WebContents> contents = CreateTestWebContents();
   OnFormsSeenForAutofillManager(autofill_manager(),

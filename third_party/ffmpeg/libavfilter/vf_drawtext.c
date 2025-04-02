@@ -48,6 +48,7 @@
 #include "libavutil/bprint.h"
 #include "libavutil/common.h"
 #include "libavutil/eval.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/random_seed.h"
 #include "libavutil/parseutils.h"
@@ -59,8 +60,8 @@
 #include "libavutil/detection_bbox.h"
 #include "avfilter.h"
 #include "drawutils.h"
+#include "filters.h"
 #include "formats.h"
-#include "internal.h"
 #include "textutils.h"
 #include "video.h"
 
@@ -103,9 +104,6 @@ static const char *const var_names[] = {
     "pict_type",
 #if FF_API_FRAME_PKT
     "pkt_pos",
-#endif
-#if FF_API_PKT_DURATION
-    "pkt_duration",
 #endif
 #if FF_API_FRAME_PKT
     "pkt_size",
@@ -154,9 +152,6 @@ enum var_name {
     VAR_PICT_TYPE,
 #if FF_API_FRAME_PKT
     VAR_PKT_POS,
-#endif
-#if FF_API_PKT_DURATION
-    VAR_PKT_DURATION,
 #endif
 #if FF_API_FRAME_PKT
     VAR_PKT_SIZE,
@@ -351,7 +346,7 @@ static const AVOption drawtext_options[]= {
     {"boxborderw",     "set box borders width", OFFSET(boxborderw),         AV_OPT_TYPE_STRING, {.str="0"},   0, 0, TFLAGS},
     {"line_spacing",   "set line spacing in pixels", OFFSET(line_spacing),  AV_OPT_TYPE_INT,    {.i64=0},     INT_MIN, INT_MAX, TFLAGS},
     {"fontsize",       "set font size",         OFFSET(fontsize_expr),      AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, TFLAGS},
-    {"text_align",     "set text alignment",    OFFSET(text_align),         AV_OPT_TYPE_FLAGS,  {.i64=0}, 0, (TA_LEFT|TA_RIGHT|TA_TOP|TA_BOTTOM), TFLAGS, "text_align"},
+    {"text_align",     "set text alignment",    OFFSET(text_align),         AV_OPT_TYPE_FLAGS,  {.i64=0}, 0, (TA_LEFT|TA_RIGHT|TA_TOP|TA_BOTTOM), TFLAGS, .unit = "text_align"},
         { "left",    NULL, 0, AV_OPT_TYPE_CONST, { .i64 = TA_LEFT   }, .flags = TFLAGS, .unit = "text_align" },
         { "L",       NULL, 0, AV_OPT_TYPE_CONST, { .i64 = TA_LEFT   }, .flags = TFLAGS, .unit = "text_align" },
         { "right",   NULL, 0, AV_OPT_TYPE_CONST, { .i64 = TA_RIGHT  }, .flags = TFLAGS, .unit = "text_align" },
@@ -377,14 +372,14 @@ static const AVOption drawtext_options[]= {
     { "font",        "Font name",            OFFSET(font),               AV_OPT_TYPE_STRING, { .str = "Sans" },           .flags = FLAGS },
 #endif
 
-    {"expansion", "set the expansion mode", OFFSET(exp_mode), AV_OPT_TYPE_INT, {.i64=EXP_NORMAL}, 0, 2, FLAGS, "expansion"},
-        {"none",     "set no expansion",                    OFFSET(exp_mode), AV_OPT_TYPE_CONST, {.i64=EXP_NONE},     0, 0, FLAGS, "expansion"},
-        {"normal",   "set normal expansion",                OFFSET(exp_mode), AV_OPT_TYPE_CONST, {.i64=EXP_NORMAL},   0, 0, FLAGS, "expansion"},
-        {"strftime", "set strftime expansion (deprecated)", OFFSET(exp_mode), AV_OPT_TYPE_CONST, {.i64=EXP_STRFTIME}, 0, 0, FLAGS, "expansion"},
-    {"y_align",   "set the y alignment",    OFFSET(y_align), AV_OPT_TYPE_INT,  {.i64=YA_TEXT}, 0, 2, TFLAGS, "y_align"},
-        {"text",     "y is referred to the top of the first text line", OFFSET(y_align), AV_OPT_TYPE_CONST, {.i64=YA_TEXT},     0, 0, FLAGS, "y_align"},
-        {"baseline", "y is referred to the baseline of the first line", OFFSET(y_align), AV_OPT_TYPE_CONST, {.i64=YA_BASELINE}, 0, 0, FLAGS, "y_align"},
-        {"font",     "y is referred to the font defined line metrics",  OFFSET(y_align), AV_OPT_TYPE_CONST, {.i64=YA_FONT},     0, 0, FLAGS, "y_align"},
+    {"expansion", "set the expansion mode", OFFSET(exp_mode), AV_OPT_TYPE_INT, {.i64=EXP_NORMAL}, 0, 2, FLAGS, .unit = "expansion"},
+        {"none",     "set no expansion",                    OFFSET(exp_mode), AV_OPT_TYPE_CONST, {.i64=EXP_NONE},     0, 0, FLAGS, .unit = "expansion"},
+        {"normal",   "set normal expansion",                OFFSET(exp_mode), AV_OPT_TYPE_CONST, {.i64=EXP_NORMAL},   0, 0, FLAGS, .unit = "expansion"},
+        {"strftime", "set strftime expansion (deprecated)", OFFSET(exp_mode), AV_OPT_TYPE_CONST, {.i64=EXP_STRFTIME}, 0, 0, FLAGS, .unit = "expansion"},
+    {"y_align",   "set the y alignment",    OFFSET(y_align), AV_OPT_TYPE_INT,  {.i64=YA_TEXT}, 0, 2, TFLAGS, .unit = "y_align"},
+        {"text",     "y is referred to the top of the first text line", OFFSET(y_align), AV_OPT_TYPE_CONST, {.i64=YA_TEXT},     0, 0, FLAGS, .unit = "y_align"},
+        {"baseline", "y is referred to the baseline of the first line", OFFSET(y_align), AV_OPT_TYPE_CONST, {.i64=YA_BASELINE}, 0, 0, FLAGS, .unit = "y_align"},
+        {"font",     "y is referred to the font defined line metrics",  OFFSET(y_align), AV_OPT_TYPE_CONST, {.i64=YA_FONT},     0, 0, FLAGS, .unit = "y_align"},
 
     {"timecode",        "set initial timecode",             OFFSET(tc_opt_string), AV_OPT_TYPE_STRING,   {.str=NULL}, 0, 0, FLAGS},
     {"tc24hmax",        "set 24 hours max (timecode only)", OFFSET(tc24hmax),      AV_OPT_TYPE_BOOL,     {.i64=0},    0, 1, FLAGS},
@@ -402,7 +397,7 @@ static const AVOption drawtext_options[]= {
 #endif
 
     /* FT_LOAD_* flags */
-    { "ft_load_flags", "set font loading flags for libfreetype", OFFSET(ft_load_flags), AV_OPT_TYPE_FLAGS, { .i64 = FT_LOAD_DEFAULT }, 0, INT_MAX, FLAGS, "ft_load_flags" },
+    { "ft_load_flags", "set font loading flags for libfreetype", OFFSET(ft_load_flags), AV_OPT_TYPE_FLAGS, { .i64 = FT_LOAD_DEFAULT }, 0, INT_MAX, FLAGS, .unit = "ft_load_flags" },
         { "default",                     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FT_LOAD_DEFAULT },                     .flags = FLAGS, .unit = "ft_load_flags" },
         { "no_scale",                    NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FT_LOAD_NO_SCALE },                    .flags = FLAGS, .unit = "ft_load_flags" },
         { "no_hinting",                  NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FT_LOAD_NO_HINTING },                  .flags = FLAGS, .unit = "ft_load_flags" },
@@ -456,6 +451,12 @@ static av_cold int set_fontsize(AVFilterContext *ctx, unsigned int fontsize)
         av_log(ctx, AV_LOG_ERROR, "Could not set font size to %d pixels: %s\n",
                fontsize, FT_ERRMSG(err));
         return AVERROR(EINVAL);
+    }
+
+    // Whenever the underlying FT_Face changes, harfbuzz has to be notified of the change.
+    for (int line = 0; line < s->line_count; line++) {
+        TextLine *cur_line = &s->lines[line];
+        hb_ft_font_changed(cur_line->hb_data.font);
     }
 
     s->fontsize = fontsize;
@@ -955,7 +956,7 @@ static int func_eval_expr_int_format(void *ctx, AVBPrint *bp, const char *functi
                                         argv[1][0], positions);
 }
 
-static FFExpandTextFunction expand_text_functions[] = {
+static const FFExpandTextFunction expand_text_functions[] = {
     { "e",               1, 1, func_eval_expr },
     { "eif",             2, 3, func_eval_expr_int_format },
     { "expr",            1, 1, func_eval_expr },
@@ -1082,9 +1083,12 @@ static av_cold int init(AVFilterContext *ctx)
     return 0;
 }
 
-static int query_formats(AVFilterContext *ctx)
+static int query_formats(const AVFilterContext *ctx,
+                         AVFilterFormatsConfig **cfg_in,
+                         AVFilterFormatsConfig **cfg_out)
 {
-    return ff_set_common_formats(ctx, ff_draw_supported_pixel_formats(0));
+    return ff_set_common_formats2(ctx, cfg_in, cfg_out,
+                                  ff_draw_supported_pixel_formats(0));
 }
 
 static int glyph_enu_border_free(void *opaque, void *elem)
@@ -1152,7 +1156,7 @@ static int config_input(AVFilterLink *inlink)
     char *expr;
     int ret;
 
-    ff_draw_init(&s->dc, inlink->format, FF_DRAW_PROCESS_ALPHA);
+    ff_draw_init2(&s->dc, inlink->format, inlink->colorspace, inlink->color_range, FF_DRAW_PROCESS_ALPHA);
     ff_draw_color(&s->dc, &s->fontcolor,   s->fontcolor.rgba);
     ff_draw_color(&s->dc, &s->shadowcolor, s->shadowcolor.rgba);
     ff_draw_color(&s->dc, &s->bordercolor, s->bordercolor.rgba);
@@ -1371,11 +1375,10 @@ static int shape_text_hb(DrawTextContext *s, HarfbuzzData* hb, const char* text,
     hb_buffer_set_script(hb->buf, HB_SCRIPT_LATIN);
     hb_buffer_set_language(hb->buf, hb_language_from_string("en", -1));
     hb_buffer_guess_segment_properties(hb->buf);
-    hb->font = hb_ft_font_create(s->face, NULL);
+    hb->font = hb_ft_font_create_referenced(s->face);
     if(hb->font == NULL) {
         return AVERROR(ENOMEM);
     }
-    hb_ft_font_set_funcs(hb->font);
     hb_buffer_add_utf8(hb->buf, text, textLen, 0, -1);
     hb_shape(hb->font, hb->buf, NULL, 0);
     hb->glyph_info = hb_buffer_get_glyph_infos(hb->buf, &hb->glyph_count);
@@ -1386,8 +1389,8 @@ static int shape_text_hb(DrawTextContext *s, HarfbuzzData* hb, const char* text,
 
 static void hb_destroy(HarfbuzzData *hb)
 {
-    hb_buffer_destroy(hb->buf);
     hb_font_destroy(hb->font);
+    hb_buffer_destroy(hb->buf);
     hb->buf = NULL;
     hb->font = NULL;
     hb->glyph_info = NULL;
@@ -1558,6 +1561,7 @@ static int draw_text(AVFilterContext *ctx, AVFrame *frame)
 {
     DrawTextContext *s = ctx->priv;
     AVFilterLink *inlink = ctx->inputs[0];
+    FilterLink *inl = ff_filter_link(inlink);
     int x = 0, y = 0, ret;
     int shift_x64, shift_y64;
     int x64, y64;
@@ -1601,7 +1605,7 @@ static int draw_text(AVFilterContext *ctx, AVFrame *frame)
 
     if (s->tc_opt_string) {
         char tcbuf[AV_TIMECODE_STR_SIZE];
-        av_timecode_make_string(&s->tc, tcbuf, inlink->frame_count_out);
+        av_timecode_make_string(&s->tc, tcbuf, inl->frame_count_out);
         av_bprint_clear(bp);
         av_bprintf(bp, "%s%s", s->text, tcbuf);
     }
@@ -1833,6 +1837,7 @@ static int draw_text(AVFilterContext *ctx, AVFrame *frame)
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 {
+    FilterLink *inl = ff_filter_link(inlink);
     AVFilterContext *ctx = inlink->dst;
     AVFilterLink *outlink = ctx->outputs[0];
     DrawTextContext *s = ctx->priv;
@@ -1853,7 +1858,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
         }
     }
 
-    if (s->reload && !(inlink->frame_count_out % s->reload)) {
+    if (s->reload && !(inl->frame_count_out % s->reload)) {
         if ((ret = ff_load_textfile(ctx, (const char *)s->textfile, &s->text, NULL)) < 0) {
             av_frame_free(&frame);
             return ret;
@@ -1867,7 +1872,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 #endif
     }
 
-    s->var_values[VAR_N] = inlink->frame_count_out + s->start_number;
+    s->var_values[VAR_N] = inl->frame_count_out + s->start_number;
     s->var_values[VAR_T] = frame->pts == AV_NOPTS_VALUE ?
         NAN : frame->pts * av_q2d(inlink->time_base);
 
@@ -1876,15 +1881,6 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 FF_DISABLE_DEPRECATION_WARNINGS
     s->var_values[VAR_PKT_POS] = frame->pkt_pos;
     s->var_values[VAR_PKT_SIZE] = frame->pkt_size;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-#if FF_API_PKT_DURATION
-FF_DISABLE_DEPRECATION_WARNINGS
-    s->var_values[VAR_PKT_DURATION] = frame->pkt_duration * av_q2d(inlink->time_base);
-
-    if (frame->pkt_duration)
-        s->var_values[VAR_DURATION] = frame->pkt_duration * av_q2d(inlink->time_base);
-    else
 FF_ENABLE_DEPRECATION_WARNINGS
 #endif
     s->var_values[VAR_DURATION] = frame->duration * av_q2d(inlink->time_base);
@@ -1927,7 +1923,7 @@ const AVFilter ff_vf_drawtext = {
     .uninit        = uninit,
     FILTER_INPUTS(avfilter_vf_drawtext_inputs),
     FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_QUERY_FUNC(query_formats),
+    FILTER_QUERY_FUNC2(query_formats),
     .process_command = command,
     .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC,
 };

@@ -14,6 +14,9 @@ namespace media {
 class MEDIA_EXPORT VideoColorSpace {
  public:
   // Table 2
+  //
+  // TODO(https://crbug.com/380457000): Delete this enum and use
+  // `SkNamedPrimaries::CicpId` instead.
   enum class PrimaryID : uint8_t {
     INVALID = 0,
     BT709 = 1,
@@ -32,6 +35,9 @@ class MEDIA_EXPORT VideoColorSpace {
   };
 
   // Table 3
+  //
+  // TODO(https://crbug.com/380457000): Delete this enum and use
+  // `SkNamedTransferFn::CicpId` instead.
   enum class TransferID : uint8_t {
     INVALID = 0,
     BT709 = 1,
@@ -68,6 +74,7 @@ class MEDIA_EXPORT VideoColorSpace {
     SMPTE240M = 7,
     YCOCG = 8,
     BT2020_NCL = 9,
+    // NOTE: BT2020_CL is no longer supported (b/333906350).
     BT2020_CL = 10,
     YDZDX = 11,
     INVALID = 255,

@@ -31,11 +31,11 @@ InspectableViewsFinder::InspectableViewsFinder(Profile* profile)
     : profile_(profile) {
 }
 
-InspectableViewsFinder::~InspectableViewsFinder() {
-}
+InspectableViewsFinder::~InspectableViewsFinder() = default;
 
 api::developer_private::ViewType ConvertViewType(const mojom::ViewType type) {
-  api::developer_private::ViewType developer_private_type;
+  api::developer_private::ViewType developer_private_type =
+      api::developer_private::ViewType::kNone;
   switch (type) {
     case mojom::ViewType::kAppWindow:
       developer_private_type = api::developer_private::ViewType::kAppWindow;
@@ -70,10 +70,14 @@ api::developer_private::ViewType ConvertViewType(const mojom::ViewType type) {
       developer_private_type =
           api::developer_private::ViewType::kExtensionSidePanel;
       break;
-    default:
-      developer_private_type = api::developer_private::ViewType::kNone;
+    case mojom::ViewType::kDeveloperTools:
+      developer_private_type =
+          api::developer_private::ViewType::kDeveloperTools;
+      break;
+    case mojom::ViewType::kInvalid:
       NOTREACHED();
   }
+  DCHECK(developer_private_type != api::developer_private::ViewType::kNone);
   return developer_private_type;
 }
 
@@ -186,9 +190,9 @@ void InspectableViewsFinder::GetViewsForExtensionProcess(
     }
 
     content::RenderProcessHost* process = host->GetProcess();
-    result->push_back(ConstructView(url, process->GetID(), host->GetRoutingID(),
-                                    is_incognito, !host->IsInPrimaryMainFrame(),
-                                    ConvertViewType(host_type)));
+    result->push_back(ConstructView(
+        url, process->GetDeprecatedID(), host->GetRoutingID(), is_incognito,
+        !host->IsInPrimaryMainFrame(), ConvertViewType(host_type)));
   }
 
   std::vector<WorkerId> service_worker_ids =
@@ -222,9 +226,10 @@ void InspectableViewsFinder::GetAppWindowViewsForExtension(
       url = window->initial_url();
 
     content::RenderFrameHost* main_frame = web_contents->GetPrimaryMainFrame();
-    result->push_back(ConstructView(
-        url, main_frame->GetProcess()->GetID(), main_frame->GetRoutingID(),
-        false, false, ConvertViewType(GetViewType(web_contents))));
+    result->push_back(
+        ConstructView(url, main_frame->GetProcess()->GetDeprecatedID(),
+                      main_frame->GetRoutingID(), false, false,
+                      ConvertViewType(GetViewType(web_contents))));
   }
 }
 

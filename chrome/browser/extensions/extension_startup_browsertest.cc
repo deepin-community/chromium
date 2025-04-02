@@ -21,6 +21,7 @@
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_util.h"
+#include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "chrome/browser/prefs/chrome_pref_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -50,7 +51,7 @@
 #include "extensions/test/test_content_script_load_waiter.h"
 #include "net/base/filename_util.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #endif
 
@@ -263,6 +264,10 @@ class ExtensionStartupTestBase : public InProcessBrowserTest {
   std::vector<base::FilePath::StringType> load_extensions_;
 
   int num_expected_extensions_;
+
+  // TODO(https://crbug.com/40804030): Remove when these tests use only MV3
+  // extensions.
+  extensions::ScopedTestMV2Enabler mv2_enabler_;
 };
 
 // ExtensionsStartupTest
@@ -339,7 +344,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsLoadTest, Test) {
   TestInjection(true, true);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 
 IN_PROC_BROWSER_TEST_F(ExtensionsLoadTest,
                        SigninProfileCommandLineExtensionsDontLoad) {
@@ -349,7 +354,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsLoadTest,
                    ash::ProfileHelper::GetSigninProfile()));
 }
 
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // ExtensionsLoadMultipleTest
 // Ensures that we can startup the browser with multiple extensions
@@ -395,7 +400,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsLoadMultipleTest, Test) {
 class DeprecatedLoadComponentExtensionSwitchBrowserTest
     : public extensions::ExtensionBrowserTest {
  public:
-  DeprecatedLoadComponentExtensionSwitchBrowserTest() {}
+  DeprecatedLoadComponentExtensionSwitchBrowserTest() = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override;
 
@@ -442,7 +447,7 @@ IN_PROC_BROWSER_TEST_F(DeprecatedLoadComponentExtensionSwitchBrowserTest,
 class DisableExtensionsExceptBrowserTest
     : public extensions::ExtensionBrowserTest {
  public:
-  DisableExtensionsExceptBrowserTest() {}
+  DisableExtensionsExceptBrowserTest() = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override;
 

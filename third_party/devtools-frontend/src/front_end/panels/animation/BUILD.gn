@@ -5,6 +5,7 @@
 import("../../../scripts/build/ninja/devtools_entrypoint.gni")
 import("../../../scripts/build/ninja/devtools_module.gni")
 import("../../../scripts/build/ninja/generate_css.gni")
+import("../../../scripts/build/typescript/typescript.gni")
 import("../visibility.gni")
 
 generate_css("css_files") {
@@ -17,7 +18,6 @@ generate_css("css_files") {
 devtools_module("animation") {
   sources = [
     "AnimationGroupPreviewUI.ts",
-    "AnimationModel.ts",
     "AnimationScreenshotPopover.ts",
     "AnimationTimeline.ts",
     "AnimationUI.ts",
@@ -46,7 +46,6 @@ devtools_entrypoint("bundle") {
 
   visibility = [
     ":*",
-    "../../../test/unittests/front_end/panels/animation/*",
     "../../entrypoints/*",
   ]
 
@@ -63,4 +62,15 @@ devtools_entrypoint("meta") {
   ]
 
   visibility = [ "../../entrypoints/*" ]
+}
+
+ts_library("unittests") {
+  testonly = true
+
+  sources = [ "AnimationTimeline.test.ts" ]
+
+  deps = [
+    ":bundle",
+    "../../testing",
+  ]
 }

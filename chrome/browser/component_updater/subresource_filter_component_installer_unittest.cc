@@ -25,10 +25,12 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/component_updater/mock_component_updater_service.h"
 #include "components/prefs/testing_pref_service.h"
-#include "components/subresource_filter/content/browser/ruleset_service.h"
-#include "components/subresource_filter/core/browser/subresource_filter_constants.h"
+#include "components/subresource_filter/content/browser/safe_browsing_ruleset_publisher.h"
+#include "components/subresource_filter/content/shared/browser/ruleset_publisher.h"
+#include "components/subresource_filter/content/shared/browser/ruleset_service.h"
 #include "components/subresource_filter/core/browser/subresource_filter_features.h"
 #include "components/subresource_filter/core/browser/subresource_filter_features_test_support.h"
+#include "components/subresource_filter/core/common/constants.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
@@ -44,15 +46,16 @@ class TestRulesetService : public subresource_filter::RulesetService {
       scoped_refptr<base::SequencedTaskRunner> task_runner,
       const base::FilePath& base_dir,
       scoped_refptr<base::SequencedTaskRunner> blocking_task_runner)
-      : subresource_filter::RulesetService(local_state,
-                                           task_runner,
-                                           base_dir,
-                                           blocking_task_runner) {}
+      : subresource_filter::RulesetService(
+            subresource_filter::kSafeBrowsingRulesetConfig,
+            local_state,
+            task_runner,
+            base_dir,
+            blocking_task_runner,
+            subresource_filter::SafeBrowsingRulesetPublisher::Factory()) {}
 
   TestRulesetService(const TestRulesetService&) = delete;
   TestRulesetService& operator=(const TestRulesetService&) = delete;
-
-  ~TestRulesetService() override = default;
 
   using UnindexedRulesetInfo = subresource_filter::UnindexedRulesetInfo;
   void IndexAndStoreAndPublishRulesetIfNeeded(
@@ -85,8 +88,6 @@ class SubresourceFilterMockComponentUpdateService
       const SubresourceFilterMockComponentUpdateService&) = delete;
   SubresourceFilterMockComponentUpdateService& operator=(
       const SubresourceFilterMockComponentUpdateService&) = delete;
-
-  ~SubresourceFilterMockComponentUpdateService() override = default;
 };
 
 subresource_filter::Configuration CreateConfigUsingRulesetFlavor(
@@ -115,7 +116,8 @@ class SubresourceFilterComponentInstallerTest : public PlatformTest {
     ASSERT_TRUE(component_install_dir_.CreateUniqueTempDir());
     ASSERT_TRUE(ruleset_service_dir_.CreateUniqueTempDir());
     subresource_filter::IndexedRulesetVersion::RegisterPrefs(
-        pref_service_.registry());
+        pref_service_.registry(),
+        subresource_filter::kSafeBrowsingRulesetConfig.filter_tag);
 
     auto test_ruleset_service = std::make_unique<TestRulesetService>(
         &pref_service_, base::SingleThreadTaskRunner::GetCurrentDefault(),
@@ -136,7 +138,7 @@ class SubresourceFilterComponentInstallerTest : public PlatformTest {
 
   TestRulesetService* service() { return test_ruleset_service_; }
 
-  void WriteStringToFile(const std::string data, const base::FilePath& path) {
+  void WriteStringToFile(const std::string& data, const base::FilePath& path) {
     ASSERT_TRUE(base::WriteFile(path, data));
   }
 

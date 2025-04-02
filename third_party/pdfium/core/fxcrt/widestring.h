@@ -10,20 +10,13 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <wchar.h>
 
-#include <functional>
 #include <iosfwd>
-#include <iterator>
-#include <optional>
 #include <utility>
 
-#include "core/fxcrt/retain_ptr.h"
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/span.h"
-#include "core/fxcrt/string_data_template.h"
 #include "core/fxcrt/string_template.h"
-#include "core/fxcrt/string_view_template.h"
-#include "third_party/base/check.h"
 
 namespace fxcrt {
 
@@ -47,6 +40,8 @@ class WideString : public StringTemplate<wchar_t> {
 
   ~WideString() = default;
 
+  UNSAFE_BUFFER_USAGE WideString(const wchar_t* pStr, size_t len);
+
   // Make a one-character string from one wide char.
   explicit WideString(wchar_t ch);
 
@@ -58,8 +53,6 @@ class WideString : public StringTemplate<wchar_t> {
   // NOLINTNEXTLINE(runtime/explicit)
   WideString(char) = delete;
 
-  WideString(const wchar_t* pStr, size_t len);
-
   explicit WideString(WideStringView str);
   WideString(WideStringView str1, WideStringView str2);
   WideString(const std::initializer_list<WideStringView>& list);
@@ -70,16 +63,6 @@ class WideString : public StringTemplate<wchar_t> {
   [[nodiscard]] static WideString FromUTF8(ByteStringView str);
   [[nodiscard]] static WideString FromUTF16LE(pdfium::span<const uint8_t> data);
   [[nodiscard]] static WideString FromUTF16BE(pdfium::span<const uint8_t> data);
-
-  // Explicit conversion to C-style wide string.  The result is never nullptr,
-  // and is always NUL terminated.
-  // Note: Any subsequent modification of |this| will invalidate the result.
-  const wchar_t* c_str() const { return m_pData ? m_pData->m_String : L""; }
-
-
-  size_t GetStringLength() const {
-    return m_pData ? wcslen(m_pData->m_String) : 0;
-  }
 
   WideString& operator=(const wchar_t* str);
   WideString& operator=(WideStringView str);
@@ -117,17 +100,10 @@ class WideString : public StringTemplate<wchar_t> {
   void MakeLower();
   void MakeUpper();
 
-  void Trim();
-  void Trim(wchar_t target);
-  void Trim(WideStringView targets);
-
-  void TrimLeft();
-  void TrimLeft(wchar_t target);
-  void TrimLeft(WideStringView targets);
-
-  void TrimRight();
-  void TrimRight(wchar_t target);
-  void TrimRight(WideStringView targets);
+  // Trim a canonical set of characters from the widestring.
+  void TrimWhitespace();
+  void TrimWhitespaceFront();
+  void TrimWhitespaceBack();
 
   int GetInteger() const;
 
@@ -144,10 +120,11 @@ class WideString : public StringTemplate<wchar_t> {
   ByteString ToDefANSI() const;
   ByteString ToUTF8() const;
 
-  // This method will add \0\0 to the end of the string to represent the
-  // wide string terminator. These values are in the string, not just the data,
-  // so GetLength() will include them.
+  // These methods will add \0\0 to the end of the string to represent the
+  // two-byte terminator. These values are part of the string itself, so
+  // GetLength() will include them.
   ByteString ToUTF16LE() const;
+  ByteString ToUCS2LE() const;
 
   // Replace the characters &<>'" with HTML entities.
   WideString EncodeEntities() const;

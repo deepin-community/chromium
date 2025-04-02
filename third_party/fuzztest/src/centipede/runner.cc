@@ -23,8 +23,6 @@
 #include "./centipede/runner.h"
 
 #include <pthread.h>  // NOLINT: use pthread to avoid extra dependencies.
-#include <sys/auxv.h>
-#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -41,13 +39,13 @@
 #include <ctime>
 #include <functional>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "absl/base/nullability.h"
 #include "./centipede/byte_array_mutator.h"
-#include "./centipede/defs.h"
 #include "./centipede/execution_metadata.h"
 #include "./centipede/feature.h"
 #include "./centipede/int_utils.h"
@@ -59,6 +57,7 @@
 #include "./centipede/runner_result.h"
 #include "./centipede/runner_utils.h"
 #include "./centipede/shared_memory_blob_sequence.h"
+#include "./common/defs.h"
 
 __attribute__((
     weak)) extern centipede::feature_t __start___centipede_extra_features;
@@ -94,10 +93,6 @@ thread_local ThreadTerminationDetector termination_detector;
 
 }  // namespace
 
-// Use of the fixed init priority allows to call CentipedeRunnerMain
-// from constructor functions (CentipedeRunnerMain needs to run after
-// state constructor).
-// Note: it must run after ForkServerCallMeVeryEarly, see comment there.
 GlobalRunnerState state __attribute__((init_priority(200)));
 // We use __thread instead of thread_local so that the compiler warns if
 // the initializer for `tls` is not a constant expression.
@@ -109,21 +104,25 @@ __thread ThreadLocalRunnerState tls;
 static void WriteFailureDescription(const char *description) {
   // TODO(b/264715830): Remove I/O error logging once the bug is fixed?
   if (state.failure_description_path == nullptr) return;
-  FILE *f = fopen(state.failure_description_path, "w");
-  if (f == nullptr) {
-    perror("FAILURE: fopen()");
-    return;
-  }
-  const auto len = strlen(description);
-  if (fwrite(description, 1, len, f) != len) {
-    perror("FAILURE: fwrite()");
-  }
-  if (fflush(f) != 0) {
-    perror("FAILURE: fflush()");
-  }
-  if (fclose(f) != 0) {
-    perror("FAILURE: fclose()");
-  }
+  // Make sure that the write is atomic and only happens once.
+  [[maybe_unused]] static int write_once = [=] {
+    FILE *f = fopen(state.failure_description_path, "w");
+    if (f == nullptr) {
+      perror("FAILURE: fopen()");
+      return 0;
+    }
+    const auto len = strlen(description);
+    if (fwrite(description, 1, len, f) != len) {
+      perror("FAILURE: fwrite()");
+    }
+    if (fflush(f) != 0) {
+      perror("FAILURE: fflush()");
+    }
+    if (fclose(f) != 0) {
+      perror("FAILURE: fclose()");
+    }
+    return 0;
+  }();
 }
 
 void ThreadLocalRunnerState::TraceMemCmp(uintptr_t caller_pc, const uint8_t *s1,
@@ -144,6 +143,7 @@ void ThreadLocalRunnerState::TraceMemCmp(uintptr_t caller_pc, const uint8_t *s1,
 
 void ThreadLocalRunnerState::OnThreadStart() {
   termination_detector.EnsureAlive();
+  tls.started = true;
   tls.lowest_sp = tls.top_frame_sp =
       reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
   tls.stack_region_low = GetCurrentThreadStackRegionLow();
@@ -191,8 +191,14 @@ void ThreadLocalRunnerState::OnThreadStop() {
 static size_t GetPeakRSSMb() {
   struct rusage usage = {};
   if (getrusage(RUSAGE_SELF, &usage) != 0) return 0;
+#ifdef __APPLE__
+  // On MacOS, the unit seems to be byte according to experiment, while some
+  // documents mentioned KiB. This could depend on OS variants.
+  return usage.ru_maxrss >> 20;
+#else   // __APPLE__
   // On Linux, ru_maxrss is in KiB
   return usage.ru_maxrss >> 10;
+#endif  // __APPLE__
 }
 
 // Returns the current time in microseconds.
@@ -272,12 +278,17 @@ static void CheckWatchdogLimits() {
 }
 
 __attribute__((noinline)) void CheckStackLimit(uintptr_t sp) {
+  static std::atomic_flag stack_limit_exceeded = ATOMIC_FLAG_INIT;
   const size_t stack_limit = state.run_time_flags.stack_limit_kb.load() << 10;
   // Check for the stack limit only if sp is inside the stack region.
   if (stack_limit > 0 && tls.stack_region_low &&
       tls.top_frame_sp - sp > stack_limit) {
+    const bool test_not_running = state.input_start_time == 0;
+    if (test_not_running) return;
+    if (stack_limit_exceeded.test_and_set()) return;
     fprintf(stderr,
-            "========= Stack limit exceeded: %" PRIuPTR " > %" PRIu64
+            "========= Stack limit exceeded: %" PRIuPTR
+            " > %zu"
             " (byte); aborting\n",
             tls.top_frame_sp - sp, stack_limit);
     centipede::WriteFailureDescription(
@@ -300,10 +311,11 @@ void GlobalRunnerState::StartWatchdogThread() {
   fprintf(stderr,
           "Starting watchdog thread: timeout_per_input: %" PRIu64
           " sec; timeout_per_batch: %" PRIu64 " sec; rss_limit_mb: %" PRIu64
-          " MB\n",
+          " MB; stack_limit_kb: %" PRIu64 " KB\n",
           state.run_time_flags.timeout_per_input.load(),
           state.run_time_flags.timeout_per_batch,
-          state.run_time_flags.rss_limit_mb.load());
+          state.run_time_flags.rss_limit_mb.load(),
+          state.run_time_flags.stack_limit_kb.load());
   pthread_t watchdog_thread;
   pthread_create(&watchdog_thread, nullptr, WatchdogThread, nullptr);
   pthread_detach(watchdog_thread);
@@ -325,8 +337,8 @@ void GlobalRunnerState::ResetTimers() {
 
 // Byte array mutation fallback for a custom mutator, as defined here:
 // https://github.com/google/fuzzing/blob/master/docs/structure-aware-fuzzing.md
-extern "C" size_t LLVMFuzzerMutate(uint8_t *data, size_t size,
-                                   size_t max_size) {
+extern "C" __attribute__((weak)) size_t
+CentipedeLLVMFuzzerMutateCallback(uint8_t *data, size_t size, size_t max_size) {
   // TODO(kcc): [as-needed] fix the interface mismatch.
   // LLVMFuzzerMutate is an array-based interface (for compatibility reasons)
   // while ByteArray has a vector-based interface.
@@ -346,6 +358,11 @@ extern "C" size_t LLVMFuzzerMutate(uint8_t *data, size_t size,
   }
   memcpy(data, array.data(), array.size());
   return array.size();
+}
+
+extern "C" size_t LLVMFuzzerMutate(uint8_t *data, size_t size,
+                                   size_t max_size) {
+  return CentipedeLLVMFuzzerMutateCallback(data, size, max_size);
 }
 
 // An arbitrary large size for input data.
@@ -379,6 +396,12 @@ PrepareCoverage(bool full_clear) {
       tls.lowest_sp = tls.top_frame_sp;
     });
   }
+  {
+    centipede::LockGuard lock(state.execution_result_override_mu);
+    if (state.execution_result_override != nullptr) {
+      state.execution_result_override->ClearAndResize(0);
+    }
+  }
   if (!full_clear) return;
   state.ForEachTls([](ThreadLocalRunnerState &tls) {
     if (state.run_time_flags.use_auto_dictionary) {
@@ -388,7 +411,9 @@ PrepareCoverage(bool full_clear) {
       tls.cmp_traceN.Clear();
     }
   });
-  state.pc_counter_set.ForEachNonZeroByte([](size_t idx, uint8_t value) {});
+  state.pc_counter_set.ForEachNonZeroByte(
+      [](size_t idx, uint8_t value) {}, 0,
+      state.actual_pc_counter_set_size_aligned);
   if (state.run_time_flags.use_dataflow_features)
     state.data_flow_feature_set.ForEachNonZeroBit([](size_t idx) {});
   if (state.run_time_flags.use_cmp_features) {
@@ -534,6 +559,11 @@ void RunnerCallbacks::GetSeeds(std::function<void(ByteSpan)> seed_callback) {
   seed_callback({0});
 }
 
+std::string RunnerCallbacks::GetSerializedTargetConfig() { return ""; }
+
+void RunnerCallbacks::OnFailure(
+    std::function<void(std::string_view)> /*failure_description_callback*/) {}
+
 class LegacyRunnerCallbacks : public RunnerCallbacks {
  public:
   LegacyRunnerCallbacks(FuzzerTestOneInputCallback test_one_input_cb,
@@ -586,7 +616,9 @@ static void RunOneInput(const uint8_t *data, size_t size,
   int target_return_value = callbacks.Execute({data, size}) ? 0 : -1;
   state.stats.exec_time_usec = UsecSinceLast();
   CheckWatchdogLimits();
-  PostProcessCoverage(target_return_value);
+  if (centipede::state.input_start_time.exchange(0) != 0) {
+    PostProcessCoverage(target_return_value);
+  }
   state.stats.post_time_usec = UsecSinceLast();
   state.stats.peak_rss_mb = GetPeakRSSMb();
 }
@@ -665,6 +697,26 @@ static size_t CopyFeatures(uint8_t *data, size_t capacity) {
 // Finishes sending the outputs (coverage, etc.) to `outputs_blobseq`.
 // Returns true on success.
 static bool FinishSendingOutputsToEngine(BlobSequence &outputs_blobseq) {
+  {
+    LockGuard lock(state.execution_result_override_mu);
+    bool has_overridden_execution_result = false;
+    if (state.execution_result_override != nullptr) {
+      RunnerCheck(state.execution_result_override->results().size() <= 1,
+                  "unexpected number of overridden execution results");
+      has_overridden_execution_result =
+          state.execution_result_override->results().size() == 1;
+    }
+    if (has_overridden_execution_result) {
+      const auto &result = state.execution_result_override->results()[0];
+      return BatchResult::WriteOneFeatureVec(result.features().data(),
+                                             result.features().size(),
+                                             outputs_blobseq) &&
+             BatchResult::WriteMetadata(result.metadata(), outputs_blobseq) &&
+             BatchResult::WriteStats(result.stats(), outputs_blobseq) &&
+             BatchResult::WriteInputEnd(outputs_blobseq);
+    }
+  }
+
   // Copy features to shared memory.
   if (!BatchResult::WriteOneFeatureVec(
           state.g_features.data(), state.g_features.size(), outputs_blobseq)) {
@@ -704,7 +756,7 @@ static int ExecuteInputsFromShmem(BlobSequence &inputs_blobseq,
   if (!runner_request::IsNumInputs(inputs_blobseq.Read(), num_inputs))
     return EXIT_FAILURE;
 
-  PrepareCoverage(/*full_clear=*/true);  // Clear the startup coverage.
+  CentipedeBeginExecutionBatch();
 
   for (size_t i = 0; i < num_inputs; i++) {
     auto blob = inputs_blobseq.Read();
@@ -724,6 +776,9 @@ static int ExecuteInputsFromShmem(BlobSequence &inputs_blobseq,
 
     if (!FinishSendingOutputsToEngine(outputs_blobseq)) break;
   }
+
+  CentipedeEndExecutionBatch();
+
   return EXIT_SUCCESS;
 }
 
@@ -772,7 +827,7 @@ static void DumpDsoTable(absl::Nonnull<const char *> output_path) {
   fclose(output_file);
 }
 
-// Dumps seed inputs to `output_dir`. Also see GetSeedsViaExternalBinary().
+// Dumps seed inputs to `output_dir`. Also see `GetSeedsViaExternalBinary()`.
 static void DumpSeedsToDir(RunnerCallbacks &callbacks, const char *output_dir) {
   size_t seed_index = 0;
   callbacks.GetSeeds([&](ByteSpan seed) {
@@ -792,6 +847,20 @@ static void DumpSeedsToDir(RunnerCallbacks &callbacks, const char *output_dir) {
     fclose(output_file);
     ++seed_index;
   });
+}
+
+// Dumps serialized target config to `output_file_path`. Also see
+// `GetSerializedTargetConfigViaExternalBinary()`.
+static void DumpSerializedTargetConfigToFile(RunnerCallbacks &callbacks,
+                                             const char *output_file_path) {
+  const std::string config = callbacks.GetSerializedTargetConfig();
+  FILE *output_file = fopen(output_file_path, "w");
+  const size_t num_bytes_written =
+      fwrite(config.data(), 1, config.size(), output_file);
+  PrintErrorAndExitIf(
+      num_bytes_written != config.size(),
+      "wrong number of bytes written for serialized target configuration");
+  fclose(output_file);
 }
 
 // Returns a random seed. No need for a more sophisticated seed.
@@ -899,13 +968,17 @@ static size_t GetVmSizeInBytes() {
   // NOTE: Ignore any (unlikely) failures to suppress a compiler warning.
   (void)fscanf(f, "%zd", &vm_size);
   fclose(f);
-  return vm_size * getauxval(AT_PAGESZ);  // proc gives VmSize in pages.
+  return vm_size * getpagesize();  // proc gives VmSize in pages.
 }
 
 // Sets RLIMIT_CORE, RLIMIT_AS
 static void SetLimits() {
-  // no core files anywhere.
-  prctl(PR_SET_DUMPABLE, 0);
+  // Disable core dumping.
+  struct rlimit core_limits;
+  getrlimit(RLIMIT_CORE, &core_limits);
+  core_limits.rlim_cur = 0;
+  core_limits.rlim_max = 0;
+  setrlimit(RLIMIT_CORE, &core_limits);
 
   // ASAN/TSAN/MSAN can not be used with RLIMIT_AS.
   // We get the current VmSize, if it is greater than 1Tb, we assume we
@@ -961,6 +1034,9 @@ extern void RunnerInterceptor();
     &RunnerInterceptor;
 
 GlobalRunnerState::GlobalRunnerState() {
+  // Make sure fork server is started if needed.
+  ForkServerCallMeVeryEarly();
+
   // TODO(kcc): move some code from CentipedeRunnerMain() here so that it works
   // even if CentipedeRunnerMain() is not called.
   tls.OnThreadStart();
@@ -1012,6 +1088,13 @@ GlobalRunnerState::~GlobalRunnerState() {
     StartSendingOutputsToEngine(outputs_blobseq);
     FinishSendingOutputsToEngine(outputs_blobseq);
   }
+  {
+    LockGuard lock(state.execution_result_override_mu);
+    if (state.execution_result_override != nullptr) {
+      delete state.execution_result_override;
+      state.execution_result_override = nullptr;
+    }
+  }
   // Always clean up detached TLSs to avoid leakage.
   CleanUpDetachedTls();
 }
@@ -1029,11 +1112,21 @@ int RunnerMain(int argc, char **argv, RunnerCallbacks &callbacks) {
   fprintf(stderr, "Centipede fuzz target runner; argv[0]: %s flags: %s\n",
           argv[0], state.centipede_runner_flags);
 
+  if (state.HasFlag(":dump_configuration:")) {
+    DumpSerializedTargetConfigToFile(callbacks,
+                                     /*output_file_path=*/state.arg1);
+    return EXIT_SUCCESS;
+  }
+
   if (state.HasFlag(":dump_seed_inputs:")) {
     // Seed request.
     DumpSeedsToDir(callbacks, /*output_dir=*/state.arg1);
     return EXIT_SUCCESS;
   }
+
+  callbacks.OnFailure([](std::string_view failure_description) {
+    WriteFailureDescription(std::string(failure_description).c_str());
+  });
 
   // Inputs / outputs from shmem.
   if (state.HasFlag(":shmem:")) {
@@ -1146,7 +1239,9 @@ extern "C" void CentipedePrepareProcessing() {
 
 extern "C" void CentipedeFinalizeProcessing() {
   centipede::CheckWatchdogLimits();
-  centipede::PostProcessCoverage(/*target_return_value=*/0);
+  if (centipede::state.input_start_time.exchange(0) != 0) {
+    centipede::PostProcessCoverage(/*target_return_value=*/0);
+  }
 }
 
 extern "C" size_t CentipedeGetExecutionResult(uint8_t *data, size_t capacity) {
@@ -1158,4 +1253,19 @@ extern "C" size_t CentipedeGetExecutionResult(uint8_t *data, size_t capacity) {
 
 extern "C" size_t CentipedeGetCoverageData(uint8_t *data, size_t capacity) {
   return centipede::CopyFeatures(data, capacity);
+}
+
+extern "C" void CentipedeSetExecutionResult(const uint8_t *data, size_t size) {
+  using centipede::state;
+  centipede::LockGuard lock(state.execution_result_override_mu);
+  if (!state.execution_result_override)
+    state.execution_result_override = new centipede::BatchResult();
+  state.execution_result_override->ClearAndResize(1);
+  if (data == nullptr) return;
+  // Removing const here should be fine as we don't write to `blobseq`.
+  centipede::BlobSequence blobseq(const_cast<uint8_t *>(data), size);
+  state.execution_result_override->Read(blobseq);
+  centipede::RunnerCheck(
+      state.execution_result_override->num_outputs_read() == 1,
+      "Failed to set execution result from CentipedeSetExecutionResult");
 }

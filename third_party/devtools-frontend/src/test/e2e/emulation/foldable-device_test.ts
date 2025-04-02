@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 import {assert} from 'chai';
 
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   clickDevicePosture,
   getDevicePostureDropDown,
@@ -16,7 +15,7 @@ import {
 const ZENBOOK_VERTICAL_SPANNED_WIDTH = '1706';
 const ZENBOOK_VERTICAL_WIDTH = '853';
 
-describe('Test the Device Posture API support', async () => {
+describe('Test the Device Posture API support', () => {
   beforeEach(async function() {
     await startEmulationWithDualScreenPage();
   });

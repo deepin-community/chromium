@@ -50,7 +50,6 @@ size_t NumBytesForSymmetricKeyType(cryptauthv2::KeyType key_type) {
       return 32u;
     default:
       NOTREACHED();
-      return 0u;
   }
 }
 

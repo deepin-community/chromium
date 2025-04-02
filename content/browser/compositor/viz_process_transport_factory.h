@@ -64,8 +64,6 @@ class VizProcessTransportFactory : public ui::ContextFactory,
   // ui::ContextFactory implementation.
   void CreateLayerTreeFrameSink(
       base::WeakPtr<ui::Compositor> compositor) override;
-  scoped_refptr<viz::ContextProvider> SharedMainThreadContextProvider()
-      override;
   scoped_refptr<viz::RasterContextProvider>
   SharedMainThreadRasterContextProvider() override;
 
@@ -99,6 +97,10 @@ class VizProcessTransportFactory : public ui::ContextFactory,
   // Provided as a callback when the GPU process has crashed.
   void OnGpuProcessLost();
 
+  // Esstablish GpuChannel for software compositing. If failed, it will keep
+  // retry for every 150 ms.
+  scoped_refptr<gpu::GpuChannelHost> GetGpuChannelHostForSoftwareCompositing();
+
   // Finishes creation of LayerTreeFrameSink after GPU channel has been
   // established.
   void OnEstablishedGpuChannel(
@@ -127,8 +129,7 @@ class VizProcessTransportFactory : public ui::ContextFactory,
   scoped_refptr<cc::RasterContextProviderWrapper>
       worker_context_provider_wrapper_;
 
-  // ContextProvider used on the main thread. Shared by ui::Compositors and also
-  // returned from GetSharedMainThreadContextProvider().
+  // ContextProvider used on the main thread. Shared by ui::Compositors.
   scoped_refptr<viz::ContextProviderCommandBuffer> main_context_provider_;
 
   std::unique_ptr<cc::SingleThreadTaskGraphRunner> task_graph_runner_;

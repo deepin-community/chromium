@@ -50,7 +50,6 @@ gfx::NativeWindow WebTestShellPlatformDelegate::GetNativeWindow(Shell* shell) {
     return ShellPlatformDelegate::GetNativeWindow(shell);
 
   NOTREACHED();
-  return {};
 }
 
 void WebTestShellPlatformDelegate::CleanUp(Shell* shell) {
@@ -200,7 +199,7 @@ void WebTestShellPlatformDelegate::DidNavigatePrimaryMainFramePostCommit(
 bool WebTestShellPlatformDelegate::HandleKeyboardEvent(
     Shell* shell,
     WebContents* source,
-    const NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   if (IsHeadless())
     return false;
   return ShellPlatformDelegate::HandleKeyboardEvent(shell, source, event);

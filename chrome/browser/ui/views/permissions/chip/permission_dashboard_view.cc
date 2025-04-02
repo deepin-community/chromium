@@ -19,10 +19,14 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/style/platform_style.h"
 #include "ui/views/view_class_properties.h"
+
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PermissionDashboardView,
+                                      kDashboardElementId);
 
 namespace {
 
@@ -84,6 +88,8 @@ class IndicatorDividerBackground : public views::Background {
 }  // namespace
 
 PermissionDashboardView::PermissionDashboardView() {
+  SetProperty(views::kElementIdentifierKey, kDashboardElementId);
+
   SetVisible(false);
 
   SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -108,6 +114,15 @@ PermissionDashboardView::PermissionDashboardView() {
   // It is unclear which chip will be shown first, hence hide both of them.
   secondary_chip_->SetVisible(false);
   anchored_chip_->SetVisible(false);
+
+  // This is needed to make sure that the permission dashboard view is
+  // recognized as a single button. Individual elements inside this view should
+  // not be accessible and/or focusable.
+  anchored_chip_->GetViewAccessibility().SetIsIgnored(true);
+  secondary_chip_->GetViewAccessibility().SetIsIgnored(true);
+  chip_divider_view_->GetViewAccessibility().SetIsIgnored(true);
+
+  GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
 }
 
 PermissionDashboardView::~PermissionDashboardView() = default;
@@ -144,7 +159,8 @@ void PermissionDashboardView::UpdateDividerViewVisibility() {
   chip_divider_view_->SetVisible(is_visible);
 }
 
-gfx::Size PermissionDashboardView::CalculatePreferredSize() const {
+gfx::Size PermissionDashboardView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   if (!secondary_chip_->GetVisible() && !anchored_chip_->GetVisible()) {
     return gfx::Size();
   }

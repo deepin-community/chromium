@@ -14,7 +14,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace autofill {
-
 namespace {
 
 class TestCardUnmaskOtpInputDialogView : public CardUnmaskOtpInputDialogView {
@@ -34,8 +33,6 @@ class TestCardUnmaskOtpInputDialogView : public CardUnmaskOtpInputDialogView {
       this};
 };
 
-}  // namespace
-
 class CardUnmaskOtpInputDialogControllerImplTest
     : public testing::Test,
       public testing::WithParamInterface<CardUnmaskChallengeOptionType> {
@@ -50,11 +47,11 @@ class CardUnmaskOtpInputDialogControllerImplTest
   void ShowDialog() {
     CardUnmaskChallengeOption challenge_option;
     challenge_option.type = GetParam();
-    controller()->ShowDialog(
-        challenge_option, /*delegate=*/nullptr,
-        base::BindOnce(&CardUnmaskOtpInputDialogControllerImplTest::
-                           CreateOtpInputDialogView,
-                       base::Unretained(this)));
+    controller_ = std::make_unique<CardUnmaskOtpInputDialogControllerImpl>(
+        challenge_option, /*delegate=*/nullptr);
+    controller_->ShowDialog(base::BindOnce(
+        &CardUnmaskOtpInputDialogControllerImplTest::CreateOtpInputDialogView,
+        base::Unretained(this)));
   }
 
   std::string GetOtpAuthType() {
@@ -72,16 +69,15 @@ class CardUnmaskOtpInputDialogControllerImplTest
 
  private:
   std::unique_ptr<TestCardUnmaskOtpInputDialogView> dialog_view_;
-  std::unique_ptr<CardUnmaskOtpInputDialogControllerImpl> controller_ =
-      std::make_unique<CardUnmaskOtpInputDialogControllerImpl>();
+  std::unique_ptr<CardUnmaskOtpInputDialogControllerImpl> controller_;
 };
 
 TEST_P(CardUnmaskOtpInputDialogControllerImplTest,
        DialogCancelledByUserBeforeConfirmation_NoTemporaryError) {
   base::HistogramTester histogram_tester;
 
-  DCHECK(controller());
   ShowDialog();
+  CHECK(controller());
   controller()->OnDialogClosed(/*user_closed_dialog=*/true,
                                /*server_request_succeeded=*/false);
 
@@ -102,8 +98,8 @@ TEST_P(CardUnmaskOtpInputDialogControllerImplTest,
        DialogCancelledByUserBeforeConfirmation_OtpMistmatch) {
   base::HistogramTester histogram_tester;
 
-  DCHECK(controller());
   ShowDialog();
+  DCHECK(controller());
   controller()->OnOtpVerificationResult(OtpUnmaskResult::kOtpMismatch);
   controller()->OnDialogClosed(/*user_closed_dialog=*/true,
                                /*server_request_succeeded=*/false);
@@ -128,8 +124,8 @@ TEST_P(CardUnmaskOtpInputDialogControllerImplTest,
        DialogCancelledByUserAfterConfirmation_OtpExpired) {
   base::HistogramTester histogram_tester;
 
-  DCHECK(controller());
   ShowDialog();
+  DCHECK(controller());
   controller()->OnOkButtonClicked(/*otp=*/u"123456");
   controller()->OnOtpVerificationResult(OtpUnmaskResult::kOtpExpired);
   controller()->OnDialogClosed(/*user_closed_dialog=*/true,
@@ -154,8 +150,8 @@ TEST_P(CardUnmaskOtpInputDialogControllerImplTest,
 TEST_P(CardUnmaskOtpInputDialogControllerImplTest, ServerRequestSucceeded) {
   base::HistogramTester histogram_tester;
 
-  DCHECK(controller());
   ShowDialog();
+  DCHECK(controller());
   controller()->OnDialogClosed(/*user_closed_dialog=*/false,
                                /*server_request_succeeded=*/true);
 
@@ -175,8 +171,8 @@ TEST_P(CardUnmaskOtpInputDialogControllerImplTest, ServerRequestSucceeded) {
 TEST_P(CardUnmaskOtpInputDialogControllerImplTest, ServerRequestFailed) {
   base::HistogramTester histogram_tester;
 
-  DCHECK(controller());
   ShowDialog();
+  DCHECK(controller());
   controller()->OnDialogClosed(/*user_closed_dialog=*/false,
                                /*server_request_succeeded=*/false);
 
@@ -196,8 +192,8 @@ TEST_P(CardUnmaskOtpInputDialogControllerImplTest, ServerRequestFailed) {
 TEST_P(CardUnmaskOtpInputDialogControllerImplTest, NewCodeLinkClicked) {
   base::HistogramTester histogram_tester;
 
-  DCHECK(controller());
   ShowDialog();
+  DCHECK(controller());
   controller()->OnNewCodeLinkClicked();
 
   histogram_tester.ExpectUniqueSample(
@@ -211,4 +207,5 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(CardUnmaskChallengeOptionType::kSmsOtp,
                     CardUnmaskChallengeOptionType::kEmailOtp));
 
+}  // namespace
 }  // namespace autofill

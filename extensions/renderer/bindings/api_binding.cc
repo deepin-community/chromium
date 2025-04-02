@@ -10,7 +10,6 @@
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -102,7 +101,7 @@ struct APIBinding::MethodData {
   // sendMessage).
   const std::string full_name;
   // The expected API signature.
-  raw_ptr<const APISignature, ExperimentalRenderer> signature;
+  raw_ptr<const APISignature> signature;
   // The callback used by the v8 function.
   APIBinding::HandlerCallback callback;
 };
@@ -160,7 +159,7 @@ struct APIBinding::EventData {
   // EventData is only accessed from the callbacks associated with the
   // APIBinding, and both the APIBinding and APIEventHandler are owned by the
   // same object (the APIBindingsSystem).
-  raw_ptr<APIBinding, ExperimentalRenderer> binding;
+  raw_ptr<APIBinding> binding;
 };
 
 struct APIBinding::CustomPropertyData {
@@ -179,7 +178,7 @@ struct APIBinding::CustomPropertyData {
   // chrome.storage.local.
   std::string property_name;
   // Values curried into this particular type from the schema.
-  raw_ptr<const base::Value::List, ExperimentalRenderer> property_values;
+  raw_ptr<const base::Value::List> property_values;
 
   CreateCustomType create_custom_type;
 };
@@ -479,8 +478,9 @@ void APIBinding::DecorateTemplateWithProperties(
       auto is_this_platform = [&this_platform](const base::Value& platform) {
         return platform.is_string() && platform.GetString() == this_platform;
       };
-      if (base::ranges::none_of(*platforms, is_this_platform))
+      if (std::ranges::none_of(*platforms, is_this_platform)) {
         continue;
+      }
     }
 
     v8::Local<v8::String> v8_key = gin::StringToSymbol(isolate, item.first);
@@ -540,9 +540,10 @@ void APIBinding::GetEventObject(
   v8::Isolate* isolate = info.GetIsolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context;
-  if (!info.Holder()->GetCreationContext().ToLocal(&context) ||
-      !binding::IsContextValidOrThrowError(context))
+  if (!info.Holder()->GetCreationContext(isolate).ToLocal(&context) ||
+      !binding::IsContextValidOrThrowError(context)) {
     return;
+  }
 
   CHECK(info.Data()->IsExternal());
   auto* event_data =
@@ -573,9 +574,10 @@ void APIBinding::GetCustomPropertyObject(
   v8::Isolate* isolate = info.GetIsolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context;
-  if (!info.Holder()->GetCreationContext().ToLocal(&context) ||
-      !binding::IsContextValid(context))
+  if (!info.Holder()->GetCreationContext(isolate).ToLocal(&context) ||
+      !binding::IsContextValid(context)) {
     return;
+  }
 
   v8::Context::Scope context_scope(context);
   CHECK(info.Data()->IsExternal());

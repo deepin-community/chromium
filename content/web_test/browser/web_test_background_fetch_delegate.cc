@@ -152,7 +152,6 @@ class WebTestBackgroundFetchDelegate::WebTestBackgroundFetchDownloadClient
         return;
       default:
         NOTREACHED();
-        return;
     }
 
     std::unique_ptr<BackgroundFetchResult> result =

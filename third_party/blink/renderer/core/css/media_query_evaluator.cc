@@ -43,6 +43,7 @@
 #include "third_party/blink/renderer/core/css/css_resolution_units.h"
 #include "third_party/blink/renderer/core/css/css_to_length_conversion_data.h"
 #include "third_party/blink/renderer/core/css/css_unparsed_declaration_value.h"
+#include "third_party/blink/renderer/core/css/media_eval_utils.h"
 #include "third_party/blink/renderer/core/css/media_feature_names.h"
 #include "third_party/blink/renderer/core/css/media_features.h"
 #include "third_party/blink/renderer/core/css/media_list.h"
@@ -65,7 +66,7 @@
 #include "third_party/blink/renderer/platform/graphics/color_space_gamut.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
-#include "ui/base/ui_base_types.h"
+#include "ui/base/mojom/window_show_state.mojom-blink.h"
 #include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
@@ -90,30 +91,6 @@ void MaybeRecordMediaFeatureValue(
         .Add(surface, IdentifiableToken(value))
         .Record(document->UkmRecorder());
     document->SetMediaFeatureEvaluated(static_cast<int>(feature_name));
-  }
-}
-
-KleeneValue KleeneOr(KleeneValue a, KleeneValue b) {
-  switch (a) {
-    case KleeneValue::kTrue:
-      return KleeneValue::kTrue;
-    case KleeneValue::kFalse:
-      return b;
-    case KleeneValue::kUnknown:
-      return (b == KleeneValue::kTrue) ? KleeneValue::kTrue
-                                       : KleeneValue::kUnknown;
-  }
-}
-
-KleeneValue KleeneAnd(KleeneValue a, KleeneValue b) {
-  switch (a) {
-    case KleeneValue::kTrue:
-      return b;
-    case KleeneValue::kFalse:
-      return KleeneValue::kFalse;
-    case KleeneValue::kUnknown:
-      return (b == KleeneValue::kFalse) ? KleeneValue::kFalse
-                                        : KleeneValue::kUnknown;
   }
 }
 
@@ -216,64 +193,10 @@ KleeneValue MediaQueryEvaluator::Eval(const MediaQueryExpNode& node) const {
 KleeneValue MediaQueryEvaluator::Eval(
     const MediaQueryExpNode& node,
     MediaQueryResultFlags* result_flags) const {
-  if (auto* n = DynamicTo<MediaQueryNestedExpNode>(node)) {
-    return Eval(n->Operand(), result_flags);
-  }
-  if (auto* n = DynamicTo<MediaQueryFunctionExpNode>(node)) {
-    return Eval(n->Operand(), result_flags);
-  }
-  if (auto* n = DynamicTo<MediaQueryNotExpNode>(node)) {
-    return EvalNot(n->Operand(), result_flags);
-  }
-  if (auto* n = DynamicTo<MediaQueryAndExpNode>(node)) {
-    return EvalAnd(n->Left(), n->Right(), result_flags);
-  }
-  if (auto* n = DynamicTo<MediaQueryOrExpNode>(node)) {
-    return EvalOr(n->Left(), n->Right(), result_flags);
-  }
-  if (IsA<MediaQueryUnknownExpNode>(node)) {
-    return KleeneValue::kUnknown;
-  }
-  return EvalFeature(To<MediaQueryFeatureExpNode>(node), result_flags);
-}
-
-KleeneValue MediaQueryEvaluator::EvalNot(
-    const MediaQueryExpNode& operand_node,
-    MediaQueryResultFlags* result_flags) const {
-  switch (Eval(operand_node, result_flags)) {
-    case KleeneValue::kTrue:
-      return KleeneValue::kFalse;
-    case KleeneValue::kFalse:
-      return KleeneValue::kTrue;
-    case KleeneValue::kUnknown:
-      return KleeneValue::kUnknown;
-  }
-}
-
-KleeneValue MediaQueryEvaluator::EvalAnd(
-    const MediaQueryExpNode& left_node,
-    const MediaQueryExpNode& right_node,
-    MediaQueryResultFlags* result_flags) const {
-  KleeneValue left = Eval(left_node, result_flags);
-  // Short-circuiting before calling Eval on |right_node| prevents
-  // unnecessary entries in |results|.
-  if (left == KleeneValue::kFalse) {
-    return left;
-  }
-  return KleeneAnd(left, Eval(right_node, result_flags));
-}
-
-KleeneValue MediaQueryEvaluator::EvalOr(
-    const MediaQueryExpNode& left_node,
-    const MediaQueryExpNode& right_node,
-    MediaQueryResultFlags* result_flags) const {
-  KleeneValue left = Eval(left_node, result_flags);
-  // Short-circuiting before calling Eval on |right_node| prevents
-  // unnecessary entries in |results|.
-  if (left == KleeneValue::kTrue) {
-    return left;
-  }
-  return KleeneOr(left, Eval(right_node, result_flags));
+  return MediaEval(
+      node, [this, result_flags](const MediaQueryFeatureExpNode& feature) {
+        return EvalFeature(feature, result_flags);
+      });
 }
 
 bool MediaQueryEvaluator::DidResultsChange(
@@ -348,19 +271,21 @@ bool CompareDoubleValue(double actual_value,
 static bool CompareAspectRatioValue(const MediaQueryExpValue& value,
                                     int width,
                                     int height,
-                                    MediaQueryOperator op) {
+                                    MediaQueryOperator op,
+                                    const MediaValues& media_values) {
   if (value.IsRatio()) {
-    return CompareDoubleValue(static_cast<double>(width) * value.Denominator(),
-                              static_cast<double>(height) * value.Numerator(),
-                              op);
+    return CompareDoubleValue(
+        static_cast<double>(width) * value.Denominator(media_values),
+        static_cast<double>(height) * value.Numerator(media_values), op);
   }
   return false;
 }
 
-static bool NumberValue(const MediaQueryExpValue& value, float& result) {
-  if (value.IsNumeric() &&
-      value.Unit() == CSSPrimitiveValue::UnitType::kNumber) {
-    result = ClampTo<float>(value.Value());
+static bool NumberValue(const MediaQueryExpValue& value,
+                        float& result,
+                        const MediaValues& media_values) {
+  if (value.IsNumber()) {
+    result = ClampTo<float>(value.Value(media_values));
     return true;
   }
   return false;
@@ -375,7 +300,7 @@ static bool ColorMediaFeatureEval(const MediaQueryExpValue& value,
                                IdentifiableSurface::MediaFeatureName::kColor,
                                bits_per_component);
   if (value.IsValid()) {
-    return NumberValue(value, number) &&
+    return NumberValue(value, number, media_values) &&
            CompareValue(bits_per_component, static_cast<int>(number), op);
   }
 
@@ -384,7 +309,7 @@ static bool ColorMediaFeatureEval(const MediaQueryExpValue& value,
 
 static bool ColorIndexMediaFeatureEval(const MediaQueryExpValue& value,
                                        MediaQueryOperator op,
-                                       const MediaValues&) {
+                                       const MediaValues& media_values) {
   // FIXME: We currently assume that we do not support indexed displays, as it
   // is unknown how to retrieve the information if the display mode is indexed.
   // This matches Firefox.
@@ -395,7 +320,7 @@ static bool ColorIndexMediaFeatureEval(const MediaQueryExpValue& value,
   // Acording to spec, if the device does not use a color lookup table, the
   // value is zero.
   float number;
-  return NumberValue(value, number) &&
+  return NumberValue(value, number, media_values) &&
          CompareValue(0, static_cast<int>(number), op);
 }
 
@@ -408,7 +333,7 @@ static bool MonochromeMediaFeatureEval(const MediaQueryExpValue& value,
       media_values, IdentifiableSurface::MediaFeatureName::kMonochrome,
       bits_per_component);
   if (value.IsValid()) {
-    return NumberValue(value, number) &&
+    return NumberValue(value, number, media_values) &&
            CompareValue(bits_per_component, static_cast<int>(number), op);
   }
   return bits_per_component != 0;
@@ -417,6 +342,9 @@ static bool MonochromeMediaFeatureEval(const MediaQueryExpValue& value,
 static bool DisplayModeMediaFeatureEval(const MediaQueryExpValue& value,
                                         MediaQueryOperator,
                                         const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kDisplayModeMediaQuery);
+
   // isValid() is false if there is no parameter. Without parameter we should
   // return true to indicate that displayModeMediaFeature is enabled in the
   // browser.
@@ -452,7 +380,6 @@ static bool DisplayModeMediaFeatureEval(const MediaQueryExpValue& value,
       return mode == blink::mojom::DisplayMode::kPictureInPicture;
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -470,23 +397,24 @@ static bool DisplayStateMediaFeatureEval(const MediaQueryExpValue& value,
     return false;
   }
 
-  ui::WindowShowState state = media_values.WindowShowState();
+  ui::mojom::blink::WindowShowState state = media_values.WindowShowState();
   MaybeRecordMediaFeatureValue(
       media_values, IdentifiableSurface::MediaFeatureName::kDisplayState,
       state);
 
   switch (value.Id()) {
     case CSSValueID::kFullscreen:
-      return state == ui::SHOW_STATE_FULLSCREEN;
+      return state == ui::mojom::blink::WindowShowState::kFullscreen;
     case CSSValueID::kMaximized:
-      return state == ui::SHOW_STATE_MAXIMIZED;
+      return state == ui::mojom::blink::WindowShowState::kMaximized;
     case CSSValueID::kMinimized:
-      return state == ui::SHOW_STATE_MINIMIZED;
+      return state == ui::mojom::blink::WindowShowState::kMinimized;
     case CSSValueID::kNormal:
-      return state == ui::SHOW_STATE_DEFAULT ||
-             state == ui::SHOW_STATE_INACTIVE || state == ui::SHOW_STATE_NORMAL;
+      return state == ui::mojom::blink::WindowShowState::kDefault ||
+             state == ui::mojom::blink::WindowShowState::kInactive ||
+             state == ui::mojom::blink::WindowShowState::kNormal;
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 
@@ -548,7 +476,7 @@ static bool AspectRatioMediaFeatureEval(const MediaQueryExpValue& value,
       aspect_ratio);
   if (value.IsValid()) {
     return CompareAspectRatioValue(value, *media_values.Width(),
-                                   *media_values.Height(), op);
+                                   *media_values.Height(), op, media_values);
   }
 
   // ({,min-,max-}aspect-ratio)
@@ -561,7 +489,8 @@ static bool DeviceAspectRatioMediaFeatureEval(const MediaQueryExpValue& value,
                                               const MediaValues& media_values) {
   if (value.IsValid()) {
     return CompareAspectRatioValue(value, media_values.DeviceWidth(),
-                                   media_values.DeviceHeight(), op);
+                                   media_values.DeviceHeight(), op,
+                                   media_values);
   }
 
   // ({,min-,max-}device-aspect-ratio)
@@ -572,6 +501,9 @@ static bool DeviceAspectRatioMediaFeatureEval(const MediaQueryExpValue& value,
 static bool DynamicRangeMediaFeatureEval(const MediaQueryExpValue& value,
                                          MediaQueryOperator op,
                                          const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kDynamicRangeMediaQuery);
+
   if (!value.IsId()) {
     return false;
   }
@@ -591,7 +523,6 @@ static bool DynamicRangeMediaFeatureEval(const MediaQueryExpValue& value,
 
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -634,22 +565,19 @@ static bool EvalResolution(const MediaQueryExpValue& value,
     return !!actual_resolution;
   }
 
-  if (value.IsNumeric() &&
-      value.Unit() == CSSPrimitiveValue::UnitType::kNumber) {
-    return CompareValue(actual_resolution, ClampTo<float>(value.Value()), op);
+  if (value.IsNumber()) {
+    return CompareValue(actual_resolution,
+                        ClampTo<float>(value.Value(media_values)), op);
   }
 
   if (!value.IsResolution()) {
     return false;
   }
 
-  double canonical_factor =
-      CSSPrimitiveValue::ConversionToCanonicalUnitsScaleFactor(value.Unit());
   double dppx_factor = CSSPrimitiveValue::ConversionToCanonicalUnitsScaleFactor(
       CSSPrimitiveValue::UnitType::kDotsPerPixel);
-  float value_in_dppx =
-      ClampTo<float>(value.Value() * (canonical_factor / dppx_factor));
-  if (value.Unit() == CSSPrimitiveValue::UnitType::kDotsPerCentimeter) {
+  float value_in_dppx = ClampTo<float>(value.Value(media_values) / dppx_factor);
+  if (value.IsDotsPerCentimeter()) {
     // To match DPCM to DPPX values, we limit to 2 decimal points.
     // The https://drafts.csswg.org/css-values/#absolute-lengths recommends
     // "that the pixel unit refer to the whole number of device pixels that best
@@ -668,8 +596,7 @@ static bool DevicePixelRatioMediaFeatureEval(const MediaQueryExpValue& value,
   UseCounter::Count(media_values.GetDocument(),
                     WebFeature::kPrefixedDevicePixelRatioMediaFeature);
 
-  return (!value.IsValid() ||
-          value.Unit() == CSSPrimitiveValue::UnitType::kNumber) &&
+  return (!value.IsValid() || value.IsNumber()) &&
          EvalResolution(value, op, media_values);
 }
 
@@ -682,11 +609,11 @@ static bool ResolutionMediaFeatureEval(const MediaQueryExpValue& value,
 
 static bool GridMediaFeatureEval(const MediaQueryExpValue& value,
                                  MediaQueryOperator op,
-                                 const MediaValues&) {
+                                 const MediaValues& media_values) {
   // if output device is bitmap, grid: 0 == true
   // assume we have bitmap device
   float number;
-  if (value.IsValid() && NumberValue(value, number)) {
+  if (value.IsValid() && NumberValue(value, number, media_values)) {
     return CompareValue(static_cast<int>(number), 0, op);
   }
   return false;
@@ -695,24 +622,16 @@ static bool GridMediaFeatureEval(const MediaQueryExpValue& value,
 static bool ComputeLength(const MediaQueryExpValue& value,
                           const MediaValues& media_values,
                           double& result) {
-  if (value.IsCSSValue()) {
-    result = To<CSSPrimitiveValue>(value.GetCSSValue())
-                 .ComputeLength<double>(media_values);
-    return true;
-  }
-
-  if (!value.IsNumeric()) {
-    return false;
-  }
-
-  if (value.Unit() == CSSPrimitiveValue::UnitType::kNumber) {
-    result = ClampTo<int>(value.Value());
+  if (value.IsNumber()) {
+    result = ClampTo<int>(value.Value(media_values));
     return !media_values.StrictMode() || !result;
   }
 
-  if (CSSPrimitiveValue::IsLength(value.Unit())) {
-    return media_values.ComputeLength(value.Value(), value.Unit(), result);
+  if (value.IsValue()) {
+    result = value.Value(media_values);
+    return true;
   }
+
   return false;
 }
 
@@ -1003,7 +922,7 @@ static bool Transform3dMediaFeatureEval(const MediaQueryExpValue& value,
 
   if (value.IsValid()) {
     float number;
-    return NumberValue(value, number) &&
+    return NumberValue(value, number, media_values) &&
            CompareValue(have3d_rendering, static_cast<int>(number), op);
   }
   return return_value_if_no_parameter;
@@ -1053,7 +972,6 @@ static bool AnyHoverMediaFeatureEval(const MediaQueryExpValue& value,
              static_cast<int>(HoverType::kHoverHoverType);
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -1093,6 +1011,9 @@ static bool PrefersReducedMotionMediaFeatureEval(
     const MediaQueryExpValue& value,
     MediaQueryOperator,
     const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kPrefersReducedMotionMediaFeature);
+
   MaybeRecordMediaFeatureValue(
       media_values,
       IdentifiableSurface::MediaFeatureName::kPrefersReducedMotion,
@@ -1116,6 +1037,8 @@ static bool PrefersReducedDataMediaFeatureEval(
     const MediaQueryExpValue& value,
     MediaQueryOperator,
     const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kPrefersReducedDataMediaFeature);
   MaybeRecordMediaFeatureValue(
       media_values, IdentifiableSurface::MediaFeatureName::kPrefersReducedData,
       media_values.PrefersReducedData());
@@ -1136,6 +1059,8 @@ static bool PrefersReducedTransparencyMediaFeatureEval(
     const MediaQueryExpValue& value,
     MediaQueryOperator,
     const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kPrefersReducedTransparencyMediaFeature);
   MaybeRecordMediaFeatureValue(
       media_values,
       IdentifiableSurface::MediaFeatureName::kPrefersReducedTransparency,
@@ -1180,7 +1105,6 @@ static bool AnyPointerMediaFeatureEval(const MediaQueryExpValue& value,
       return available_pointers & static_cast<int>(PointerType::kPointerNone);
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -1250,12 +1174,9 @@ static bool ColorGamutMediaFeatureEval(const MediaQueryExpValue& value,
              value.Id() == CSSValueID::kRec2020;
     case ColorSpaceGamut::kEnd:
       NOTREACHED();
-      return false;
   }
 
-  // This is for some compilers that do not understand that it can't be reached.
   NOTREACHED();
-  return false;
 }
 
 static bool PrefersColorSchemeMediaFeatureEval(
@@ -1315,7 +1236,6 @@ static bool PrefersContrastMediaFeatureEval(const MediaQueryExpValue& value,
       return preferred_contrast == mojom::blink::PreferredContrast::kCustom;
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -1373,6 +1293,9 @@ static bool HorizontalViewportSegmentsMediaFeatureEval(
     const MediaQueryExpValue& value,
     MediaQueryOperator op,
     const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kViewportSegmentsMediaFeature);
+  UseCounter::Count(media_values.GetDocument(), WebFeature::kFoldableAPIs);
   int horizontal_viewport_segments =
       media_values.GetHorizontalViewportSegments();
 
@@ -1386,7 +1309,7 @@ static bool HorizontalViewportSegmentsMediaFeatureEval(
   }
 
   float number;
-  return NumberValue(value, number) &&
+  return NumberValue(value, number, media_values) &&
          CompareValue(horizontal_viewport_segments, static_cast<int>(number),
                       op);
 }
@@ -1395,6 +1318,9 @@ static bool VerticalViewportSegmentsMediaFeatureEval(
     const MediaQueryExpValue& value,
     MediaQueryOperator op,
     const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kViewportSegmentsMediaFeature);
+  UseCounter::Count(media_values.GetDocument(), WebFeature::kFoldableAPIs);
   int vertical_viewport_segments = media_values.GetVerticalViewportSegments();
 
   MaybeRecordMediaFeatureValue(
@@ -1407,13 +1333,16 @@ static bool VerticalViewportSegmentsMediaFeatureEval(
   }
 
   float number;
-  return NumberValue(value, number) &&
+  return NumberValue(value, number, media_values) &&
          CompareValue(vertical_viewport_segments, static_cast<int>(number), op);
 }
 
 static bool OverflowInlineMediaFeatureEval(const MediaQueryExpValue& value,
                                            MediaQueryOperator,
                                            const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kOverflowMediaQuery);
+
   bool can_scroll = !EqualIgnoringASCIICase(media_values.MediaType(),
                                             media_type_names::kPrint);
   // No value = boolean context:
@@ -1429,13 +1358,15 @@ static bool OverflowInlineMediaFeatureEval(const MediaQueryExpValue& value,
       return can_scroll;
     default:
       NOTREACHED();
-      return false;
   }
 }
 
 static bool OverflowBlockMediaFeatureEval(const MediaQueryExpValue& value,
                                           MediaQueryOperator,
                                           const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kOverflowMediaQuery);
+
   bool can_scroll = !EqualIgnoringASCIICase(media_values.MediaType(),
                                             media_type_names::kPrint);
   // No value = boolean context:
@@ -1453,13 +1384,15 @@ static bool OverflowBlockMediaFeatureEval(const MediaQueryExpValue& value,
       return !can_scroll;
     default:
       NOTREACHED();
-      return false;
   }
 }
 
 static bool DevicePostureMediaFeatureEval(const MediaQueryExpValue& value,
                                           MediaQueryOperator,
                                           const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kDevicePostureMediaFeature);
+  UseCounter::Count(media_values.GetDocument(), WebFeature::kFoldableAPIs);
   // isValid() is false if there is no parameter. Without parameter we should
   // return true to indicate that device posture is enabled in the
   // browser.
@@ -1481,13 +1414,14 @@ static bool DevicePostureMediaFeatureEval(const MediaQueryExpValue& value,
       return device_posture == DevicePostureType::kFolded;
     default:
       NOTREACHED();
-      return false;
   }
 }
 
 static bool UpdateMediaFeatureEval(const MediaQueryExpValue& value,
                                    MediaQueryOperator,
                                    const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(), WebFeature::kUpdateMediaQuery);
+
   bool can_update = !EqualIgnoringASCIICase(media_values.MediaType(),
                                             media_type_names::kPrint);
   // No value = boolean context:
@@ -1511,7 +1445,6 @@ static bool UpdateMediaFeatureEval(const MediaQueryExpValue& value,
                  mojom::blink::OutputDeviceUpdateAbilityType::kFastType;
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -1534,17 +1467,16 @@ static bool StuckMediaFeatureEval(const MediaQueryExpValue& value,
       return media_values.StuckVertical() == ContainerStuckPhysical::kBottom;
     case CSSValueID::kRight:
       return media_values.StuckHorizontal() == ContainerStuckPhysical::kRight;
-    case CSSValueID::kInsetBlockStart:
+    case CSSValueID::kBlockStart:
       return media_values.StuckBlock() == ContainerStuckLogical::kStart;
-    case CSSValueID::kInsetBlockEnd:
+    case CSSValueID::kBlockEnd:
       return media_values.StuckBlock() == ContainerStuckLogical::kEnd;
-    case CSSValueID::kInsetInlineStart:
+    case CSSValueID::kInlineStart:
       return media_values.StuckInline() == ContainerStuckLogical::kStart;
-    case CSSValueID::kInsetInlineEnd:
+    case CSSValueID::kInlineEnd:
       return media_values.StuckInline() == ContainerStuckLogical::kEnd;
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -1556,20 +1488,71 @@ static bool SnappedMediaFeatureEval(const MediaQueryExpValue& value,
   }
   switch (value.Id()) {
     case CSSValueID::kNone:
-      return media_values.Snapped();
+      return !media_values.Snapped();
+    case CSSValueID::kX:
+      return media_values.SnappedX();
+    case CSSValueID::kY:
+      return media_values.SnappedY();
     case CSSValueID::kBlock:
       return media_values.SnappedBlock();
     case CSSValueID::kInline:
       return media_values.SnappedInline();
+    case CSSValueID::kBoth:
+      return media_values.SnappedX() && media_values.SnappedY();
     default:
       NOTREACHED();
-      return false;
+  }
+}
+
+static bool ScrollableMediaFeatureEval(const MediaQueryExpValue& value,
+                                       MediaQueryOperator op,
+                                       const MediaValues& media_values) {
+  if (!value.IsValid()) {
+    return media_values.Scrollable();
+  }
+
+  constexpr ContainerScrollableFlags scrollable_start =
+      static_cast<ContainerScrollableFlags>(ContainerScrollable::kStart);
+  constexpr ContainerScrollableFlags scrollable_end =
+      static_cast<ContainerScrollableFlags>(ContainerScrollable::kEnd);
+
+  switch (value.Id()) {
+    case CSSValueID::kNone:
+      return !media_values.Scrollable();
+    case CSSValueID::kTop:
+      return media_values.ScrollableVertical() & scrollable_start;
+    case CSSValueID::kLeft:
+      return media_values.ScrollableHorizontal() & scrollable_start;
+    case CSSValueID::kBottom:
+      return media_values.ScrollableVertical() & scrollable_end;
+    case CSSValueID::kRight:
+      return media_values.ScrollableHorizontal() & scrollable_end;
+    case CSSValueID::kBlockStart:
+      return media_values.ScrollableBlock() & scrollable_start;
+    case CSSValueID::kBlockEnd:
+      return media_values.ScrollableBlock() & scrollable_end;
+    case CSSValueID::kInlineStart:
+      return media_values.ScrollableInline() & scrollable_start;
+    case CSSValueID::kInlineEnd:
+      return media_values.ScrollableInline() & scrollable_end;
+    case CSSValueID::kX:
+      return media_values.ScrollableHorizontal() != 0;
+    case CSSValueID::kY:
+      return media_values.ScrollableVertical() != 0;
+    case CSSValueID::kBlock:
+      return media_values.ScrollableBlock() != 0;
+    case CSSValueID::kInline:
+      return media_values.ScrollableInline() != 0;
+    default:
+      NOTREACHED();
   }
 }
 
 static bool InvertedColorsMediaFeatureEval(const MediaQueryExpValue& value,
                                            MediaQueryOperator,
                                            const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kInvertedColorsMediaFeature);
   MaybeRecordMediaFeatureValue(
       media_values, IdentifiableSurface::MediaFeatureName::kInvertedColors,
       media_values.InvertedColors());
@@ -1588,6 +1571,8 @@ static bool InvertedColorsMediaFeatureEval(const MediaQueryExpValue& value,
 static bool ScriptingMediaFeatureEval(const MediaQueryExpValue& value,
                                       MediaQueryOperator,
                                       const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kScriptingMediaFeature);
   MaybeRecordMediaFeatureValue(
       media_values, IdentifiableSurface::MediaFeatureName::kScripting,
       media_values.GetScripting());
@@ -1609,7 +1594,6 @@ static bool ScriptingMediaFeatureEval(const MediaQueryExpValue& value,
       return media_values.GetScripting() == Scripting::kEnabled;
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -1629,7 +1613,6 @@ static MediaQueryOperator ReverseOperator(MediaQueryOperator op) {
   }
 
   NOTREACHED();
-  return MediaQueryOperator::kNone;
 }
 
 void MediaQueryEvaluator::Init() {
@@ -1650,7 +1633,6 @@ KleeneValue MediaQueryEvaluator::EvalFeature(
     // only media queries we support in UA stylesheets are media type queries.
     // If HasValues() return false, it means the document frame is nullptr.
     NOTREACHED();
-    return KleeneValue::kFalse;
   }
 
   if (!media_values_->Width().has_value() && feature.IsWidthDependent()) {
@@ -1714,7 +1696,6 @@ KleeneValue MediaQueryEvaluator::EvalStyleFeature(
   if (!media_values_ || !media_values_->HasValues()) {
     NOTREACHED()
         << "media_values has to be initialized for style() container queries";
-    return KleeneValue::kFalse;
   }
 
   const MediaQueryExpBounds& bounds = feature.Bounds();
@@ -1746,7 +1727,9 @@ KleeneValue MediaQueryEvaluator::EvalStyleFeature(
     CSSVariableData* computed =
         container->ComputedStyleRef().GetVariableData(property_name);
 
-    if (base::ValuesEquivalent(computed, query_computed)) {
+    if (computed == query_computed ||
+        (computed && query_computed &&
+         computed->EqualsIgnoringAttrTainting(*query_computed))) {
       return KleeneValue::kTrue;
     }
     return KleeneValue::kFalse;
@@ -1754,9 +1737,9 @@ KleeneValue MediaQueryEvaluator::EvalStyleFeature(
 
   const CSSValue* computed_value =
       CustomProperty(property_name, *media_values_->GetDocument())
-          .CSSValueFromComputedStyle(container->ComputedStyleRef(),
-                                     nullptr /* layout_object */,
-                                     false /* allow_visited_style */);
+          .CSSValueFromComputedStyle(
+              container->ComputedStyleRef(), nullptr /* layout_object */,
+              false /* allow_visited_style */, CSSValuePhase::kComputedValue);
   if (base::ValuesEquivalent(query_value, computed_value) == explicit_value) {
     return KleeneValue::kTrue;
   }

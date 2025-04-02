@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/modules/webaudio/oscillator_handler.h"
 
 #include <algorithm>
@@ -205,40 +210,46 @@ OscillatorHandler::~OscillatorHandler() {
   Uninitialize();
 }
 
-String OscillatorHandler::GetType() const {
+V8OscillatorType::Enum OscillatorHandler::GetType() const {
   switch (type_) {
     case SINE:
-      return "sine";
+      return V8OscillatorType::Enum::kSine;
     case SQUARE:
-      return "square";
+      return V8OscillatorType::Enum::kSquare;
     case SAWTOOTH:
-      return "sawtooth";
+      return V8OscillatorType::Enum::kSawtooth;
     case TRIANGLE:
-      return "triangle";
+      return V8OscillatorType::Enum::kTriangle;
     case CUSTOM:
-      return "custom";
+      return V8OscillatorType::Enum::kCustom;
     default:
       NOTREACHED();
-      return "custom";
   }
 }
 
-void OscillatorHandler::SetType(const String& type,
+void OscillatorHandler::SetType(V8OscillatorType::Enum type,
                                 ExceptionState& exception_state) {
-  if (type == "sine") {
-    SetType(SINE);
-  } else if (type == "square") {
-    SetType(SQUARE);
-  } else if (type == "sawtooth") {
-    SetType(SAWTOOTH);
-  } else if (type == "triangle") {
-    SetType(TRIANGLE);
-  } else if (type == "custom") {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      "'type' cannot be set directly to "
-                                      "'custom'.  Use setPeriodicWave() to "
-                                      "create a custom Oscillator type.");
+  switch (type) {
+    case V8OscillatorType::Enum::kSine:
+      SetType(SINE);
+      return;
+    case V8OscillatorType::Enum::kSquare:
+      SetType(SQUARE);
+      return;
+    case V8OscillatorType::Enum::kSawtooth:
+      SetType(SAWTOOTH);
+      return;
+    case V8OscillatorType::Enum::kTriangle:
+      SetType(TRIANGLE);
+      return;
+    case V8OscillatorType::Enum::kCustom:
+      exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                        "'type' cannot be set directly to "
+                                        "'custom'.  Use setPeriodicWave() to "
+                                        "create a custom Oscillator type.");
+      return;
   }
+  NOTREACHED();
 }
 
 bool OscillatorHandler::SetType(uint8_t type) {
@@ -262,7 +273,6 @@ bool OscillatorHandler::SetType(uint8_t type) {
       // Return false for invalid types, including CUSTOM since
       // setPeriodicWave() method must be called explicitly.
       NOTREACHED();
-      return false;
   }
 
   SetPeriodicWave(periodic_wave->impl());
@@ -760,6 +770,10 @@ void OscillatorHandler::SetPeriodicWave(PeriodicWaveImpl* periodic_wave) {
 
 bool OscillatorHandler::PropagatesSilence() const {
   return !IsPlayingOrScheduled() || HasFinished() || !periodic_wave_;
+}
+
+base::WeakPtr<AudioScheduledSourceHandler> OscillatorHandler::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 void OscillatorHandler::HandleStoppableSourceNode() {

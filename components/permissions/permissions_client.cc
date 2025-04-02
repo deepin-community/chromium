@@ -6,13 +6,13 @@
 
 #include "base/functional/callback.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/permissions/permission_request_enums.h"
 #include "components/permissions/permission_uma_util.h"
 #include "content/public/browser/web_contents.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/gfx/vector_icon_types.h"
 #endif
 
 namespace permissions {
@@ -66,7 +66,7 @@ IconId PermissionsClient::GetOverrideIconId(RequestType request_type) {
 #if BUILDFLAG(IS_ANDROID)
   return 0;
 #else
-  return gfx::kNoneIcon;
+  return gfx::VectorIcon::EmptyIcon();
 #endif
 }
 
@@ -86,6 +86,9 @@ void PermissionsClient::TriggerPromptHatsSurveyIfEnabled(
     std::optional<base::TimeDelta> prompt_display_duration,
     bool is_post_prompt,
     const GURL& gurl,
+    std::optional<permissions::feature_params::PermissionElementPromptPosition>
+        pepc_prompt_position,
+    ContentSetting initial_permission_status,
     base::OnceCallback<void()> hats_shown_callback_) {}
 
 void PermissionsClient::OnPromptResolved(
@@ -97,6 +100,9 @@ void PermissionsClient::OnPromptResolved(
     PermissionRequestGestureType gesture_type,
     std::optional<QuietUiReason> quiet_ui_reason,
     base::TimeDelta prompt_display_duration,
+    std::optional<permissions::feature_params::PermissionElementPromptPosition>
+        pepc_prompt_position,
+    ContentSetting initial_permission_status,
     content::WebContents* web_contents) {}
 
 std::optional<bool>
@@ -105,7 +111,14 @@ PermissionsClient::HadThreeConsecutiveNotificationPermissionDenies(
   return std::nullopt;
 }
 
-std::optional<url::Origin> PermissionsClient::GetAutoApprovalOrigin() {
+std::optional<url::Origin> PermissionsClient::GetAutoApprovalOrigin(
+    content::BrowserContext* browser_context) {
+  return std::nullopt;
+}
+
+std::optional<PermissionAction> PermissionsClient::GetAutoApprovalStatus(
+    content::BrowserContext* browser_context,
+    const GURL& origin) {
   return std::nullopt;
 }
 
@@ -190,6 +203,31 @@ bool PermissionsClient::HasDevicePermission(ContentSettingsType type) const {
 }
 
 bool PermissionsClient::CanRequestDevicePermission(
+    ContentSettingsType type) const {
+  return false;
+}
+
+bool PermissionsClient::IsPermissionAllowedByDevicePolicy(
+    content::WebContents* web_contents,
+    ContentSetting setting,
+    const content_settings::SettingInfo& info,
+    ContentSettingsType type) const {
+  return false;
+}
+
+bool PermissionsClient::IsPermissionBlockedByDevicePolicy(
+    content::WebContents* web_contents,
+    ContentSetting setting,
+    const content_settings::SettingInfo& info,
+    ContentSettingsType type) const {
+  return false;
+}
+
+bool PermissionsClient::IsSystemDenied(ContentSettingsType type) const {
+  return false;
+}
+
+bool PermissionsClient::CanPromptSystemPermission(
     ContentSettingsType type) const {
   return false;
 }

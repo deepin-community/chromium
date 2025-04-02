@@ -49,6 +49,7 @@
 <translation id="2295140143284145483">Апытанне</translation>
 <translation id="2297836609126180313"><ph name="QUANTITY" /> ТБ/с</translation>
 <translation id="2353636109065292463">Праверка падключэння да інтэрнэту</translation>
+<translation id="2359808026110333948">Працягнуць</translation>
 <translation id="2388990488038464401">Выклікаць гэты нумар з тэлефона?</translation>
 <translation id="2435457462613246316">Паказаць пароль</translation>
 <translation id="24452542372838207">Разгарнуць апавяшчэнне</translation>
@@ -65,7 +66,6 @@
 <translation id="2653844658857826081">НОВАЕ</translation>
 <translation id="2666092431469916601">Зверху</translation>
 <translation id="2701330563083355633">Абагулена з прылады <ph name="DEVICE_NAME" /></translation>
-<translation id="271033894570825754">Новае</translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{1 год таму}one{# год таму}few{# гады таму}many{# гадоў таму}other{# года таму}}</translation>
 <translation id="2878511608894704031">Выдаліць усё</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{праз 1 сут}one{праз # сут}few{праз # сут}many{праз # сут}other{праз # сут}}</translation>
@@ -129,7 +129,9 @@
 <translation id="5528053674512161860">Не ўдалося загрузіць старонку: модуль карыстальніцкага інтэрфейсу для распрацоўшчыкаў (dev_ui) не ўсталяваны</translation>
 <translation id="5574202486608032840">Сістэма <ph name="IDS_SHORT_PRODUCT_OS_NAME" /></translation>
 <translation id="5583640892426849032">Backspace</translation>
+<translation id="5606865426897221650">Tab</translation>
 <translation id="5613020302032141669">Стрэлка ўлева</translation>
+<translation id="5633029987065897167">Змесціва няма</translation>
 <translation id="5754277640426581776">{MINUTES,plural, =1{1 хв}one{# хв}few{# хв}many{# хв}other{# хв}}</translation>
 <translation id="5763338081255973061">{DAYS,plural, =0{Апошнія дзеянні адбываліся сёння}=1{Апошнія дзеянні: дзень таму}one{Апошнія дзеянні: # дзень таму}few{Апошнія дзеянні: # дні таму}many{Апошнія дзеянні: # дзён таму}other{Апошнія дзеянні: # дня таму}}</translation>
 <translation id="5768079895599174203">{DAYS,plural, =1{1 дзень і }one{# дзень і }few{# дні і }many{# дзён і }other{# дня і }}</translation>
@@ -158,7 +160,6 @@
 <translation id="6503257047630241175">Змесціва ў фармаце RTF</translation>
 <translation id="6539092367496845964">Нешта пайшло не так. Паўтарыце спробу пазней.</translation>
 <translation id="654149438358937226">Блакіраваць усе апавяшчэнні</translation>
-<translation id="6612467943526193239">Каб выйсці з каліброўкі, націсніце Esc.</translation>
 <translation id="6620110761915583480">Захаваць файл</translation>
 <translation id="6699343763173986273">Мультымедыйная клавіша "Наступны трэк"</translation>
 <translation id="6808150112686056157">Спыніць мультымедыя</translation>
@@ -200,7 +201,6 @@
 <translation id="8179976553408161302">Enter</translation>
 <translation id="8210608804940886430">Page Down</translation>
 <translation id="822964464349305906"><ph name="TYPE_1" />, <ph name="TYPE_2" /></translation>
-<translation id="8245914219290430011">Tab</translation>
 <translation id="8259556432390118667">Шаснаццатковае значэнне колеру</translation>
 <translation id="8328145009876646418">Левы край</translation>
 <translation id="8331626408530291785">Прагартаць уверх</translation>
@@ -224,6 +224,8 @@
 <translation id="9044832324875206639">{SECONDS,plural, =1{1 с}one{# с}few{# с}many{# с}other{# с}}</translation>
 <translation id="9059834730836941392">Згарнуць апавяшчэнне</translation>
 <translation id="9170848237812810038">&amp;Адрабіць</translation>
+<translation id="9195990613383871904">Заўтра</translation>
+<translation id="928628199082367701">Супер</translation>
 <translation id="932327136139879170">Галоўная старонка</translation>
 <translation id="944069440740578670">Непрачытаныя апавяшчэнні</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{1 секунду таму}one{# секунду таму}few{# секунды таму}many{# секунд таму}other{# секунды таму}}</translation>

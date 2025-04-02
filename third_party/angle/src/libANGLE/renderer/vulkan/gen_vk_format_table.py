@@ -38,7 +38,7 @@ namespace rx
 namespace vk
 {{
 
-void Format::initialize(RendererVk *renderer,
+void Format::initialize(Renderer *renderer,
                         const angle::Format &angleFormat)
 {{
     switch (angleFormat.id)
@@ -50,13 +50,13 @@ void Format::initialize(RendererVk *renderer,
     }}
 }}
 
-VkFormat GetVkFormatFromFormatID(angle::FormatID formatID)
+VkFormat GetVkFormatFromFormatID(const Renderer *renderer, angle::FormatID formatID)
 {{
     static constexpr angle::FormatMap<VkFormat> kMap = {{
 {format_id_cases}
     }};
 
-    return kMap[formatID];
+    return AdjustASTCFormatForHDR(renderer, kMap[formatID]);
 }}
 
 angle::FormatID GetFormatIDFromVkFormat(VkFormat vkFormat)
@@ -181,6 +181,7 @@ def gen_format_case(angle, internal_format, vk_json_data):
         fallbacks += compressed
 
         if format in vk_map:
+            assert format not in fallbacks
             fallbacks = [format] + fallbacks
 
         return (fallbacks, len(fallbacks) - len(compressed))

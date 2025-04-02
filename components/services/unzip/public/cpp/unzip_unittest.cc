@@ -4,6 +4,7 @@
 
 #include "components/services/unzip/public/cpp/unzip.h"
 
+#include <cstdint>
 #include <string_view>
 #include <utility>
 
@@ -12,6 +13,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_helpers.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
@@ -41,9 +43,10 @@ int CountFiles(const base::FilePath& dir, bool* some_files_empty = nullptr) {
                                        base::FileEnumerator::FILES);
   for (base::FilePath path = file_enumerator.Next(); !path.empty();
        path = file_enumerator.Next()) {
-    if (int64_t file_size; some_files_empty != nullptr &&
-                           base::GetFileSize(path, &file_size) &&
-                           file_size == 0) {
+    std::optional<int64_t> file_size = base::GetFileSize(path);
+
+    if (some_files_empty != nullptr && file_size.has_value() &&
+        file_size.value() == 0) {
       *some_files_empty = true;
       some_files_empty = nullptr;  // So we don't check files again.
     }
@@ -64,21 +67,19 @@ class UnzipTest : public testing::Test {
   // it is provided.
   bool DoUnzip(const base::FilePath& zip_file,
                const base::FilePath& output_dir,
-               UnzipFilterCallback filter_callback = {}) {
+               UnzipFilterCallback filter_callback = unzip::AllContents()) {
     mojo::PendingRemote<mojom::Unzipper> unzipper;
     receivers_.Add(&unzipper_, unzipper.InitWithNewPipeAndPassReceiver());
 
     base::RunLoop run_loop;
     bool result = false;
 
-    UnzipCallback result_callback =
-        base::BindLambdaForTesting([&](const bool success) {
-          result = success;
-          run_loop.QuitClosure().Run();
-        });
-
-    UnzipWithFilter(std::move(unzipper), zip_file, output_dir,
-                    std::move(filter_callback), std::move(result_callback));
+    Unzip(std::move(unzipper), zip_file, output_dir,
+          unzip::mojom::UnzipOptions::New(), std::move(filter_callback),
+          base::DoNothing(), base::BindLambdaForTesting([&](bool success) {
+            result = success;
+            run_loop.QuitClosure().Run();
+          }));
 
     run_loop.Run();
     return result;
@@ -95,17 +96,12 @@ class UnzipTest : public testing::Test {
     base::RunLoop run_loop;
     bool result = false;
 
-    UnzipListenerCallback progress_callback = base::BindLambdaForTesting(
-        [&](uint64_t written_bytes) { base::DoNothing(); });
-
-    UnzipCallback result_callback =
-        base::BindLambdaForTesting([&](const bool success) {
-          result = success;
-          run_loop.QuitClosure().Run();
-        });
-
     Unzip(std::move(unzipper), zip_file, output_dir, std::move(options),
-          std::move(progress_callback), std::move(result_callback));
+          AllContents(), base::BindLambdaForTesting([&](uint64_t) {}),
+          base::BindLambdaForTesting([&](bool success) {
+            result = success;
+            run_loop.QuitClosure().Run();
+          }));
 
     run_loop.Run();
     return result;
@@ -154,20 +150,15 @@ class UnzipTest : public testing::Test {
 
     base::RunLoop run_loop;
     uint64_t bytes = 0;
-    mojom::UnzipOptionsPtr options =
-        unzip::mojom::UnzipOptions::New("auto", "");
 
-    UnzipListenerCallback progress_callback =
-        base::BindLambdaForTesting([&](uint64_t written_bytes) {
-          bytes = written_bytes;
-          run_loop.QuitClosure().Run();
-        });
-
-    UnzipCallback result_callback = base::BindLambdaForTesting(
-        [&](const bool success) { run_loop.QuitClosure().Run(); });
-
-    Unzip(std::move(unzipper), zip_file, output_dir, std::move(options),
-          std::move(progress_callback), std::move(result_callback));
+    Unzip(std::move(unzipper), zip_file, output_dir,
+          unzip::mojom::UnzipOptions::New("auto", ""), AllContents(),
+          base::BindLambdaForTesting([&](uint64_t written_bytes) {
+            bytes = written_bytes;
+            run_loop.QuitClosure().Run();
+          }),
+          base::BindLambdaForTesting(
+              [&](bool) { run_loop.QuitClosure().Run(); }));
 
     run_loop.Run();
     return bytes;

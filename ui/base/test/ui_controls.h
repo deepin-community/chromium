@@ -6,11 +6,9 @@
 #define UI_BASE_TEST_UI_CONTROLS_H_
 
 #include <cstdint>
-#include <string>
 
 #include "base/functional/callback_forward.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/native_widget_types.h"
 
@@ -87,7 +85,7 @@ enum AcceleratorState {
 };
 
 // Not supported on win.
-// TODO(crbug.com/1414800): Support this on win.
+// TODO(crbug.com/40256300): Support this on win.
 #if !BUILDFLAG(IS_WIN)
 // Sends a key press and/or release message with/without modifier keys.
 // `key_event_types` is a bitmask of KeyEventType constants that indicates what
@@ -195,7 +193,7 @@ bool SendTouchEventsNotifyWhenDone(int action,
 void ForceUseScreenCoordinatesOnce();
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
 class UIControlsAura;
 void InstallUIControlsAura(UIControlsAura* instance);
 #endif
@@ -205,14 +203,6 @@ void InstallUIControlsAura(UIControlsAura* instance);
 // to traverse to the desired item; because the application is configured to
 // traverse more elements for accessibility reasons.
 bool IsFullKeyboardAccessEnabled();
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-// TODO(vincentchiang): Move to another test API file.
-// Update the test display configurations in accordance to the passed in
-// |display_specs| which is a comma separated list of display specs. See
-// ash::DisplayManagerTestApi::UpdateDisplay for detail.
-void UpdateDisplaySync(const std::string& display_specs);
 #endif
 
 }  // namespace ui_controls

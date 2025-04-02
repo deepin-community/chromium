@@ -29,7 +29,6 @@ system_display::LayoutPosition GetLayoutPositionFromMojo(
       return system_display::LayoutPosition::kLeft;
   }
   NOTREACHED();
-  return system_display::LayoutPosition::kLeft;
 }
 }  // namespace
 
@@ -79,7 +78,6 @@ crosapi::mojom::DisplayLayoutPosition GetDisplayLayoutPosition(
       return crosapi::mojom::DisplayLayoutPosition::kLeft;
   }
   NOTREACHED();
-  return crosapi::mojom::DisplayLayoutPosition::kLeft;
 }
 
 gfx::Insets GetInsets(const system_display::Insets& insets) {
@@ -109,7 +107,6 @@ crosapi::mojom::DisplayRotationOptions GetMojomDisplayRotationOptions(
       return crosapi::mojom::DisplayRotationOptions::k270Degrees;
     default:
       NOTREACHED();
-      return crosapi::mojom::DisplayRotationOptions::kZeroDegrees;
   }
 }
 

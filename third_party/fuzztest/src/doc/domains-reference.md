@@ -24,7 +24,6 @@ protocol buffers. Specifically, for the following types:
 -   Integral types: `short`, `int`, `unsigned`, `int8_t`, `uint32_t`, `long
     long`, etc.
 -   Floating types: `float`, `double`, etc.
--   Enumeration types: `enum`, `enum class` (TBD: b/183016365).
 -   Simple user defined structs.
 -   Tuple types: `std::pair<T1,T2>`, `std::tuple<T,...>`.
 -   Smart pointers: `std::unique_ptr<T>`, `std::shared_ptr<T>`.
@@ -365,7 +364,7 @@ In addition, for repeated fields, you can customize its size with
 ```c++
 FUZZ_TEST(MySuite, DoingStuffDoesNotCrashWithCustomProto).
   WithDomains(Arbitrary<MyProto>()
-      .WithRepeatedFieldSize("size1", 1)
+      .WithRepeatedFieldSize("size1", 1, 2)
       .WithRepeatedFieldMinSize("size_ge_2", 2)
       .WithRepeatedFieldMaxSize("size_le_3", 3));
 ```
@@ -395,11 +394,11 @@ Also, `With<Type>FieldAlwaysSet` is a shorter alternative when one wants to
 customize non-empty fields:
 
 ```c++
-// Short form for .WithOptionalIntField("optional_int", NonNull(InRange(1, 10)))
-.WithIntFieldAlwaysSet("optional_int", InRange(1, 10))
+// Short form for .WithOptionalInt32Field("optional_int", NonNull(InRange(1, 10)))
+.WithInt32FieldAlwaysSet("optional_int", InRange(1, 10))
 
-// Short form for .WithRepeatedIntField("repeated_int", VectorOf(InRange(1, 10)).WithMinSize(1))
-.WithIntFieldAlwaysSet("repeated_int", InRange(1, 10))
+// Short form for .WithRepeatedInt32Field("repeated_int", VectorOf(InRange(1, 10)).WithMinSize(1))
+.WithInt32FieldAlwaysSet("repeated_int", InRange(1, 10))
 ```
 
 #### Customizing a Subset of Fields
@@ -540,7 +539,7 @@ Then, you wish to customize the domain and test different non-legacy strategies.
 The following would not work because the `legacy_strategy_id` could still have
 values.
 
-```c++
+```c++ {.bad}
 FUZZ_TEST(MySuite, DoingStuffDoesNotCrashWithCustomProto).
   WithDomains(Arbitrary<Algorithm>()
     .WithFieldAlwaysSet("strategy_id"));
@@ -1080,6 +1079,13 @@ This leads to more efficient fuzzing, as no values will be dropped and no cycles
 will be wasted.
 
 ### Recursive Domains
+
+**WARNING**: Recursion limit for recursive domains is not implemented yet
+. If the probability of recursion is high in the domain, the initial input
+generation might "blow up", leading to resource exhaustion. Note that this is
+not an issue in case of protobuf domains (when there's recursion in the protobuf
+definition), because recursion is avoided during the initial input generation
+and only happens during mutating the inputs.
 
 Recursive data structures need recursive domains. We can use the `DomainBuilder`
 to build such domains. Here are some examples:

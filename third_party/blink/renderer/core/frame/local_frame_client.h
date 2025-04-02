@@ -45,7 +45,6 @@
 #include "third_party/blink/public/common/performance/performance_timeline_constants.h"
 #include "third_party/blink/public/common/permissions_policy/document_policy_features.h"
 #include "third_party/blink/public/common/permissions_policy/permissions_policy.h"
-#include "third_party/blink/public/common/responsiveness_metrics/user_interaction_latency.h"
 #include "third_party/blink/public/common/subresource_load_metrics.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/common/use_counter/use_counter_feature.h"
@@ -53,6 +52,7 @@
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/devtools/devtools_agent.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/fenced_frame/fenced_frame.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/frame/remote_frame.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/triggering_event_info.mojom-blink-forward.h"
 #include "third_party/blink/public/platform/child_url_loader_factory_bundle.h"
 #include "third_party/blink/public/platform/scheduler/web_scoped_virtual_time_pauser.h"
@@ -87,7 +87,6 @@ class SharedURLLoaderFactory;
 namespace blink {
 
 class AssociatedInterfaceProvider;
-class BrowserInterfaceBrokerProxy;
 class DocumentLoader;
 class HTMLFencedFrameElement;
 class HTMLFormElement;
@@ -99,6 +98,7 @@ class KURL;
 class LocalDOMWindow;
 class LocalFrame;
 class RemoteFrame;
+class RemotePlaybackClient;
 class ResourceError;
 class ResourceRequest;
 class ResourceResponse;
@@ -110,7 +110,6 @@ class WebMediaPlayer;
 class WebMediaPlayerClient;
 class WebMediaPlayerSource;
 class WebPluginContainerImpl;
-class WebRemotePlaybackClient;
 class WebServiceWorkerProvider;
 class WebSpellCheckPanelHostClient;
 class WebTextCheckClient;
@@ -139,7 +138,13 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
   virtual base::UnguessableToken GetDevToolsFrameToken() const = 0;
 
   virtual void WillBeDetached() = 0;
-  virtual void DispatchWillSendRequest(ResourceRequest&) = 0;
+  virtual void DispatchFinalizeRequest(ResourceRequest&) = 0;
+  virtual std::optional<KURL> DispatchWillSendRequest(
+      const KURL& requested_url,
+      const scoped_refptr<const SecurityOrigin>& requestor_origin,
+      const net::SiteForCookies& site_for_cookies,
+      bool has_redirect_info,
+      const KURL& upstream_url) = 0;
   virtual void DispatchDidLoadResourceFromMemoryCache(
       const ResourceRequest&,
       const ResourceResponse&) = 0;
@@ -150,7 +155,8 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
       bool is_synchronously_committed,
       mojom::blink::SameDocumentNavigationType,
       bool is_client_redirect,
-      bool is_browser_initiated) {}
+      bool is_browser_initiated,
+      bool should_skip_screenshot) {}
   virtual void DidFailAsyncSameDocumentCommit() {}
   virtual void DispatchDidOpenDocumentInputStream(const KURL&) {}
   virtual void DispatchDidReceiveTitle(const String&) = 0;
@@ -189,10 +195,10 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
       const std::optional<Impression>& impression,
       const LocalFrameToken* initiator_frame_token,
       std::unique_ptr<SourceLocation> source_location,
-      mojo::PendingRemote<mojom::blink::PolicyContainerHostKeepAliveHandle>
-          initiator_policy_container_handle,
+      mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>
+          initiator_navigation_state_keep_alive_handle,
       bool is_container_initiated,
-      bool is_fullscreen_requested) = 0;
+      bool has_rel_opener) = 0;
 
   virtual void DispatchWillSendSubmitEvent(HTMLFormElement*) = 0;
 
@@ -212,9 +218,9 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
   // Will be called when a user interaction is observed.
   virtual void DidObserveUserInteraction(
       base::TimeTicks max_event_start,
-      base::TimeTicks max_event_end,
       base::TimeTicks max_event_queued_main_thread,
-      UserInteractionType interaction_type,
+      base::TimeTicks max_event_commit_finish,
+      base::TimeTicks max_event_end,
       uint64_t interaction_offset) {}
 
   // Will be called when |CpuTiming| events are updated
@@ -243,11 +249,6 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
   virtual void DidObserveLayoutShift(double score, bool after_input_or_scroll) {
   }
 
-  // Notifies the observers of the origins for which subresource redirect
-  // optimizations can be preloaded.
-  virtual void PreloadSubresourceOptimizationsForOrigins(
-      const WTF::HashSet<scoped_refptr<const SecurityOrigin>>& origins) {}
-
   // Transmits the change in the set of watched CSS selectors property that
   // match any element on the frame.
   virtual void SelectorMatchChanged(
@@ -273,12 +274,7 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
       HTMLFencedFrameElement*,
       mojo::PendingAssociatedReceiver<mojom::blink::FencedFrameOwnerHost>) = 0;
 
-  // Whether or not plugin creation should fail if the HTMLPlugInElement isn't
-  // in the DOM after plugin initialization.
-  enum DetachedPluginPolicy {
-    kFailOnDetachedPlugin,
-    kAllowDetachedPlugin,
-  };
+  // TODO(crbug.com/40511450): Remove `load_manually` once PPAPI is gone.
   virtual WebPluginContainerImpl* CreatePlugin(HTMLPlugInElement&,
                                                const KURL&,
                                                const Vector<String>&,
@@ -290,7 +286,7 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
       HTMLMediaElement&,
       const WebMediaPlayerSource&,
       WebMediaPlayerClient*) = 0;
-  virtual WebRemotePlaybackClient* CreateWebRemotePlaybackClient(
+  virtual RemotePlaybackClient* CreateRemotePlaybackClient(
       HTMLMediaElement&) = 0;
 
   virtual void DidCommitDocumentReplacementNavigation(DocumentLoader*) = 0;
@@ -340,14 +336,12 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
   // returned if the URL is not overriden.
   virtual KURL OverrideFlashEmbedWithHTML(const KURL&) { return KURL(); }
 
-  virtual BrowserInterfaceBrokerProxy& GetBrowserInterfaceBroker() = 0;
-
   virtual AssociatedInterfaceProvider*
   GetRemoteNavigationAssociatedInterfaces() = 0;
 
   virtual void NotifyUserActivation() {}
 
-  virtual void AbortClientNavigation() {}
+  virtual void AbortClientNavigation(bool for_new_navigation) {}
 
   virtual WebSpellCheckPanelHostClient* SpellCheckPanelHostClient() const = 0;
 
@@ -360,8 +354,6 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
 
   virtual scoped_refptr<WebBackgroundResourceFetchAssets>
   MaybeGetBackgroundResourceFetchAssets() = 0;
-
-  virtual void AnnotatedRegionsChanged() = 0;
 
   virtual void SetVirtualTimePauser(
       WebScopedVirtualTimePauser virtual_time_pauser) {}
@@ -427,14 +419,14 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
 
   virtual void NotifyAutoscrollForSelectionInMainFrame(bool) {}
 
-  // Returns whether we are associated with a print context who suggests to use
-  // printing layout.
-  virtual bool UsePrintingLayout() const { return false; }
-
   virtual std::unique_ptr<ResourceLoadInfoNotifierWrapper>
   CreateResourceLoadInfoNotifierWrapper() {
     return nullptr;
   }
+
+  // Specifies whether to disable DOM storage interfaces such as localStorage
+  // and sessionStorage.
+  virtual bool IsDomStorageDisabled() const { return false; }
 
   // Debugging -----------------------------------------------------------
   virtual void BindDevToolsAgent(

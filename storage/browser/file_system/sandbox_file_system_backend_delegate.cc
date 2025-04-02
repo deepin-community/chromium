@@ -141,7 +141,6 @@ std::string SandboxFileSystemBackendDelegate::GetTypeString(
     case kFileSystemTypeUnknown:
     default:
       NOTREACHED() << "Unknown filesystem type requested:" << type;
-      return std::string();
   }
 }
 

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/common/input/synthetic_gesture_controller.h"
 
 #include <stddef.h>
@@ -72,10 +77,8 @@ WebTouchPoint::State ToWebTouchPointState(
     case SyntheticPointerActionParams::PointerActionType::NOT_INITIALIZED:
       NOTREACHED()
           << "Invalid SyntheticPointerActionParams::PointerActionType.";
-      return WebTouchPoint::State::kStateUndefined;
   }
   NOTREACHED() << "Invalid SyntheticPointerActionParams::PointerActionType.";
-  return WebTouchPoint::State::kStateUndefined;
 }
 
 WebInputEvent::Type ToWebMouseEventType(
@@ -94,10 +97,8 @@ WebInputEvent::Type ToWebMouseEventType(
     case SyntheticPointerActionParams::PointerActionType::NOT_INITIALIZED:
       NOTREACHED()
           << "Invalid SyntheticPointerActionParams::PointerActionType.";
-      return WebInputEvent::Type::kUndefined;
   }
   NOTREACHED() << "Invalid SyntheticPointerActionParams::PointerActionType.";
-  return WebInputEvent::Type::kUndefined;
 }
 
 WebInputEvent::Type WebTouchPointStateToEventType(
@@ -167,6 +168,12 @@ class MockSyntheticGestureTarget : public SyntheticGestureTarget {
     if (!(event.GetModifiers() & blink::WebInputEvent::kFromDebugger)) {
       all_from_debugger_ = false;
     }
+  }
+
+  void GetVSyncParameters(base::TimeTicks& timebase,
+                          base::TimeDelta& interval) const override {
+    timebase = base::TimeTicks();
+    interval = base::Microseconds(16667);
   }
 
   content::mojom::GestureSourceType GetDefaultSyntheticGestureSourceType()
@@ -435,7 +442,6 @@ class MockSyntheticTouchscreenPinchTouchTarget
         return 1.0f;
       default:
         NOTREACHED();
-        return 0.0f;
     }
   }
 
@@ -829,14 +835,12 @@ class SyntheticGestureControllerTestBase {
   }
 
   void FlushInputUntilComplete() {
-    // Start and stop the timer explicitly here, since the test does not need to
+    // Start the timer explicitly here, since the test does not need to
     // wait for begin-frame to start the timer.
-    controller_->dispatch_timer_.Start(FROM_HERE, base::Seconds(1),
-                                       base::DoNothing());
+    controller_->StartOrUpdateTimer();
     do
       time_ += base::Milliseconds(kFlushInputRateInMs);
     while (controller_->DispatchNextEvent(time_));
-    controller_->dispatch_timer_.Stop();
   }
 
   void OnSyntheticGestureCompleted(SyntheticGesture::Result result) {

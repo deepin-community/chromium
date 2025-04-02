@@ -9,13 +9,13 @@ INCLUDE PERFETTO MODULE chrome.scroll_jank.scroll_jank_v3;
 -- based on the V3 version of scroll jank metrics.
 CREATE PERFETTO TABLE chrome_janky_event_latencies_v3(
   -- The slice id.
-  id INT,
+  id LONG,
   -- The start timestamp of the slice.
-  ts INT,
+  ts TIMESTAMP,
   -- The duration of the slice.
-  dur INT,
+  dur DURATION,
   -- The track_id for the slice.
-  track_id INT,
+  track_id LONG,
   -- The name of the slice (EventLatency).
   name STRING,
   -- The stage of EventLatency that the caused the jank.
@@ -23,11 +23,11 @@ CREATE PERFETTO TABLE chrome_janky_event_latencies_v3(
   -- The stage of cause_of_jank that caused the jank.
   sub_cause_of_jank STRING,
   -- How many vsyncs this frame missed its deadline by.
-  delayed_frame_count INT,
+  delayed_frame_count LONG,
   -- The start timestamp where frame presentation was delayed.
-  frame_jank_ts INT,
+  frame_jank_ts TIMESTAMP,
   -- The duration in ms of the delay in frame presentation.
-  frame_jank_dur INT
+  frame_jank_dur LONG
 ) AS
 SELECT
   s.id,
@@ -37,10 +37,13 @@ SELECT
   s.name,
   e.cause_of_jank,
   e.sub_cause_of_jank,
-  CAST((e.delay_since_last_frame/e.vsync_interval) - 1 AS INT) AS delayed_frame_count,
-  CAST(s.ts + s.dur - ((e.delay_since_last_frame - e.vsync_interval) * 1e6) AS INT) AS frame_jank_ts,
-  CAST((e.delay_since_last_frame - e.vsync_interval) * 1e6 AS INT) AS frame_jank_dur
-FROM slice s
+  cast_int!((e.delay_since_last_frame/e.vsync_interval) - 1)
+    AS delayed_frame_count,
+  cast_int!(s.ts + s.dur - ((e.delay_since_last_frame - e.vsync_interval) * 1e6))
+    AS frame_jank_ts,
+  cast_int!((e.delay_since_last_frame - e.vsync_interval) * 1e6)
+    AS frame_jank_dur
+FROM chrome_gesture_scroll_updates s
 JOIN chrome_janky_frames e
   ON s.id = e. event_latency_id;
 
@@ -48,19 +51,19 @@ JOIN chrome_janky_frames e
 -- to be presented and when it was actually presented.
 CREATE PERFETTO VIEW chrome_janky_frame_presentation_intervals(
   -- Unique id.
-  id INT,
+  id LONG,
   -- The start timestamp of the slice.
-  ts INT,
+  ts TIMESTAMP,
   -- The duration of the slice.
-  dur INT,
+  dur DURATION,
   -- How many vsyncs this frame missed its deadline by.
-  delayed_frame_count INT,
+  delayed_frame_count LONG,
   -- The stage of EventLatency that the caused the jank.
-  cause_of_jank INT,
+  cause_of_jank STRING,
   -- The stage of cause_of_jank that caused the jank.
-  sub_cause_of_jank INT,
+  sub_cause_of_jank STRING,
   -- The id of the associated event latency in the slice table.
-  event_latency_id INT
+  event_latency_id LONG
 ) AS
 SELECT
   ROW_NUMBER() OVER(ORDER BY frame_jank_ts) AS id,
@@ -73,19 +76,19 @@ SELECT
 FROM chrome_janky_event_latencies_v3;
 
 -- Scroll jank frame presentation stats for individual scrolls.
-CREATE PERFETTO VIEW chrome_scroll_stats(
+CREATE PERFETTO TABLE chrome_scroll_stats(
   -- Id of the individual scroll.
-  scroll_id INT,
+  scroll_id LONG,
   -- The number of frames in the scroll.
-  frame_count INT,
+  frame_count LONG,
   -- The number of missed vsyncs in the scroll.
-  missed_vsyncs INT,
+  missed_vsyncs LONG,
   -- The number presented frames in the scroll.
-  presented_frame_count INT,
+  presented_frame_count LONG,
   -- The number of janky frames in the scroll.
-  janky_frame_count INT,
+  janky_frame_count LONG,
   -- The % of frames that janked in the scroll.
-  janky_frame_percent FLOAT
+  janky_frame_percent DOUBLE
 ) AS
 WITH vsyncs AS (
   SELECT
@@ -98,7 +101,8 @@ WITH vsyncs AS (
   GROUP BY scroll_id),
 missed_vsyncs AS (
   SELECT
-    CAST(SUM((delay_since_last_frame / vsync_interval) - 1) AS INT)  AS total_missed_vsyncs,
+    cast_int!(SUM((delay_since_last_frame / vsync_interval) - 1))
+      AS total_missed_vsyncs,
     scroll_id
   FROM chrome_janky_frames
   GROUP BY scroll_id),
@@ -126,11 +130,11 @@ LEFT JOIN frame_stats
 -- Defines slices for all of janky scrolling intervals in a trace.
 CREATE PERFETTO TABLE chrome_scroll_jank_intervals_v3(
   -- The unique identifier of the janky interval.
-  id INT,
+  id LONG,
   -- The start timestamp of the janky interval.
-  ts INT,
+  ts TIMESTAMP,
   -- The duration of the janky interval.
-  dur INT
+  dur DURATION
 ) AS
 -- Sub-table to retrieve all janky slice timestamps. Ordering calculations are
 -- based on timestamps rather than durations.
@@ -157,7 +161,8 @@ range_starts AS (
       -- This is a two-pass calculation to calculate the first event in the
       -- group. An event is considered the first event in a group if all events
       -- which started before it also finished the current one started.
-      WHEN start_ts <= 1 + LAG(max_end_ts_so_far) OVER (ORDER BY start_ts) THEN 0
+      WHEN start_ts <= 1 + LAG(max_end_ts_so_far) OVER (ORDER BY start_ts)
+        THEN 0
       ELSE 1
     END AS range_start
   FROM ordered_jank_end_ts),

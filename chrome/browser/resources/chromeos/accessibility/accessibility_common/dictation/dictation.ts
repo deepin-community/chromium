@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 import {Context} from '/common/action_fulfillment/context_checker.js';
-import {Macro} from '/common/action_fulfillment/macros/macro.js';
+import type {Macro} from '/common/action_fulfillment/macros/macro.js';
 import {MacroName} from '/common/action_fulfillment/macros/macro_names.js';
 import {TestImportManager} from '/common/testing/test_import_manager.js';
 
@@ -137,6 +137,10 @@ export class Dictation {
     if (this.inputController_) {
       this.inputController_.removeListeners();
     }
+  }
+
+  isActive(): boolean {
+    return this.active_;
   }
 
   /**
@@ -416,7 +420,7 @@ export class Dictation {
 
   /** Shows the interim result in the UI. */
   private showInterimText_(text: string): void {
-    // TODO(crbug.com/1252037): Need to find a way to show interim text that is
+    // TODO(crbug.com/40792919): Need to find a way to show interim text that is
     // only whitespace. Google Cloud Speech can return a newline character
     // although SODA does not seem to do that. The newline character looks wrong
     // here.
@@ -458,7 +462,7 @@ export class Dictation {
 
   /**
    * Shows a message in the UI that a command failed to execute.
-   * TODO(crbug.com/1252037): Optionally use the MacroError to provide
+   * TODO(crbug.com/40792919): Optionally use the MacroError to provide
    * additional context.
    * @param transcript The user's spoken transcript, shown so they
    *     understand the final speech recognized which might be helpful in

@@ -4,18 +4,18 @@
 
 #include "chrome/browser/send_tab_to_self/receiving_ui_handler_registry.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "base/memory/singleton.h"
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/send_tab_to_self/receiving_ui_handler.h"
 #include "components/send_tab_to_self/features.h"
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
-    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
+    BUILDFLAG(IS_WIN)
 #include "chrome/browser/send_tab_to_self/desktop_notification_handler.h"
 #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_toolbar_icon_controller.h"
 #endif
@@ -26,8 +26,8 @@
 
 namespace send_tab_to_self {
 
-ReceivingUiHandlerRegistry::ReceivingUiHandlerRegistry() {}
-ReceivingUiHandlerRegistry::~ReceivingUiHandlerRegistry() {}
+ReceivingUiHandlerRegistry::ReceivingUiHandlerRegistry() = default;
+ReceivingUiHandlerRegistry::~ReceivingUiHandlerRegistry() = default;
 
 // static
 ReceivingUiHandlerRegistry* ReceivingUiHandlerRegistry::GetInstance() {
@@ -47,7 +47,7 @@ SendTabToSelfToolbarIconController*
 ReceivingUiHandlerRegistry::GetToolbarButtonControllerForProfile(
     Profile* profile) {
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
-    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
+    BUILDFLAG(IS_WIN)
   for (const std::unique_ptr<ReceivingUiHandler>& handler :
        applicable_handlers_) {
     auto* button_controller =
@@ -92,13 +92,12 @@ ReceivingUiHandlerRegistry::GetHandlers() const {
 
 void ReceivingUiHandlerRegistry::OnProfileShutdown(Profile* profile) {
   // Remove all handlers for |profile|.
-  applicable_handlers_.erase(
-      base::ranges::remove_if(
-          applicable_handlers_,
-          [=](const std::unique_ptr<ReceivingUiHandler>& handler) {
-            return handler->profile() == profile;
-          }),
-      applicable_handlers_.end());
+  auto to_remove = std::ranges::remove_if(
+      applicable_handlers_,
+      [=](const std::unique_ptr<ReceivingUiHandler>& handler) {
+        return handler->profile() == profile;
+      });
+  applicable_handlers_.erase(to_remove.begin(), to_remove.end());
 }
 
 }  // namespace send_tab_to_self

@@ -10,9 +10,11 @@ import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 
 import {assertExhaustive} from '../assert_extras.js';
-import {Route, routes} from '../router.js';
+import type {Route} from '../router.js';
+import {routes} from '../router.js';
 
-import {getInputMethodSettings, SettingsContext, SettingsType} from './input_method_settings.js';
+import type {SettingsContext} from './input_method_settings.js';
+import {getInputMethodSettings, SettingsType} from './input_method_settings.js';
 import {JapaneseInputMode, JapaneseKeymapStyle, JapanesePunctuationStyle, JapaneseSectionShortcut, JapaneseShiftKeyModeStyle, JapaneseSpaceInputStyle, JapaneseSymbolStyle} from './input_method_types.js';
 
 /**
@@ -71,6 +73,7 @@ export enum OptionType {
       'virtualKeyboardEnableCapitalization',
   XKB_LAYOUT = 'xkbLayout',
   // Options for Japanese input method.
+  // LINT.IfChange(JpOptionCategories)
   JAPANESE_AUTOMATICALLY_SWITCH_TO_HALFWIDTH = 'AutomaticallySwitchToHalfwidth',
   JAPANESE_SHIFT_KEY_MODE_STYLE = 'ShiftKeyModeStyle',
   JAPANESE_USE_INPUT_HISTORY = 'UseInputHistory',
@@ -85,8 +88,7 @@ export enum OptionType {
   JAPANESE_MANAGE_USER_DICTIONARY = 'JapaneseManageUserDictionary',
   JAPANESE_DELETE_PERSONALIZATION_DATA = 'JapaneseClearPersonalizationData',
   JAPANESE_DISABLE_PERSONALIZED_SUGGESTIONS = 'JapaneseDisableSuggestions',
-  JAPANESE_AUTOMATICALLY_SEND_STATISTICS_TO_GOOGLE =
-      'AutomaticallySendStatisticsToGoogle',
+  // LINT.ThenChange(/chrome/browser/ash/input_method/japanese/japanese_prefs_constants.h:JpOptionCategories)
   // Options for Korean input method.
   KOREAN_ENABLE_SYLLABLE_INPUT = 'koreanEnableSyllableInput',
   KOREAN_KEYBOARD_LAYOUT = 'koreanKeyboardLayout',
@@ -142,11 +144,6 @@ export const OPTION_DEFAULT = {
   [OptionType.ENABLE_GESTURE_TYPING]: true,
   [OptionType.ENABLE_PREDICTION]: false,
   [OptionType.ENABLE_SOUND_ON_KEYPRESS]: false,
-  [OptionType.JAPANESE_AUTOMATICALLY_SWITCH_TO_HALFWIDTH]: true,
-  [OptionType.JAPANESE_SHIFT_KEY_MODE_STYLE]:
-      JapaneseShiftKeyModeStyle.ALPHANUMERIC,
-  [OptionType.JAPANESE_USE_INPUT_HISTORY]: true,
-  [OptionType.JAPANESE_USE_SYSTEM_DICTIONARY]: true,
   [OptionType.JAPANESE_NUMBER_OF_SUGGESTIONS]: 3,
   [OptionType.PHYSICAL_KEYBOARD_AUTO_CORRECTION_LEVEL]: 0,
   [OptionType.PHYSICAL_KEYBOARD_ENABLE_CAPITALIZATION]: true,
@@ -155,6 +152,12 @@ export const OPTION_DEFAULT = {
   [OptionType.VIRTUAL_KEYBOARD_ENABLE_CAPITALIZATION]: true,
   [OptionType.XKB_LAYOUT]: 'US',
   // Options for Japanese input methods.
+  // LINT.IfChange(JpPrefDefaults)
+  [OptionType.JAPANESE_AUTOMATICALLY_SWITCH_TO_HALFWIDTH]: true,
+  [OptionType.JAPANESE_SHIFT_KEY_MODE_STYLE]:
+      JapaneseShiftKeyModeStyle.ALPHANUMERIC,
+  [OptionType.JAPANESE_USE_INPUT_HISTORY]: true,
+  [OptionType.JAPANESE_USE_SYSTEM_DICTIONARY]: true,
   [OptionType.JAPANESE_INPUT_MODE]: JapaneseInputMode.ROMAJI,
   [OptionType.JAPANESE_PUNCTUATION_STYLE]:
       JapanesePunctuationStyle.KUTEN_TOUTEN,
@@ -165,7 +168,7 @@ export const OPTION_DEFAULT = {
       JapaneseSectionShortcut.DIGITS_123456789,
   [OptionType.JAPANESE_KEYMAP_STYLE]: JapaneseKeymapStyle.CUSTOM,
   [OptionType.JAPANESE_DISABLE_PERSONALIZED_SUGGESTIONS]: true,
-  [OptionType.JAPANESE_AUTOMATICALLY_SEND_STATISTICS_TO_GOOGLE]: true,
+  // LINT.ThenChange(/chrome/browser/ash/input_method/japanese/japanese_settings.cc:JpPrefDefaults)
 
   // Options for Korean input method.
   [OptionType.KOREAN_ENABLE_SYLLABLE_INPUT]: true,
@@ -335,7 +338,6 @@ const Settings = {
       optionNames: [
         {name: OptionType.JAPANESE_DELETE_PERSONALIZATION_DATA},
         {name: OptionType.JAPANESE_DISABLE_PERSONALIZED_SUGGESTIONS},
-        {name: OptionType.JAPANESE_AUTOMATICALLY_SEND_STATISTICS_TO_GOOGLE},
       ],
     },
   ],
@@ -559,7 +561,6 @@ export function getOptionUiType(option: OptionType): UiType {
     case OptionType.JAPANESE_USE_SYSTEM_DICTIONARY:
     case OptionType.JAPANESE_USE_INPUT_HISTORY:
     case OptionType.JAPANESE_DISABLE_PERSONALIZED_SUGGESTIONS:
-    case OptionType.JAPANESE_AUTOMATICALLY_SEND_STATISTICS_TO_GOOGLE:
     case OptionType.PHYSICAL_KEYBOARD_ENABLE_CAPITALIZATION:
     case OptionType.PHYSICAL_KEYBOARD_ENABLE_PREDICTIVE_WRITING:
     case OptionType.VIRTUAL_KEYBOARD_ENABLE_CAPITALIZATION:
@@ -594,9 +595,7 @@ export function getOptionUiType(option: OptionType): UiType {
       return UiType.TOGGLE_BUTTON;
     case OptionType.PHYSICAL_KEYBOARD_AUTO_CORRECTION_LEVEL:
     case OptionType.VIRTUAL_KEYBOARD_AUTO_CORRECTION_LEVEL:
-      return loadTimeData.getBoolean('allowAutocorrectToggle') ?
-          UiType.TOGGLE_BUTTON :
-          UiType.DROPDOWN;
+      return UiType.TOGGLE_BUTTON;
     case OptionType.XKB_LAYOUT:
     case OptionType.JAPANESE_INPUT_MODE:
     case OptionType.JAPANESE_PUNCTUATION_STYLE:
@@ -714,8 +713,6 @@ export function getOptionLabelName(option: OptionType): string {
       return 'inputMethodOptionsJapaneseDeletePersonalizationData';
     case OptionType.JAPANESE_DISABLE_PERSONALIZED_SUGGESTIONS:
       return 'inputMethodOptionsJapaneseDisablePersonalizedSuggestions';
-    case OptionType.JAPANESE_AUTOMATICALLY_SEND_STATISTICS_TO_GOOGLE:
-      return 'inputMethodOptionsJapaneseAutomaticallySendStatisticsToGoogle';
     case OptionType.XKB_LAYOUT:
       return 'inputMethodOptionsXkbLayout';
     case OptionType.EDIT_USER_DICT:

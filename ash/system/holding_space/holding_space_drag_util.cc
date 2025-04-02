@@ -4,6 +4,7 @@
 
 #include "ash/system/holding_space/holding_space_drag_util.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "ash/bubble/bubble_utils.h"
@@ -18,7 +19,6 @@
 #include "base/containers/adapters.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_provider.h"
@@ -321,8 +321,10 @@ class DragImageOverflowBadge : public views::View {
 
  private:
   // views::View:
-  gfx::Size CalculatePreferredSize() const override {
-    gfx::Size preferred_size = views::View::CalculatePreferredSize();
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
+    gfx::Size preferred_size =
+        views::View::CalculatePreferredSize(available_size);
     preferred_size.SetToMax(kDragImageOverflowBadgeMinimumSize);
     return preferred_size;
   }
@@ -466,7 +468,7 @@ class DragImageView : public views::View {
         std::make_unique<DragImageLayoutManager>(kDragImageViewChildOffset));
 
     const bool contains_only_screen_captures =
-        base::ranges::all_of(items, [](const HoldingSpaceItem* item) {
+        std::ranges::all_of(items, [](const HoldingSpaceItem* item) {
           return HoldingSpaceItem::IsScreenCaptureType(item->type());
         });
 

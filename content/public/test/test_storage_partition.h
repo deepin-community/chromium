@@ -28,6 +28,8 @@ class ProtoDatabaseProvider;
 }  // namespace leveldb_proto
 
 namespace network {
+class TestURLLoaderFactory;
+
 namespace mojom {
 class NetworkContext;
 }  // namespace mojom
@@ -70,6 +72,10 @@ class TestStoragePartition : public StoragePartition {
 
   storage::SharedStorageManager* GetSharedStorageManager() override;
 
+  void set_url_loader_factory_for_browser_process(
+      network::TestURLLoaderFactory* factory) {
+    test_url_loader_factory_ = factory;
+  }
   scoped_refptr<network::SharedURLLoaderFactory>
   GetURLLoaderFactoryForBrowserProcess() override;
 
@@ -157,6 +163,15 @@ class TestStoragePartition : public StoragePartition {
 
   CookieDeprecationLabelManager* GetCookieDeprecationLabelManager() override;
 
+#if BUILDFLAG(ENABLE_LIBRARY_CDMS)
+  CdmStorageDataModel* GetCdmStorageDataModel() override;
+#endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
+
+  network::mojom::DeviceBoundSessionManager* GetDeviceBoundSessionManager()
+      override;
+
+  void DeleteStaleSessionData() override {}
+
   void set_browsing_topics_site_data_manager(
       BrowsingTopicsSiteDataManager* manager) {
     browsing_topics_site_data_manager_ = manager;
@@ -241,6 +256,8 @@ class TestStoragePartition : public StoragePartition {
   void SetNetworkContextForTesting(
       mojo::PendingRemote<network::mojom::NetworkContext>
           network_context_remote) override;
+  void OverrideDeleteStaleSessionOnlyCookiesDelayForTesting(
+      const base::TimeDelta& delay) override {}
 
   base::WeakPtr<StoragePartition> GetWeakPtr();
   void InvalidateWeakPtrs();
@@ -251,6 +268,7 @@ class TestStoragePartition : public StoragePartition {
   mojo::Remote<network::mojom::NetworkContext> network_context_remote_;
   raw_ptr<network::mojom::NetworkContext, DanglingUntriaged> network_context_ =
       nullptr;
+  raw_ptr<network::TestURLLoaderFactory> test_url_loader_factory_ = nullptr;
   raw_ptr<network::mojom::CookieManager> cookie_manager_for_browser_process_ =
       nullptr;
   raw_ptr<storage::QuotaManager> quota_manager_ = nullptr;

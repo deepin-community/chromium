@@ -7,17 +7,11 @@
 #include <memory>
 #include <string>
 
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/session/arc_service_manager.h"
-#include "ash/components/arc/session/arc_session_runner.h"
-#include "ash/components/arc/test/arc_util_test_support.h"
-#include "ash/components/arc/test/fake_arc_session.h"
 #include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
-#include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
@@ -41,6 +35,11 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/session/arc_session_runner.h"
+#include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
+#include "chromeos/ash/experiences/arc/test/fake_arc_session.h"
 #include "components/account_id/account_id.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
@@ -58,6 +57,7 @@
 #include "extensions/browser/api_test_utils.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -65,7 +65,7 @@ namespace {
 
 constexpr char kWellKnownConsumerName[] = "test@gmail.com";
 constexpr char kFakeUserName[] = "test@example.com";
-constexpr char kFakeGaiaId[] = "1234567890";
+constexpr GaiaId::Literal kFakeGaiaId("1234567890");
 
 std::unique_ptr<KeyedService> CreateCertificateProviderService(
     content::BrowserContext* context) {
@@ -91,7 +91,7 @@ class ArcPlayStoreDisabledWaiter : public ArcSessionManagerObserver {
 
   void Wait() {
     base::RunLoop run_loop;
-    base::AutoReset<base::RunLoop*> reset(&run_loop_, &run_loop);
+    base::AutoReset<raw_ptr<base::RunLoop>> reset(&run_loop_, &run_loop);
     run_loop.Run();
   }
 
@@ -104,9 +104,7 @@ class ArcPlayStoreDisabledWaiter : public ArcSessionManagerObserver {
     }
   }
 
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of
-  RAW_PTR_EXCLUSION base::RunLoop* run_loop_ = nullptr;
+  raw_ptr<base::RunLoop> run_loop_ = nullptr;
 };
 
 class ArcSessionManagerTest : public MixinBasedInProcessBrowserTest {
@@ -283,7 +281,7 @@ IN_PROC_BROWSER_TEST_F(ArcSessionManagerTest, ArcDisabledInLockedFullscreen) {
   scoped_refptr<const extensions::Extension> extension(
       extensions::ExtensionBuilder("Test")
           .SetID("pmgljoohajacndjcjlajcopidgnhphcl")
-          .AddPermission("lockWindowFullscreenPrivate")
+          .AddAPIPermission("lockWindowFullscreenPrivate")
           .Build());
   function->set_extension(extension.get());
 

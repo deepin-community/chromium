@@ -63,7 +63,8 @@ void PrepopulatedComputedStylePropertyMap::UpdateNativeProperty(
   native_values_.Set(property_id, CSSProperty::Get(property_id)
                                       .CSSValueFromComputedStyle(
                                           style, /*layout_object=*/nullptr,
-                                          /*allow_visited_style=*/false));
+                                          /*allow_visited_style=*/false,
+                                          CSSValuePhase::kComputedValue));
 }
 
 void PrepopulatedComputedStylePropertyMap::UpdateCustomProperty(
@@ -73,7 +74,7 @@ void PrepopulatedComputedStylePropertyMap::UpdateCustomProperty(
   CSSPropertyRef ref(property_name, document);
   const CSSValue* value = ref.GetProperty().CSSValueFromComputedStyle(
       style, /*layout_object=*/nullptr,
-      /*allow_visited_style=*/false);
+      /*allow_visited_style=*/false, CSSValuePhase::kComputedValue);
   if (!value) {
     value = CSSUnparsedValue::Create()->ToCSSValue();
   }
@@ -122,7 +123,6 @@ String PrepopulatedComputedStylePropertyMap::SerializationForShorthand(
     const CSSProperty&) const {
   // TODO(816722): Shorthands not yet supported for this style map.
   NOTREACHED();
-  return "";
 }
 
 void PrepopulatedComputedStylePropertyMap::Trace(Visitor* visitor) const {

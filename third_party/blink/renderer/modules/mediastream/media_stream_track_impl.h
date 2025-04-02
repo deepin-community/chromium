@@ -35,7 +35,7 @@
 #include "third_party/blink/renderer/modules/event_target_modules.h"
 #include "third_party/blink/renderer/modules/mediastream/media_constraints.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_track.h"
-#include "third_party/blink/renderer/modules/mediastream/media_stream_track_video_stats.h"
+#include "third_party/blink/renderer/modules/mediastream/speech_recognition_media_stream_audio_sink.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_descriptor.h"
@@ -47,13 +47,11 @@
 namespace blink {
 
 class AudioSourceProvider;
-class DOMException;
 class ImageCapture;
 class MediaTrackCapabilities;
 class MediaTrackConstraints;
 class MediaStream;
 class MediaTrackSettings;
-class ScriptPromiseResolver;
 class ScriptState;
 
 // Primary implementation of the MediaStreamTrack interface and idl type.
@@ -86,16 +84,18 @@ class MODULES_EXPORT MediaStreamTrackImpl : public MediaStreamTrack,
   bool muted() const override;
   String ContentHint() const override;
   void SetContentHint(const String&) override;
-  String readyState() const override;
+  V8MediaStreamTrackState readyState() const override;
   MediaStreamTrack* clone(ExecutionContext*) override;
   void stopTrack(ExecutionContext*) override;
   MediaTrackCapabilities* getCapabilities() const override;
   MediaTrackConstraints* getConstraints() const override;
   MediaTrackSettings* getSettings() const override;
-  MediaStreamTrackVideoStats* stats() override;
+  V8UnionMediaStreamTrackAudioStatsOrMediaStreamTrackVideoStats* stats()
+      override;
   CaptureHandle* getCaptureHandle() const override;
-  ScriptPromise applyConstraints(ScriptState*,
-                                 const MediaTrackConstraints*) override;
+  ScriptPromise<IDLUndefined> applyConstraints(
+      ScriptState*,
+      const MediaTrackConstraints*) override;
 
   // These two functions are called when constraints have been successfully
   // applied.
@@ -122,30 +122,25 @@ class MODULES_EXPORT MediaStreamTrackImpl : public MediaStreamTrack,
   void RegisterMediaStream(MediaStream*) override;
   void UnregisterMediaStream(MediaStream*) override;
 
+  void RegisterSink(SpeechRecognitionMediaStreamAudioSink*) override;
+
   // EventTarget
   const AtomicString& InterfaceName() const override;
   ExecutionContext* GetExecutionContext() const override;
   void AddedEventListener(const AtomicString&,
                           RegisteredEventListener&) override;
 
-#if !BUILDFLAG(IS_ANDROID)
-  void SendWheel(double relative_x,
-                 double relative_y,
-                 int wheel_delta_x,
-                 int wheel_delta_y,
-                 base::OnceCallback<void(DOMException*)> callback) override;
-  void SetZoomLevel(int zoom_level,
-                    base::OnceCallback<void(DOMException*)> callback) override;
-#endif
-
   // ScriptWrappable
   bool HasPendingActivity() const final;
 
   std::unique_ptr<AudioSourceProvider> CreateWebAudioSource(
       int context_sample_rate,
-      uint32_t context_buffer_size) override;
+      base::TimeDelta platform_buffer_duration) override;
 
   MediaStreamTrackPlatform::VideoFrameStats GetVideoFrameStats() const;
+
+  void TransferAudioFrameStatsTo(
+      MediaStreamTrackPlatform::AudioFrameStats& destination);
 
   ImageCapture* GetImageCapture() override { return image_capture_.Get(); }
 
@@ -157,6 +152,8 @@ class MODULES_EXPORT MediaStreamTrackImpl : public MediaStreamTrack,
   void AddObserver(MediaStreamTrack::Observer*) override;
 
   void Trace(Visitor*) const override;
+
+  std::optional<int> GetZoomLevelForTesting() const { return zoom_level_; }
 
  protected:
   // Given a partially built MediaStreamTrackImpl, finishes the job of making it
@@ -170,7 +167,7 @@ class MODULES_EXPORT MediaStreamTrackImpl : public MediaStreamTrack,
   friend class InternalsMediaStream;
 
   // MediaStreamTrack
-  void applyConstraints(ScriptPromiseResolver*,
+  void applyConstraints(ScriptPromiseResolver<IDLUndefined>*,
                         const MediaTrackConstraints*) override;
 
   // MediaStreamSource::Observer
@@ -178,7 +175,7 @@ class MODULES_EXPORT MediaStreamTrackImpl : public MediaStreamTrack,
   void SourceChangedCaptureConfiguration() override;
   void SourceChangedCaptureHandle() override;
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-  void SourceChangedZoomLevel(int) override {}
+  void SourceChangedZoomLevel(int) override;
 #endif
   void PropagateTrackEnded();
 
@@ -216,15 +213,17 @@ class MODULES_EXPORT MediaStreamTrackImpl : public MediaStreamTrack,
 
   MediaStreamSource::ReadyState ready_state_;
   HeapHashSet<Member<MediaStream>> registered_media_streams_;
+  HeapHashSet<Member<SpeechRecognitionMediaStreamAudioSink>> registered_sinks_;
   bool is_iterating_registered_media_streams_ = false;
   const Member<MediaStreamComponent> component_;
   Member<ImageCapture> image_capture_;
   WeakMember<ExecutionContext> execution_context_;
   HeapHashSet<WeakMember<MediaStreamTrack::Observer>> observers_;
   bool muted_ = false;
+  std::optional<int> zoom_level_;
   MediaConstraints constraints_;
   std::optional<bool> suppress_local_audio_playback_setting_;
-  Member<MediaStreamTrackVideoStats> video_stats_;
+  Member<V8UnionMediaStreamTrackAudioStatsOrMediaStreamTrackVideoStats> stats_;
 };
 
 }  // namespace blink

@@ -26,7 +26,6 @@
 #include "cc/paint/paint_recorder.h"
 #include "cc/raster/raster_source.h"
 #include "components/viz/client/client_resource_provider.h"
-#include "components/viz/common/features.h"
 #include "components/viz/common/gpu/raster_context_provider.h"
 #include "gpu/GLES2/gl2extchromium.h"
 #include "gpu/command_buffer/client/client_shared_image.h"
@@ -44,44 +43,10 @@
 
 namespace cc {
 
-// Subclass for InUsePoolResource that holds ownership of a gpu-rastered backing
-// and does cleanup of the backing when destroyed.
-class GpuRasterBufferProvider::GpuRasterBacking
-    : public ResourcePool::GpuBacking {
- public:
-  ~GpuRasterBacking() override {
-    if (!shared_image) {
-      return;
-    }
-    auto* sii = worker_context_provider->SharedImageInterface();
-    if (returned_sync_token.HasData())
-      sii->DestroySharedImage(returned_sync_token, std::move(shared_image));
-    else if (mailbox_sync_token.HasData())
-      sii->DestroySharedImage(mailbox_sync_token, std::move(shared_image));
-  }
-
-  void OnMemoryDump(
-      base::trace_event::ProcessMemoryDump* pmd,
-      const base::trace_event::MemoryAllocatorDumpGuid& buffer_dump_guid,
-      uint64_t tracing_process_id,
-      int importance) const override {
-    if (!shared_image) {
-      return;
-    }
-
-    auto tracing_guid = shared_image->GetGUIDForTracing();
-    pmd->CreateSharedGlobalAllocatorDump(tracing_guid);
-    pmd->AddOwnershipEdge(buffer_dump_guid, tracing_guid, importance);
-  }
-
-  // The context used to clean up the mailbox
-  raw_ptr<viz::RasterContextProvider> worker_context_provider = nullptr;
-};
-
 GpuRasterBufferProvider::RasterBufferImpl::RasterBufferImpl(
     GpuRasterBufferProvider* client,
     const ResourcePool::InUsePoolResource& in_use_resource,
-    GpuRasterBacking* backing,
+    ResourcePool::GpuBacking* backing,
     bool resource_has_previous_content,
     bool depends_on_at_raster_decodes,
     bool depends_on_hardware_accelerated_jpeg_candidates,
@@ -149,7 +114,6 @@ GpuRasterBufferProvider::GpuRasterBufferProvider(
       worker_context_provider_(worker_context_provider),
       tile_format_(raster_caps.tile_format),
       tile_overlay_candidate_(raster_caps.tile_overlay_candidate),
-      tile_texture_target_(raster_caps.tile_texture_target),
       max_tile_size_(max_tile_size),
       pending_raster_queries_(pending_raster_queries),
       raster_metric_probability_(raster_metric_probability),
@@ -168,13 +132,9 @@ GpuRasterBufferProvider::GpuRasterBufferProvider(
         worker_context_provider->ContextCapabilities().using_vulkan_context;
 
     // On Android, DMSAA on vulkan backend launch is controlled by
-    // kUseDMSAAForTiles whereas GL backend launch is controlled by
-    // kUseDMSAAForTilesAndroidGL.
-    is_using_dmsaa_ =
-        (base::FeatureList::IsEnabled(features::kUseDMSAAForTiles) &&
-         is_using_vulkan) ||
-        (base::FeatureList::IsEnabled(features::kUseDMSAAForTilesAndroidGL) &&
-         !is_using_vulkan);
+    // kUseDMSAAForTiles.
+    is_using_dmsaa_ = !is_using_vulkan ||
+                      base::FeatureList::IsEnabled(features::kUseDMSAAForTiles);
   }
 #endif
 }
@@ -189,16 +149,13 @@ std::unique_ptr<RasterBuffer> GpuRasterBufferProvider::AcquireBufferForRaster(
     bool depends_on_hardware_accelerated_jpeg_candidates,
     bool depends_on_hardware_accelerated_webp_candidates) {
   if (!resource.gpu_backing()) {
-    auto backing = std::make_unique<GpuRasterBacking>();
-    backing->worker_context_provider = worker_context_provider_;
+    auto backing = std::make_unique<ResourcePool::GpuBacking>();
     backing->overlay_candidate = tile_overlay_candidate_;
-    backing->texture_target = tile_texture_target_;
     backing->is_using_raw_draw =
         !backing->overlay_candidate && is_using_raw_draw_;
     resource.set_gpu_backing(std::move(backing));
   }
-  GpuRasterBacking* backing =
-      static_cast<GpuRasterBacking*>(resource.gpu_backing());
+  ResourcePool::GpuBacking* backing = resource.gpu_backing();
   bool resource_has_previous_content =
       resource_content_id && resource_content_id == previous_content_id;
   return std::make_unique<RasterBufferImpl>(
@@ -376,20 +333,18 @@ void GpuRasterBufferProvider::RasterBufferImpl::RasterizeSource(
 
     // This SharedImage will serve as the destination of the raster defined by
     // `raster_source` before being sent off to the display compositor.
-    uint32_t flags = gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
-                     gpu::SHARED_IMAGE_USAGE_RASTER_WRITE |
-                     gpu::SHARED_IMAGE_USAGE_OOP_RASTERIZATION;
+    gpu::SharedImageUsageSet flags = gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
+                                     gpu::SHARED_IMAGE_USAGE_RASTER_WRITE |
+                                     gpu::SHARED_IMAGE_USAGE_OOP_RASTERIZATION;
     if (backing_->overlay_candidate) {
       flags |= gpu::SHARED_IMAGE_USAGE_SCANOUT;
-      if (features::IsDelegatedCompositingEnabled())
-        flags |= gpu::SHARED_IMAGE_USAGE_RASTER_DELEGATED_COMPOSITING;
     } else if (client_->is_using_raw_draw_) {
       flags |= gpu::SHARED_IMAGE_USAGE_RAW_DRAW;
     }
-    backing_->shared_image = sii->CreateSharedImage(
-        shared_image_format_, resource_size_, color_space_,
-        kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, flags, "GpuRasterTile",
-        gpu::kNullSurfaceHandle);
+    backing_->shared_image =
+        sii->CreateSharedImage({shared_image_format_, resource_size_,
+                                color_space_, flags, "GpuRasterTile"},
+                               gpu::kNullSurfaceHandle);
     CHECK(backing_->shared_image);
     mailbox_needs_clear = true;
     ri->WaitSyncTokenCHROMIUM(sii->GenUnverifiedSyncToken().GetConstData());
@@ -436,6 +391,7 @@ void GpuRasterBufferProvider::RasterBufferImpl::RasterizeSource(
       playback_settings.image_provider, content_size, raster_full_rect,
       playback_rect, transform.translation(), recording_to_raster_scale,
       raster_source->requires_clear(),
+      playback_settings.raster_inducing_scroll_offsets,
       const_cast<RasterSource*>(raster_source)->max_op_size_hint());
   ri->EndRasterCHROMIUM();
 
@@ -445,7 +401,7 @@ void GpuRasterBufferProvider::RasterBufferImpl::RasterizeSource(
 
 bool GpuRasterBufferProvider::ShouldUnpremultiplyAndDitherResource(
     viz::SharedImageFormat format) const {
-  // TODO(crbug.com/1151490): Re-enable for OOPR.
+  // TODO(crbug.com/40042400): Re-enable for OOPR.
   return false;
 }
 

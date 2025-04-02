@@ -7,40 +7,6 @@
 #include <string>
 #include <utility>
 
-#include "ash/components/arc/app/arc_app_launch_notifier.h"
-#include "ash/components/arc/appfuse/arc_appfuse_bridge.h"
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/audio/arc_audio_bridge.h"
-#include "ash/components/arc/camera/arc_camera_bridge.h"
-#include "ash/components/arc/chrome_feature_flags/arc_chrome_feature_flags_bridge.h"
-#include "ash/components/arc/clipboard/arc_clipboard_bridge.h"
-#include "ash/components/arc/compat_mode/arc_resize_lock_manager.h"
-#include "ash/components/arc/crash_collector/arc_crash_collector_bridge.h"
-#include "ash/components/arc/disk_quota/arc_disk_quota_bridge.h"
-#include "ash/components/arc/ime/arc_ime_service.h"
-#include "ash/components/arc/keyboard_shortcut/arc_keyboard_shortcut_bridge.h"
-#include "ash/components/arc/media_session/arc_media_session_bridge.h"
-#include "ash/components/arc/memory/arc_memory_bridge.h"
-#include "ash/components/arc/memory_pressure/arc_memory_pressure_bridge.h"
-#include "ash/components/arc/metrics/arc_metrics_service.h"
-#include "ash/components/arc/midis/arc_midis_bridge.h"
-#include "ash/components/arc/net/arc_net_host_impl.h"
-#include "ash/components/arc/obb_mounter/arc_obb_mounter_bridge.h"
-#include "ash/components/arc/pay/arc_digital_goods_bridge.h"
-#include "ash/components/arc/pay/arc_payment_app_bridge.h"
-#include "ash/components/arc/power/arc_power_bridge.h"
-#include "ash/components/arc/property/arc_property_bridge.h"
-#include "ash/components/arc/sensor/arc_iio_sensor_bridge.h"
-#include "ash/components/arc/session/arc_service_manager.h"
-#include "ash/components/arc/session/arc_session.h"
-#include "ash/components/arc/session/arc_session_runner.h"
-#include "ash/components/arc/storage_manager/arc_storage_manager.h"
-#include "ash/components/arc/system_ui/arc_system_ui_bridge.h"
-#include "ash/components/arc/timer/arc_timer_bridge.h"
-#include "ash/components/arc/usb/usb_host_bridge.h"
-#include "ash/components/arc/volume_mounter/arc_volume_mounter_bridge.h"
-#include "ash/components/arc/wake_lock/arc_wake_lock_bridge.h"
 #include "ash/constants/ash_features.h"
 #include "base/check_op.h"
 #include "base/files/file_util.h"
@@ -51,6 +17,7 @@
 #include "chrome/browser/ash/app_list/arc/arc_usb_host_permission_manager.h"
 #include "chrome/browser/ash/app_list/arc/arc_usb_host_permission_manager_factory.h"
 #include "chrome/browser/ash/app_restore/app_restore_arc_task_handler.h"
+#include "chrome/browser/ash/app_restore/app_restore_arc_task_handler_factory.h"
 #include "chrome/browser/ash/apps/apk_web_app_service.h"
 #include "chrome/browser/ash/arc/accessibility/arc_accessibility_helper_bridge.h"
 #include "chrome/browser/ash/arc/adbd/arc_adbd_monitor_bridge.h"
@@ -59,7 +26,8 @@
 #include "chrome/browser/ash/arc/bluetooth/arc_bluetooth_bridge.h"
 #include "chrome/browser/ash/arc/boot_phase_monitor/arc_boot_phase_monitor_bridge.h"
 #include "chrome/browser/ash/arc/enterprise/arc_enterprise_reporting_service.h"
-#include "chrome/browser/ash/arc/enterprise/cert_store/cert_store_service.h"
+#include "chrome/browser/ash/arc/enterprise/cert_store/cert_store_service_factory.h"
+#include "chrome/browser/ash/arc/error_notification/arc_error_notification_bridge.h"
 #include "chrome/browser/ash/arc/file_system_watcher/arc_file_system_watcher_service.h"
 #include "chrome/browser/ash/arc/fileapi/arc_documents_provider_root_map_factory.h"
 #include "chrome/browser/ash/arc/fileapi/arc_file_system_bridge.h"
@@ -73,7 +41,6 @@
 #include "chrome/browser/ash/arc/intent_helper/chrome_arc_intent_helper_delegate.h"
 #include "chrome/browser/ash/arc/keymaster/arc_keymaster_bridge.h"
 #include "chrome/browser/ash/arc/keymint/arc_keymint_bridge.h"
-#include "chrome/browser/ash/arc/kiosk/arc_kiosk_bridge.h"
 #include "chrome/browser/ash/arc/metrics/arc_metrics_service_proxy.h"
 #include "chrome/browser/ash/arc/nearby_share/arc_nearby_share_bridge.h"
 #include "chrome/browser/ash/arc/net/browser_url_opener_impl.h"
@@ -81,15 +48,13 @@
 #include "chrome/browser/ash/arc/notification/arc_boot_error_notification.h"
 #include "chrome/browser/ash/arc/notification/arc_provision_notification_service.h"
 #include "chrome/browser/ash/arc/notification/arc_vm_data_migration_notifier.h"
-#include "chrome/browser/ash/arc/oemcrypto/arc_oemcrypto_bridge.h"
 #include "chrome/browser/ash/arc/pip/arc_pip_bridge.h"
 #include "chrome/browser/ash/arc/policy/arc_policy_bridge.h"
 #include "chrome/browser/ash/arc/print_spooler/arc_print_spooler_bridge.h"
 #include "chrome/browser/ash/arc/privacy_items/arc_privacy_items_bridge.h"
-#include "chrome/browser/ash/arc/process/arc_process_service.h"
 #include "chrome/browser/ash/arc/screen_capture/arc_screen_capture_bridge.h"
 #include "chrome/browser/ash/arc/session/arc_disk_space_monitor.h"
-#include "chrome/browser/ash/arc/session/arc_initial_optin_notifier.h"
+#include "chrome/browser/ash/arc/session/arc_initial_optin_metrics_recorder_factory.h"
 #include "chrome/browser/ash/arc/session/arc_play_store_enabled_preference_handler.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/arc/sharesheet/arc_sharesheet_bridge.h"
@@ -98,7 +63,6 @@
 #include "chrome/browser/ash/arc/tracing/arc_tracing_bridge.h"
 #include "chrome/browser/ash/arc/tts/arc_tts_service.h"
 #include "chrome/browser/ash/arc/user_session/arc_user_session_service.h"
-#include "chrome/browser/ash/arc/video/gpu_arc_video_service_host.h"
 #include "chrome/browser/ash/arc/vmm/arc_system_state_bridge.h"
 #include "chrome/browser/ash/arc/vmm/arc_vmm_manager.h"
 #include "chrome/browser/ash/arc/wallpaper/arc_wallpaper_service.h"
@@ -108,8 +72,42 @@
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/common/channel_info.h"
 #include "chromeos/ash/components/memory/swap_configuration.h"
-#include "components/arc/common/intent_helper/arc_icon_cache_delegate.h"
-#include "components/arc/intent_helper/arc_intent_helper_bridge.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_launch_notifier.h"
+#include "chromeos/ash/experiences/arc/appfuse/arc_appfuse_bridge.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/audio/arc_audio_bridge.h"
+#include "chromeos/ash/experiences/arc/camera/arc_camera_bridge.h"
+#include "chromeos/ash/experiences/arc/chrome_feature_flags/arc_chrome_feature_flags_bridge.h"
+#include "chromeos/ash/experiences/arc/compat_mode/arc_resize_lock_manager.h"
+#include "chromeos/ash/experiences/arc/crash_collector/arc_crash_collector_bridge.h"
+#include "chromeos/ash/experiences/arc/disk_space/arc_disk_space_bridge.h"
+#include "chromeos/ash/experiences/arc/ime/arc_ime_service.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_icon_cache_delegate.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_bridge.h"
+#include "chromeos/ash/experiences/arc/media_session/arc_media_session_bridge.h"
+#include "chromeos/ash/experiences/arc/memory/arc_memory_bridge.h"
+#include "chromeos/ash/experiences/arc/metrics/arc_metrics_service.h"
+#include "chromeos/ash/experiences/arc/midis/arc_midis_bridge.h"
+#include "chromeos/ash/experiences/arc/net/arc_net_host_impl.h"
+#include "chromeos/ash/experiences/arc/net/arc_wifi_host_impl.h"
+#include "chromeos/ash/experiences/arc/obb_mounter/arc_obb_mounter_bridge.h"
+#include "chromeos/ash/experiences/arc/oemcrypto/arc_oemcrypto_bridge.h"
+#include "chromeos/ash/experiences/arc/pay/arc_digital_goods_bridge.h"
+#include "chromeos/ash/experiences/arc/pay/arc_payment_app_bridge.h"
+#include "chromeos/ash/experiences/arc/power/arc_power_bridge.h"
+#include "chromeos/ash/experiences/arc/process/arc_process_service.h"
+#include "chromeos/ash/experiences/arc/safety/arc_safety_bridge.h"
+#include "chromeos/ash/experiences/arc/sensor/arc_iio_sensor_bridge.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/session/arc_session.h"
+#include "chromeos/ash/experiences/arc/session/arc_session_runner.h"
+#include "chromeos/ash/experiences/arc/system_ui/arc_system_ui_bridge.h"
+#include "chromeos/ash/experiences/arc/timer/arc_timer_bridge.h"
+#include "chromeos/ash/experiences/arc/usb/usb_host_bridge.h"
+#include "chromeos/ash/experiences/arc/video/gpu_arc_video_service_host.h"
+#include "chromeos/ash/experiences/arc/volume_mounter/arc_volume_mounter_bridge.h"
+#include "chromeos/ash/experiences/arc/wake_lock/arc_wake_lock_bridge.h"
 #include "components/prefs/pref_member.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 
@@ -118,15 +116,21 @@
 #include "base/time/time.h"
 #include "chromeos/ash/components/dbus/cdm_factory_daemon/cdm_factory_daemon_client.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager_client.h"
+#else
+#include "ash/constants/ash_switches.h"
+#include "base/files/file_path.h"
+#endif
 
+namespace arc {
+namespace {
+
+#if BUILDFLAG(USE_ARC_PROTECTED_MEDIA)
 // Delay for repeatedly checking if the TPM is owned or not.
 constexpr base::TimeDelta kTpmOwnershipCheckDelay = base::Seconds(5);
 // Timeout for waiting for the daemon to become available after we have owned
 // the TPM.
 constexpr base::TimeDelta kDaemonWaitTimeoutSec = base::Seconds(30);
 #endif  // BUILDFLAG(USE_ARC_PROTECTED_MEDIA)
-namespace arc {
-namespace {
 
 // `ChromeBrowserMainPartsAsh` owns.
 ArcServiceLauncher* g_arc_service_launcher = nullptr;
@@ -142,6 +146,20 @@ std::unique_ptr<ArcSessionManager> CreateArcSessionManager(
   return std::make_unique<ArcSessionManager>(std::move(runner),
                                              std::move(delegate));
 }
+
+#if !BUILDFLAG(USE_ARC_PROTECTED_MEDIA)
+void CheckArcvmDlcImageStatus() {
+  base::FilePath arc_vm_dlc_image_path(
+      "/opt/google/vms/android/system.raw.img");
+  // Check if the ARCVM DLC image exists before calling
+  // GetArcStatusForProfile(). This blocks the main thread but is necessary to
+  // ensure arc availability is consistent, especially during Ash Chrome
+  // restarts. The check only occurs when the arcvm_dlc USE flag is enabled,
+  // which is currently specific to the Reven board.
+  bool is_arcvm_dlc_image_available = base::PathExists(arc_vm_dlc_image_path);
+  arc::SetArcvmDlcImageStatus(is_arcvm_dlc_image_available);
+}
+#endif  //! BUILDFLAG(USE_ARC_PROTECTED_MEDIA)
 
 }  // namespace
 
@@ -160,8 +178,6 @@ ArcServiceLauncher::ArcServiceLauncher(
       base::FeatureList::IsEnabled(kEnableArcVmDataMigration)) {
     arc_disk_space_monitor_ = std::make_unique<ArcDiskSpaceMonitor>();
   }
-
-  session_manager_obs_.Observe(arc_session_manager_.get());
 }
 
 ArcServiceLauncher::~ArcServiceLauncher() {
@@ -189,6 +205,12 @@ void ArcServiceLauncher::Initialize() {
                      weak_factory_.GetWeakPtr()),
       kTpmOwnershipCheckDelay);
 #else
+  if (arc::IsArcVmDlcEnabled() &&
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          ash::switches::kLoginUser)) {
+    CheckArcvmDlcImageStatus();
+  }
+
   arc_session_manager_->ExpandPropertyFilesAndReadSalt();
 #endif  // BUILDFLAG(USE_ARC_PROTECTED_MEDIA)
 }
@@ -228,9 +250,7 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   ash::ConfigureSwap(IsArcPlayStoreEnabledForProfile(profile));
 
   // Record metrics for ARC status based on device affiliation
-  if (base::FeatureList::IsEnabled(kUnaffiliatedDeviceArcRestriction)) {
-    RecordArcStatusBasedOnDeviceAffiliationUMA(profile);
-  }
+  RecordArcStatusBasedOnDeviceAffiliationUMA(profile);
 
   if (arc_session_manager_->profile() != profile) {
     // Profile is not matched, so the given |profile| is not allowed to use
@@ -257,12 +277,11 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   ArcBootErrorNotification::GetForBrowserContext(profile);
   ArcBootPhaseMonitorBridge::GetForBrowserContext(profile);
   ArcCameraBridge::GetForBrowserContext(profile);
-  ArcClipboardBridge::GetForBrowserContext(profile);
   ArcCrashCollectorBridge::GetForBrowserContext(profile);
   ArcDigitalGoodsBridge::GetForBrowserContext(profile);
-  ArcDiskQuotaBridge::GetForBrowserContext(profile)->SetAccountId(
-      multi_user_util::GetAccountIdFromProfile(profile));
+  ArcDiskSpaceBridge::GetForBrowserContext(profile);
   ArcEnterpriseReportingService::GetForBrowserContext(profile);
+  ArcErrorNotificationBridge::GetForBrowserContext(profile);
   ArcFileSystemBridge::GetForBrowserContext(profile);
   ArcFileSystemMounter::GetForBrowserContext(profile);
   ArcFileSystemWatcherService::GetForBrowserContext(profile);
@@ -278,13 +297,11 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
     arc_icon_cache_delegate_provider_ =
         std::make_unique<ArcIconCacheDelegateProvider>(intent_helper);
   }
-  ArcKeyboardShortcutBridge::GetForBrowserContext(profile);
   if (ShouldUseArcKeyMint()) {
     ArcKeyMintBridge::GetForBrowserContext(profile);
   } else {
     ArcKeymasterBridge::GetForBrowserContext(profile);
   }
-  ArcKioskBridge::GetForBrowserContext(profile);
   ArcMediaSessionBridge::GetForBrowserContext(profile);
   {
     auto* metrics_service = ArcMetricsService::GetForBrowserContext(profile);
@@ -302,9 +319,7 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
     arc_net_host_impl->SetPrefService(profile->GetPrefs());
     arc_net_host_impl->SetCertManager(
         std::make_unique<CertManagerImpl>(profile));
-    if (ash::features::IsPasspointARCSupportEnabled()) {
-      arc_net_url_opener_ = std::make_unique<BrowserUrlOpenerImpl>();
-    }
+    arc_net_url_opener_ = std::make_unique<BrowserUrlOpenerImpl>();
   }
   ArcOemCryptoBridge::GetForBrowserContext(profile);
   ArcPaymentAppBridge::GetForBrowserContext(profile);
@@ -314,7 +329,6 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   ArcPrintSpoolerBridge::GetForBrowserContext(profile);
   ArcPrivacyItemsBridge::GetForBrowserContext(profile);
   ArcProcessService::GetForBrowserContext(profile);
-  ArcPropertyBridge::GetForBrowserContext(profile);
   ArcProvisionNotificationService::GetForBrowserContext(profile);
   ArcResizeLockManager::GetForBrowserContext(profile);
   ArcScreenCaptureBridge::GetForBrowserContext(profile);
@@ -330,19 +344,20 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   ArcVolumeMounterBridge::GetForBrowserContext(profile);
   ArcWakeLockBridge::GetForBrowserContext(profile);
   ArcWallpaperService::GetForBrowserContext(profile);
+  ArcWifiHostImpl::GetForBrowserContext(profile);
   GpuArcVideoKeyedService::GetForBrowserContext(profile);
-  CertStoreService::GetForBrowserContext(profile);
+  CertStoreServiceFactory::GetForBrowserContext(profile);
   apps::ArcAppsFactory::GetForProfile(profile);
   ash::ApkWebAppService::Get(profile);
-  ash::app_restore::AppRestoreArcTaskHandler::GetForProfile(profile);
-  ArcInitialOptInNotifier::GetForProfile(profile);
+  ash::app_restore::AppRestoreArcTaskHandlerFactory::GetForProfile(profile);
+  ArcInitialOptInMetricsRecorderFactory::GetForBrowserContext(profile);
   ArcChromeFeatureFlagsBridge::GetForBrowserContext(profile);
 
   if (arc::IsArcVmEnabled()) {
     // ARCVM-only services.
-    ArcMemoryPressureBridge::GetForBrowserContext(profile);
     ArcVmmManager::GetForBrowserContext(profile)->set_user_id_hash(
         user_id_hash);
+    ArcSafetyBridge::GetForBrowserContext(profile);
     ArcSystemStateBridge::GetForBrowserContext(profile);
 
     if (base::FeatureList::IsEnabled(kEnableArcVmDataMigration)) {
@@ -351,6 +366,11 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
     }
     if (base::FeatureList::IsEnabled(kEnableArcIdleManager))
       ArcIdleManager::GetForBrowserContext(profile);
+    if (ShouldUseArcKeyMint()) {
+      auto serial_number = arc_session_manager_->GetSerialNumberForKeyMint();
+      ArcKeyMintBridge::GetForBrowserContext(profile)->SetSerialNumberInKeyMint(
+          serial_number);
+    }
   } else {
     // ARC Container-only services.
     ArcTimerBridge::GetForBrowserContext(profile);
@@ -381,7 +401,6 @@ void ArcServiceLauncher::ResetForTesting() {
   // First destroy the internal states, then re-initialize them.
   // These are for workaround of singletonness DCHECK in their ctors/dtors.
   Shutdown();
-  session_manager_obs_.Reset();
   arc_session_manager_.reset();
 
   // No recreation of arc_service_manager. Pointers to its ArcBridgeService
@@ -390,11 +409,6 @@ void ArcServiceLauncher::ResetForTesting() {
   arc_session_manager_ = CreateArcSessionManager(
       arc_service_manager_->arc_bridge_service(), chrome::GetChannel(),
       scheduler_configuration_manager_);
-  session_manager_obs_.Observe(arc_session_manager_.get());
-}
-
-void ArcServiceLauncher::OnArcPlayStoreEnabledChanged(bool enabled) {
-  ash::ConfigureSwap(/*arc_enabled=*/enabled);
 }
 
 #if BUILDFLAG(USE_ARC_PROTECTED_MEDIA)
@@ -460,30 +474,27 @@ void ArcServiceLauncher::EnsureFactoriesBuilt() {
   ArcBootErrorNotification::EnsureFactoryBuilt();
   ArcBootPhaseMonitorBridgeFactory::GetInstance();
   ArcCameraBridge::EnsureFactoryBuilt();
-  ArcClipboardBridge::EnsureFactoryBuilt();
   ArcCrashCollectorBridge::EnsureFactoryBuilt();
   ArcDigitalGoodsBridge::EnsureFactoryBuilt();
-  ArcDiskQuotaBridge::EnsureFactoryBuilt();
+  ArcDiskSpaceBridge::EnsureFactoryBuilt();
   ArcDocumentsProviderRootMapFactory::GetInstance();
   ArcEnterpriseReportingService::EnsureFactoryBuilt();
+  ArcErrorNotificationBridge::EnsureFactoryBuilt();
   ArcFileSystemMounter::EnsureFactoryBuilt();
   ArcFileSystemOperationRunner::EnsureFactoryBuilt();
   ArcFileSystemWatcherService::EnsureFactoryBuilt();
   ArcIdleManager::EnsureFactoryBuilt();
   ArcIioSensorBridge::EnsureFactoryBuilt();
   ArcImeService::EnsureFactoryBuilt();
-  ArcInitialOptInNotifier::EnsureFactoryBuilt();
+  ArcInitialOptInMetricsRecorderFactory::GetInstance();
   ArcInstanceThrottle::EnsureFactoryBuilt();
-  ArcKeyboardShortcutBridge::EnsureFactoryBuilt();
   if (ShouldUseArcKeyMint()) {
     ArcKeyMintBridge::EnsureFactoryBuilt();
   } else {
     ArcKeymasterBridge::EnsureFactoryBuilt();
   }
-  ArcKioskBridge::EnsureFactoryBuilt();
   ArcMediaSessionBridge::EnsureFactoryBuilt();
   ArcMemoryBridge::EnsureFactoryBuilt();
-  ArcMemoryPressureBridge::EnsureFactoryBuilt();
   ArcMetricsServiceFactory::GetInstance();
   ArcMetricsServiceProxy::EnsureFactoryBuilt();
   ArcMidisBridge::EnsureFactoryBuilt();
@@ -499,12 +510,11 @@ void ArcServiceLauncher::EnsureFactoriesBuilt() {
   ArcPrintSpoolerBridge::EnsureFactoryBuilt();
   ArcPrivacyItemsBridge::EnsureFactoryBuilt();
   ArcProcessService::EnsureFactoryBuilt();
-  ArcPropertyBridge::EnsureFactoryBuilt();
   ArcProvisionNotificationService::EnsureFactoryBuilt();
   ArcResizeLockManager::EnsureFactoryBuilt();
+  ArcSafetyBridge::EnsureFactoryBuilt();
   ArcScreenCaptureBridge::EnsureFactoryBuilt();
   ArcSettingsService::EnsureFactoryBuilt();
-  ArcStorageManager::EnsureFactoryBuilt();
   ArcSharesheetBridge::EnsureFactoryBuilt();
   ArcSurveyService::EnsureFactoryBuilt();
   ArcSystemUIBridge::EnsureFactoryBuilt();
@@ -519,7 +529,8 @@ void ArcServiceLauncher::EnsureFactoriesBuilt() {
   ArcVolumeMounterBridge::EnsureFactoryBuilt();
   ArcWakeLockBridge::EnsureFactoryBuilt();
   ArcWallpaperService::EnsureFactoryBuilt();
-  CertStoreService::EnsureFactoryBuilt();
+  ArcWifiHostImpl::EnsureFactoryBuilt();
+  CertStoreServiceFactory::GetInstance();
   GpuArcVideoKeyedService::EnsureFactoryBuilt();
   input_overlay::ArcInputOverlayManager::EnsureFactoryBuilt();
   ArcChromeFeatureFlagsBridge::EnsureFactoryBuilt();

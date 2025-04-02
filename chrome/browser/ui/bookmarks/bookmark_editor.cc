@@ -101,9 +101,9 @@ int BookmarkEditor::EditDetails::GetWindowTitleId() const {
     case EditDetails::EXISTING_NODE:
     case EditDetails::NEW_URL:
       dialog_title = (type == EditDetails::EXISTING_NODE &&
-                      existing_node->type() == BookmarkNode::FOLDER) ?
-          IDS_BOOKMARK_FOLDER_EDITOR_WINDOW_TITLE :
-          IDS_BOOKMARK_EDITOR_TITLE;
+                      existing_node->type() == BookmarkNode::FOLDER)
+                         ? IDS_BOOKMARK_FOLDER_EDITOR_WINDOW_TITLE
+                         : IDS_BOOKMARK_EDITOR_TITLE;
       break;
     case EditDetails::NEW_FOLDER:
       dialog_title = bookmark_data.children.empty()
@@ -120,8 +120,9 @@ BookmarkEditor::EditDetails BookmarkEditor::EditDetails::EditNode(
     const BookmarkNode* node) {
   EditDetails details(EXISTING_NODE);
   details.existing_node = node;
-  if (node)
+  if (node) {
     details.parent_node = node->parent();
+  }
   return details;
 }
 
@@ -152,35 +153,11 @@ BookmarkEditor::EditDetails::EditDetails(const EditDetails& other) = default;
 BookmarkEditor::EditDetails::~EditDetails() = default;
 
 // static
-const BookmarkNode* BookmarkEditor::ApplyEditsWithNoFolderChange(
-    BookmarkModel* model,
-    const BookmarkNode* parent,
-    const EditDetails& details,
-    const std::u16string& new_title,
-    const GURL& new_url) {
-  if (details.type == EditDetails::NEW_URL ||
-      details.type == EditDetails::NEW_FOLDER) {
-    return CreateNewNode(model, parent, details, new_title, new_url);
-  }
-
-  const BookmarkNode* node = details.existing_node;
-  DCHECK(node);
-
-  if (node->is_url())
-    model->SetURL(node, new_url, bookmarks::metrics::BookmarkEditSource::kUser);
-  model->SetTitle(node, new_title,
-                  bookmarks::metrics::BookmarkEditSource::kUser);
-
-  return node;
-}
-
-// static
-const BookmarkNode* BookmarkEditor::ApplyEditsWithPossibleFolderChange(
-    BookmarkModel* model,
-    const BookmarkNode* new_parent,
-    const EditDetails& details,
-    const std::u16string& new_title,
-    const GURL& new_url) {
+const BookmarkNode* BookmarkEditor::ApplyEdits(BookmarkModel* model,
+                                               const BookmarkNode* new_parent,
+                                               const EditDetails& details,
+                                               const std::u16string& new_title,
+                                               const GURL& new_url) {
   if (details.type == EditDetails::NEW_URL ||
       details.type == EditDetails::NEW_FOLDER) {
     return CreateNewNode(model, new_parent, details, new_title, new_url);
@@ -189,10 +166,12 @@ const BookmarkNode* BookmarkEditor::ApplyEditsWithPossibleFolderChange(
   const BookmarkNode* node = details.existing_node;
   DCHECK(node);
 
-  if (new_parent != node->parent())
+  if (new_parent != node->parent()) {
     model->Move(node, new_parent, new_parent->children().size());
-  if (node->is_url())
+  }
+  if (node->is_url()) {
     model->SetURL(node, new_url, bookmarks::metrics::BookmarkEditSource::kUser);
+  }
   model->SetTitle(node, new_title,
                   bookmarks::metrics::BookmarkEditSource::kUser);
 

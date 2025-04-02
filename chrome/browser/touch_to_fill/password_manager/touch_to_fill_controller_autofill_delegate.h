@@ -5,14 +5,21 @@
 #ifndef CHROME_BROWSER_TOUCH_TO_FILL_PASSWORD_MANAGER_TOUCH_TO_FILL_CONTROLLER_AUTOFILL_DELEGATE_H_
 #define CHROME_BROWSER_TOUCH_TO_FILL_PASSWORD_MANAGER_TOUCH_TO_FILL_CONTROLLER_AUTOFILL_DELEGATE_H_
 
+#include <memory>
+
 #include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/types/pass_key.h"
 #include "base/types/strong_alias.h"
+#include "chrome/browser/password_manager/android/access_loss/password_access_loss_warning_bridge.h"
+#include "chrome/browser/password_manager/android/grouped_affiliations/acknowledge_grouped_credential_sheet_bridge.h"
+#include "chrome/browser/password_manager/android/grouped_affiliations/acknowledge_grouped_credential_sheet_controller.h"
 #include "chrome/browser/touch_to_fill/password_manager/touch_to_fill_controller_delegate.h"
+#include "components/autofill/core/common/unique_ids.h"
 #include "components/device_reauth/device_authenticator.h"
+#include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "ui/gfx/native_widget_types.h"
@@ -35,14 +42,16 @@ class Profile;
 
 // Delegate interface for TouchToFillController being used in an autofill
 // context.
+// The order of execution is the following:
+// - `OnShow` is called upon showing the bottom sheet with credentials.
+// - `OnCredentialSelected` is called upon selecting the credential.
+// - `OnReauthCompleted` (only of auth before filling of on).
+// - `FillCredential` finally fills the credentials.
 class TouchToFillControllerAutofillDelegate
     : public TouchToFillControllerDelegate {
  public:
   using ShowHybridOption = base::StrongAlias<struct ShowHybridOptionTag, bool>;
-  using ShowPasswordMigrationWarningCallback = base::RepeatingCallback<void(
-      gfx::NativeWindow,
-      Profile*,
-      password_manager::metrics_util::PasswordMigrationWarningTriggers)>;
+  using ShowDataLossWarningCallback = base::RepeatingCallback<void(void)>;
 
   // The action a user took when interacting with the Touch To Fill sheet.
   //
@@ -84,8 +93,11 @@ class TouchToFillControllerAutofillDelegate
       base::WeakPtr<password_manager::WebAuthnCredentialsDelegate>
           webauthn_delegate,
       std::unique_ptr<password_manager::PasswordCredentialFiller> filler,
+      const password_manager::PasswordForm* form_to_fill,
+      autofill::FieldRendererId focused_field_renderer_id,
       ShowHybridOption should_show_hybrid_option,
-      ShowPasswordMigrationWarningCallback show_password_migration_warning);
+      std::unique_ptr<PasswordAccessLossWarningBridge>
+          data_loss_warning_bridge);
 
   TouchToFillControllerAutofillDelegate(
       ChromePasswordManagerClient* password_client,
@@ -93,6 +105,8 @@ class TouchToFillControllerAutofillDelegate
       base::WeakPtr<password_manager::WebAuthnCredentialsDelegate>
           webauthn_delegate,
       std::unique_ptr<password_manager::PasswordCredentialFiller> filler,
+      const password_manager::PasswordForm* form_to_fill,
+      autofill::FieldRendererId focused_field_renderer_id,
       ShowHybridOption should_show_hybrid_option);
   TouchToFillControllerAutofillDelegate(
       const TouchToFillControllerAutofillDelegate&) = delete;
@@ -115,6 +129,7 @@ class TouchToFillControllerAutofillDelegate
   void OnDismiss(base::OnceClosure action_completed) override;
   void OnCredManDismissed(base::OnceClosure action_completed) override;
   GURL GetFrameUrl() override;
+  bool ShouldShowTouchToFill() override;
   bool ShouldTriggerSubmission() override;
   bool ShouldShowHybridOption() override;
   bool ShouldShowNoPasskeysSheetIfRequired() override;
@@ -126,14 +141,16 @@ class TouchToFillControllerAutofillDelegate
   void OnReauthCompleted(password_manager::UiCredential credential,
                          bool authSuccessful);
 
-  // Fills the credential into the form.
+  // Fills the credential into the form and triggers form submission when
+  // appropriate.
   void FillCredential(const password_manager::UiCredential& credential);
 
   // Called upon completion or dismissal to perform cleanup.
   void CleanUpFillerAndReportOutcome(TouchToFillOutcome outcome,
                                      bool show_virtual_keyboard);
 
-  void ShowPasswordMigrationWarningIfNeeded();
+  void OnFillingCredentialComplete(const std::u16string& username,
+                                   bool triggered_submission);
 
   // Callback to the controller to be invoked when a finalizing action has
   // completed. This will result in the destruction of the delegate so
@@ -158,12 +175,17 @@ class TouchToFillControllerAutofillDelegate
   // the form if required.
   std::unique_ptr<password_manager::PasswordCredentialFiller> filler_;
 
-  // Shows the password migration warning (expected to be shown after filing
-  // user's credentials).
-  ShowPasswordMigrationWarningCallback show_password_migration_warning_;
+  // The form which should be autofilled.
+  raw_ptr<const password_manager::PasswordForm> form_to_fill_ = nullptr;
+
+  autofill::FieldRendererId focused_field_renderer_id_;
 
   // Whether the controller should show an option for passkey hybrid sign-in.
   ShowHybridOption should_show_hybrid_option_ = ShowHybridOption(false);
+
+  // Bridge used to show the data loss warning (expected to be shown after
+  // filling user's credentials).
+  std::unique_ptr<PasswordAccessLossWarningBridge> access_loss_warning_bridge_;
 
   ukm::SourceId source_id_ = ukm::kInvalidSourceId;
 };

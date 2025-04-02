@@ -8,6 +8,7 @@
 #include "base/path_service.h"
 #include "base/task/single_thread_task_runner.h"
 #include "content/browser/child_process_security_policy_impl.h"
+#include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/file_system/browser_file_system_helper.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/storage_partition_impl.h"
@@ -26,6 +27,7 @@
 #include "net/base/network_anonymization_key.h"
 #include "net/cookies/cookie_setting_override.h"
 #include "net/http/http_auth.h"
+#include "net/storage_access_api/status.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/restricted_cookie_manager.mojom.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
@@ -63,17 +65,28 @@ GetRestrictedCookieManagerForContext(
       net::IsolationInfo::RequestType::kOther, top_frame_origin,
       top_frame_origin, site_for_cookies);
 
+  net::CookieSettingOverrides devtools_cookie_setting_overrides;
+
+  if (render_frame_host) {
+    devtools_instrumentation::ApplyNetworkCookieControlsOverrides(
+        *render_frame_host, devtools_cookie_setting_overrides);
+  }
+
   mojo::PendingRemote<network::mojom::RestrictedCookieManager> pipe;
   static_cast<StoragePartitionImpl*>(storage_partition)
       ->CreateRestrictedCookieManager(
           network::mojom::RestrictedCookieManagerRole::NETWORK, request_origin,
           std::move(isolation_info),
           /* is_service_worker = */ false,
-          render_frame_host ? render_frame_host->GetProcess()->GetID() : -1,
+          render_frame_host ? render_frame_host->GetProcess()->GetDeprecatedID()
+                            : -1,
           render_frame_host ? render_frame_host->GetRoutingID()
                             : MSG_ROUTING_NONE,
+          /*cookie_setting_overrides=*/
           render_frame_host ? render_frame_host->GetCookieSettingOverrides()
                             : net::CookieSettingOverrides(),
+          /*devtools_cookie_setting_overrides=*/
+          devtools_cookie_setting_overrides,
           pipe.InitWithNewPipeAndPassReceiver(),
           render_frame_host ? render_frame_host->CreateCookieAccessObserver()
                             : mojo::NullRemote());
@@ -145,7 +158,7 @@ void MediaResourceGetterImpl::GetCookies(
     const GURL& url,
     const net::SiteForCookies& site_for_cookies,
     const url::Origin& top_frame_origin,
-    bool has_storage_access,
+    net::StorageAccessApiStatus storage_access_api_status,
     GetCookieCB callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
@@ -166,8 +179,10 @@ void MediaResourceGetterImpl::GetCookies(
   network::mojom::RestrictedCookieManager* cookie_manager_ptr =
       cookie_manager.get();
   cookie_manager_ptr->GetCookiesString(
-      url, site_for_cookies, top_frame_origin, has_storage_access,
+      url, site_for_cookies, top_frame_origin, storage_access_api_status,
       /*get_version_shared_memory=*/false, /*is_ad_tagged=*/false,
+      /*apply_devtools_overrides=*/true,
+      /*force_disable_third_party_cookies=*/false,
       base::BindOnce(&ReturnResultOnUIThreadAndClosePipe,
                      std::move(cookie_manager), std::move(callback)));
 }

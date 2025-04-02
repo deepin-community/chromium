@@ -11,26 +11,22 @@
 
 #include "common/platform.h"
 
-#if defined(ANGLE_USE_ABSEIL)
-#    include "absl/container/flat_hash_map.h"
-#    include "absl/container/flat_hash_set.h"
-#endif  // defined(ANGLE_USE_ABSEIL)
-
 #if defined(ANGLE_WITH_LSAN)
 #    include <sanitizer/lsan_interface.h>
 #endif  // defined(ANGLE_WITH_LSAN)
 
+#if defined(ANGLE_WITH_MSAN)
+#    include <sanitizer/msan_interface.h>
+#endif  // defined(ANGLE_WITH_MSAN)
+
 #include <climits>
 #include <cstdarg>
 #include <cstddef>
-#include <fstream>
 #include <mutex>
 #include <set>
 #include <sstream>
 #include <string>
 #include <thread>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace angle
@@ -39,34 +35,6 @@ namespace angle
 #if defined(ANGLE_ENABLE_D3D9) || defined(ANGLE_ENABLE_D3D11)
 using Microsoft::WRL::ComPtr;
 #endif  // defined(ANGLE_ENABLE_D3D9) || defined(ANGLE_ENABLE_D3D11)
-
-#if defined(ANGLE_USE_ABSEIL)
-template <typename Key,
-          typename T,
-          class Hash = absl::container_internal::hash_default_hash<Key>,
-          class Eq   = absl::container_internal::hash_default_eq<Key>>
-using HashMap = absl::flat_hash_map<Key, T, Hash, Eq>;
-template <typename Key,
-          class Hash = absl::container_internal::hash_default_hash<Key>,
-          class Eq   = absl::container_internal::hash_default_eq<Key>>
-using HashSet = absl::flat_hash_set<Key, Hash, Eq>;
-
-// Absl has generic lookup unconditionally
-#    define ANGLE_HAS_HASH_MAP_GENERIC_LOOKUP 1
-#else
-template <typename Key,
-          typename T,
-          class Hash     = std::hash<Key>,
-          class KeyEqual = std::equal_to<Key>>
-using HashMap = std::unordered_map<Key, T, Hash, KeyEqual>;
-template <typename Key, class Hash = std::hash<Key>, class KeyEqual = std::equal_to<Key>>
-using HashSet = std::unordered_set<Key, Hash, KeyEqual>;
-#    if __cpp_lib_generic_unordered_lookup >= 201811L
-#        define ANGLE_HAS_HASH_MAP_GENERIC_LOOKUP 1
-#    else
-#        define ANGLE_HAS_HASH_MAP_GENERIC_LOOKUP 0
-#    endif
-#endif  // defined(ANGLE_USE_ABSEIL)
 
 // Forward declaration. Implementation in system_utils.h
 #if defined(ANGLE_PLATFORM_LINUX) || defined(ANGLE_PLATFORM_WINDOWS)
@@ -88,30 +56,6 @@ class NonCopyable
 };
 
 extern const uintptr_t DirtyPointer;
-
-struct SaveFileHelper
-{
-  public:
-    // We always use ios::binary to avoid inconsistent line endings when captured on Linux vs Win.
-    SaveFileHelper(const std::string &filePathIn);
-    ~SaveFileHelper();
-
-    template <typename T>
-    SaveFileHelper &operator<<(const T &value)
-    {
-        mOfs << value;
-        checkError();
-        return *this;
-    }
-
-    void write(const uint8_t *data, size_t size);
-
-  private:
-    void checkError();
-
-    std::ofstream mOfs;
-    std::string mFilePath;
-};
 
 // AMD_performance_monitor helpers.
 constexpr char kPerfMonitorExtensionName[] = "GL_AMD_performance_monitor";
@@ -163,6 +107,7 @@ struct PerfMonitorTriplet
     FN(renderPasses)                               \
     FN(writeDescriptorSets)                        \
     FN(flushedOutsideRenderPassCommandBuffers)     \
+    FN(swapchainCreate)                            \
     FN(swapchainResolveInSubpass)                  \
     FN(swapchainResolveOutsideSubpass)             \
     FN(resolveImageCommands)                       \
@@ -208,6 +153,7 @@ struct PerfMonitorTriplet
     FN(shaderResourcesDescriptorSetCacheHits)      \
     FN(deviceMemoryImageAllocationFallbacks)       \
     FN(mutableTexturesUploaded)                    \
+    FN(fullImageClears)                            \
     FN(shaderResourcesDescriptorSetCacheMisses)    \
     FN(shaderResourcesDescriptorSetCacheTotalSize) \
     FN(buffersGhosted)                             \
@@ -375,32 +321,6 @@ inline bool IsLittleEndian()
     return isLittleEndian;
 }
 
-// Helper class to use a mutex with the control of boolean.
-class ConditionalMutex final : angle::NonCopyable
-{
-  public:
-    ConditionalMutex() : mUseMutex(true) {}
-    void init(bool useMutex) { mUseMutex = useMutex; }
-    void lock()
-    {
-        if (mUseMutex)
-        {
-            mMutex.lock();
-        }
-    }
-    void unlock()
-    {
-        if (mUseMutex)
-        {
-            mMutex.unlock();
-        }
-    }
-
-  private:
-    std::mutex mMutex;
-    bool mUseMutex;
-};
-
 // Helper macro that casts to a bitfield type then verifies no bits were dropped.
 #define SetBitField(lhs, rhs)                                                         \
     do                                                                                \
@@ -481,9 +401,6 @@ class ConditionalMutex final : angle::NonCopyable
 #define GL_RGB10_A2_SSCALED_ANGLEX 0x6AEC
 #define GL_RGB10_A2_USCALED_ANGLEX 0x6AED
 
-// EXT_texture_type_2_10_10_10_REV
-#define GL_RGB10_UNORM_ANGLEX 0x6AEE
-
 // These are fake formats for OES_vertex_type_10_10_10_2
 #define GL_A2_RGB10_UNORM_ANGLEX 0x6AEF
 #define GL_A2_RGB10_SNORM_ANGLEX 0x6AF0
@@ -497,14 +414,14 @@ class ConditionalMutex final : angle::NonCopyable
 #define GL_X2_RGB10_SNORM_ANGLEX 0x6AF8
 
 #define ANGLE_CHECK_GL_ALLOC(context, result) \
-    ANGLE_CHECK(context, result, "Failed to allocate host memory", GL_OUT_OF_MEMORY)
+    ANGLE_CHECK(context, result, "Failed to allocate host memory.", GL_OUT_OF_MEMORY)
 
 #define ANGLE_CHECK_GL_MATH(context, result) \
     ANGLE_CHECK(context, result, "Integer overflow.", GL_INVALID_OPERATION)
 
 #define ANGLE_GL_UNREACHABLE(context) \
     UNREACHABLE();                    \
-    ANGLE_CHECK(context, false, "Unreachable Code.", GL_INVALID_OPERATION)
+    ANGLE_CHECK(context, false, "Unreachable code.", GL_INVALID_OPERATION)
 
 #if defined(ANGLE_WITH_LSAN)
 #    define ANGLE_SCOPED_DISABLE_LSAN() __lsan::ScopedDisabler lsanDisabler

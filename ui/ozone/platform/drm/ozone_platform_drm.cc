@@ -17,7 +17,6 @@
 #include "base/notreached.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/platform_thread.h"
-#include "build/chromeos_buildflags.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "ui/base/buildflags.h"
@@ -57,7 +56,7 @@
 #include "ui/events/ozone/layout/stub/stub_keyboard_layout_engine.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ui/base/ime/ash/input_method_ash.h"
 #else
 #include "ui/base/ime/input_method_minimal.h"
@@ -84,10 +83,7 @@ class OzonePlatformDrm : public OzonePlatform {
     return event_factory_ozone_->input_controller();
   }
 
-  std::unique_ptr<PlatformScreen> CreateScreen() override {
-    NOTREACHED();
-    return nullptr;
-  }
+  std::unique_ptr<PlatformScreen> CreateScreen() override { NOTREACHED(); }
   void InitScreen(PlatformScreen* screen) override { NOTREACHED(); }
 
   GpuPlatformSupportHost* GetGpuPlatformSupportHost() override {
@@ -174,7 +170,7 @@ class OzonePlatformDrm : public OzonePlatform {
   std::unique_ptr<InputMethod> CreateInputMethod(
       ImeKeyEventDispatcher* ime_key_event_dispatcher,
       gfx::AcceleratedWidget) override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     return std::make_unique<ash::InputMethodAsh>(ime_key_event_dispatcher);
 #else
     return std::make_unique<InputMethodMinimal>(ime_key_event_dispatcher);
@@ -186,6 +182,8 @@ class OzonePlatformDrm : public OzonePlatform {
     return gfx::ClientNativePixmapDmaBuf::IsConfigurationSupported(format,
                                                                    usage);
   }
+
+  bool IsWindowCompositingSupported() const override { return true; }
 
   bool InitializeUI(const InitParams& args) override {
     // Ozone drm can operate in two modes configured at runtime.
@@ -245,7 +243,7 @@ class OzonePlatformDrm : public OzonePlatform {
     host_properties_.supports_native_pixmaps = true;
 
     overlay_manager_ = std::make_unique<DrmOverlayManagerGpu>(
-        drm_thread_proxy_.get(),
+        drm_thread_proxy_.get(), args.handle_overlays_swap_failure,
         args.allow_sync_and_real_buffer_page_flip_testing);
 
     // If gpu is in a separate process, rest of the initialization happens after

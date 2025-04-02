@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ash/public/cpp/rounded_image_view.h"
 
 #include "skia/ext/image_operations.h"
@@ -62,7 +67,8 @@ void RoundedImageView::SetCornerRadius(int corner_radius) {
   SetCornerRadii(corner_radius, corner_radius, corner_radius, corner_radius);
 }
 
-gfx::Size RoundedImageView::CalculatePreferredSize() const {
+gfx::Size RoundedImageView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(GetImageSize().width() + GetInsets().width(),
                    GetImageSize().height() + GetInsets().height());
 }

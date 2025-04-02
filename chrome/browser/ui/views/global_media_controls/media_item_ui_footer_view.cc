@@ -81,8 +81,9 @@ SkColor DeviceEntryButton::GetForegroundColor() const {
 }
 
 void DeviceEntryButton::UpdateImage() {
-  if (!icon_)
+  if (!icon_) {
     return;
+  }
 
   SetImageModel(views::Button::ButtonState::STATE_NORMAL,
                 ui::ImageModel::FromVectorIcon(*icon_, foreground_color_,
@@ -105,8 +106,9 @@ MediaItemUIFooterView::MediaItemUIFooterView(
           gfx::Insets::VH(0, ChromeLayoutProvider::Get()->GetDistanceMetric(
                                  views::DISTANCE_RELATED_BUTTON_HORIZONTAL)));
 
-  if (stop_casting_callback.is_null())
+  if (stop_casting_callback.is_null()) {
     return;
+  }
 
   // |this| owns the DeviceEntryButton, so base::Unretained is safe here.
   AddChildView(std::make_unique<DeviceEntryButton>(
@@ -118,7 +120,8 @@ MediaItemUIFooterView::MediaItemUIFooterView(
 MediaItemUIFooterView::~MediaItemUIFooterView() = default;
 
 void MediaItemUIFooterView::OnMediaItemUIDeviceSelectorUpdated(
-    const std::map<int, DeviceEntryUI*>& device_entries_map) {
+    const std::map<int, raw_ptr<DeviceEntryUI, CtnExperimental>>&
+        device_entries_map) {
   RemoveAllChildViews();
 
   for (const auto& entry : device_entries_map) {
@@ -129,7 +132,7 @@ void MediaItemUIFooterView::OnMediaItemUIDeviceSelectorUpdated(
         AddChildView(std::make_unique<DeviceEntryButton>(
             base::BindRepeating(&MediaItemUIFooterView::OnDeviceSelected,
                                 base::Unretained(this), tag),
-            device_entry->icon(),
+            &device_entry->icon(),
             base::UTF8ToUTF16(device_entry->device_name())));
     device_entry_button->set_tag(tag);
     device_entry_button->SetProperty(
@@ -162,8 +165,9 @@ void MediaItemUIFooterView::Layout(PassKey) {
   }
 
   overflow_button_->SetVisible(false);
-  if (GetPreferredSize().width() > GetContentsBounds().width())
+  if (GetPreferredSize().width() > GetContentsBounds().width()) {
     overflow_button_->SetVisible(true);
+  }
   LayoutSuperclass<views::View>(this);
 }
 
@@ -184,13 +188,15 @@ void MediaItemUIFooterView::UpdateButtonsColor() {
 }
 
 void MediaItemUIFooterView::OnDeviceSelected(int tag) {
-  if (delegate_)
+  if (delegate_) {
     delegate_->OnDeviceSelected(tag);
+  }
 }
 
 void MediaItemUIFooterView::OnOverflowButtonClicked() {
-  if (!delegate_)
+  if (!delegate_) {
     return;
+  }
 
   delegate_->OnDropdownButtonClicked();
   overflow_button_->SetIcon(delegate_->IsDeviceSelectorExpanded()

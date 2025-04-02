@@ -4,24 +4,34 @@
 
 #include "chrome/browser/performance_manager/policies/background_tab_loading_policy.h"
 
+#include <vector>
+
+#include "base/check.h"
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/time/time.h"
 #include "chrome/browser/performance_manager/mechanisms/page_loader.h"
 #include "chrome/browser/performance_manager/policies/background_tab_loading_policy_helpers.h"
+#include "chrome/browser/performance_manager/public/background_tab_loading_policy.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/performance_manager/graph/page_node_impl.h"
 #include "components/performance_manager/public/decorators/site_data_recorder.h"
+#include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/graph/node_data_describer_registry.h"
-#include "components/performance_manager/public/graph/policies/background_tab_loading_policy.h"
 #include "components/performance_manager/public/performance_manager.h"
 #include "components/performance_manager/public/persistence/site_data/site_data_reader.h"
+#include "components/site_engagement/content/site_engagement_service.h"
+#include "components/site_engagement/core/mojom/site_engagement_details.mojom.h"
+#include "content/public/browser/browser_context.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
+#include "url/gurl.h"
 
 namespace performance_manager {
 
@@ -33,6 +43,22 @@ namespace {
 BackgroundTabLoadingPolicy* g_background_tab_loading_policy = nullptr;
 
 const char kDescriberName[] = "BackgroundTabLoadingPolicy";
+
+size_t GetSiteEngagementScore(content::WebContents* contents) {
+  // Get the active navigation entry. Restored tabs should always have one.
+  auto& controller = contents->GetController();
+  auto* nav_entry =
+      controller.GetEntryAtIndex(controller.GetCurrentEntryIndex());
+  DCHECK(nav_entry);
+
+  auto* engagement_svc = site_engagement::SiteEngagementService::Get(
+      Profile::FromBrowserContext(contents->GetBrowserContext()));
+  double engagement =
+      engagement_svc->GetDetails(nav_entry->GetURL()).total_score;
+
+  // Return the engagement as an integer.
+  return engagement;
+}
 
 }  // namespace
 
@@ -46,28 +72,32 @@ constexpr uint32_t BackgroundTabLoadingPolicy::kMinSimultaneousTabLoads;
 constexpr uint32_t BackgroundTabLoadingPolicy::kMaxSimultaneousTabLoads;
 constexpr uint32_t BackgroundTabLoadingPolicy::kCoresPerSimultaneousTabLoad;
 
-BackgroundTabLoadingPolicy::PageNodeAndNotificationPermission::
-    PageNodeAndNotificationPermission(base::WeakPtr<PageNode> page_node,
-                                      bool has_notification_permission)
+BackgroundTabLoadingPolicy::PageNodeData::PageNodeData(
+    base::WeakPtr<PageNode> page_node,
+    GURL main_frame_url,
+    blink::mojom::PermissionStatus notification_permission_status)
     : page_node(std::move(page_node)),
-      has_notification_permission(has_notification_permission) {}
+      main_frame_url(std::move(main_frame_url)),
+      notification_permission_status(notification_permission_status) {}
 
-BackgroundTabLoadingPolicy::PageNodeAndNotificationPermission::
-    PageNodeAndNotificationPermission(
-        const PageNodeAndNotificationPermission&
-            page_node_and_notification_permission) = default;
-
-BackgroundTabLoadingPolicy::PageNodeAndNotificationPermission::
-    ~PageNodeAndNotificationPermission() = default;
+BackgroundTabLoadingPolicy::PageNodeData::PageNodeData(PageNodeData&& other) =
+    default;
+BackgroundTabLoadingPolicy::PageNodeData&
+BackgroundTabLoadingPolicy::PageNodeData::operator=(PageNodeData&& other) =
+    default;
+BackgroundTabLoadingPolicy::PageNodeData::PageNodeData(
+    const PageNodeData& other) = default;
+BackgroundTabLoadingPolicy::PageNodeData&
+BackgroundTabLoadingPolicy::PageNodeData::operator=(const PageNodeData& other) =
+    default;
+BackgroundTabLoadingPolicy::PageNodeData::~PageNodeData() = default;
 
 void ScheduleLoadForRestoredTabs(
     std::vector<content::WebContents*> web_contents_vector) {
   DCHECK(!web_contents_vector.empty());
 
-  std::vector<BackgroundTabLoadingPolicy::PageNodeAndNotificationPermission>
-      page_node_and_notification_permission_vector;
-  page_node_and_notification_permission_vector.reserve(
-      web_contents_vector.size());
+  std::vector<BackgroundTabLoadingPolicy::PageNodeData> page_node_data_vector;
+  page_node_data_vector.reserve(web_contents_vector.size());
   for (content::WebContents* content : web_contents_vector) {
     content::PermissionController* permission_controller =
         content->GetBrowserContext()->GetPermissionController();
@@ -78,33 +108,39 @@ void ScheduleLoadForRestoredTabs(
     DCHECK_EQ(content->GetPrimaryMainFrame()->GetLastCommittedURL(), GURL());
     DCHECK_NE(content->GetLastCommittedURL(), GURL());
 
-    bool has_notifications_permission =
-        permission_controller
-            ->GetPermissionResultForOriginWithoutContext(
-                blink::PermissionType::NOTIFICATIONS,
-                url::Origin::Create(content->GetLastCommittedURL()))
-            .status == blink::mojom::PermissionStatus::GRANTED;
+    // Without kBackgroundTabLoadingRestoreMainFrameState, use the incorrect
+    // lookup method to get bug-for-bug compatibility with TabLoader.
+    // TODO(crbug.com/40121561): Remove this after comparing the performance.
+    auto notification_permission =
+        features::kBackgroundTabLoadingRestoreMainFrameState.Get()
+            ? permission_controller
+                  ->GetPermissionResultForOriginWithoutContext(
+                      blink::PermissionType::NOTIFICATIONS,
+                      url::Origin::Create(content->GetLastCommittedURL()))
+                  .status
+            : permission_controller->GetPermissionStatusForCurrentDocument(
+                  blink::PermissionType::NOTIFICATIONS,
+                  content->GetPrimaryMainFrame());
 
-    BackgroundTabLoadingPolicy::PageNodeAndNotificationPermission
-        page_node_and_notification_permission(
-            PerformanceManager::GetPrimaryPageNodeForWebContents(content),
-            has_notifications_permission);
-
-    page_node_and_notification_permission_vector.push_back(
-        page_node_and_notification_permission);
+    page_node_data_vector.emplace_back(
+        PerformanceManager::GetPrimaryPageNodeForWebContents(content),
+        content->GetLastCommittedURL(), notification_permission);
+    if (features::kBackgroundTabLoadingMinSiteEngagement.Get() > 0) {
+      page_node_data_vector.back().site_engagement =
+          GetSiteEngagementScore(content);
+    }
   }
+
   performance_manager::PerformanceManager::CallOnGraph(
       FROM_HERE,
       base::BindOnce(
-          [](std::vector<
-                 BackgroundTabLoadingPolicy::PageNodeAndNotificationPermission>
-                 page_node_and_notification_permission_vector,
+          [](std::vector<BackgroundTabLoadingPolicy::PageNodeData>
+                 page_node_data_vector,
              performance_manager::Graph* graph) {
             BackgroundTabLoadingPolicy::GetInstance()
-                ->ScheduleLoadForRestoredTabs(
-                    std::move(page_node_and_notification_permission_vector));
+                ->ScheduleLoadForRestoredTabs(std::move(page_node_data_vector));
           },
-          std::move(page_node_and_notification_permission_vector)));
+          std::move(page_node_data_vector)));
 }
 
 BackgroundTabLoadingPolicy::BackgroundTabLoadingPolicy(
@@ -177,7 +213,7 @@ void BackgroundTabLoadingPolicy::OnLoadingStateChanged(
       // initiated but hasn't started.
       const bool erased =
           ErasePageNodeToLoadData(page_node) ||
-          base::Erase(page_nodes_load_initiated_, page_node) != 0;
+          std::erase(page_nodes_load_initiated_, page_node) != 0;
 
       // Keep track of all PageNodes that are loading, even when the load isn't
       // initiated by this policy.
@@ -209,20 +245,31 @@ void BackgroundTabLoadingPolicy::OnBeforePageNodeRemoved(
 }
 
 void BackgroundTabLoadingPolicy::ScheduleLoadForRestoredTabs(
-    std::vector<BackgroundTabLoadingPolicy::PageNodeAndNotificationPermission>
-        page_node_and_permission_vector) {
+    std::vector<BackgroundTabLoadingPolicy::PageNodeData>
+        page_node_data_vector) {
   has_restored_tabs_to_load_ = true;
 
   const size_t page_nodes_to_load_initial_size = page_nodes_to_load_.size();
 
-  for (auto page_node_and_permission : page_node_and_permission_vector) {
-    PageNode* page_node = page_node_and_permission.page_node.get();
+  for (const auto& page_node_data : page_node_data_vector) {
+    PageNode* page_node = page_node_data.page_node.get();
     if (!page_node)
       continue;
 
     DCHECK_EQ(page_node->GetType(), PageType::kTab);
     DCHECK(!FindPageNodeToLoadData(page_node));
     DCHECK(!base::Contains(page_nodes_load_initiated_, page_node));
+
+    // Setting main frame restored state ensures that the notification
+    // permission status and background title/favicon update properties are set
+    // correctly when `ScoreTab` scores the page.
+    // TODO(crbug.com/40121561): Remove the feature check after comparing the
+    // performance to TabLoader, which lacks this call.
+    if (features::kBackgroundTabLoadingRestoreMainFrameState.Get()) {
+      PageNodeImpl::FromNode(page_node)->SetMainFrameRestoredState(
+          page_node_data.main_frame_url,
+          page_node_data.notification_permission_status);
+    }
 
     // No need to schedule a load if the page is already loading.
     if (base::Contains(page_nodes_loading_, page_node)) {
@@ -233,8 +280,7 @@ void BackgroundTabLoadingPolicy::ScheduleLoadForRestoredTabs(
 
     // Put the page in the queue for loading.
     page_nodes_to_load_.push_back(std::make_unique<PageNodeToLoadData>(
-        page_node, /* has_notification_permission=*/page_node_and_permission
-                       .has_notification_permission));
+        page_node, page_node_data.site_engagement));
   }
 
   // Asynchronously determine whether pages added to `page_nodes_to_load_` are
@@ -275,12 +321,18 @@ BackgroundTabLoadingPolicy* BackgroundTabLoadingPolicy::GetInstance() {
 }
 
 BackgroundTabLoadingPolicy::PageNodeToLoadData::PageNodeToLoadData(
-    PageNode* page_node,
-    bool has_notification_permission)
-    : page_node(page_node),
-      has_notification_permission(has_notification_permission) {}
+    const PageNode* page_node,
+    std::optional<size_t> site_engagement)
+    : page_node(page_node), site_engagement(site_engagement) {}
 
 BackgroundTabLoadingPolicy::PageNodeToLoadData::~PageNodeToLoadData() = default;
+
+bool BackgroundTabLoadingPolicy::PageNodeToLoadData::
+    UsesBackgroundCommunication() const {
+  return page_node->GetNotificationPermissionStatus() ==
+             blink::mojom::PermissionStatus::GRANTED ||
+         updates_title_or_favicon_in_bg.value();
+}
 
 struct BackgroundTabLoadingPolicy::ScoredTabComparator {
   bool operator()(const std::unique_ptr<PageNodeToLoadData>& tab0,
@@ -316,7 +368,8 @@ base::Value::Dict BackgroundTabLoadingPolicy::DescribeSystemNodeData(
   return dict;
 }
 
-bool BackgroundTabLoadingPolicy::ShouldLoad(const PageNode* page_node) {
+bool BackgroundTabLoadingPolicy::ShouldLoad(
+    const PageNodeToLoadData& page_node_data) {
   if (tab_loads_started_ < kMinTabsToLoad)
     return true;
 
@@ -329,13 +382,24 @@ bool BackgroundTabLoadingPolicy::ShouldLoad(const PageNode* page_node) {
     return false;
 
   // Enforce a max time since last use.
-  if (page_node->GetTimeSinceLastVisibilityChange() >
+  if (page_node_data.page_node->GetTimeSinceLastVisibilityChange() >
       kMaxTimeSinceLastUseToLoad) {
     return false;
   }
 
-  // TODO(crbug.com/1071100): Enforce the site engagement score for tabs that
-  // don't make use of background communication mechanisms.
+  // Enforce a minimum site engagement score if applicable.
+  // Only enforce the site engagement score for tabs that don't make use of
+  // background communication mechanisms. These sites often have low engagements
+  // because they are only used very sporadically, but it is important that they
+  // are loaded because if not loaded the user can miss important messages.
+  const size_t min_site_engagement =
+      features::kBackgroundTabLoadingMinSiteEngagement.Get();
+  if (!page_node_data.UsesBackgroundCommunication() &&
+      page_node_data.site_engagement.value_or(min_site_engagement) <
+          min_site_engagement) {
+    return false;
+  }
+
   return true;
 }
 
@@ -372,7 +436,7 @@ void BackgroundTabLoadingPolicy::StopLoadingTabs() {
   page_nodes_to_load_.clear();
   tabs_scored_ = 0;
 
-  // TODO(crbug.com/1071077): Interrupt all ongoing loads.
+  // TODO(crbug.com/40126598): Interrupt all ongoing loads.
 
   // All restored tabs may be loaded.
   UpdateHasRestoredTabsToLoad();
@@ -392,10 +456,7 @@ void BackgroundTabLoadingPolicy::OnMemoryPressure(
 
 SiteDataReader* BackgroundTabLoadingPolicy::GetSiteDataReader(
     const PageNode* page_node) const {
-  auto* data = SiteDataRecorder::Data::FromPageNode(page_node);
-  if (!data)
-    return nullptr;
-  return data->reader();
+  return SiteDataRecorder::Data::GetReaderForPageNode(page_node);
 }
 
 void BackgroundTabLoadingPolicy::ScoreTab(
@@ -406,8 +467,7 @@ void BackgroundTabLoadingPolicy::ScoreTab(
   // Give higher priorities to tabs used in the background, and lowest
   // priority to internal tabs. Apps and pinned tabs are simply treated as
   // normal tabs.
-  if (page_node_to_load_data->has_notification_permission ||
-      page_node_to_load_data->updates_title_or_favicon_in_bg.value()) {
+  if (page_node_to_load_data->UsesBackgroundCommunication()) {
     score = 2;
   } else if (!page_node_to_load_data->page_node->GetMainFrameUrl().SchemeIs(
                  content::kChromeUIScheme)) {
@@ -473,7 +533,7 @@ void BackgroundTabLoadingPolicy::InitiateLoad(const PageNode* page_node) {
 
 void BackgroundTabLoadingPolicy::RemovePageNode(const PageNode* page_node) {
   ErasePageNodeToLoadData(page_node);
-  base::Erase(page_nodes_load_initiated_, page_node);
+  std::erase(page_nodes_load_initiated_, page_node);
   page_nodes_loading_.erase(page_node);
 
   // All restored tabs may be loaded.
@@ -523,7 +583,7 @@ void BackgroundTabLoadingPolicy::LoadNextTab() {
   // Find the next PageNode to load.
   while (!page_nodes_to_load_.empty()) {
     const PageNode* page_node = page_nodes_to_load_.front()->page_node;
-    if (ShouldLoad(page_node)) {
+    if (ShouldLoad(*page_nodes_to_load_.front())) {
       InitiateLoad(page_node);
       return;
     }
@@ -550,9 +610,9 @@ bool BackgroundTabLoadingPolicy::ErasePageNodeToLoadData(
         // |tabs_scored_| count.
         DCHECK_GT(tabs_scored_, 0U);
         --tabs_scored_;
-        base::Erase(page_nodes_to_load_, page_node_to_load_data);
+        std::erase(page_nodes_to_load_, page_node_to_load_data);
       } else {
-        base::Erase(page_nodes_to_load_, page_node_to_load_data);
+        std::erase(page_nodes_to_load_, page_node_to_load_data);
 
         // If the PageNode has not been scored yet, then removing it may trigger
         // all tabs scored notification.

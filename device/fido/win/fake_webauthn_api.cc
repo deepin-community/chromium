@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "device/fido/win/fake_webauthn_api.h"
 
 #include <stdint.h>
@@ -15,7 +20,6 @@
 #include "base/containers/span.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "base/notreached.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util_win.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/cbor/values.h"
@@ -232,7 +236,7 @@ HRESULT FakeWinWebAuthnApi::AuthenticatorMakeCredential(
     PWEBAUTHN_CREDENTIAL_EX exclude_credential =
         options->pExcludeCredentialList->ppCredentials[i];
     std::vector<uint8_t> credential_id = fido_parsing_utils::Materialize(
-        base::make_span(exclude_credential->pbId, exclude_credential->cbId));
+        base::span(exclude_credential->pbId, exclude_credential->cbId));
     if (registrations_.contains(credential_id)) {
       return NTE_EXISTS;
     }
@@ -245,12 +249,13 @@ HRESULT FakeWinWebAuthnApi::AuthenticatorMakeCredential(
   std::array<uint8_t, crypto::kSHA256Length> rp_id_hash =
       fido_parsing_utils::CreateSHA256Hash(rp_id);
   std::vector<uint8_t> user_id =
-      fido_parsing_utils::Materialize(base::make_span(user->pbId, user->cbId));
+      fido_parsing_utils::Materialize(base::span(user->pbId, user->cbId));
 
   RegistrationData registration(std::move(private_key), std::move(rp_id_hash),
                                 /*counter=*/1);
   bool resident_key =
       options->bRequireResidentKey || options->bPreferResidentKey;
+  registration.is_resident = resident_key;
   if (resident_key) {
     registration.rp =
         PublicKeyCredentialRpEntity(rp_id, base::WideToUTF8(rp->pwszName));
@@ -290,7 +295,7 @@ HRESULT FakeWinWebAuthnApi::AuthenticatorMakeCredential(
   attestation->win_attestation.bResidentKey = resident_key;
   attestation->win_attestation.bLargeBlobSupported =
       options->dwLargeBlobSupport != WEBAUTHN_LARGE_BLOB_SUPPORT_NONE &&
-      version_ >= WEBAUTHN_API_VERSION_3;
+      version_ >= WEBAUTHN_API_VERSION_3 && large_blob_supported_;
   attestation->win_attestation.dwUsedTransport =
       attachment == WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM
           ? WEBAUTHN_CTAP_TRANSPORT_INTERNAL
@@ -468,7 +473,6 @@ HRESULT FakeWinWebAuthnApi::AuthenticatorGetAssertion(
 HRESULT FakeWinWebAuthnApi::CancelCurrentOperation(GUID* cancellation_id) {
   DCHECK(is_available_);
   NOTREACHED() << "not implemented";
-  return E_NOTIMPL;
 }
 
 HRESULT FakeWinWebAuthnApi::GetPlatformCredentialList(
@@ -542,8 +546,11 @@ HRESULT FakeWinWebAuthnApi::GetPlatformCredentialList(
 
 HRESULT FakeWinWebAuthnApi::DeletePlatformCredential(
     base::span<const uint8_t> credential_id) {
-  // TODO: not yet implemented.
-  CHECK(false);
+  const auto registration_it = registrations_.find(credential_id);
+  if (registration_it == registrations_.end()) {
+    return NTE_NOT_FOUND;
+  }
+  registrations_.erase(registration_it);
   return S_OK;
 }
 

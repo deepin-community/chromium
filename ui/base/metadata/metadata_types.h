@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/callback_list.h"
@@ -44,6 +45,17 @@ COMPONENT_EXPORT(UI_BASE_METADATA) extern bool operator!(PropertyFlags op);
 
 // Used to identify the CallbackList<> within the PropertyChangedVectors map.
 using PropertyKey = const void*;
+
+// Used to generate property keys when a single field needs multiple property
+// keys - for example, if you have a single "bounds" field which is a gfx::Rect
+// and want to have four separate properties that all use that field, you can
+// use MakeUniquePropertyKey() rather than using &bounds_ + 0, &bounds_ + 1,
+// and so on. This avoids unsafe buffer use warnings.
+static inline PropertyKey MakeUniquePropertyKey(PropertyKey base,
+                                                uintptr_t offset) {
+  return reinterpret_cast<PropertyKey>(reinterpret_cast<uintptr_t>(base) +
+                                       offset);
+}
 
 using PropertyChangedCallbacks = base::RepeatingClosureList;
 using PropertyChangedCallback = PropertyChangedCallbacks::CallbackType;
@@ -171,7 +183,7 @@ class COMPONENT_EXPORT(UI_BASE_METADATA) ClassMetaData {
   ClassMemberIterator end();
 
  protected:
-  void SetTypeName(const std::string_view type_name);
+  void SetTypeName(std::string_view type_name);
 
  private:
   // `type_name_` is a static string stored in the binary.
@@ -218,7 +230,7 @@ class COMPONENT_EXPORT(UI_BASE_METADATA) MemberMetaDataBase {
   // available. For instance, an SkColor member type would add the "--" string
   // which tells the frontend to display a color swatch and a color editing
   // dialog.
-  virtual const char* GetMemberNamePrefix() const;
+  virtual std::string_view GetMemberNamePrefix() const;
 
   const std::string& member_name() const { return member_name_; }
   const std::string& member_type() const { return member_type_; }

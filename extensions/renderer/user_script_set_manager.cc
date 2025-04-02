@@ -80,13 +80,11 @@ void UserScriptSetManager::OnUpdateUserScripts(
     const mojom::HostID& host_id) {
   if (!shared_memory.IsValid()) {
     NOTREACHED() << "Bad scripts handle";
-    return;
   }
 
   if (host_id.type == mojom::HostID::HostType::kExtensions &&
       !crx_file::id_util::IdIsValid(host_id.id)) {
     NOTREACHED() << "Invalid extension id: " << host_id.id;
-    return;
   }
 
   auto& scripts = scripts_[host_id];

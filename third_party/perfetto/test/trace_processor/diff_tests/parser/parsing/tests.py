@@ -15,7 +15,7 @@
 
 from python.generators.diff_tests.testing import Path, DataPath, Metric
 from python.generators.diff_tests.testing import Csv, Json, TextProto
-from python.generators.diff_tests.testing import DiffTestBlueprint
+from python.generators.diff_tests.testing import DiffTestBlueprint, TraceInjector
 from python.generators.diff_tests.testing import TestSuite
 
 
@@ -338,7 +338,7 @@ class Parsing(TestSuite):
         SELECT ts, cpu, dur, ts_end, utid, end_state, priority, upid, name, tid
         FROM sched
         JOIN thread USING(utid)
-        ORDER BY ts;
+        ORDER BY ts, sched.id;
         """,
         out=Path('systrace_html.out'))
 
@@ -618,6 +618,102 @@ class Parsing(TestSuite):
         101000004,"test2","producer2",4
         """))
 
+  def test_triggers_packets_clone_snapshot_trigger_packet(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+      packet {
+        clone_snapshot_trigger {
+          trigger_name: "test1"
+          trusted_producer_uid: 3
+          producer_name: "producer1"
+        }
+        timestamp: 101000002
+      }
+      """),
+        query=Path('triggers_packets_test.sql'),
+        out=Csv("""
+      "ts","name","string_value","int_value"
+      101000002,"test1","producer1",3
+      """))
+
+  def test_trigger_metadata_test_clone_snapshot_trigger_packet(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+    packet {
+      clone_snapshot_trigger {
+        trigger_name: "test1"
+        trusted_producer_uid: 3
+        producer_name: "producer1"
+      }
+      timestamp: 101000002
+    }
+    """),
+        query=Path('trigger_metadata_test.sql'),
+        out=Csv("""
+      "str_value"
+      "test1"
+      """))
+
+  def test_trigger_metadata_trigger_packet(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          trigger {
+            trigger_name: "test1"
+            trusted_producer_uid: 1
+            producer_name: "producer1"
+          }
+          timestamp: 101000002
+        }
+        packet {
+          trigger {
+            trigger_name: "test2"
+            trusted_producer_uid: 2
+            producer_name: "producer2"
+          }
+          timestamp: 101000001
+        }
+        """),
+        query=Path('trigger_metadata_test.sql'),
+        out=Csv("""
+      "str_value"
+      "test2"
+      """))
+
+  def test_trigger_metadata_trigger_packet_and_clone_snapshot_packet(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+      packet {
+        trigger {
+          trigger_name: "test1"
+          trusted_producer_uid: 1
+          producer_name: "producer1"
+        }
+        timestamp: 101000004
+      }
+      packet {
+        trigger {
+          trigger_name: "test2"
+          trusted_producer_uid: 2
+          producer_name: "producer2"
+        }
+        timestamp: 101000002
+      }
+      packet {
+        clone_snapshot_trigger {
+          trigger_name: "testClone"
+          trusted_producer_uid: 3
+          producer_name: "producer3"
+        }
+        timestamp: 101000003
+      }
+      """),
+        query=Path('trigger_metadata_test.sql'),
+        out=Csv("""
+    "str_value"
+    "testClone"
+    """))
+
   def test_chrome_metadata(self):
     return DiffTestBlueprint(
         trace=TextProto(r"""
@@ -627,6 +723,13 @@ class Parsing(TestSuite):
               clock_id: 6
               timestamp: 101000002
             }
+          }
+          trusted_packet_sequence_id: 1
+          timestamp: 101000002
+        }
+        packet {
+          chrome_trigger {
+            trigger_name_hash: 1595654158
           }
           trusted_packet_sequence_id: 1
           timestamp: 101000002
@@ -655,9 +758,21 @@ class Parsing(TestSuite):
         }
         """),
         query="""
-        SELECT * FROM metadata;
+        SELECT id, name, key_type, int_value, str_value FROM metadata;
         """,
-        out=Path('chrome_metadata.out'))
+        out=Csv('''
+          "id","name","key_type","int_value","str_value"
+          0,"trace_uuid","single","[NULL]","00000000-0000-0000-7f42-b235fa358661"
+          1,"trace_time_clock_id","single",6,"[NULL]"
+          2,"cr-a-playstore_version_code","single",101,"[NULL]"
+          3,"cr-a-enabled_categories","single","[NULL]","cat1,cat2,cat3"
+          4,"cr-a-field_trial_hashes","single","[NULL]","{ name: 123, group: 456 } { name: 789, group: 120 } "
+          5,"cr-background_tracing_metadata","single","[NULL]","CgUlDsAbXx2RziSz"
+          6,"cr-scenario_name_hash","single",3005533841,"[NULL]"
+          7,"cr-triggered_rule_name_hash","single",1595654158,"[NULL]"
+          8,"trace_size_bytes","single",95,"[NULL]"
+          9,"trace_type","single","[NULL]","proto"
+        '''))
 
   def test_chrome_metadata_multiple(self):
     return DiffTestBlueprint(
@@ -706,20 +821,20 @@ class Parsing(TestSuite):
         }
         """),
         query="""
-        SELECT * FROM metadata;
+        SELECT id, name, key_type, int_value, str_value FROM metadata;
         """,
         out=Csv("""
-        "id","type","name","key_type","int_value","str_value"
-        0,"metadata","trace_uuid","single","[NULL]","00000000-0000-0000-0de8-df55233147f0"
-        1,"metadata","trace_time_clock_id","single",6,"[NULL]"
-        2,"metadata","cr-a-playstore_version_code","single",101,"[NULL]"
-        3,"metadata","cr-a-enabled_categories","single","[NULL]","cat1,cat2,cat3"
-        4,"metadata","cr-a-field_trial_hashes","single","[NULL]","{ name: 123, group: 456 } { name: 789, group: 120 } "
-        5,"metadata","cr-b-playstore_version_code","single",102,"[NULL]"
-        6,"metadata","cr-b-enabled_categories","single","[NULL]","cat3,cat4,cat5"
-        7,"metadata","cr-b-field_trial_hashes","single","[NULL]","{ name: 1234, group: 5678 } { name: 9012, group: 3456 } "
-        8,"metadata","trace_size_bytes","single",110,"[NULL]"
-        9,"metadata","trace_type","single","[NULL]","proto"
+        "id","name","key_type","int_value","str_value"
+        0,"trace_uuid","single","[NULL]","00000000-0000-0000-0de8-df55233147f0"
+        1,"trace_time_clock_id","single",6,"[NULL]"
+        2,"cr-a-playstore_version_code","single",101,"[NULL]"
+        3,"cr-a-enabled_categories","single","[NULL]","cat1,cat2,cat3"
+        4,"cr-a-field_trial_hashes","single","[NULL]","{ name: 123, group: 456 } { name: 789, group: 120 } "
+        5,"cr-b-playstore_version_code","single",102,"[NULL]"
+        6,"cr-b-enabled_categories","single","[NULL]","cat3,cat4,cat5"
+        7,"cr-b-field_trial_hashes","single","[NULL]","{ name: 1234, group: 5678 } { name: 9012, group: 3456 } "
+        8,"trace_size_bytes","single",110,"[NULL]"
+        9,"trace_type","single","[NULL]","proto"
         """))
 
   # CPU info
@@ -728,13 +843,13 @@ class Parsing(TestSuite):
         trace=Path('cpu_info.textproto'),
         query="""
         SELECT
-          id,
+          cpu,
           cluster_id,
           processor
         FROM cpu;
         """,
         out=Csv("""
-        "id","cluster_id","processor"
+        "cpu","cluster_id","processor"
         0,0,"AArch64 Processor rev 13 (aarch64)"
         1,0,"AArch64 Processor rev 13 (aarch64)"
         2,0,"AArch64 Processor rev 13 (aarch64)"
@@ -751,8 +866,8 @@ class Parsing(TestSuite):
         query="""
         SELECT
           freq,
-          GROUP_CONCAT(cpu_id) AS cpus
-        FROM cpu_freq
+          GROUP_CONCAT(cpu) AS cpus
+        FROM cpu_available_frequencies
         GROUP BY freq
         ORDER BY freq;
         """,
@@ -839,10 +954,10 @@ class Parsing(TestSuite):
         }
         """),
         query="""
-        SELECT RUN_METRIC('android/process_metadata.sql');
+        INCLUDE PERFETTO MODULE android.process_metadata;
 
         SELECT upid, process_name, uid, shared_uid, package_name, version_code
-        FROM process_metadata_table
+        FROM android_process_metadata
         WHERE upid != 0;
         """,
         out=Csv("""
@@ -1134,18 +1249,6 @@ class Parsing(TestSuite):
         9
         """))
 
-  def test_otheruuids_android_other_traces(self):
-    return DiffTestBlueprint(
-        trace=Path('otheruuids.textproto'),
-        query=Metric('android_other_traces'),
-        out=TextProto(r"""
-        android_other_traces {
-          finalized_traces_uuid: "75e4c6d0-d8f6-4f82-fa4b-9e09c5512288"
-          finalized_traces_uuid: "ad836701-3113-3fb1-be4f-f7731e23fbbf"
-          finalized_traces_uuid: "0de1a010-efa1-a081-2345-969b1186a6ab"
-        }
-        """))
-
   # Per-process Binder transaction metrics
   def test_android_binder(self):
     return DiffTestBlueprint(
@@ -1317,4 +1420,334 @@ class Parsing(TestSuite):
         "name","int_value"
         "all_data_source_flushed_ns",12344
         "all_data_source_flushed_ns",12345
+        """))
+
+  def test_slow_starting_data_sources(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          timestamp: 108227060089867
+          trusted_uid: 679634
+          trusted_packet_sequence_id: 1
+          service_event {
+            slow_starting_data_sources {
+              data_source {
+                producer_name: "producer2"
+                data_source_name: "track_event"
+              }
+              data_source {
+                producer_name: "producer3"
+                data_source_name: "track_event"
+              }
+            }
+          }
+        }
+        """),
+        query="""
+        SELECT str_value FROM metadata WHERE name = 'slow_start_data_source'""",
+        out=Csv("""
+        "str_value"
+        "producer2 track_event"
+        "producer3 track_event"
+        """))
+
+  def test_ftrace_abi_errors_skipped_zero_data_length(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          ftrace_stats {
+            phase: END_OF_TRACE
+            cpu_stats {
+              cpu: 0
+              entries: 14
+              overrun: 0
+              commit_overrun: 0
+              bytes_read: 840
+              oldest_event_ts: 86557.552705
+              now_ts: 86557.574310
+              dropped_events: 0
+              read_events: 199966062
+            }
+            kernel_symbols_parsed: 128611
+            kernel_symbols_mem_kb: 1322
+            ftrace_parse_errors: FTRACE_STATUS_ABI_ZERO_DATA_LENGTH
+          }
+          trusted_uid: 9999
+          trusted_packet_sequence_id: 2
+          trusted_pid: 1069
+        }
+        """),
+        query="""
+        select name, severity, value
+        from stats
+        where name = "ftrace_abi_errors_skipped_zero_data_length"
+        """,
+        out=Csv("""
+        "name","severity","value"
+        "ftrace_abi_errors_skipped_zero_data_length","info",1
+        """))
+
+  # CPU info
+  def test_cpu_machine_id(self):
+    return DiffTestBlueprint(
+        trace=Path('cpu_info.textproto'),
+        trace_modifier=TraceInjector(['cpu_info'], {'machine_id': 1001}),
+        query="""
+        SELECT
+          cpu,
+          cluster_id,
+          processor
+        FROM cpu
+        WHERE machine_id is not NULL;
+        """,
+        out=Csv("""
+        "cpu","cluster_id","processor"
+        0,0,"AArch64 Processor rev 13 (aarch64)"
+        1,0,"AArch64 Processor rev 13 (aarch64)"
+        2,0,"AArch64 Processor rev 13 (aarch64)"
+        3,0,"AArch64 Processor rev 13 (aarch64)"
+        4,0,"AArch64 Processor rev 13 (aarch64)"
+        5,0,"AArch64 Processor rev 13 (aarch64)"
+        6,1,"AArch64 Processor rev 13 (aarch64)"
+        7,1,"AArch64 Processor rev 13 (aarch64)"
+        """))
+
+  def test_cpu_freq_machine_id(self):
+    return DiffTestBlueprint(
+        trace=Path('cpu_info.textproto'),
+        trace_modifier=TraceInjector(['cpu_info'], {'machine_id': 1001}),
+        query="""
+        SELECT
+          freq,
+          GROUP_CONCAT(cpu.cpu) AS cpus
+        FROM cpu_available_frequencies
+        JOIN cpu using (ucpu)
+        WHERE machine_id is not NULL
+        GROUP BY freq
+        ORDER BY freq;
+        """,
+        out=Path('cpu_freq.out'))
+
+  def test_sched_waking_instants_compact_sched_machine_id(self):
+    return DiffTestBlueprint(
+        trace=DataPath('compact_sched.pb'),
+        trace_modifier=TraceInjector(
+            ['ftrace_events', 'ftrace_stats', 'system_info'],
+            {'machine_id': 1001}),
+        query="""
+        SELECT ts, thread.name, thread.tid
+        FROM thread_state
+        JOIN thread USING (utid)
+        WHERE state = 'R' AND thread.machine_id is not NULL
+        ORDER BY ts;
+        """,
+        out=Path('sched_waking_instants_compact_sched.out'))
+
+  def test_cpu_capacity_present(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+      packet {
+        cpu_info {
+          cpus {
+            processor: "AArch64 Processor rev 13 (aarch64)"
+            frequencies: 150000
+            frequencies: 300000
+            capacity: 256
+          }
+          cpus {
+            processor: "AArch64 Processor rev 13 (aarch64)"
+            frequencies: 300000
+            frequencies: 576000
+            capacity: 1024
+          }
+        }
+      }
+      """),
+        query="""
+      SELECT
+        cpu,
+        cluster_id,
+        capacity,
+        processor
+      FROM cpu
+      ORDER BY cpu
+      """,
+        out=Csv("""
+      "cpu","cluster_id","capacity","processor"
+      0,0,256,"AArch64 Processor rev 13 (aarch64)"
+      1,1,1024,"AArch64 Processor rev 13 (aarch64)"
+      """))
+
+  def test_cpu_capacity_not_present(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+      packet {
+        cpu_info {
+          cpus {
+            processor: "AArch64 Processor rev 13 (aarch64)"
+            frequencies: 150000
+            frequencies: 300000
+          }
+          cpus {
+            processor: "AArch64 Processor rev 13 (aarch64)"
+            frequencies: 300000
+            frequencies: 576000
+          }
+        }
+      }
+      """),
+        query="""
+      SELECT
+        cpu,
+        cluster_id,
+        capacity,
+        processor
+      FROM cpu
+      ORDER BY cpu
+      """,
+        out=Csv("""
+      "cpu","cluster_id","capacity","processor"
+      0,0,"[NULL]","AArch64 Processor rev 13 (aarch64)"
+      1,1,"[NULL]","AArch64 Processor rev 13 (aarch64)"
+      """))
+
+  # Test that the sched slices of a VM guest is ingested and not filtered
+  # because timestamp is far before the tracing session.
+  def test_sched_remote_clock_sync(self):
+    return DiffTestBlueprint(
+        trace=DataPath('multi_machine_trace.pb'),
+        query="""
+        SELECT ts, cpu.cpu, thread.name, thread.tid
+        FROM sched JOIN cpu USING(ucpu) JOIN thread USING(utid)
+        WHERE cpu.machine_id IS NOT NULL LIMIT 10
+        """,
+        out=Csv("""
+        "ts","cpu","name","tid"
+        5230310112669,5,"kworker/5:7",32536
+        5230310132355,5,"swapper",0
+        5230310284063,4,"traced_probes",550
+        5230310421518,1,"swapper",0
+        5230310428373,3,"swapper",0
+        5230310587630,1,"rcuog/4",49
+        5230310590258,3,"logd.klogd",246
+        5230310592868,1,"swapper",0
+        5230310659357,3,"swapper",0
+        5230310671279,5,"traced_relay",25171
+        """))
+
+  # A query that selects the sched slices of a host vcpu thread and the guest
+  # sched slices. If remote clock sync works, guest sched slices should not be
+  # far off from host vcpu slices, and the query should return both host and
+  # guest slices.
+  def test_sched_remote_clock_sync_vcpu0(self):
+    return DiffTestBlueprint(
+        trace=DataPath('multi_machine_trace.pb'),
+        query="""
+        SELECT ts, cpu.cpu, utid, machine_id
+        FROM sched JOIN cpu USING (ucpu)
+        WHERE ucpu = 4096
+        UNION
+        SELECT ts, cpu.cpu, utid, machine_id
+        FROM sched JOIN cpu USING (ucpu)
+        WHERE utid = (
+          SELECT utid
+          FROM thread
+          WHERE name = 'crosvm_vcpu0')
+        LIMIT 20
+        """,
+        out=Csv("""
+        "ts","cpu","utid","machine_id"
+        5230311628979,0,1,1
+        5230315517287,0,11,1
+        5230315524649,0,1,1
+        5230315676788,0,10,1
+        5230315684911,0,1,1
+        5230319663217,0,10,1
+        5230319684310,0,1,1
+        5230323692459,0,10,1
+        5230323726976,0,11,1
+        5230323764556,0,1,1
+        5230327702466,0,10,1
+        5230327736100,0,1,1
+        5230331761483,0,10,1
+        5230331800905,0,11,1
+        5230331837332,0,1,1
+        5230421799455,0,10,1
+        5230421810047,0,1,1
+        5230422048874,0,1306,"[NULL]"
+        5230422153284,0,1306,"[NULL]"
+        5230425693562,0,10,1
+        """))
+
+  # Kernel idle tasks created by /sbin/init should be filtered.
+  def test_task_newtask_swapper_by_init(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          first_packet_on_sequence: true
+          ftrace_events {
+            cpu: 1
+            event {
+              timestamp: 1000000
+              pid: 0
+              task_newtask {
+                pid: 1
+                comm: "swapper/0"
+                clone_flags: 8389376
+                oom_score_adj: 0
+              }
+            }
+            event {
+              timestamp: 1000000
+              pid: 0
+              task_newtask {
+                pid: 2
+                comm: "swapper/0"
+                clone_flags: 8390400
+                oom_score_adj: 0
+              }
+            }
+            event {
+              timestamp: 17000000
+              pid: 1
+              task_newtask {
+                pid: 0
+                comm: "swapper/0"
+                clone_flags: 256
+                oom_score_adj: 0
+              }
+            }
+            event {
+              timestamp: 17000000
+              pid: 1
+              task_newtask {
+                pid: 0
+                comm: "swapper/0"
+                clone_flags: 256
+                oom_score_adj: 0
+              }
+            }
+            event {
+              timestamp: 17000000
+              pid: 1
+              task_newtask {
+                pid: 0
+                comm: "swapper/0"
+                clone_flags: 256
+                oom_score_adj: 0
+              }
+            }
+          }
+          trusted_uid: 9999
+          trusted_packet_sequence_id: 2
+          trusted_pid: 521
+          previous_packet_dropped: true
+        }
+        """),
+        query="""
+        SELECT utid, tid, name from thread where tid = 0
+        """,
+        out=Csv("""
+        "utid","tid","name"
+        0,0,"swapper"
         """))

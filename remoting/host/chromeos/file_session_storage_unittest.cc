@@ -5,6 +5,7 @@
 #include "remoting/host/chromeos/file_session_storage.h"
 
 #include <optional>
+
 #include "base/files/scoped_temp_dir.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
@@ -92,7 +93,7 @@ TEST_F(FileSessionStorageTest,
 
   std::optional<base::Value::Dict> result = RetrieveSession();
   ASSERT_TRUE(result.has_value());
-  EXPECT_THAT(result.value(), base::test::IsJson(session_information));
+  EXPECT_THAT(*result, base::test::IsJson(session_information));
 }
 
 }  // namespace remoting

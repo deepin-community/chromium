@@ -60,7 +60,6 @@ gpu::VulkanInstance* VulkanImplementationFlatland::GetVulkanInstance() {
 std::unique_ptr<gpu::VulkanSurface>
 VulkanImplementationFlatland::CreateViewSurface(gfx::AcceleratedWidget window) {
   NOTREACHED();
-  return nullptr;
 }
 
 bool VulkanImplementationFlatland::GetPhysicalDevicePresentationSupport(

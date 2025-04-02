@@ -4,6 +4,7 @@
 
 #include "components/policy/core/common/policy_statistics_collector.h"
 
+#include <array>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -13,6 +14,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/time/time.h"
+#include "base/types/expected_macros.h"
 #include "base/values.h"
 #include "components/policy/core/common/external_data_fetcher.h"
 #include "components/policy/core/common/mock_policy_service.h"
@@ -61,15 +63,15 @@ const char kTestChromeSchema[] = R"(
       }
     })";
 
-const PolicyDetails kTestPolicyDetails[] = {
+const auto kTestPolicyDetails = std::to_array<PolicyDetails>({
     // is_deprecated is_future is_device_policy id  max_external_data_size
-    {false, false, false, kTestPolicy1Id, 0},
-    {false, false, false, kTestPolicy2Id, 0},
-    {false, false, false, kTestPolicy3Id, 0},
-    {false, false, false, kEnrollmentTokenPolicyId, 0},
-    {false, false, false, kEnrollmentOptionPolicyId, 0},
-    {false, false, false, kBrowserSigninPolicyId, 0},
-};
+    {false, false, kProfile, kTestPolicy1Id, 0},
+    {false, false, kProfile, kTestPolicy2Id, 0},
+    {false, false, kProfile, kTestPolicy3Id, 0},
+    {false, false, kProfile, kEnrollmentTokenPolicyId, 0},
+    {false, false, kProfile, kEnrollmentOptionPolicyId, 0},
+    {false, false, kProfile, kBrowserSigninPolicyId, 0},
+});
 
 }  // namespace
 
@@ -79,9 +81,8 @@ class PolicyStatisticsCollectorTest : public testing::Test {
       : task_runner_(new base::TestSimpleTaskRunner()) {}
 
   void SetUp() override {
-    std::string error;
-    chrome_schema_ = Schema::Parse(kTestChromeSchema, &error);
-    ASSERT_TRUE(chrome_schema_.valid()) << error;
+    ASSIGN_OR_RETURN(chrome_schema_, Schema::Parse(kTestChromeSchema),
+                     [](const auto& e) { ADD_FAILURE() << e; });
 
     policy_details_.SetDetails(kTestPolicy1, &kTestPolicyDetails[0]);
     policy_details_.SetDetails(kTestPolicy2, &kTestPolicyDetails[1]);

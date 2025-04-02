@@ -6,15 +6,17 @@
 from __future__ import annotations
 
 import enum
-import pathlib
+import os
 import sys
 import textwrap
-from typing import List, Optional, Tuple, NamedTuple, Type, TypeVar, cast
+from typing import List, NamedTuple, Optional, Tuple, Type, TypeVar, cast
 
 import tabulate
 
+from crossbench import path as pth
+
 if sys.version_info >= (3, 11):
-  from enum import StrEnum
+  from enum import StrEnum  # pylint: disable=unused-import
 else:
 
   class StrEnum(str, enum.Enum):
@@ -25,16 +27,22 @@ else:
 
 if sys.version_info >= (3, 9):
 
-  def is_relative_to(path_a: pathlib.Path, path_b: pathlib.Path) -> bool:
+  def is_relative_to(path_a: pth.AnyPath, path_b: pth.AnyPath) -> bool:
     return path_a.is_relative_to(path_b)
+
+  def readlink(path: pth.LocalPath) -> pth.LocalPath:
+    return path.readlink()
 else:
 
-  def is_relative_to(path_a: pathlib.Path, path_b: pathlib.Path) -> bool:
+  def is_relative_to(path_a: pth.AnyPath, path_b: pth.AnyPath) -> bool:
     try:
       path_a.relative_to(path_b)
       return True
     except ValueError:
       return False
+
+  def readlink(path: pth.LocalPath) -> pth.LocalPath:
+    return pth.LocalPath(os.readlink(path))
 
 
 class StrHelpDataMixin(NamedTuple):
@@ -49,8 +57,8 @@ class StrEnumWithHelp(StrHelpDataMixin, enum.Enum):
   @classmethod
   def _missing_(cls: Type[StrEnumWithHelpT],
                 value) -> Optional[StrEnumWithHelpT]:
-    value = str(value)
-    for member in cls:  # pytype: disable=missing-parameter
+    value = str(value).lower()
+    for member in cls:
       if member.value == value:
         return member
     return None

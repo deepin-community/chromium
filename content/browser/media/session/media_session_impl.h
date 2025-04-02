@@ -17,6 +17,7 @@
 #include "base/containers/id_map.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ptr_exclusion.h"
+#include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "content/browser/media/session/audio_focus_delegate.h"
@@ -51,6 +52,7 @@ class MediaSessionImplVisibilityBrowserTest;
 class MediaSessionPlayerObserver;
 class MediaSessionServiceImpl;
 class MediaSessionServiceImplBrowserTest;
+class VideoPictureInPictureWindowControllerImpl;
 
 #if BUILDFLAG(IS_ANDROID)
 class MediaSessionAndroid;
@@ -111,9 +113,6 @@ class MediaSessionImpl : public MediaSession,
   // Removes all the players associated with |observer|. Abandons audio focus if
   // these were the last players in the session.
   CONTENT_EXPORT void RemovePlayers(MediaSessionPlayerObserver* observer);
-
-  // Record that the session was ducked.
-  void RecordSessionDuck();
 
   // Called when a player is paused in the content.
   // If the paused player is the last player, we suspend the MediaSession.
@@ -215,6 +214,10 @@ class MediaSessionImpl : public MediaSession,
   // default value.
   CONTENT_EXPORT void SetAudioFocusGroupId(
       const base::UnguessableToken& group_id) override;
+
+  // Returns the `RenderFrameHost` for the currently MediaSession routed
+  // service.
+  RenderFrameHost* GetRoutedFrame() override;
 
   // Suspend the media session.
   // |type| represents the origin of the request.
@@ -332,6 +335,9 @@ class MediaSessionImpl : public MediaSession,
   // device switching.
   void OnAudioOutputSinkChangingDisabled();
 
+  // Called when any of the normal players video visibility changes.
+  CONTENT_EXPORT void OnVideoVisibilityChanged();
+
   // Update the value of `remote_playback_metadata_`.
   CONTENT_EXPORT void SetRemotePlaybackMetadata(
       media_session::mojom::RemotePlaybackMetadataPtr metadata);
@@ -345,6 +351,13 @@ class MediaSessionImpl : public MediaSession,
 
   // Returns the Audio Focus request ID associated with this media session.
   const base::UnguessableToken& GetRequestId() const;
+
+  // Flushes the VideoPictureInPictureWindowControllerImpl with the latest data.
+  void UpdateVideoPictureInPictureWindowController(
+      VideoPictureInPictureWindowControllerImpl* pip_controller) const;
+
+  // Returns a WeakPtr to `this`.
+  base::WeakPtr<MediaSessionImpl> GetWeakPtr();
 
   CONTENT_EXPORT bool HasImageCacheForTest(const GURL& image_url) const;
 
@@ -382,8 +395,7 @@ class MediaSessionImpl : public MediaSession,
     bool operator==(const PlayerIdentifier& other) const;
     bool operator!=(const PlayerIdentifier& other) const;
     bool operator<(const PlayerIdentifier& other) const;
-    // This field is not a raw_ptr<> because it was filtered by the rewriter
-    // for: #constexpr-ctor-field-initializer, #union
+    // RAW_PTR_EXCLUSION: #union
     RAW_PTR_EXCLUSION MediaSessionPlayerObserver* observer;
     int player_id;
   };
@@ -438,6 +450,9 @@ class MediaSessionImpl : public MediaSession,
   CONTENT_EXPORT bool AddOneShotPlayer(MediaSessionPlayerObserver* observer,
                                        int player_id);
 
+  CONTENT_EXPORT bool AddAmbientPlayer(MediaSessionPlayerObserver* observer,
+                                       int player_id);
+
   // Returns true if there is at least one player and all the players are
   // one-shot.
   bool HasOnlyOneShotPlayers() const;
@@ -471,6 +486,18 @@ class MediaSessionImpl : public MediaSession,
                      std::vector<media_session::MediaImage>& artwork);
 
   bool IsPictureInPictureAvailable() const;
+
+  // Iterates over all |normal_players_| and returns true if any of the players'
+  // videos is sufficiently visible, false otherwise.
+  CONTENT_EXPORT bool HasSufficientlyVisibleVideo() const;
+
+  // Iterates over all |normal_players_| and returns true if any of the players'
+  // videos is sufficiently visible, false otherwise.
+  //
+  // This is very similar to `HasSufficientlyVisibleVideo`, however this method
+  // is used to get notifications on demand, while `HasSufficientlyVisibleVideo`
+  // is constantly reporting visibility.
+  void GetVisibility(GetVisibilityCallback get_visibility_callback) override;
 
   // Returns the device ID for the audio output device being used by all of the
   // normal players. If the players are not all using the same audio output
@@ -520,13 +547,21 @@ class MediaSessionImpl : public MediaSession,
   std::set<media_session::mojom::MediaSessionAction> actions_;
 
   std::unique_ptr<AudioFocusDelegate> delegate_;
+
+  // Standard video playback (e.g. WebMediaPlayerImpl players).
   std::map<PlayerIdentifier, media_session::mojom::AudioFocusType>
       normal_players_;
+
+  // Pepper players (PPAPI players).
   base::flat_set<PlayerIdentifier> pepper_players_;
 
   // Players that are playing in the web contents but we cannot control (e.g.
-  // WebAudio or MediaStream).
+  // MediaStream).
   base::flat_set<PlayerIdentifier> one_shot_players_;
+
+  // Players that we can neither control nor should affect other players in the
+  // audio focus stack (e.g. WebAudio).
+  base::flat_set<PlayerIdentifier> ambient_players_;
 
   // Players that are removed from |normal_players_| temporarily when the page
   // goes to back-forward cache. When the page is restored from the cache, these
@@ -552,6 +587,13 @@ class MediaSessionImpl : public MediaSession,
   // is set to |true| after StartDucking(), and will be set to |false| after
   // StopDucking().
   bool is_ducking_;
+
+  // True if we should unduck when we gain audio focus. This is set to true each
+  // time we request focus, and set to false if the AudioFocusManager tells us
+  // to duck. If our request is granted and this is still true, we will unduck.
+  // If false (because we were told to duck after our request began) we will
+  // remain ducked, as that is the intended state the AudioFocusManager expects.
+  bool should_unduck_on_focus_gained_ = true;
 
   base::UnguessableToken audio_focus_group_id_ = base::UnguessableToken::Null();
 
@@ -604,7 +646,8 @@ class MediaSessionImpl : public MediaSession,
 
   // MediaSessionService-related fields
   using ServicesMap =
-      std::map<GlobalRenderFrameHostId, MediaSessionServiceImpl*>;
+      std::map<GlobalRenderFrameHostId,
+               raw_ptr<MediaSessionServiceImpl, CtnExperimental>>;
 
   // The current metadata and images associated with the current media session.
   media_session::MediaMetadata metadata_;
@@ -645,6 +688,13 @@ class MediaSessionImpl : public MediaSession,
   // Used by tests to force media sessions to be ignored when finding a new
   // active session.
   bool always_ignore_for_active_session_for_testing_ = false;
+
+  // True if the given media has infinite duration OR has a duration that
+  // changes often enough to be considered live. See
+  // `MaybeGuardDurationUpdate()` for details on duration changes.
+  bool is_considered_live_ = false;
+
+  base::WeakPtrFactory<MediaSessionImpl> weak_factory_{this};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };

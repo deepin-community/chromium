@@ -41,11 +41,6 @@ namespace {
 // SetLatencyHint(), so we needed to peg this with a constant.
 constexpr int kAbsoluteMaxFrames = 24;
 
-bool ShouldUseLowDelayMode(DemuxerStream* stream) {
-  return base::FeatureList::IsEnabled(kLowDelayVideoRenderingOnLiveStream) &&
-         stream->liveness() == StreamLiveness::kLive;
-}
-
 }  // namespace
 
 VideoRendererImpl::VideoRendererImpl(
@@ -194,7 +189,7 @@ void VideoRendererImpl::Initialize(
         base::Unretained(gpu_memory_buffer_pool_.get())));
   }
 
-  low_delay_ = ShouldUseLowDelayMode(demuxer_stream_);
+  low_delay_ = stream->liveness() == StreamLiveness::kLive;
   if (low_delay_) {
     MEDIA_LOG(DEBUG, media_log_) << "Video rendering in low delay mode.";
 
@@ -666,7 +661,7 @@ void VideoRendererImpl::FrameReady(VideoDecoderStream::ReadResult result) {
   if (!sink_started_ && !painted_first_frame_ && algorithm_->frames_queued()) {
     if (received_end_of_stream_ ||
         (algorithm_->effective_frames_queued() && has_best_first_frame)) {
-      PaintFirstFrame();
+      PaintFirstFrame_Locked();
     } else if (cant_read) {
       // `cant_read` isn't always reliable, so only paint after 250ms if we
       // haven't gotten anything better. This resets for each frame received. We
@@ -1067,7 +1062,14 @@ void VideoRendererImpl::AttemptReadAndCheckForMetadataChanges(
 }
 
 void VideoRendererImpl::PaintFirstFrame() {
+  base::AutoLock auto_lock(lock_);
+  PaintFirstFrame_Locked();
+}
+
+void VideoRendererImpl::PaintFirstFrame_Locked() {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  lock_.AssertAcquired();
+
   if (painted_first_frame_ || sink_started_) {
     return;
   }
@@ -1077,8 +1079,8 @@ void VideoRendererImpl::PaintFirstFrame() {
   auto first_frame =
       algorithm_->Render(base::TimeTicks(), base::TimeTicks(), nullptr);
   DCHECK(first_frame);
-  CheckForMetadataChanges(first_frame->format(), first_frame->natural_size());
   sink_->PaintSingleFrame(first_frame);
+  CheckForMetadataChanges(first_frame->format(), first_frame->natural_size());
   painted_first_frame_ = true;
   paint_first_frame_cb_.Cancel();
 }

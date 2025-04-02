@@ -3,22 +3,22 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-from __future__ import print_function
-
 import copy
-import sys
 import typing
 from typing import Dict, List
 import unittest
+from unittest import mock
 
-if sys.version_info[0] == 2:
-  import mock
-else:
-  import unittest.mock as mock
-
+# //testing imports.
 from unexpected_passes_common import constants
 from unexpected_passes_common import data_types
 from unexpected_passes_common import unittest_utils as uu
+
+# Protected access is allowed for unittests.
+# pylint: disable=protected-access
+
+# Disabled instead of fixing to avoid a large amount of churn.
+# pylint: disable=no-self-use
 
 GENERIC_EXPECTATION = data_types.Expectation('test', ['tag1', 'tag2'], ['Pass'])
 GENERIC_RESULT = data_types.Result('test', ['tag1', 'tag2'], 'Pass',

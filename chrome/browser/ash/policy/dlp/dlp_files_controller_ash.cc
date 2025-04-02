@@ -29,7 +29,6 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
@@ -60,8 +59,8 @@
 #include "chromeos/dbus/dlp/dlp_client.h"
 #include "chromeos/dbus/dlp/dlp_service.pb.h"
 #include "chromeos/ui/base/file_icon_util.h"
-#include "components/enterprise/data_controls/component.h"
-#include "components/enterprise/data_controls/dlp_histogram_helper.h"
+#include "components/enterprise/data_controls/core/browser/component.h"
+#include "components/enterprise/data_controls/core/browser/dlp_histogram_helper.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/common/constants.h"
@@ -91,9 +90,7 @@ constexpr size_t kEntriesLimit = 100;
 std::optional<DlpFileDestination> GetFileDestinationForApp(
     const apps::AppUpdate& app_update) {
   switch (app_update.AppType()) {
-    case apps::AppType::kStandaloneBrowserChromeApp:
     case apps::AppType::kExtension:
-    case apps::AppType::kStandaloneBrowserExtension:
     case apps::AppType::kChromeApp:
       return DlpFileDestination(GURL(base::StrCat(
           {extensions::kExtensionScheme, "://", app_update.AppId()})));
@@ -109,8 +106,6 @@ std::optional<DlpFileDestination> GetFileDestinationForApp(
       // the start URL.
       return DlpFileDestination(GURL(app_update.PublisherId()));
     case apps::AppType::kUnknown:
-    case apps::AppType::kBuiltIn:
-    case apps::AppType::kStandaloneBrowser:
     case apps::AppType::kRemote:
     case apps::AppType::kBorealis:
     case apps::AppType::kBruschetta:
@@ -256,7 +251,7 @@ void DlpFilesControllerAsh::CheckIfTransferAllowed(
     return;
   }
 
-  // If the destination file path is in My Files, all files transfers should be
+  // If the destination file path is in MyFiles, all files transfers should be
   // allowed.
   if (IsInLocalFileSystem(destination.path())) {
     std::move(result_callback).Run(std::vector<storage::FileSystemURL>());
@@ -517,7 +512,6 @@ void DlpFilesControllerAsh::IsFilesTransferRestricted(
 
   std::vector<std::pair<FileDaemonInfo, ::dlp::RestrictionLevel>> files_levels;
   std::vector<FileDaemonInfo> warned_files;
-  std::optional<std::string> destination_pattern;
   std::vector<std::string> warned_source_patterns;
   std::vector<DlpRulesManager::RuleMetadata> warned_rules_metadata;
   for (const auto& file : transferred_files) {
@@ -527,24 +521,24 @@ void DlpFilesControllerAsh::IsFilesTransferRestricted(
     if (destination.component()) {
       data_controls::Component dst_component = *destination.component();
       level = rules_manager_->IsRestrictedComponent(
-          GURL(file.source_url), dst_component,
-          DlpRulesManager::Restriction::kFiles, &source_pattern,
-          &rule_metadata);
+          file.source_url, dst_component, DlpRulesManager::Restriction::kFiles,
+          &source_pattern, &rule_metadata);
       actual_dst = DlpFileDestination(dst_component);
-      MaybeReportEvent(file.inode, file.crtime, file.path, source_pattern,
-                       actual_dst, std::nullopt, rule_metadata, level);
+      MaybeReportEvent(file.inode, file.crtime, file.path,
+                       file.source_url.spec(), actual_dst, rule_metadata,
+                       level);
     } else if (destination.IsFileSystem()) {
       level = DlpRulesManager::Level::kAllow;
     } else {
       DCHECK(destination.url().has_value());
-      destination_pattern = std::string();
       level = rules_manager_->IsRestrictedDestination(
           GURL(file.source_url), GURL(*destination.url()),
           DlpRulesManager::Restriction::kFiles, &source_pattern,
-          &destination_pattern.value(), &rule_metadata);
+          /*out_destination_pattern=*/nullptr, &rule_metadata);
       if (!IsSystemAppURL(destination.url().value())) {
-        MaybeReportEvent(file.inode, file.crtime, file.path, source_pattern,
-                         actual_dst, destination_pattern, rule_metadata, level);
+        MaybeReportEvent(file.inode, file.crtime, file.path,
+                         file.source_url.spec(), actual_dst, rule_metadata,
+                         level);
       }
     }
 
@@ -586,15 +580,14 @@ void DlpFilesControllerAsh::IsFilesTransferRestricted(
     return;
   }
   std::vector<base::FilePath> warning_files_paths;
-  base::ranges::for_each(warned_files, [&](auto& warned_file) {
+  std::ranges::for_each(warned_files, [&](auto& warned_file) {
     warning_files_paths.push_back(warned_file.path);
   });
   fpnm->ShowDlpWarning(
       base::BindOnce(&DlpFilesControllerAsh::OnDlpWarnDialogReply,
                      weak_ptr_factory_.GetWeakPtr(), std::move(files_levels),
                      std::move(warned_files), std::move(warned_source_patterns),
-                     std::move(warned_rules_metadata), actual_dst,
-                     destination_pattern, files_action,
+                     std::move(warned_rules_metadata), actual_dst, files_action,
                      std::move(result_callback)),
       std::move(task_id), std::move(warning_files_paths), actual_dst,
       files_action);
@@ -615,13 +608,13 @@ DlpFilesControllerAsh::GetDlpRestrictionDetails(const std::string& source_url) {
   for (const auto& [level, urls] : aggregated_destinations) {
     DlpFileRestrictionDetails details;
     details.level = level;
-    base::ranges::move(urls.begin(), urls.end(),
-                       std::back_inserter(details.urls));
+    std::ranges::move(urls.begin(), urls.end(),
+                      std::back_inserter(details.urls));
     // Add the components for this level, if any.
     const auto it = aggregated_components.find(level);
     if (it != aggregated_components.end()) {
-      base::ranges::move(it->second.begin(), it->second.end(),
-                         std::back_inserter(details.components));
+      std::ranges::move(it->second.begin(), it->second.end(),
+                        std::back_inserter(details.components));
     }
     result.emplace_back(std::move(details));
   }
@@ -635,8 +628,8 @@ DlpFilesControllerAsh::GetDlpRestrictionDetails(const std::string& source_url) {
     }
     DlpFileRestrictionDetails details;
     details.level = level;
-    base::ranges::move(components.begin(), components.end(),
-                       std::back_inserter(details.components));
+    std::ranges::move(components.begin(), components.end(),
+                      std::back_inserter(details.components));
     result.emplace_back(std::move(details));
   }
 
@@ -653,8 +646,8 @@ DlpFilesControllerAsh::GetBlockedComponents(const std::string& source_url) {
   std::vector<data_controls::Component> result;
   const auto it = aggregated_components.find(DlpRulesManager::Level::kBlock);
   if (it != aggregated_components.end()) {
-    base::ranges::move(it->second.begin(), it->second.end(),
-                       std::back_inserter(result));
+    std::ranges::move(it->second.begin(), it->second.end(),
+                      std::back_inserter(result));
   }
   return result;
 }
@@ -770,7 +763,6 @@ void DlpFilesControllerAsh::OnDlpWarnDialogReply(
     std::vector<std::string> warned_src_patterns,
     std::vector<DlpRulesManager::RuleMetadata> warned_rules_metadata,
     const DlpFileDestination& dst,
-    const std::optional<std::string>& dst_pattern,
     dlp::FileAction files_action,
     IsFilesTransferRestrictedCallback callback,
     std::optional<std::u16string> user_justification,
@@ -782,8 +774,8 @@ void DlpFilesControllerAsh::OnDlpWarnDialogReply(
       data_controls::DlpHistogramEnumeration(
           data_controls::dlp::kFileActionWarnProceededUMA, files_action);
       MaybeReportEvent(warned_files[i].inode, warned_files[i].crtime,
-                       warned_files[i].path, warned_src_patterns[i], dst,
-                       dst_pattern, warned_rules_metadata[i], std::nullopt);
+                       warned_files[i].path, warned_files[i].source_url.spec(),
+                       dst, warned_rules_metadata[i], std::nullopt);
     }
     files_levels.emplace_back(warned_files[i],
                               should_proceed
@@ -842,10 +834,10 @@ void DlpFilesControllerAsh::ReturnAllowedUploads(
                                                  response.files_paths().end());
     // If any of the selected files/folders is restricted or contains a
     // restricted file, it'll be removed.
-    base::EraseIf(
+    std::erase_if(
         selected_files,
         [&restricted_files](const ui::SelectedFileInfo& selected_file) -> bool {
-          return base::ranges::any_of(
+          return std::ranges::any_of(
               restricted_files, [&](const base::FilePath& restricted_file) {
                 return selected_file.file_path == restricted_file ||
                        selected_file.file_path.IsParent(restricted_file);
@@ -925,9 +917,8 @@ void DlpFilesControllerAsh::MaybeReportEvent(
     ino64_t inode,
     time_t crtime,
     const base::FilePath& path,
-    const std::string& source_pattern,
+    const std::string& source_url,
     const DlpFileDestination& dst,
-    const std::optional<std::string>& dst_pattern,
     const DlpRulesManager::RuleMetadata& rule_metadata,
     std::optional<DlpRulesManager::Level> level) {
   const bool is_warning_proceeded_event = !level.has_value();
@@ -955,19 +946,18 @@ void DlpFilesControllerAsh::MaybeReportEvent(
   std::unique_ptr<data_controls::DlpPolicyEventBuilder> event_builder =
       is_warning_proceeded_event
           ? data_controls::DlpPolicyEventBuilder::WarningProceededEvent(
-                source_pattern, rule_metadata.name, rule_metadata.obfuscated_id,
+                source_url, rule_metadata.name, rule_metadata.obfuscated_id,
                 DlpRulesManager::Restriction::kFiles)
           : data_controls::DlpPolicyEventBuilder::Event(
-                source_pattern, rule_metadata.name, rule_metadata.obfuscated_id,
+                source_url, rule_metadata.name, rule_metadata.obfuscated_id,
                 DlpRulesManager::Restriction::kFiles, level.value());
 
   event_builder->SetContentName(path.BaseName().value());
 
-  if (dst_pattern.has_value()) {
-    DCHECK(!dst.component().has_value());
-    event_builder->SetDestinationPattern(dst_pattern.value());
-  } else {
-    DCHECK(dst.component().has_value());
+  if (dst.url().has_value()) {
+    event_builder->SetDestinationUrl(dst.url()->spec());
+  }
+  if (dst.component().has_value()) {
     event_builder->SetDestinationComponent(dst.component().value());
   }
   reporting_manager->ReportEvent(event_builder->Create());

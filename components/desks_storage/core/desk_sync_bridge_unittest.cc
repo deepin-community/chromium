@@ -38,10 +38,10 @@
 #include "components/sync/model/entity_change.h"
 #include "components/sync/model/in_memory_metadata_change_list.h"
 #include "components/sync/model/metadata_batch.h"
+#include "components/sync/protocol/data_type_state.pb.h"
 #include "components/sync/protocol/entity_data.h"
-#include "components/sync/protocol/model_type_state.pb.h"
-#include "components/sync/test/mock_model_type_change_processor.h"
-#include "components/sync/test/model_type_store_test_util.h"
+#include "components/sync/test/data_type_store_test_util.h"
+#include "components/sync/test/mock_data_type_local_change_processor.h"
 #include "components/sync/test/test_matchers.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -70,8 +70,10 @@ namespace {
 using ash::DeskTemplate;
 using ash::DeskTemplateSource;
 using ash::DeskTemplateType;
-using sync_pb::ModelTypeState;
+using sync_pb::DataTypeState;
 using sync_pb::WorkspaceDeskSpecifics;
+using syncer::DataTypeStore;
+using syncer::DataTypeStoreTestUtil;
 using syncer::EntityChange;
 using syncer::EntityChangeList;
 using syncer::EntityData;
@@ -79,10 +81,8 @@ using syncer::HasEncryptionKeyName;
 using syncer::InMemoryMetadataChangeList;
 using syncer::MetadataBatchContains;
 using syncer::MetadataChangeList;
-using syncer::MockModelTypeChangeProcessor;
+using syncer::MockDataTypeLocalChangeProcessor;
 using syncer::ModelError;
-using syncer::ModelTypeStore;
-using syncer::ModelTypeStoreTestUtil;
 using testing::_;
 using testing::Return;
 using testing::SizeIs;
@@ -548,8 +548,8 @@ WorkspaceDeskSpecifics CreateChromeAppTemplateExpectedValue(
   return expected_desk_specifics;
 }
 
-ModelTypeState StateWithEncryption(const std::string& encryption_key_name) {
-  ModelTypeState state;
+DataTypeState StateWithEncryption(const std::string& encryption_key_name) {
+  DataTypeState state;
   state.set_encryption_key_name(encryption_key_name);
   return state;
 }
@@ -585,7 +585,7 @@ class DeskSyncBridgeTest : public testing::Test {
 
  protected:
   DeskSyncBridgeTest()
-      : store_(ModelTypeStoreTestUtil::CreateInMemoryStoreForTest()),
+      : store_(DataTypeStoreTestUtil::CreateInMemoryStoreForTest()),
         cache_(std::make_unique<apps::AppRegistryCache>()),
         account_id_(AccountId::FromUserEmail("test@gmail.com")) {}
 
@@ -593,7 +593,7 @@ class DeskSyncBridgeTest : public testing::Test {
     ON_CALL(mock_processor_, IsTrackingMetadata()).WillByDefault(Return(true));
     bridge_ = std::make_unique<DeskSyncBridge>(
         mock_processor_.CreateForwardingProcessor(),
-        ModelTypeStoreTestUtil::FactoryForForwardingStore(store_.get()),
+        DataTypeStoreTestUtil::FactoryForForwardingStore(store_.get()),
         account_id_);
     bridge_->AddObserver(&mock_observer_);
   }
@@ -621,17 +621,17 @@ class DeskSyncBridgeTest : public testing::Test {
 
   void WriteToStoreWithMetadata(
       const std::vector<WorkspaceDeskSpecifics>& specifics_list,
-      ModelTypeState state) {
-    std::unique_ptr<ModelTypeStore::WriteBatch> batch =
+      DataTypeState state) {
+    std::unique_ptr<DataTypeStore::WriteBatch> batch =
         store_->CreateWriteBatch();
     for (auto& specifics : specifics_list) {
       batch->WriteData(specifics.uuid(), specifics.SerializeAsString());
     }
-    batch->GetMetadataChangeList()->UpdateModelTypeState(state);
+    batch->GetMetadataChangeList()->UpdateDataTypeState(state);
     CommitToStoreAndWait(std::move(batch));
   }
 
-  void CommitToStoreAndWait(std::unique_ptr<ModelTypeStore::WriteBatch> batch) {
+  void CommitToStoreAndWait(std::unique_ptr<DataTypeStore::WriteBatch> batch) {
     base::RunLoop loop;
     store_->CommitWriteBatch(
         std::move(batch),
@@ -768,7 +768,7 @@ class DeskSyncBridgeTest : public testing::Test {
     desk_test_util::PopulateAppRegistryCache(account_id_, cache_.get());
   }
 
-  MockModelTypeChangeProcessor* processor() { return &mock_processor_; }
+  MockDataTypeLocalChangeProcessor* processor() { return &mock_processor_; }
 
   DeskSyncBridge* bridge() { return bridge_.get(); }
 
@@ -781,16 +781,16 @@ class DeskSyncBridgeTest : public testing::Test {
  private:
   base::SimpleTestClock clock_;
 
-  // In memory model type store needs to be able to post tasks.
+  // In memory data type store needs to be able to post tasks.
   base::test::TaskEnvironment task_environment_;
 
-  std::unique_ptr<ModelTypeStore> store_;
+  std::unique_ptr<DataTypeStore> store_;
 
-  testing::NiceMock<MockModelTypeChangeProcessor> mock_processor_;
-
-  std::unique_ptr<DeskSyncBridge> bridge_;
+  testing::NiceMock<MockDataTypeLocalChangeProcessor> mock_processor_;
 
   testing::NiceMock<MockDeskModelObserver> mock_observer_;
+
+  std::unique_ptr<DeskSyncBridge> bridge_;
 
   std::unique_ptr<apps::AppRegistryCache> cache_;
 
@@ -995,33 +995,6 @@ TEST_F(DeskSyncBridgeTest, EnsureAshBrowserWindowsSavedProperly) {
               SavedDeskBrowserBuilder()
                   .SetUrls({GURL(base::StringPrintf(kTestUrlFormat, 1)),
                             GURL(base::StringPrintf(kTestUrlFormat, 2))})
-                  .SetIsLacros(false)
-                  .SetGenericBuilder(SavedDeskGenericAppBuilder().SetWindowId(
-                      kBrowserWindowId))
-                  .Build())
-          .Build();
-
-  EXPECT_THAT(
-      desk_template_conversion::ToSyncProto(desk_template.get(), app_cache()),
-      EqualsSpecifics(CreateBrowserTemplateExpectedValue(
-          kDefaultTemplateIndex, desk_template->created_time())));
-}
-
-TEST_F(DeskSyncBridgeTest, EnsureLacrosBrowserWindowsCanBeSavedProperly) {
-  CreateBridge();
-
-  // Uses a different method to instantiate the template that doesn't rely
-  // on the assumption that the template is instantiated from a proto, but
-  // rather is captured and saved for the first time.
-  std::unique_ptr<DeskTemplate> desk_template =
-      SavedDeskBuilder()
-          .SetUuid(base::StringPrintf(kUuidFormat, kDefaultTemplateIndex))
-          .SetName(base::StringPrintf(kNameFormat, kDefaultTemplateIndex))
-          .AddAppWindow(
-              SavedDeskBrowserBuilder()
-                  .SetUrls({GURL(base::StringPrintf(kTestUrlFormat, 1)),
-                            GURL(base::StringPrintf(kTestUrlFormat, 2))})
-                  .SetIsLacros(true)
                   .SetGenericBuilder(SavedDeskGenericAppBuilder().SetWindowId(
                       kBrowserWindowId))
                   .Build())
@@ -1043,30 +1016,6 @@ TEST_F(DeskSyncBridgeTest, EnsurePwaInAshChromeCanBeSavedProperly) {
           .AddAppWindow(
               SavedDeskBrowserBuilder()
                   .SetUrls({GURL(base::StringPrintf(kTestUrlFormat, 1))})
-                  .SetIsLacros(false)
-                  .SetIsApp(true)
-                  .SetGenericBuilder(
-                      SavedDeskGenericAppBuilder().SetWindowId(kPwaWindowId))
-                  .Build())
-          .Build();
-
-  EXPECT_THAT(
-      desk_template_conversion::ToSyncProto(desk_template.get(), app_cache()),
-      EqualsSpecifics(CreatePwaTemplateExpectedValue(
-          kDefaultTemplateIndex, desk_template->created_time())));
-}
-
-TEST_F(DeskSyncBridgeTest, EnsurePwaInLacrosChromeCanBeSavedProperly) {
-  CreateBridge();
-
-  std::unique_ptr<DeskTemplate> desk_template =
-      SavedDeskBuilder()
-          .SetUuid(base::StringPrintf(kUuidFormat, kDefaultTemplateIndex))
-          .SetName(base::StringPrintf(kNameFormat, kDefaultTemplateIndex))
-          .AddAppWindow(
-              SavedDeskBrowserBuilder()
-                  .SetUrls({GURL(base::StringPrintf(kTestUrlFormat, 1))})
-                  .SetIsLacros(true)
                   .SetIsApp(true)
                   .SetGenericBuilder(
                       SavedDeskGenericAppBuilder().SetWindowId(kPwaWindowId))
@@ -1097,26 +1046,6 @@ TEST_F(DeskSyncBridgeTest, EnsureChromeAppCanBeSavedProperly) {
       EqualsSpecifics(CreateChromeAppTemplateExpectedValue(
           kDefaultTemplateIndex, desk_template->created_time(),
           kChromeAppWindowId, desk_test_util::kTestChromeAppId)));
-}
-
-TEST_F(DeskSyncBridgeTest, EnsureLacrosChromeAppCanBeSavedProperly) {
-  CreateBridge();
-
-  std::unique_ptr<DeskTemplate> desk_template =
-      SavedDeskBuilder()
-          .SetUuid(base::StringPrintf(kUuidFormat, kDefaultTemplateIndex))
-          .SetName(base::StringPrintf(kNameFormat, kDefaultTemplateIndex))
-          .AddAppWindow(SavedDeskGenericAppBuilder()
-                            .SetAppId(desk_test_util::kTestLacrosChromeAppId)
-                            .SetWindowId(kChromeAppWindowId)
-                            .Build())
-          .Build();
-
-  EXPECT_THAT(
-      desk_template_conversion::ToSyncProto(desk_template.get(), app_cache()),
-      EqualsSpecifics(CreateChromeAppTemplateExpectedValue(
-          kDefaultTemplateIndex, desk_template->created_time(),
-          kChromeAppWindowId, desk_test_util::kTestLacrosChromeAppId)));
 }
 
 TEST_F(DeskSyncBridgeTest, EnsureUnsupportedAppCanBeIgnored) {
@@ -1184,7 +1113,7 @@ TEST_F(DeskSyncBridgeTest, InitializationWithLocalDataAndMetadata) {
   const WorkspaceDeskSpecifics template1 = CreateWorkspaceDeskSpecifics(1);
   const WorkspaceDeskSpecifics template2 = CreateWorkspaceDeskSpecifics(2);
 
-  ModelTypeState state = StateWithEncryption("test_encryption_key");
+  DataTypeState state = StateWithEncryption("test_encryption_key");
   WriteToStoreWithMetadata({template1, template2}, state);
   EXPECT_CALL(*processor(), ModelReadyToSync(MetadataBatchContains(
                                 HasEncryptionKeyName("test_encryption_key"),
@@ -1214,7 +1143,7 @@ TEST_F(DeskSyncBridgeTest, GetAllEntriesIncludesPolicyEntries) {
   const WorkspaceDeskSpecifics template1 = CreateWorkspaceDeskSpecifics(1);
   const WorkspaceDeskSpecifics template2 = CreateWorkspaceDeskSpecifics(2);
 
-  ModelTypeState state = StateWithEncryption("test_encryption_key");
+  DataTypeState state = StateWithEncryption("test_encryption_key");
   WriteToStoreWithMetadata({template1, template2}, state);
   EXPECT_CALL(*processor(), ModelReadyToSync(MetadataBatchContains(
                                 HasEncryptionKeyName("test_encryption_key"),
@@ -1231,11 +1160,11 @@ TEST_F(DeskSyncBridgeTest, GetAllEntriesIncludesPolicyEntries) {
   EXPECT_EQ(result.entries.size(), 4ul);
 
   // Two of these templates should be from policy.
-  EXPECT_EQ(base::ranges::count_if(result.entries,
-                                   [](const ash::DeskTemplate* entry) {
-                                     return entry->source() ==
-                                            ash::DeskTemplateSource::kPolicy;
-                                   }),
+  EXPECT_EQ(std::ranges::count_if(result.entries,
+                                  [](const ash::DeskTemplate* entry) {
+                                    return entry->source() ==
+                                           ash::DeskTemplateSource::kPolicy;
+                                  }),
             2l);
 
   bridge()->SetPolicyDeskTemplates("");
@@ -1682,7 +1611,8 @@ TEST_F(DeskSyncBridgeTest, ApplyIncrementalSyncChangesWithOneDeletion) {
 
   // Now delete template 1.
   EntityChangeList delete_changes;
-  delete_changes.push_back(EntityChange::CreateDelete(template1.uuid()));
+  delete_changes.push_back(
+      EntityChange::CreateDelete(template1.uuid(), syncer::EntityData()));
 
   EXPECT_CALL(*mock_observer(), EntriesRemovedRemotely(SizeIs(1)));
   bridge()->ApplyIncrementalSyncChanges(bridge()->CreateMetadataChangeList(),
@@ -1705,10 +1635,11 @@ TEST_F(DeskSyncBridgeTest, ApplyIncrementalSyncChangesDeleteNonexistent) {
   std::unique_ptr<MetadataChangeList> metadata_changes =
       bridge()->CreateMetadataChangeList();
 
-  EXPECT_CALL(*processor(), Delete(_, _)).Times(0);
+  EXPECT_CALL(*processor(), Delete).Times(0);
 
   EntityChangeList entity_change_list;
-  entity_change_list.push_back(EntityChange::CreateDelete("no-such-uuid"));
+  entity_change_list.push_back(
+      EntityChange::CreateDelete("no-such-uuid", syncer::EntityData()));
   auto error = bridge()->ApplyIncrementalSyncChanges(
       std::move(metadata_changes), std::move(entity_change_list));
   EXPECT_FALSE(error);

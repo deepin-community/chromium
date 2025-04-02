@@ -74,7 +74,7 @@ class ExtensionAppsChromeOs : public ExtensionAppsBase,
   // ExtensionAppsBase overrides.
   void Initialize() override;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Requests a compressed icon data for an app identified by `app_id`. The icon
   // is identified by `size_in_dip` and `scale_factor`. Calls `callback` with
   // the result.
@@ -215,7 +215,8 @@ class ExtensionAppsChromeOs : public ExtensionAppsBase,
   // and is set by updating SystemDisabledMode policy.
   bool is_disabled_apps_mode_hidden_ = false;
 
-  std::map<extensions::AppWindow*, aura::Window*> app_window_to_aura_window_;
+  std::map<extensions::AppWindow*, raw_ptr<aura::Window, CtnExperimental>>
+      app_window_to_aura_window_;
 
   raw_ptr<ArcAppListPrefs> arc_prefs_ = nullptr;
 

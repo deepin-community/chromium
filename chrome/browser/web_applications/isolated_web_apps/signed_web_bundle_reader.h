@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/files/file_path.h"
@@ -19,6 +20,7 @@
 #include "chrome/browser/web_applications/isolated_web_apps/error/unusable_swbn_file_error.h"
 #include "components/web_package/mojom/web_bundle_parser.mojom-forward.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
+#include "components/web_package/signed_web_bundles/signed_web_bundle_integrity_block.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_signature_verifier.h"
 #include "mojo/public/cpp/system/data_pipe_producer.h"
 #include "net/base/net_errors.h"
@@ -27,10 +29,6 @@
 
 namespace network {
 struct ResourceRequest;
-}
-
-namespace web_package {
-class SignedWebBundleIntegrityBlock;
 }
 
 namespace mojo {
@@ -43,9 +41,9 @@ namespace web_app {
 //
 // `Create` returns a new instance of this class.
 //
-// `StartReading` starts the process to read the Signed Web Bundle's integrity
-// block and metadata, as well as to verify that the signatures contained in the
-// integrity block sign the bundle correctly.
+// `ReadIntegrityBlock` starts the process to read the Signed Web Bundle's
+// integrity block and metadata, as well as to verify that the signatures
+// contained in the integrity block sign the bundle correctly.
 //
 // If everything is parsed successfully, then
 // the caller can make requests to responses contained in the Signed Web Bundle
@@ -75,7 +73,7 @@ class SignedWebBundleReader {
       kContinueAndSkipSignatureVerification,
     };
 
-    static SignatureVerificationAction Abort(const std::string& abort_message);
+    static SignatureVerificationAction Abort(UnusableSwbnFileError error);
     static SignatureVerificationAction ContinueAndVerifySignatures();
     static SignatureVerificationAction ContinueAndSkipSignatureVerification();
 
@@ -85,19 +83,19 @@ class SignedWebBundleReader {
     Type type() { return type_; }
 
     // Will CHECK if `type()` != `Type::kAbort`.
-    std::string abort_message() { return *abort_message_; }
+    UnusableSwbnFileError error() { return *error_; }
 
    private:
     SignatureVerificationAction(Type type,
-                                std::optional<std::string> abort_message);
+                                std::optional<UnusableSwbnFileError> error);
 
     const Type type_;
-    const std::optional<std::string> abort_message_;
+    const std::optional<UnusableSwbnFileError> error_;
   };
 
   using IntegrityBlockReadResultCallback = base::OnceCallback<void(
-      web_package::SignedWebBundleIntegrityBlock integrity_block,
-      base::OnceCallback<void(SignatureVerificationAction)> callback)>;
+      base::expected<web_package::SignedWebBundleIntegrityBlock,
+                     UnusableSwbnFileError>)>;
 
   using ReadErrorCallback = base::OnceCallback<void(
       base::expected<void, UnusableSwbnFileError> status)>;
@@ -108,10 +106,7 @@ class SignedWebBundleReader {
   // the Web Bundle will result in an error.
   static std::unique_ptr<SignedWebBundleReader> Create(
       const base::FilePath& web_bundle_path,
-      const std::optional<GURL>& base_url,
-      std::unique_ptr<
-          web_package::SignedWebBundleSignatureVerifier> signature_verifier =
-          std::make_unique<web_package::SignedWebBundleSignatureVerifier>());
+      const std::optional<GURL>& base_url);
 
   // Starts reading the Signed Web Bundle. This will invoke
   // `integrity_block_result_callback` after reading the integrity block, which
@@ -121,9 +116,11 @@ class SignedWebBundleReader {
   // `read_error_callback` will be called once reading integrity block and
   // metadata has either succeeded, was aborted, or failed.
   // Will CHECK if `GetState()` != `kUninitialized`.
-  void StartReading(
-      IntegrityBlockReadResultCallback integrity_block_result_callback,
-      ReadErrorCallback read_error_callback);
+  void ReadIntegrityBlock(
+      IntegrityBlockReadResultCallback integrity_block_result_callback);
+
+  void ProceedWithAction(SignatureVerificationAction action,
+                         ReadErrorCallback callback);
 
   // Closes all the closable resources that the reader is using.
   void Close(base::OnceClosure callback);
@@ -153,6 +150,10 @@ class SignedWebBundleReader {
   SignedWebBundleReader& operator=(const SignedWebBundleReader&) = delete;
 
   ~SignedWebBundleReader();
+
+  // Returns the integrity block of the Web Bundle.
+  // Will CHECK if `GetState()` != `kInitialized`.
+  const web_package::SignedWebBundleIntegrityBlock& GetIntegrityBlock() const;
 
   // Returns the primary URL, as specified in the metadata of the Web Bundle.
   // Will CHECK if `GetState()` != `kInitialized`.
@@ -202,31 +203,24 @@ class SignedWebBundleReader {
 
   base::WeakPtr<SignedWebBundleReader> AsWeakPtr();
 
+  static base::AutoReset<web_package::SignedWebBundleSignatureVerifier*>
+  SetSignatureVerifierForTesting(
+      web_package::SignedWebBundleSignatureVerifier*);
+
  private:
-  explicit SignedWebBundleReader(
-      const base::FilePath& web_bundle_path,
-      const std::optional<GURL>& base_url,
-      std::unique_ptr<web_package::SignedWebBundleSignatureVerifier>
-          signature_verifier);
+  explicit SignedWebBundleReader(const base::FilePath& web_bundle_path,
+                                 const std::optional<GURL>& base_url);
 
   void OnFileOpened(
       IntegrityBlockReadResultCallback integrity_block_result_callback,
-      ReadErrorCallback read_error_callback,
       base::File file);
 
   void OnIntegrityBlockParsed(
       IntegrityBlockReadResultCallback integrity_block_result_callback,
-      ReadErrorCallback read_error_callback,
       web_package::mojom::BundleIntegrityBlockPtr integrity_block,
       web_package::mojom::BundleIntegrityBlockParseErrorPtr error);
 
-  void OnShouldContinueParsingAfterIntegrityBlock(
-      web_package::SignedWebBundleIntegrityBlock integrity_block,
-      ReadErrorCallback callback,
-      SignatureVerificationAction action);
-
   void OnFileLengthRead(
-      web_package::SignedWebBundleIntegrityBlock integrity_block,
       ReadErrorCallback callback,
       base::expected<uint64_t, base::File::Error> file_length);
 
@@ -234,8 +228,8 @@ class SignedWebBundleReader {
       const base::TimeTicks& verification_start_time,
       uint64_t file_length,
       ReadErrorCallback callback,
-      std::optional<web_package::SignedWebBundleSignatureVerifier::Error>
-          verification_error);
+      base::expected<void, web_package::SignedWebBundleSignatureVerifier::Error>
+          verification_result);
 
   void ReadMetadata(ReadErrorCallback callback);
 
@@ -272,13 +266,13 @@ class SignedWebBundleReader {
   void OnFileClosed(base::OnceClosure callback);
   void ReplyClosedIfNecessary();
 
-  State state_ = State::kUninitialized;
+  web_package::SignedWebBundleSignatureVerifier& GetSignatureVerifier();
 
-  std::unique_ptr<web_package::SignedWebBundleSignatureVerifier>
-      signature_verifier_;
+  State state_ = State::kUninitialized;
+  web_package::SignedWebBundleSignatureVerifier signature_verifier_;
 
   // Integrity Block
-  std::optional<uint64_t> integrity_block_size_in_bytes_;
+  std::optional<web_package::SignedWebBundleIntegrityBlock> integrity_block_;
 
   // Metadata
   std::optional<GURL> primary_url_;

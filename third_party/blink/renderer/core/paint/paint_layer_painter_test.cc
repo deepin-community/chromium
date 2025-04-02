@@ -4,11 +4,14 @@
 
 #include "third_party/blink/renderer/core/paint/paint_layer_painter.h"
 
+#include "base/test/trace_event_analyzer.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "third_party/blink/renderer/core/inspector/identifiers_factory.h"
 #include "third_party/blink/renderer/core/layout/layout_box_model_object.h"
 #include "third_party/blink/renderer/core/paint/cull_rect_updater.h"
 #include "third_party/blink/renderer/core/paint/paint_controller_paint_test.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/testing/find_cc_layer.h"
 #include "third_party/blink/renderer/platform/testing/paint_property_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
@@ -185,10 +188,10 @@ TEST_P(PaintLayerPainterTest, CachedSubsequenceAndChunksWithoutBackgrounds) {
   auto container_properties =
       container->FirstFragment().LocalBorderBoxProperties();
   auto content_properties = container->FirstFragment().ContentsProperties();
-  HitTestData scroll_hit_test;
-  scroll_hit_test.scroll_translation =
+  auto* scroll_hit_test = MakeGarbageCollected<HitTestData>();
+  scroll_hit_test->scroll_translation =
       container->FirstFragment().PaintProperties()->ScrollTranslation();
-  scroll_hit_test.scroll_hit_test_rect = gfx::Rect(0, 0, 150, 150);
+  scroll_hit_test->scroll_hit_test_rect = gfx::Rect(0, 0, 150, 150);
 
   if (RuntimeEnabledFeatures::HitTestOpaquenessEnabled()) {
     EXPECT_THAT(
@@ -202,7 +205,7 @@ TEST_P(PaintLayerPainterTest, CachedSubsequenceAndChunksWithoutBackgrounds) {
             IsPaintChunk(
                 1, 1,
                 PaintChunk::Id(container->Id(), DisplayItem::kScrollHitTest),
-                container_properties, &scroll_hit_test,
+                container_properties, scroll_hit_test,
                 gfx::Rect(0, 0, 150, 150)),
             IsPaintChunk(
                 1, 1,
@@ -233,7 +236,7 @@ TEST_P(PaintLayerPainterTest, CachedSubsequenceAndChunksWithoutBackgrounds) {
             IsPaintChunk(
                 1, 1,
                 PaintChunk::Id(container->Id(), DisplayItem::kScrollHitTest),
-                container_properties, &scroll_hit_test,
+                container_properties, scroll_hit_test,
                 gfx::Rect(0, 0, 150, 150)),
             IsPaintChunk(
                 1, 1,
@@ -286,7 +289,7 @@ TEST_P(PaintLayerPainterTest, CachedSubsequenceAndChunksWithoutBackgrounds) {
             IsPaintChunk(
                 1, 1,
                 PaintChunk::Id(container->Id(), DisplayItem::kScrollHitTest),
-                container_properties, &scroll_hit_test,
+                container_properties, scroll_hit_test,
                 gfx::Rect(0, 0, 150, 150)),
             IsPaintChunk(
                 1, 1,
@@ -322,7 +325,7 @@ TEST_P(PaintLayerPainterTest, CachedSubsequenceAndChunksWithoutBackgrounds) {
             IsPaintChunk(
                 1, 1,
                 PaintChunk::Id(container->Id(), DisplayItem::kScrollHitTest),
-                container_properties, &scroll_hit_test,
+                container_properties, scroll_hit_test,
                 gfx::Rect(0, 0, 150, 150)),
             IsPaintChunk(
                 1, 1,
@@ -851,7 +854,7 @@ TEST_P(PaintLayerPainterTest, PaintWithOverriddenCullRect) {
                                   /*disable_expansion*/ false);
     EXPECT_EQ(gfx::Rect(0, 0, 100, 100), GetCullRect(stacking).Rect());
     EXPECT_EQ(gfx::Rect(0, 0, 100, 100), GetCullRect(absolute).Rect());
-    PaintController controller(PaintController::kTransient);
+    PaintController controller;
     GraphicsContext context(controller);
     PaintLayerPainter(stacking).Paint(context);
   }
@@ -862,6 +865,105 @@ TEST_P(PaintLayerPainterTest, PaintWithOverriddenCullRect) {
   EXPECT_EQ(kFullyPainted, absolute.PreviousPaintResult());
   EXPECT_FALSE(stacking.SelfOrDescendantNeedsRepaint());
   EXPECT_FALSE(absolute.SelfOrDescendantNeedsRepaint());
+}
+
+TEST_P(PaintLayerPainterTest, DevtoolsPaintTraceEvents) {
+  SetBodyInnerHTML(R"HTML(
+    <div id=scroller style="width: 100px; height: 100px; overflow-y: scroll;
+                            position: relative">
+      <div style="height: 5000px"></div>
+      <div id=target style="position: relative; width: 50px; height: 50px;
+                            background: red"></div>
+      <div style="height: 5000px"></div>
+    </div>
+  )HTML");
+
+  auto* target = GetElementById("target");
+  auto* scroller = GetElementById("scroller");
+
+  auto get_clip = [](const base::Value::Dict& data) {
+    const base::Value::List* list = data.FindList("clip");
+    EXPECT_EQ(8u, list->size());
+    gfx::QuadF quad(
+        gfx::PointF((*list)[0].GetDouble(), (*list)[1].GetDouble()),
+        gfx::PointF((*list)[2].GetDouble(), (*list)[3].GetDouble()),
+        gfx::PointF((*list)[4].GetDouble(), (*list)[5].GetDouble()),
+        gfx::PointF((*list)[6].GetDouble(), (*list)[7].GetDouble()));
+    return quad.BoundingBox();
+  };
+
+  std::string frame_id =
+      IdentifiersFactory::FrameId(GetDocument().GetFrame()).Utf8();
+
+  {
+    trace_analyzer::Start("devtools.timeline");
+    target->SetInlineStyleProperty(CSSPropertyID::kBackground, "yellow");
+    UpdateAllLifecyclePhasesForTest();
+    auto analyzer = trace_analyzer::Stop();
+    trace_analyzer::TraceEventVector events;
+    analyzer->FindEvents(trace_analyzer::Query::EventNameIs("Paint"), &events);
+
+    // Target is out of the cull rect and is not painted, so there is only
+    // the root paint event.
+    ASSERT_EQ(1u, events.size());
+    base::Value::Dict root_data = events[0]->GetKnownArgAsDict("data");
+    EXPECT_EQ(gfx::RectF(800, 600), get_clip(root_data));
+    EXPECT_EQ(IdentifiersFactory::FrameId(GetDocument().GetFrame()).Utf8(),
+              *root_data.FindString("frame"));
+    EXPECT_EQ(IdentifiersFactory::IntIdForNode(&GetDocument()),
+              root_data.FindInt("nodeId"));
+  }
+
+  {
+    trace_analyzer::Start("devtools.timeline");
+    scroller->scrollTo(0, 3000);
+    UpdateAllLifecyclePhasesForTest();
+    auto analyzer = trace_analyzer::Stop();
+    trace_analyzer::TraceEventVector events;
+    analyzer->FindEvents(trace_analyzer::Query::EventNameIs("Paint"), &events);
+
+    ASSERT_EQ(3u, events.size());
+    auto root_data = events[0]->GetKnownArgAsDict("data");
+    EXPECT_EQ(gfx::RectF(800, 600), get_clip(root_data));
+    EXPECT_EQ(frame_id, *root_data.FindString("frame"));
+    EXPECT_EQ(IdentifiersFactory::IntIdForNode(&GetDocument()),
+              root_data.FindInt("nodeId"));
+    // Scroller was SetNeedsRepaint on cull rect change.
+    auto scroller_data = events[1]->GetKnownArgAsDict("data");
+    EXPECT_EQ(gfx::RectF(0, 0, 100, 7100), get_clip(scroller_data));
+    EXPECT_EQ(frame_id, *scroller_data.FindString("frame"));
+    EXPECT_EQ(IdentifiersFactory::IntIdForNode(scroller),
+              scroller_data.FindInt("nodeId"));
+    // `target` was SetNeedsRepaint because its cull rect changed. It is
+    // reported along with `scroller` because `scroller` is not a stacking
+    // context (thus not `target`s paint parent).
+    auto target_data = events[2]->GetKnownArgAsDict("data");
+    EXPECT_EQ(gfx::RectF(0, -5000, 100, 7100), get_clip(target_data));
+    EXPECT_EQ(frame_id, *target_data.FindString("frame"));
+    EXPECT_EQ(IdentifiersFactory::IntIdForNode(target),
+              target_data.FindInt("nodeId"));
+  }
+
+  {
+    trace_analyzer::Start("devtools.timeline");
+    target->SetInlineStyleProperty(CSSPropertyID::kBackground, "green");
+    UpdateAllLifecyclePhasesForTest();
+    auto analyzer = trace_analyzer::Stop();
+    trace_analyzer::TraceEventVector events;
+    analyzer->FindEvents(trace_analyzer::Query::EventNameIs("Paint"), &events);
+
+    ASSERT_EQ(2u, events.size());
+    auto root_data = events[0]->GetKnownArgAsDict("data");
+    EXPECT_EQ(gfx::RectF(800, 600), get_clip(root_data));
+    EXPECT_EQ(frame_id, *root_data.FindString("frame"));
+    EXPECT_EQ(IdentifiersFactory::IntIdForNode(&GetDocument()),
+              root_data.FindInt("nodeId"));
+    auto target_data = events[1]->GetKnownArgAsDict("data");
+    EXPECT_EQ(gfx::RectF(0, -5000, 100, 7100), get_clip(target_data));
+    EXPECT_EQ(frame_id, *root_data.FindString("frame"));
+    EXPECT_EQ(IdentifiersFactory::IntIdForNode(target),
+              target_data.FindInt("nodeId"));
+  }
 }
 
 class PaintLayerPainterPaintedOutputInvisibleTest

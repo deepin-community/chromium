@@ -13,6 +13,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/cloud_content_scanning/binary_upload_service.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
+#include "components/enterprise/connectors/core/reporting_utils.h"
 #include "url/gurl.h"
 
 class Profile;
@@ -20,10 +21,6 @@ class Profile;
 namespace enterprise_connectors {
 class ContentAnalysisResponse;
 }  // namespace enterprise_connectors
-
-namespace signin {
-class IdentityManager;
-}  // namespace signin
 
 namespace safe_browsing {
 
@@ -57,26 +54,6 @@ enum class DeepScanAccessPoint {
 };
 std::string DeepScanAccessPointToString(DeepScanAccessPoint access_point);
 
-// The resulting action that chrome performed in response to a scan request.
-// This maps to the event result in the real-time reporting.
-enum class EventResult {
-  UNKNOWN,
-
-  // The user was allowed to use the data without restriction.
-  ALLOWED,
-
-  // The user was allowed to use the data but was warned that it may violate
-  // enterprise rules.
-  WARNED,
-
-  // The user was not allowed to use the data.
-  BLOCKED,
-
-  // The user has chosen to use the data even though it violated enterprise
-  // rules.
-  BYPASSED,
-};
-
 // Helper function to examine a ContentAnalysisResponse and report the
 // appropriate events to the enterprise admin. |download_digest_sha256| must be
 // encoded using base::HexEncode.  |event_result| indicates whether the user was
@@ -96,7 +73,7 @@ void MaybeReportDeepScanningVerdict(
     const int64_t content_size,
     BinaryUploadService::Result result,
     const enterprise_connectors::ContentAnalysisResponse& response,
-    EventResult event_result);
+    enterprise_connectors::EventResult event_result);
 
 // Helper function to report the user bypassed a warning to the enterprise
 // admin. This is split from MaybeReportDeepScanningVerdict since it happens
@@ -140,21 +117,11 @@ SimpleContentAnalysisResponseForTesting(std::optional<bool> dlp_success,
                                         std::optional<bool> malware_success,
                                         bool has_custom_rule_message);
 
-// Helper function to convert a EventResult to a string that.  The format of
-// string returned is processed by the sever.
-std::string EventResultToString(EventResult result);
-
 // Helper function to convert a BinaryUploadService::Result to a CamelCase
 // string.
 std::string BinaryUploadServiceResultToString(
     const BinaryUploadService::Result& result,
     bool success);
-
-// Returns the email address of the unconsented account signed in to the profile
-// or an empty string if no account is signed in.  If either |profile| or
-// |identity_manager| is null then the empty string is returned.
-std::string GetProfileEmail(Profile* profile);
-std::string GetProfileEmail(signin::IdentityManager* identity_manager);
 
 // Helper enum and function to manipulate crash keys relevant to scanning.
 // If a key would be set to 0, it is unset.
@@ -170,6 +137,10 @@ enum class ScanningCrashKey {
 };
 void IncrementCrashKey(ScanningCrashKey key, int delta = 1);
 void DecrementCrashKey(ScanningCrashKey key, int delta = 1);
+
+// Returns true for consumer scans and not on enterprise scans.
+bool IsConsumerScanRequest(
+    const safe_browsing::BinaryUploadService::Request& request);
 
 }  // namespace safe_browsing
 

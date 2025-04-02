@@ -15,6 +15,7 @@
 #include "ash/system/unified/unified_system_tray.h"
 #include "base/auto_reset.h"
 #include "base/check.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -23,10 +24,12 @@
 #include "base/scoped_observation.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+#include "chromeos/ui/frame/caption_buttons/frame_caption_button_container_view.h"
 #include "chromeos/ui/frame/multitask_menu/multitask_menu.h"
 #include "chromeos/ui/frame/multitask_menu/multitask_menu_metrics.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window_observer.h"
+#include "ui/compositor/layer.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/geometry/size.h"
@@ -35,6 +38,7 @@
 #include "ui/gfx/image/image_util.h"
 #include "ui/snapshot/snapshot_aura.h"
 #include "ui/views/controls/menu/menu_item_view.h"
+#include "ui/views/view.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/any_widget_observer.h"
 #include "ui/views/widget/widget.h"
@@ -87,6 +91,27 @@ views::MenuItemView* FindMenuItemWithLabelFromWindow(
 
   for (aura::Window* const child : search_root->children()) {
     if (auto* found = FindMenuItemWithLabelFromWindow(child, label)) {
+      return found;
+    }
+  }
+
+  return nullptr;
+}
+
+// Returns a pointer to the `aura::Window` in the window tree associated with
+// the specified `window` which has the specified `name`. In the event that no
+// such `aura::Window` is found, `nullptr` is returned.
+aura::Window* FindWindowWithName(aura::Window* window, std::string_view name) {
+  if (!window) {
+    return nullptr;
+  }
+
+  if (window->GetName() == name) {
+    return window;
+  }
+
+  for (aura::Window* const child : window->children()) {
+    if (aura::Window* found = FindWindowWithName(child, name)) {
       return found;
     }
   }
@@ -215,19 +240,20 @@ std::string CreateEncodedImageForTesting(const gfx::Size& size,
   if (image_out) {
     *image_out = test_image;
   }
-  std::vector<unsigned char> encoded_image;
+
+  std::optional<std::vector<uint8_t>> encoded_image;
   switch (codec) {
     case data_decoder::mojom::ImageCodec::kDefault:
-      CHECK(gfx::JPEG1xEncodedDataFromImage(gfx::Image(test_image), 100,
-                                            &encoded_image));
+      encoded_image =
+          gfx::JPEG1xEncodedDataFromImage(gfx::Image(test_image), 100);
       break;
     case data_decoder::mojom::ImageCodec::kPng:
-      CHECK(gfx::PNGCodec::EncodeBGRASkBitmap(
-          *test_image.bitmap(), /*discard_transparency=*/true, &encoded_image));
+      encoded_image = gfx::PNGCodec::EncodeBGRASkBitmap(
+          *test_image.bitmap(), /*discard_transparency=*/true);
       break;
   }
-  return std::string(reinterpret_cast<const char*>(encoded_image.data()),
-                     encoded_image.size());
+  CHECK(encoded_image.has_value());
+  return std::string(base::as_string_view(encoded_image.value()));
 }
 
 void DecorateWindow(aura::Window* window,
@@ -293,6 +319,62 @@ void SendKey(ui::KeyboardCode key_code,
   for (int i = 0; i < count; ++i) {
     event_generator->PressAndReleaseKey(key_code, flags);
   }
+}
+
+ui::Layer* FindLayerWithName(ui::Layer* layer, std::string_view name) {
+  if (!layer) {
+    return nullptr;
+  }
+
+  if (layer->name() == name) {
+    return layer;
+  }
+
+  for (ui::Layer* child : layer->children()) {
+    if (ui::Layer* result = FindLayerWithName(child, name)) {
+      return result;
+    }
+  }
+
+  return nullptr;
+}
+
+ui::Layer* FindLayerWithName(views::View* view, std::string_view name) {
+  if (!view) {
+    return nullptr;
+  }
+
+  if (ui::Layer* layer = FindLayerWithName(view->layer(), name)) {
+    return layer;
+  }
+
+  for (views::View* child : view->children()) {
+    if (ui::Layer* layer = FindLayerWithName(child, name)) {
+      return layer;
+    }
+  }
+
+  return nullptr;
+}
+
+views::Widget* FindWidgetWithName(std::string_view name) {
+  for (aura::Window* const root_window : Shell::Get()->GetAllRootWindows()) {
+    if (aura::Window* const found = FindWindowWithName(root_window, name)) {
+      return views::Widget::GetWidgetForNativeView(found);
+    }
+  }
+
+  return nullptr;
+}
+
+views::Widget* FindWidgetWithNameAndWaitIfNeeded(const std::string& name) {
+  if (views::Widget* const found = FindWidgetWithName(name)) {
+    return found;
+  }
+
+  return views::NamedWidgetShownWaiter(views::test::AnyWidgetTestPasskey(),
+                                       name)
+      .WaitIfNeededAndGet();
 }
 
 }  // namespace ash

@@ -179,7 +179,6 @@ bool FeatureAsParameterInterface<N>::IsFeatureEnabledInThisTestCase(
   }
 
   NOTREACHED() << "The requested feature isn't being parameterized.";
-  return false;
 }
 
 template <size_t N>

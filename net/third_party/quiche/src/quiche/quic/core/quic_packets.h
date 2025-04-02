@@ -18,6 +18,7 @@
 #include "quiche/quic/core/frames/quic_frame.h"
 #include "quiche/quic/core/quic_ack_listener_interface.h"
 #include "quiche/quic/core/quic_bandwidth.h"
+#include "quiche/quic/core/quic_connection_id.h"
 #include "quiche/quic/core/quic_constants.h"
 #include "quiche/quic/core/quic_error_codes.h"
 #include "quiche/quic/core/quic_time.h"
@@ -300,6 +301,11 @@ class QUICHE_EXPORT QuicReceivedPacket : public QuicEncryptedPacket {
                      bool owns_buffer, int ttl, bool ttl_valid,
                      char* packet_headers, size_t headers_length,
                      bool owns_header_buffer, QuicEcnCodepoint ecn_codepoint);
+  QuicReceivedPacket(const char* buffer, size_t length, QuicTime receipt_time,
+                     bool owns_buffer, int ttl, bool ttl_valid,
+                     char* packet_headers, size_t headers_length,
+                     bool owns_header_buffer, QuicEcnCodepoint ecn_codepoint,
+                     uint32_t ipv6_flow_label);
   ~QuicReceivedPacket();
   QuicReceivedPacket(const QuicReceivedPacket&) = delete;
   QuicReceivedPacket& operator=(const QuicReceivedPacket&) = delete;
@@ -319,14 +325,17 @@ class QUICHE_EXPORT QuicReceivedPacket : public QuicEncryptedPacket {
   // Length of packet headers.
   int headers_length() const { return headers_length_; }
 
+  QuicEcnCodepoint ecn_codepoint() const { return ecn_codepoint_; }
+
+  // Returns the IPv6 flow label in host byte order if present, or 0 otherwise.
+  uint32_t ipv6_flow_label() const { return ipv6_flow_label_; }
+
   // By default, gtest prints the raw bytes of an object. The bool data
   // member (in the base class QuicData) causes this object to have padding
   // bytes, which causes the default gtest object printer to read
   // uninitialize memory. So we need to teach gtest how to print this object.
   QUICHE_EXPORT friend std::ostream& operator<<(std::ostream& os,
                                                 const QuicReceivedPacket& s);
-
-  QuicEcnCodepoint ecn_codepoint() const { return ecn_codepoint_; }
 
  private:
   friend class test::QuicReceivedPacketPeer;
@@ -340,6 +349,8 @@ class QUICHE_EXPORT QuicReceivedPacket : public QuicEncryptedPacket {
   // Whether owns the buffer for packet headers.
   bool owns_header_buffer_;
   QuicEcnCodepoint ecn_codepoint_;
+  // IPv6 flow label.
+  uint32_t ipv6_flow_label_;
 };
 
 // SerializedPacket contains information of a serialized(encrypted) packet.
@@ -449,6 +460,19 @@ struct QUICHE_EXPORT ReceivedPacketInfo {
   QuicConnectionId destination_connection_id;
   QuicConnectionId source_connection_id;
   std::optional<absl::string_view> retry_token;
+};
+
+// Information about a packet sent by the dispatcher.
+struct QUICHE_EXPORT DispatcherSentPacket {
+  // The packet number sent, in response to |received_packet_number|.
+  QuicPacketNumber packet_number;
+  // The packet number received.
+  QuicPacketNumber received_packet_number;
+  // The largest acked packet number in all received packets, including
+  // |received_packet_number|.
+  QuicPacketNumber largest_acked;
+  QuicTime sent_time = QuicTime::Zero();
+  QuicPacketLength bytes_sent = 0;
 };
 
 }  // namespace quic

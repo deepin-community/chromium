@@ -29,6 +29,11 @@ class TestResponseHolder : public mojom::StreamingResponder {
   // Accumulated responses so far from whoever controls the remote
   // StreamingResponder endpoint.
   const std::vector<std::string>& responses() const { return responses_; }
+  bool complete() const { return complete_; }
+  bool disconnected() const { return disconnected_; }
+  bool terminated() const { return disconnected_ || complete_; }
+  uint32_t input_token_count() const { return input_token_count_; }
+  uint32_t output_token_count() const { return output_token_count_; }
 
   // Spins a RunLoop until this object observes completion of its response.
   void WaitForCompletion();
@@ -36,11 +41,16 @@ class TestResponseHolder : public mojom::StreamingResponder {
   // mojom::StreamingResponder:
   void OnResponse(mojom::ResponseChunkPtr chunk) override;
   void OnComplete(mojom::ResponseSummaryPtr summary) override;
+  void OnDisconnect();
 
  private:
   base::RunLoop run_loop_;
-  mojo::Receiver<mojom::StreamingResponder> receiver_{this};
   std::vector<std::string> responses_;
+  bool complete_ = false;
+  bool disconnected_ = false;
+  uint32_t input_token_count_ = 0;
+  uint32_t output_token_count_ = 0;
+  mojo::Receiver<mojom::StreamingResponder> receiver_{this};
 };
 
 }  // namespace on_device_model

@@ -10,11 +10,13 @@
 
 #include "base/auto_reset.h"
 #include "base/check_op.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/task/delay_policy.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/traced_value.h"
 #include "cc/base/devtools_instrumentation.h"
@@ -111,6 +113,12 @@ void Scheduler::SetVisible(bool visible) {
   ProcessScheduledActions();
 }
 
+void Scheduler::SetShouldWarmUp() {
+  CHECK(base::FeatureList::IsEnabled(features::kWarmUpCompositor));
+  state_machine_.SetShouldWarmUp();
+  ProcessScheduledActions();
+}
+
 void Scheduler::SetCanDraw(bool can_draw) {
   state_machine_.SetCanDraw(can_draw);
   ProcessScheduledActions();
@@ -156,8 +164,8 @@ void Scheduler::NotifyPaintWorkletStateChange(PaintWorkletState state) {
   ProcessScheduledActions();
 }
 
-void Scheduler::SetNeedsBeginMainFrame() {
-  state_machine_.SetNeedsBeginMainFrame();
+void Scheduler::SetNeedsBeginMainFrame(bool now) {
+  state_machine_.SetNeedsBeginMainFrame(now);
   ProcessScheduledActions();
 }
 
@@ -177,19 +185,15 @@ void Scheduler::SetNeedsPrepareTiles() {
   ProcessScheduledActions();
 }
 
-void Scheduler::DidSubmitCompositorFrame(uint32_t frame_token,
-                                         base::TimeTicks submit_time,
-                                         EventMetricsSet events_metrics,
-                                         bool has_missing_content) {
+void Scheduler::DidSubmitCompositorFrame(SubmitInfo& submit_info) {
   // Hardware and software draw may occur at the same frame simultaneously for
   // Android WebView. There is no need to call DidSubmitCompositorFrame here for
   // software draw.
   if (!settings_.using_synchronous_renderer_compositor ||
       !state_machine_.resourceless_draw()) {
     compositor_frame_reporting_controller_->DidSubmitCompositorFrame(
-        frame_token, submit_time, begin_main_frame_args_.frame_id,
-        last_activate_origin_frame_args_.frame_id, std::move(events_metrics),
-        has_missing_content);
+        submit_info, begin_main_frame_args_.frame_id,
+        last_activate_origin_frame_args_.frame_id);
   }
   state_machine_.DidSubmitCompositorFrame();
 
@@ -241,12 +245,7 @@ void Scheduler::BeginMainFrameAborted(CommitEarlyOutReason reason) {
   ProcessScheduledActions();
 }
 
-void Scheduler::WillPrepareTiles() {
-  compositor_timing_history_->WillPrepareTiles();
-}
-
 void Scheduler::DidPrepareTiles() {
-  compositor_timing_history_->DidPrepareTiles();
   state_machine_.DidPrepareTiles();
 }
 
@@ -313,8 +312,9 @@ void Scheduler::StartOrStopBeginFrames() {
   }
 
   bool needs_begin_frames = state_machine_.ShouldSubscribeToBeginFrames();
-  if (needs_begin_frames == observing_begin_frame_source_)
+  if (needs_begin_frames == observing_begin_frame_source_) {
     return;
+  }
 
   if (needs_begin_frames) {
     observing_begin_frame_source_ = true;
@@ -393,6 +393,27 @@ bool Scheduler::OnBeginFrameDerivedImpl(const viz::BeginFrameArgs& args) {
   if (args.interval != last_frame_interval_ && args.interval.is_positive()) {
     last_frame_interval_ = args.interval;
     client_->FrameIntervalUpdated(last_frame_interval_);
+
+    // Only query the feature (and thus enter the experiment group) if we see a
+    // short interval. This ignores 90Hz displays, on purpose, and adds some
+    // leeway.
+    //
+    // Apply some slack, so that if for some reason the interval is a bit larger
+    // than 8.33333333333333ms, then we catch it still.
+    constexpr float kSlackFactor = .9;
+    if (args.interval < base::Hertz(120) * (1 / kSlackFactor) &&
+        base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz)) {
+      TRACE_EVENT0("cc", "ThrottleMainFrameTo60Hz");
+      // Note that we don't change args.interval, so the next main frame will
+      // see e.g. 8ms, even though the next one will come in 16ms. This is not
+      // necessarily bad, as it is mostly used for idle period timing.
+      //
+      // Here as well, use a slack factor, to make sure that small timing
+      // variations don't result in uneven pacing.
+      state_machine_.SetThrottleMainFrames(base::Hertz(60.) * kSlackFactor);
+    } else {
+      state_machine_.SetThrottleMainFrames(base::TimeDelta());
+    }
   }
 
   // Drop the BeginFrame if we don't need one.
@@ -454,6 +475,14 @@ bool Scheduler::OnBeginFrameDerivedImpl(const viz::BeginFrameArgs& args) {
 void Scheduler::SetVideoNeedsBeginFrames(bool video_needs_begin_frames) {
   state_machine_.SetVideoNeedsBeginFrames(video_needs_begin_frames);
   ProcessScheduledActions();
+}
+
+void Scheduler::SetIsScrolling(bool is_scrolling) {
+  state_machine_.set_is_scrolling(is_scrolling);
+}
+
+void Scheduler::SetWaitingForScrollEvent(bool waiting_for_scroll_event) {
+  state_machine_.set_waiting_for_scroll_event(waiting_for_scroll_event);
 }
 
 void Scheduler::OnDrawForLayerTreeFrameSink(bool resourceless_software_draw,
@@ -566,19 +595,23 @@ void Scheduler::BeginImplFrameWithDeadline(const viz::BeginFrameArgs& args) {
             ->BeginMainFrameStartToReadyToCommitNotCriticalEstimate();
   }
 
-  bool main_thread_response_expected_before_deadline;
+  bool main_thread_response_expected_soon;
+  // Allow the main thread to delay N impl frame before we decide to give up
+  // and create a pending tree instead.
+  bmf_to_activate_threshold +=
+      args.interval * settings_.delay_impl_invalidation_frames;
   if (time_since_main_frame_sent > bmf_to_activate_threshold) {
     // If the response to a main frame is pending past the desired duration
     // then proactively assume that the main thread is slow instead of late
     // correction through the frame history.
-    main_thread_response_expected_before_deadline = false;
+    main_thread_response_expected_soon = false;
   } else {
-    main_thread_response_expected_before_deadline =
+    main_thread_response_expected_soon =
         bmf_sent_to_ready_to_commit_estimate - time_since_main_frame_sent <
         bmf_to_activate_threshold;
   }
   state_machine_.set_should_defer_invalidation_for_fast_main_frame(
-      main_thread_response_expected_before_deadline);
+      main_thread_response_expected_soon);
 
   BeginImplFrame(adjusted_args, now);
 }
@@ -614,6 +647,7 @@ void Scheduler::BeginImplFrameSynchronous(const viz::BeginFrameArgs& args) {
 }
 
 void Scheduler::FinishImplFrame() {
+  TRACE_EVENT0("cc", __PRETTY_FUNCTION__);
   DCHECK(!needs_finish_frame_for_synchronous_compositor_);
   state_machine_.OnBeginImplFrameIdle();
 
@@ -626,6 +660,8 @@ void Scheduler::FinishImplFrame() {
                               SchedulerStateMachine::BeginMainFrameState::IDLE;
     bool is_draw_throttled =
         state_machine_.needs_redraw() && state_machine_.IsDrawThrottled();
+    TRACE_EVENT2("cc", "DidNotSubmitInLastFrame", "has_pending_tree",
+                 has_pending_tree, "is_waiting_on_main", is_waiting_on_main);
 
     FrameSkippedReason reason = FrameSkippedReason::kNoDamage;
 
@@ -663,6 +699,7 @@ void Scheduler::FinishImplFrame() {
 
 void Scheduler::SendDidNotProduceFrame(const viz::BeginFrameArgs& args,
                                        FrameSkippedReason reason) {
+  TRACE_EVENT1("cc", __PRETTY_FUNCTION__, "reason", reason);
   if (last_begin_frame_ack_.frame_id == args.frame_id)
     return;
   last_begin_frame_ack_ = viz::BeginFrameAck(args, false /* has_damage */);
@@ -687,7 +724,6 @@ void Scheduler::BeginImplFrame(const viz::BeginFrameArgs& args,
 
     begin_impl_frame_tracker_.Start(args);
     state_machine_.OnBeginImplFrame(args.frame_id, args.animate_only);
-    compositor_timing_history_->WillBeginImplFrame(args, now);
     compositor_frame_reporting_controller_->WillBeginImplFrame(args);
     bool has_damage =
         client_->WillBeginImplFrame(begin_impl_frame_tracker_.Current());
@@ -753,6 +789,11 @@ void Scheduler::ScheduleBeginImplFrameDeadline() {
       // base::TimeTicks() achieves the same result.
       new_deadline = base::TimeTicks();
       break;
+    case DeadlineMode::WAIT_FOR_SCROLL:
+      new_deadline = begin_impl_frame_tracker_.Current().frame_time +
+                     begin_impl_frame_tracker_.Current().interval *
+                         settings_.scroll_deadline_ratio;
+      break;
   }
 
   // Post deadline task only if we didn't have one already or something caused
@@ -789,7 +830,6 @@ void Scheduler::OnBeginImplFrameDeadline() {
     //     order to wait for more user-input before starting the next commit.
     // * Creating a new OutputSurface will not occur during the deadline in
     //     order to allow the state machine to "settle" first.
-    compositor_timing_history_->RecordDeadlineMode(deadline_mode_);
     if (!settings_.using_synchronous_renderer_compositor) {
       compositor_timing_history_->WillFinishImplFrame(
           state_machine_.needs_redraw());
@@ -798,6 +838,7 @@ void Scheduler::OnBeginImplFrameDeadline() {
     }
 
     state_machine_.OnBeginImplFrameDeadline();
+    client_->OnBeginImplFrameDeadline();
   }
   ProcessScheduledActions();
 
@@ -885,8 +926,10 @@ void Scheduler::ProcessScheduledActions() {
     action = state_machine_.NextAction();
     TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("cc.debug.scheduler"),
                 "SchedulerStateMachine", [this](perfetto::EventContext ctx) {
-                  this->AsProtozeroInto(ctx,
-                                        ctx.event()->set_cc_scheduler_state());
+                  this->AsProtozeroInto(
+                      ctx,
+                      ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>()
+                          ->set_cc_scheduler_state());
                 });
     base::AutoReset<SchedulerStateMachine::Action> mark_inside_action(
         &inside_action_, action);
@@ -976,7 +1019,7 @@ void Scheduler::ProcessScheduledActions() {
 
 void Scheduler::AsProtozeroInto(
     perfetto::EventContext& ctx,
-    perfetto::protos::pbzero::ChromeCompositorSchedulerState* state) const {
+    perfetto::protos::pbzero::ChromeCompositorSchedulerStateV2* state) const {
   base::TimeTicks now = Now();
 
   state_machine_.AsProtozeroInto(state->set_state_machine());

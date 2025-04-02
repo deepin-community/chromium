@@ -33,8 +33,8 @@ using browsing_data::HistoryCounter;
 
 class HistoryCounterTest : public InProcessBrowserTest {
  public:
-  HistoryCounterTest() {}
-  ~HistoryCounterTest() override {}
+  HistoryCounterTest() = default;
+  ~HistoryCounterTest() override = default;
 
   void SetUpOnMainThread() override {
     time_ = base::Time::Now();
@@ -52,7 +52,7 @@ class HistoryCounterTest : public InProcessBrowserTest {
     history_service_ = nullptr;
   }
 
-  void AddVisit(const std::string url) {
+  void AddVisit(std::string_view url) {
     history_service_->AddPage(GURL(url), time_, history::SOURCE_BROWSED);
   }
 

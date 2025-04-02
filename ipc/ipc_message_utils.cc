@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ipc/ipc_message_utils.h"
 
 #include <stddef.h>
@@ -34,6 +39,7 @@
 
 #if BUILDFLAG(IS_WIN)
 #include <tchar.h>
+
 #include "ipc/handle_win.h"
 #include "ipc/ipc_platform_file.h"
 #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
@@ -305,7 +311,6 @@ bool ReadValue(const base::Pickle* pickle,
     }
     default:
       NOTREACHED();
-      return false;
   }
 
   return true;
@@ -427,7 +432,6 @@ bool ParamTraits<double>::Read(const base::Pickle* m,
   const char *data;
   if (!iter->ReadBytes(&data, sizeof(*r))) {
     NOTREACHED();
-    return false;
   }
   memcpy(r, data, sizeof(param_type));
   return true;
@@ -1479,7 +1483,6 @@ bool ParamTraits<MSG>::Read(const base::Pickle* m,
   if (result && data_size == sizeof(MSG)) {
     memcpy(r, data, sizeof(MSG));
   } else {
-    result = false;
     NOTREACHED();
   }
 

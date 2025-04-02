@@ -37,6 +37,7 @@
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/favicon_size.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/flex_layout.h"
@@ -124,10 +125,11 @@ class TabTest : public ChromeViewsTestBase {
           break;
         case 2:
           EXPECT_TRUE(tab.showing_icon_);
-          if (tab.data_.alert_state.size())
+          if (tab.data_.alert_state.size()) {
             EXPECT_TRUE(tab.showing_alert_indicator_);
-          else
+          } else {
             EXPECT_FALSE(tab.showing_alert_indicator_);
+          }
           break;
         default:
           EXPECT_EQ(3, VisibleIconCount(tab));
@@ -135,19 +137,27 @@ class TabTest : public ChromeViewsTestBase {
       }
     }
 
-    // Check positioning of elements with respect to each other, and that they
-    // are fully within the contents bounds.
+    // Check the tab icon's positioning. Icons should be positioned at the
+    // start of the tab. Favicons should be centered within their icons. We
+    // extend the bounds vertically down along the tab so that the crashed tabs
+    // and alerts icons can be placed. This means that the true bounds are not
+    // centered on the contents bounds.
     const gfx::Rect contents_bounds = tab.GetContentsBounds();
     if (tab.showing_icon_) {
+      gfx::Rect icon_bounds = tab.icon_->bounds();
+      icon_bounds.Inset(tab.icon_->GetInsets());
       if (tab.center_icon_) {
-        EXPECT_LE(tab.icon_->x(), contents_bounds.x());
+        EXPECT_LE(icon_bounds.x(), contents_bounds.x());
       } else {
-        EXPECT_LE(contents_bounds.x(), tab.icon_->x());
+        EXPECT_LE(contents_bounds.x(), icon_bounds.x());
       }
-      if (tab.title_->GetVisible())
+      if (tab.title_->GetVisible()) {
         EXPECT_LE(tab.icon_->bounds().right(), tab.title_->x());
-      EXPECT_LE(contents_bounds.y(), tab.icon_->y());
-      EXPECT_LE(tab.icon_->bounds().bottom(), contents_bounds.bottom());
+      }
+
+      // Tab Icon content now exactly fit the content bounds.
+      EXPECT_EQ(icon_bounds.y(), contents_bounds.y());
+      EXPECT_GE(tab.icon_->bounds().bottom(), contents_bounds.bottom());
     }
 
     if (tab.showing_icon_ && tab.showing_alert_indicator_) {
@@ -170,10 +180,13 @@ class TabTest : public ChromeViewsTestBase {
         EXPECT_LE(GetAlertIndicatorBounds(tab).right(),
                   contents_bounds.right());
       }
-      EXPECT_LE(contents_bounds.y(), GetAlertIndicatorBounds(tab).y());
-      EXPECT_LE(GetAlertIndicatorBounds(tab).bottom(),
-                contents_bounds.bottom());
+
+      // The alert indicator should be centered in the content bounds.
+      gfx::Rect alert_bounds = GetAlertIndicatorBounds(tab);
+      EXPECT_EQ(alert_bounds.CenterPoint().y(),
+                contents_bounds.CenterPoint().y());
     }
+
     if (tab.showing_alert_indicator_ && tab.showing_close_button_) {
       // Note: The alert indicator can overlap the left-insets of the close box,
       // but should otherwise be to the left of the close button.
@@ -189,15 +202,12 @@ class TabTest : public ChromeViewsTestBase {
                   tab.close_button_->bounds().x() +
                       tab.close_button_->GetInsets().left());
       }
-      // We need to use the close button contents bounds instead of its bounds,
-      // since it has an empty border around it to extend its clickable area for
-      // touch.
-      // Note: The close button right edge can be outside the nominal contents
-      // bounds, but shouldn't leave the local bounds.
+
+      // The close button has a larger hit target than the content bounds.
       const gfx::Rect close_bounds = tab.close_button_->GetContentsBounds();
       EXPECT_LE(close_bounds.right(), tab.GetLocalBounds().right());
-      EXPECT_LE(contents_bounds.y(), close_bounds.y());
-      EXPECT_LE(close_bounds.bottom(), contents_bounds.bottom());
+      EXPECT_LE(close_bounds.y(), contents_bounds.y());
+      EXPECT_LE(contents_bounds.bottom(), close_bounds.bottom());
     }
   }
 
@@ -251,7 +261,8 @@ class AlertIndicatorButtonTest : public ChromeViewsTestBase {
                                      views::MaximumFlexSizeRule::kUnbounded));
     parent->AddChildView(tab_strip_.get());
 
-    widget_ = CreateTestWidget();
+    widget_ =
+        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
     widget_->SetContentsView(std::move(parent));
   }
 
@@ -291,41 +302,64 @@ class AlertIndicatorButtonTest : public ChromeViewsTestBase {
   std::unique_ptr<views::Widget> widget_;
 };
 
-TEST_F(TabTest, HitTestTopPixel) {
-  // TODO (crbug/1520660): Fix or remove test.
-  if (features::IsChromeRefresh2023()) {
-    GTEST_SKIP();
-  }
+TEST_F(TabTest, HitTest) {
   auto tab_slot_controller = std::make_unique<FakeTabSlotController>();
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   Tab* tab =
       widget->SetContentsView(std::make_unique<Tab>(tab_slot_controller.get()));
   tab->SizeToPreferredSize();
 
-  // Tabs are slanted, so a click halfway down the left edge won't hit it.
+  // Attempt to click on the left curved extender. this is not a part of the
+  // hit target.
+  // x ╭─────────╮
+  //   │ Content │
+  // ┏─╯         ╰─┐
   int middle_y = tab->height() / 2;
   EXPECT_FALSE(tab->HitTestPoint(gfx::Point(0, middle_y)));
 
-  // Tabs should not be hit if we click above them.
+  // Attempt to click above the tab. this is not a part of the hit target.
+  //        x
+  //   ╭─────────╮
+  //   │ Content │
+  // ┏─╯         ╰─┐
   int middle_x = tab->width() / 2;
   EXPECT_FALSE(tab->HitTestPoint(gfx::Point(middle_x, -1)));
-  EXPECT_TRUE(tab->HitTestPoint(gfx::Point(middle_x, 0)));
 
-  // Make sure top edge clicks still select the tab when the window is
-  // maximized.
+  int tab_starting_y =
+      GetLayoutConstant(TAB_STRIP_HEIGHT) - GetLayoutConstant(TAB_HEIGHT);
+
+  // Attempt to click on the top pixel of the tab. This should be part of the
+  // hit target.
+  //   ╭────x────╮
+  //   │ Content │
+  // ┏─╯         ╰─┐
+  EXPECT_TRUE(tab->HitTestPoint(gfx::Point(middle_x, tab_starting_y)));
+
+  // In maximized mode, attempt to click on the top pixel of the tab. This
+  // should be part of the hit target.
+  //   ╭────x────╮
+  //   │ Content │
+  // ┏─╯         ╰─┐
   widget->Maximize();
-  EXPECT_TRUE(tab->HitTestPoint(gfx::Point(middle_x, 0)));
+  EXPECT_TRUE(tab->HitTestPoint(gfx::Point(middle_x, tab_starting_y)));
 
-  // But clicks in the area above the slanted sides should still miss.
-  EXPECT_FALSE(tab->HitTestPoint(gfx::Point(0, 0)));
-  EXPECT_FALSE(tab->HitTestPoint(gfx::Point(tab->width() - 1, 0)));
+  // Attempt to click on the left curved extender. this is not a part of the
+  // hit target.
+  // x ╭─────────╮
+  //   │ Content │
+  // ┏─╯         ╰─┐
+  EXPECT_FALSE(tab->HitTestPoint(gfx::Point(0, tab_starting_y)));
+
+  // Attempt to click on the right curved extender. this is not a part of the
+  // hit target.
+  //   ╭─────────╮ x
+  //   │ Content │
+  // ┏─╯         ╰─┐
+  EXPECT_FALSE(tab->HitTestPoint(gfx::Point(tab->width() - 1, tab_starting_y)));
 }
 
 TEST_F(TabTest, LayoutAndVisibilityOfElements) {
-  // TODO (crbug/1520660): Fix or remove test.
-  if (features::IsChromeRefresh2023()) {
-    GTEST_SKIP();
-  }
   static const std::optional<TabAlertState> kAlertStatesToTest[] = {
       std::nullopt,
       TabAlertState::TAB_CAPTURING,
@@ -335,7 +369,8 @@ TEST_F(TabTest, LayoutAndVisibilityOfElements) {
   };
 
   auto controller = std::make_unique<FakeTabSlotController>();
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   Tab* tab = widget->SetContentsView(std::make_unique<Tab>(controller.get()));
 
   SkBitmap bitmap;
@@ -358,10 +393,11 @@ TEST_F(TabTest, LayoutAndVisibilityOfElements) {
 
         data.pinned = is_pinned_tab;
         controller->set_active_tab(is_active_tab ? tab : nullptr);
-        if (alert_state)
+        if (alert_state) {
           data.alert_state = {alert_state.value()};
-        else
+        } else {
           data.alert_state.clear();
+        }
         tab->SetData(data);
         StopFadeAnimationIfNecessary(*tab);
 
@@ -406,13 +442,14 @@ TEST_F(TabTest, CloseButtonLayout) {
 // get focus on right click.
 TEST_F(TabTest, CloseButtonFocus) {
   auto controller = std::make_unique<FakeTabSlotController>();
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   Tab* tab = widget->SetContentsView(std::make_unique<Tab>(controller.get()));
 
   TabCloseButton* tab_close_button = GetCloseButton(tab);
 
   // Verify tab_close_button does not get focus on right click.
-  ui::MouseEvent right_click_event(ui::ET_KEY_PRESSED, gfx::Point(),
+  ui::MouseEvent right_click_event(ui::EventType::kKeyPressed, gfx::Point(),
                                    gfx::Point(), base::TimeTicks(),
                                    ui::EF_RIGHT_MOUSE_BUTTON, 0);
   tab_close_button->OnMousePressed(right_click_event);
@@ -420,11 +457,36 @@ TEST_F(TabTest, CloseButtonFocus) {
             tab_close_button->GetFocusManager()->GetFocusedView());
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
+TEST_F(TabTest, CloseButtonHiddenWhenLockedForOnTask) {
+  const auto tab_slot_controller = std::make_unique<FakeTabSlotController>();
+  tab_slot_controller->SetLockedForOnTask(true);
+  const std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  Tab* const tab =
+      widget->SetContentsView(std::make_unique<Tab>(tab_slot_controller.get()));
+  TabCloseButton* const tab_close_button = GetCloseButton(tab);
+  EXPECT_FALSE(tab_close_button->GetVisible());
+}
+
+TEST_F(TabTest, CloseButtonShownWhenNotLockedForOnTask) {
+  const auto tab_slot_controller = std::make_unique<FakeTabSlotController>();
+  tab_slot_controller->SetLockedForOnTask(false);
+  const std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  Tab* const tab =
+      widget->SetContentsView(std::make_unique<Tab>(tab_slot_controller.get()));
+  TabCloseButton* const tab_close_button = GetCloseButton(tab);
+  EXPECT_TRUE(tab_close_button->GetVisible());
+}
+#endif
+
 // Tests expected changes to the ThrobberView state when the WebContents loading
 // state changes or the animation timer (usually in BrowserView) triggers.
 TEST_F(TabTest, LayeredThrobber) {
   auto tab_slot_controller = std::make_unique<FakeTabSlotController>();
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   Tab* tab =
       widget->SetContentsView(std::make_unique<Tab>(tab_slot_controller.get()));
   tab->SizeToPreferredSize();
@@ -530,7 +592,8 @@ TEST_F(TabTest, TitleHiddenWhenSmall) {
 
 TEST_F(TabTest, FaviconDoesntMoveWhenShowingAlertIndicator) {
   auto controller = std::make_unique<FakeTabSlotController>();
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
 
   for (bool is_active_tab : {false, true}) {
     Tab* tab = widget->SetContentsView(std::make_unique<Tab>(controller.get()));
@@ -547,12 +610,9 @@ TEST_F(TabTest, FaviconDoesntMoveWhenShowingAlertIndicator) {
 }
 
 TEST_F(TabTest, SmallTabsHideCloseButton) {
-  // TODO (crbug/1520660): Fix or remove test.
-  if (features::IsChromeRefresh2023()) {
-    GTEST_SKIP();
-  }
   auto controller = std::make_unique<FakeTabSlotController>();
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   Tab* tab = widget->SetContentsView(std::make_unique<Tab>(controller.get()));
   const int width = tab->tab_style_views()->GetContentsInsets().width() +
                     Tab::kMinimumContentsWidthForCloseButtons;
@@ -560,45 +620,20 @@ TEST_F(TabTest, SmallTabsHideCloseButton) {
   const views::View* close = GetCloseButton(tab);
   EXPECT_TRUE(close->GetVisible());
 
-  const views::View* icon = GetTabIcon(tab);
-  const int icon_x = icon->x();
   // Shrink the tab. The close button should disappear.
   tab->SetBounds(0, 0, width - 1, 50);
   EXPECT_FALSE(close->GetVisible());
-  // The favicon moves left because the extra padding disappears too.
-  EXPECT_LT(icon->x(), icon_x);
-}
-
-TEST_F(TabTest, ExtraLeftPaddingNotShownOnSmallActiveTab) {
-  // TODO (crbug/1520660): Fix or remove test.
-  if (features::IsChromeRefresh2023()) {
-    GTEST_SKIP();
-  }
-  auto controller = std::make_unique<FakeTabSlotController>();
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
-  Tab* tab = widget->SetContentsView(std::make_unique<Tab>(controller.get()));
-  controller->set_active_tab(tab);
-  tab->SetBounds(0, 0, 200, 50);
-  const views::View* close = GetCloseButton(tab);
-  EXPECT_TRUE(close->GetVisible());
-
-  const views::View* icon = GetTabIcon(tab);
-  const int icon_x = icon->x();
-
-  tab->SetBounds(0, 0, 40, 50);
-  EXPECT_TRUE(close->GetVisible());
-  // The favicon moves left because the extra padding disappears.
-  EXPECT_LT(icon->x(), icon_x);
 }
 
 TEST_F(TabTest, ExtraLeftPaddingShownOnSiteWithoutFavicon) {
   auto controller = std::make_unique<FakeTabSlotController>();
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   Tab* tab = widget->SetContentsView(std::make_unique<Tab>(controller.get()));
 
   tab->SizeToPreferredSize();
   const views::View* icon = GetTabIcon(tab);
-  const int icon_x = icon->x();
+  const int icon_x = icon->x() + icon->GetInsets().left();
 
   // Remove the favicon.
   TabRendererData data;
@@ -611,12 +646,9 @@ TEST_F(TabTest, ExtraLeftPaddingShownOnSiteWithoutFavicon) {
 }
 
 TEST_F(TabTest, ExtraAlertPaddingNotShownOnSmallActiveTab) {
-  // TODO (crbug/1520660): Fix or remove test.
-  if (features::IsChromeRefresh2023()) {
-    GTEST_SKIP();
-  }
   auto controller = std::make_unique<FakeTabSlotController>();
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   Tab* tab = widget->SetContentsView(std::make_unique<Tab>(controller.get()));
   controller->set_active_tab(tab);
   TabRendererData data;
@@ -629,12 +661,19 @@ TEST_F(TabTest, ExtraAlertPaddingNotShownOnSmallActiveTab) {
   const views::View* alert = GetAlertIndicator(tab);
   const int original_spacing = close->x() - alert->bounds().right();
 
-  tab->SetBounds(0, 0, 70, 50);
+  tab->SetBounds(0, 0, 90, 50);
   EXPECT_FALSE(GetTabIcon(tab)->GetVisible());
+
+  tab->SetBounds(0, 0, 76, 50);
   EXPECT_TRUE(close->GetVisible());
   EXPECT_TRUE(alert->GetVisible());
+
   // The alert indicator moves closer because the extra padding is gone.
   EXPECT_LT(close->x() - alert->bounds().right(), original_spacing);
+
+  tab->SetBounds(0, 0, 75, 50);
+  EXPECT_TRUE(close->GetVisible());
+  EXPECT_FALSE(alert->GetVisible());
 }
 
 TEST_F(TabTest, TitleTextHasSufficientContrast) {
@@ -647,20 +686,30 @@ TEST_F(TabTest, TitleTextHasSufficientContrast) {
     SkColor fg_inactive;
   } color_schemes[] = {
       {
-          SK_ColorBLACK, SK_ColorWHITE, SK_ColorBLACK, SK_ColorWHITE,
+          SK_ColorBLACK,
+          SK_ColorWHITE,
+          SK_ColorBLACK,
+          SK_ColorWHITE,
       },
       {
-          SK_ColorBLACK, SK_ColorWHITE, SK_ColorWHITE, SK_ColorBLACK,
+          SK_ColorBLACK,
+          SK_ColorWHITE,
+          SK_ColorWHITE,
+          SK_ColorBLACK,
       },
       {
-          kDarkGray, kLightGray, kDarkGray, kLightGray,
+          kDarkGray,
+          kLightGray,
+          kDarkGray,
+          kLightGray,
       },
   };
 
   auto controller = std::make_unique<FakeTabSlotController>();
   // Create a tab inside a Widget, so it has a theme provider, so the call to
   // UpdateForegroundColors() below doesn't no-op.
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   Tab* tab = widget->SetContentsView(std::make_unique<Tab>(controller.get()));
 
   for (const auto& colors : color_schemes) {
@@ -733,8 +782,6 @@ TEST_F(AlertIndicatorButtonTest, ShowsAndHidesAlertIndicator) {
 // visible at least for 5 seconds even if a camera/mic stopped being used.
 TEST_F(AlertIndicatorButtonTest, MinHoldDurationTest) {
   base::test::ScopedFeatureList scoped_feature_list_;
-  scoped_feature_list_.InitAndEnableFeature(
-      content_settings::features::kImprovedSemanticsActivityIndicators);
 
   controller_->AddTab(0, TabActive::kActive);
   Tab* media_tab = tab_strip_->tab_at(0);
@@ -766,8 +813,6 @@ TEST_F(AlertIndicatorButtonTest, MinHoldDurationTest) {
 // 1-second fadeout animation after it was visible for longer than 5 seconds.
 TEST_F(AlertIndicatorButtonTest, 1SecondFadeoutAnimationTest) {
   base::test::ScopedFeatureList scoped_feature_list_;
-  scoped_feature_list_.InitAndEnableFeature(
-      content_settings::features::kImprovedSemanticsActivityIndicators);
 
   controller_->AddTab(0, TabActive::kActive);
   Tab* media_tab = tab_strip_->tab_at(0);
@@ -798,4 +843,55 @@ TEST_F(AlertIndicatorButtonTest, 1SecondFadeoutAnimationTest) {
   EXPECT_EQ(base::Time(), get_camera_mic_indicator_start_time(media_tab));
   EXPECT_EQ(base::Seconds(1),
             get_fadeout_animation_duration_for_testing_(media_tab));
+}
+
+TEST_F(TabTest, DiscardIndicatorResponsiveness) {
+  auto controller = std::make_unique<FakeTabSlotController>();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+  Tab* tab = widget->SetContentsView(std::make_unique<Tab>(controller.get()));
+  const TabIcon* tab_icon = GetTabIcon(tab);
+
+  struct TestCase {
+    int tab_width;
+    int expected_increased_radius;
+  };
+  std::list<TestCase> test_cases{
+      {256, 2}, {45, 2}, {44, 2}, {43, 0}, {32, 0},
+  };
+
+  for (auto const& test_case : test_cases) {
+    controller->SetInactiveTabWidth(test_case.tab_width);
+    tab->SetBounds(0, 0, test_case.tab_width, 50);
+    EXPECT_EQ(test_case.expected_increased_radius,
+              tab_icon->increased_discard_indicator_radius_);
+  }
+}
+
+TEST_F(TabTest, AccessibleProperties) {
+  auto controller = std::make_unique<FakeTabSlotController>();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+  Tab* tab = widget->SetContentsView(std::make_unique<Tab>(controller.get()));
+  ui::AXNodeData data;
+
+  tab->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(ax::mojom::Role::kTab, data.role);
+}
+
+TEST_F(AlertIndicatorButtonTest, AccessibleNameChanged) {
+  controller_->AddTab(0, TabActive::kInactive, TabPinned::kPinned);
+
+  TabRendererData old_data = tab_strip_->tab_at(0)->data();
+  TabRendererData new_data = tab_strip_->tab_at(0)->data();
+  EXPECT_FALSE(
+      tab_strip_->tab_at(0)->ShouldUpdateAccessibleName(old_data, new_data));
+
+  new_data.incognito = !new_data.incognito;
+  EXPECT_FALSE(
+      tab_strip_->tab_at(0)->ShouldUpdateAccessibleName(old_data, new_data));
+
+  new_data.title = u"new_title";
+  EXPECT_TRUE(
+      tab_strip_->tab_at(0)->ShouldUpdateAccessibleName(old_data, new_data));
 }

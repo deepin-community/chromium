@@ -47,10 +47,11 @@
 #include "third_party/blink/renderer/core/layout/constraint_space.h"
 #include "third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.h"
 #include "third_party/blink/renderer/core/layout/flex/layout_flexible_box.h"
+#include "third_party/blink/renderer/core/layout/grid/layout_grid.h"
 #include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
+#include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_inline.h"
-#include "third_party/blink/renderer/core/layout/layout_ng_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/layout/layout_theme.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
@@ -68,7 +69,6 @@
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/size_assertions.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
@@ -224,7 +224,7 @@ void LayoutBlock::AddChildBeforeDescendant(LayoutObject* new_child,
     // that is not inline level, although IsInline() is true.
     if ((new_child->IsInline() && !new_child->IsLayoutOutsideListMarker()) ||
         (new_child->IsFloatingOrOutOfFlowPositioned() &&
-         (StyleRef().IsDeprecatedFlexboxUsingFlexLayout() ||
+         (StyleRef().IsDeprecatedFlexbox() ||
           (!IsFlexibleBox() && !IsLayoutGrid()))) ||
         before_descendant->Parent()->SlowFirstChild() != before_descendant) {
       before_descendant_container->AddChild(new_child, before_descendant);
@@ -266,10 +266,9 @@ void LayoutBlock::AddChild(LayoutObject* new_child,
   // here.
   DCHECK(!ChildrenInline());
 
-  if (new_child->IsInline() ||
-      (new_child->IsFloatingOrOutOfFlowPositioned() &&
-       (StyleRef().IsDeprecatedFlexboxUsingFlexLayout() ||
-        (!IsFlexibleBox() && !IsLayoutGrid())))) {
+  if (new_child->IsInline() || (new_child->IsFloatingOrOutOfFlowPositioned() &&
+                                (StyleRef().IsDeprecatedFlexbox() ||
+                                 (!IsFlexibleBox() && !IsLayoutGrid())))) {
     // If we're inserting an inline child but all of our children are blocks,
     // then we have to make sure it is put into an anomyous block box. We try to
     // use an existing anonymous box if possible, otherwise a new one is created
@@ -333,8 +332,8 @@ void LayoutBlock::Paint(const PaintInfo& paint_info) const {
          GetPhysicalFragment(0)->GetBreakToken()->IsRepeated());
 
   // Avoid painting dirty objects because descendants maybe already destroyed.
-  if (UNLIKELY(NeedsLayout() && !ChildLayoutBlockedByDisplayLock())) {
-    NOTREACHED();
+  if (NeedsLayout() && !ChildLayoutBlockedByDisplayLock()) [[unlikely]] {
+    DUMP_WILL_BE_NOTREACHED();
     return;
   }
 
@@ -345,7 +344,7 @@ void LayoutBlock::Paint(const PaintInfo& paint_info) const {
     return;
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 void LayoutBlock::InvalidatePaint(
@@ -455,8 +454,9 @@ void LayoutBlock::RemoveSvgTextDescendant(LayoutBox& svg_text) {
 LayoutUnit LayoutBlock::TextIndentOffset() const {
   NOT_DESTROYED();
   LayoutUnit cw;
-  if (StyleRef().TextIndent().IsPercentOrCalc())
+  if (StyleRef().TextIndent().HasPercent()) {
     cw = ContentLogicalWidth();
+  }
   return MinimumValueForLength(StyleRef().TextIndent(), cw);
 }
 
@@ -466,13 +466,14 @@ bool LayoutBlock::NodeAtPoint(HitTestResult& result,
                               HitTestPhase phase) {
   NOT_DESTROYED();
 
-  // See |Paint()|.
-  DCHECK(IsMonolithic() || !CanTraversePhysicalFragments() ||
-         Parent()->CanTraversePhysicalFragments());
   // We may get here in multiple-fragment cases if the object is repeated
   // (inside table headers and footers, for instance).
   DCHECK(PhysicalFragmentCount() <= 1u ||
          GetPhysicalFragment(0)->GetBreakToken()->IsRepeated());
+
+  if (!MayIntersect(result, hit_test_location, accumulated_offset)) {
+    return false;
+  }
 
   if (PhysicalFragmentCount()) {
     const PhysicalBoxFragment* fragment = GetPhysicalFragment(0);
@@ -585,6 +586,8 @@ bool LayoutBlock::HasLineIfEmpty() const {
   return FirstLineStyleRef().HasLineIfEmpty();
 }
 
+// This function should return the distance from the block-start, not from
+// the line-over.
 std::optional<LayoutUnit> LayoutBlock::BaselineForEmptyLine() const {
   NOT_DESTROYED();
   const ComputedStyle* style = FirstLineStyle();
@@ -594,6 +597,15 @@ std::optional<LayoutUnit> LayoutBlock::BaselineForEmptyLine() const {
   const auto& font_metrics = font_data->GetFontMetrics();
   const auto baseline_type = style->GetFontBaseline();
   const LayoutUnit line_height = FirstLineHeight();
+  if (RuntimeEnabledFeatures::SidewaysWritingModesEnabled()) {
+    int ascent_or_descent = IsFlippedLinesWritingMode(style->GetWritingMode())
+                                ? font_metrics.Descent(baseline_type)
+                                : font_metrics.Ascent(baseline_type);
+    return LayoutUnit((ascent_or_descent +
+                       (line_height - font_metrics.Height()) / 2 +
+                       BorderAndPaddingBlockStart())
+                          .ToInt());
+  }
   const LayoutUnit border_padding = style->IsHorizontalWritingMode()
                                         ? BorderTop() + PaddingTop()
                                         : BorderRight() + PaddingRight();
@@ -605,21 +617,6 @@ std::optional<LayoutUnit> LayoutBlock::BaselineForEmptyLine() const {
 LayoutUnit LayoutBlock::FirstLineHeight() const {
   NOT_DESTROYED();
   return LayoutUnit(FirstLineStyle()->ComputedLineHeight());
-}
-
-bool LayoutBlock::UseLogicalBottomMarginEdgeForInlineBlockBaseline() const {
-  NOT_DESTROYED();
-  // CSS2.1 states that the baseline of an 'inline-block' is:
-  // the baseline of the last line box in the normal flow, unless it has
-  // either no in-flow line boxes or if its 'overflow' property has a computed
-  // value other than 'visible', in which case the baseline is the bottom
-  // margin edge.
-  // We likewise avoid using the last line box in the case of size containment,
-  // where the block's contents shouldn't be considered when laying out its
-  // ancestors or siblings.
-  return (!StyleRef().IsOverflowVisibleOrClip() &&
-          !StyleRef().ShouldIgnoreOverflowPropertyForInlineBlockBaseline()) ||
-         ShouldApplyLayoutContainment();
 }
 
 const LayoutBlock* LayoutBlock::FirstLineStyleParentBlock() const {
@@ -672,14 +669,12 @@ inline bool LayoutBlock::IsInlineBoxWrapperActuallyChild() const {
          GetNode() && EditingIgnoresContent(*GetNode());
 }
 
-PhysicalRect LayoutBlock::LocalCaretRect(
-    int caret_offset,
-    LayoutUnit* extra_width_to_end_of_line) const {
+PhysicalRect LayoutBlock::LocalCaretRect(int caret_offset) const {
   NOT_DESTROYED();
   // Do the normal calculation in most cases.
   if ((FirstChild() && !FirstChild()->IsPseudoElement()) ||
       IsInlineBoxWrapperActuallyChild()) {
-    return LayoutBox::LocalCaretRect(caret_offset, extra_width_to_end_of_line);
+    return LayoutBox::LocalCaretRect(caret_offset);
   }
 
   const ComputedStyle& style = StyleRef();
@@ -688,9 +683,6 @@ PhysicalRect LayoutBlock::LocalCaretRect(
   LayoutUnit inline_size = is_horizontal ? Size().width : Size().height;
   LogicalRect caret_rect =
       LocalCaretRectForEmptyElement(inline_size, TextIndentOffset());
-  if (extra_width_to_end_of_line) {
-    *extra_width_to_end_of_line = inline_size - caret_rect.InlineEndOffset();
-  }
   return CreateWritingModeConverter().ToPhysical(caret_rect);
 }
 
@@ -731,7 +723,6 @@ LayoutBox* LayoutBlock::CreateAnonymousBoxWithSameTypeAs(
 const char* LayoutBlock::GetName() const {
   NOT_DESTROYED();
   NOTREACHED();
-  return "LayoutBlock";
 }
 
 LayoutBlock* LayoutBlock::CreateAnonymousWithParentAndDisplay(
@@ -780,7 +771,7 @@ LayoutBlock* LayoutBlock::CreateAnonymousWithParentAndDisplay(
   } else {
     DCHECK(new_display == EDisplay::kBlock ||
            new_display == EDisplay::kFlowRoot);
-    layout_block = MakeGarbageCollected<LayoutNGBlockFlow>(nullptr);
+    layout_block = MakeGarbageCollected<LayoutBlockFlow>(nullptr);
   }
   layout_block->SetDocumentForAnonymous(&parent->GetDocument());
   layout_block->SetStyle(new_style);

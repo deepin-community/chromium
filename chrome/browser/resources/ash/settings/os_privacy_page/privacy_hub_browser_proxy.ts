@@ -6,13 +6,12 @@ import {sendWithPromise} from 'chrome://resources/js/cr.js';
 
 export interface PrivacyHubBrowserProxy {
   getInitialMicrophoneHardwareToggleState(): Promise<boolean>;
+  getInitialMicrophoneMutedBySecurityCurtainState(): Promise<boolean>;
   getInitialCameraSwitchForceDisabledState(): Promise<boolean>;
   getCameraLedFallbackState(): Promise<boolean>;
   getCurrentTimeZoneName(): Promise<string>;
   getCurrentSunriseTime(): Promise<string>;
   getCurrentSunsetTime(): Promise<string>;
-  sendLeftOsPrivacyPage(): void;
-  sendOpenedOsPrivacyPage(): void;
 }
 
 let instance: PrivacyHubBrowserProxy|null = null;
@@ -20,6 +19,10 @@ let instance: PrivacyHubBrowserProxy|null = null;
 export class PrivacyHubBrowserProxyImpl implements PrivacyHubBrowserProxy {
   getInitialMicrophoneHardwareToggleState(): Promise<boolean> {
     return sendWithPromise('getInitialMicrophoneHardwareToggleState');
+  }
+
+  getInitialMicrophoneMutedBySecurityCurtainState(): Promise<boolean> {
+    return sendWithPromise('getInitialMicrophoneMutedBySecurityCurtainState');
   }
 
   getInitialCameraSwitchForceDisabledState(): Promise<boolean> {
@@ -40,14 +43,6 @@ export class PrivacyHubBrowserProxyImpl implements PrivacyHubBrowserProxy {
 
   getCurrentSunsetTime(): Promise<string> {
     return sendWithPromise('getCurrentSunsetTime');
-  }
-
-  sendLeftOsPrivacyPage(): void {
-    chrome.send('leftOsPrivacyPage');
-  }
-
-  sendOpenedOsPrivacyPage(): void {
-    chrome.send('osPrivacyPageWasOpened');
   }
 
   static getInstance(): PrivacyHubBrowserProxy {

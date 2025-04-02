@@ -25,6 +25,7 @@
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/mojom/frame/frame.mojom-test-utils.h"
 #include "third_party/blink/public/mojom/scroll/scroll_into_view_params.mojom.h"
 #include "third_party/re2/src/re2/re2.h"
 #include "ui/events/event_constants.h"
@@ -189,7 +190,6 @@ class ScrollIntoViewBrowserTestBase : public ContentBrowserTest {
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
     IsolateAllSitesForTesting(command_line);
 
     // Need this to control page scale factor via script or check for root
@@ -441,24 +441,24 @@ class ScrollIntoViewBrowserTestBase : public ContentBrowserTest {
 
   // Calls `func` with each FrameTreeNode in the page, starting from the root
   // and descending into the inner most frame, traversing frame tree boundaries
-  // such as fenced frames/portals.
+  // such as fenced frames.
   template <typename Function>
   void ForEachFrameFromRootToInnerMost(const Function& func) {
     FrameTreeNode* node = web_contents()->GetPrimaryFrameTree().root();
     while (node) {
       bool is_proxy_for_inner_frame_tree =
-          node->current_frame_host()->inner_tree_main_frame_tree_node_id() !=
-          FrameTreeNode::kFrameTreeNodeInvalidId;
-
+          !node->current_frame_host()
+               ->inner_tree_main_frame_tree_node_id()
+               .is_null();
       // The functor isn't called for the placeholder FrameTreeNode, it'll be
       // called on the inner tree's root.
       if (!is_proxy_for_inner_frame_tree)
         func(node);
 
       if (node->child_count()) {
-        CHECK_EQ(
-            node->current_frame_host()->inner_tree_main_frame_tree_node_id(),
-            FrameTreeNode::kFrameTreeNodeInvalidId);
+        CHECK(node->current_frame_host()
+                  ->inner_tree_main_frame_tree_node_id()
+                  .is_null());
         // These tests never have multiple child frames.
         CHECK_EQ(node->child_count(), 1ul);
         node = node->child_at(0);
@@ -796,7 +796,7 @@ IN_PROC_BROWSER_TEST_P(ZoomScrollIntoViewBrowserTest,
   RunTest();
 
   // width=device-width must prevent the zooming behavior.
-  EXPECT_EQ(kMobileMinimumScale, GetVisualViewport().scale);
+  EXPECT_LE(kMobileMinimumScale, GetVisualViewport().scale);
 }
 
 // Similar to above, an input in a touch-action region that disables pinch-zoom

@@ -12,6 +12,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/events/devices/device_data_manager.h"
+#include "ui/gl/startup_trace.h"
 #include "ui/ozone/platform_object.h"
 #include "ui/ozone/platform_selection.h"
 #include "ui/ozone/public/platform_global_shortcut_listener.h"
@@ -43,9 +44,13 @@ void EnsureInstance() {
 
 }  // namespace
 
-OzonePlatform::PlatformRuntimeProperties::SupportsSsdForTest
+OzonePlatform::PlatformRuntimeProperties::SupportsForTest
     OzonePlatform::PlatformRuntimeProperties::override_supports_ssd_for_test =
-        OzonePlatform::PlatformRuntimeProperties::SupportsSsdForTest::kNotSet;
+        OzonePlatform::PlatformRuntimeProperties::SupportsForTest::kNotSet;
+
+OzonePlatform::PlatformRuntimeProperties::SupportsForTest OzonePlatform::
+    PlatformRuntimeProperties::override_supports_per_window_scaling_for_test =
+        OzonePlatform::PlatformRuntimeProperties::SupportsForTest::kNotSet;
 
 OzonePlatform::PlatformProperties::PlatformProperties() = default;
 OzonePlatform::PlatformProperties::~PlatformProperties() = default;
@@ -85,6 +90,7 @@ bool OzonePlatform::InitializeForUI(const InitParams& args) {
 
 // static
 void OzonePlatform::InitializeForGPU(const InitParams& args) {
+  GPU_STARTUP_TRACE_EVENT("ui::OzonePlatform::InitializeForGPU");
   EnsureInstance();
   if (g_instance->initialized_gpu_)
     return;
@@ -144,10 +150,6 @@ bool OzonePlatform::IsNativePixmapConfigSupported(
     gfx::BufferFormat format,
     gfx::BufferUsage usage) const {
   // Platform that support NativePixmap must override this method.
-  return false;
-}
-
-bool OzonePlatform::IsWindowCompositingSupported() const {
   return false;
 }
 

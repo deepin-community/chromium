@@ -15,8 +15,7 @@
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "services/network/public/mojom/tcp_socket.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_property.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/modules/direct_sockets/socket.h"
 #include "third_party/blink/renderer/modules/direct_sockets/tcp_readable_stream_wrapper.h"
@@ -37,9 +36,9 @@ class IPEndPoint;
 }  // namespace net
 
 namespace blink {
-
-class TCPSocketOptions;
 class SocketCloseOptions;
+class TCPSocketOpenInfo;
+class TCPSocketOptions;
 
 // TCPSocket interface from tcp_socket.idl
 class MODULES_EXPORT TCPSocket final
@@ -58,7 +57,8 @@ class MODULES_EXPORT TCPSocket final
                            ExceptionState&);
 
   // Socket:
-  ScriptPromise close(ScriptState*, ExceptionState&) override;
+  ScriptPromise<TCPSocketOpenInfo> opened(ScriptState*) const;
+  ScriptPromise<IDLUndefined> close(ScriptState*, ExceptionState&) override;
 
  public:
   // Constructor for use from TCPServerSocket.
@@ -121,14 +121,26 @@ class MODULES_EXPORT TCPSocket final
   void OnReadError(int32_t net_error) override;
   void OnWriteError(int32_t net_error) override;
 
-  void OnBothStreamsClosed(std::vector<ScriptValue> args);
+  // Invoked when one of the streams (readable or writable) closes.
+  // `exception` is non-empty iff the stream closed with an error.
+  void OnStreamClosed(v8::Local<v8::Value> exception);
+  void OnBothStreamsClosed();
 
   HeapMojoRemote<network::mojom::blink::TCPConnectedSocket> tcp_socket_;
   HeapMojoReceiver<network::mojom::blink::SocketObserver, TCPSocket>
       socket_observer_;
 
+  Member<ScriptPromiseProperty<TCPSocketOpenInfo, DOMException>> opened_;
+
   Member<TCPReadableStreamWrapper> readable_stream_wrapper_;
   Member<TCPWritableStreamWrapper> writable_stream_wrapper_;
+
+  // Always less or equal to 2 (readable + writable).
+  int streams_closed_count_ = 0;
+
+  // Stores the first encountered stream error to be reported after both streams
+  // close.
+  TraceWrapperV8Reference<v8::Value> stream_error_;
 
   FRIEND_TEST_ALL_PREFIXES(TCPSocketTest, OnSocketObserverConnectionError);
   FRIEND_TEST_ALL_PREFIXES(TCPSocketCloseTest, OnErrorOrClose);

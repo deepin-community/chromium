@@ -32,7 +32,7 @@ class ScopedA11yOverrideWindowSetter;
 // CaptureModeSessionFocusCycler handles the special focus transitions which
 // happen between the capture session UI items. These include the capture bar
 // buttons, the selection region UI and the capture button.
-// TODO(crbug.com/1182456): The selection region UI are drawn directly on a
+// TODO(crbug.com/40170806): The selection region UI are drawn directly on a
 // layer. We simulate focus by drawing focus rings on the same layer, but this
 // is not compatible with accessibility. Investigate using AxVirtualView or
 // making the dots actual Views.
@@ -40,8 +40,8 @@ class ASH_EXPORT CaptureModeSessionFocusCycler : public views::WidgetObserver {
  public:
   // The different groups which can receive focus during a capture mode session.
   // A group may have multiple items which can receive focus.
-  // TODO(crbug.com/1182456): Investigate removing the groups concept and having
-  // one flat list.
+  // TODO(crbug.com/40170806): Investigate removing the groups concept and
+  // having one flat list.
   enum class FocusGroup {
     kNone = 0,
     // The buttons to select the capture type and source on the capture bar.
@@ -69,6 +69,8 @@ class ASH_EXPORT CaptureModeSessionFocusCycler : public views::WidgetObserver {
     kPendingRecordingType,
     // The menu items inside the recording type menu.
     kRecordingTypeMenu,
+    // The action buttons that may be available during region selection.
+    kActionButtons,
   };
 
   // If a focusable capture session item is part of a views hierarchy, it needs
@@ -109,7 +111,7 @@ class ASH_EXPORT CaptureModeSessionFocusCycler : public views::WidgetObserver {
     HighlightableView();
     virtual ~HighlightableView();
 
-    // TODO(crbug.com/1182456): This can result in multiple of these objects
+    // TODO(crbug.com/40170806): This can result in multiple of these objects
     // thinking they have focus if CaptureModeSessionFocusCycler does not call
     // PseudoFocus or PseudoBlur properly. Investigate if there is a better
     // approach.
@@ -316,8 +318,12 @@ class ASH_EXPORT CaptureModeSessionFocusCycler : public views::WidgetObserver {
   const std::vector<FocusGroup> groups_for_window_;
 
   // Focusable groups for the game capture session that always has `kWindow`
-  // capture source selected. And the selected window is not changeable.
+  // capture source selected and the selected window is not changeable.
   const std::vector<FocusGroup> groups_for_game_capture_;
+
+  // Focusable groups for the sunfish session that always has `kRegion` capture
+  // source selected.
+  const std::vector<FocusGroup> groups_for_sunfish_;
 
   // Highlightable windows of the focus group `kCaptureWindow`. Windows opened
   // after the session starts will not be included.

@@ -4,9 +4,11 @@
 
 #include "chrome/browser/ui/webui/ash/settings/pages/multitasking/multitasking_section.h"
 
+#include <array>
+
 #include "ash/constants/ash_features.h"
+#include "base/containers/span.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/no_destructor.h"
 #include "chrome/browser/ui/webui/ash/settings/os_settings_features_util.h"
 #include "chrome/browser/ui/webui/ash/settings/search/search_tag_registry.h"
 #include "chrome/grit/generated_resources.h"
@@ -16,16 +18,16 @@
 namespace ash::settings {
 
 namespace mojom {
-using ::chromeos::settings::mojom::kSystemPreferencesSectionPath;
-using ::chromeos::settings::mojom::Section;
-using ::chromeos::settings::mojom::Setting;
-using ::chromeos::settings::mojom::Subpage;
+using chromeos::settings::mojom::kSystemPreferencesSectionPath;
+using chromeos::settings::mojom::Section;
+using chromeos::settings::mojom::Setting;
+using chromeos::settings::mojom::Subpage;
 }  // namespace mojom
 
 namespace {
 
-const std::vector<SearchConcept>& GetSnapWindowSuggestionsSearchConcepts() {
-  static const base::NoDestructor<std::vector<SearchConcept>> tags({
+base::span<const SearchConcept> GetSnapWindowSuggestionsSearchConcepts() {
+  static constexpr auto tags = std::to_array<SearchConcept>({
       {IDS_OS_SETTINGS_TAG_MULTITASKING_SNAP_WINDOW,
        mojom::kSystemPreferencesSectionPath,
        mojom::SearchResultIcon::kSnapWindowSuggestions,
@@ -38,7 +40,7 @@ const std::vector<SearchConcept>& GetSnapWindowSuggestionsSearchConcepts() {
         IDS_OS_SETTINGS_TAG_MULTITASKING_SNAP_WINDOW_ALT4,
         SearchConcept::kAltTagEnd}},
   });
-  return *tags;
+  return tags;
 }
 
 }  // namespace
@@ -48,12 +50,9 @@ MultitaskingSection::MultitaskingSection(Profile* profile,
     : OsSettingsSection(profile, search_tag_registry) {
   CHECK(profile);
   CHECK(search_tag_registry);
-  CHECK(ash::features::IsOsSettingsRevampWayfindingEnabled());
 
-  if (ShouldShowMultitasking()) {
-    SearchTagRegistry::ScopedTagUpdater updater = registry()->StartUpdate();
-    updater.AddSearchTags(GetSnapWindowSuggestionsSearchConcepts());
-  }
+  SearchTagRegistry::ScopedTagUpdater updater = registry()->StartUpdate();
+  updater.AddSearchTags(GetSnapWindowSuggestionsSearchConcepts());
 }
 
 MultitaskingSection::~MultitaskingSection() = default;
@@ -69,7 +68,6 @@ void MultitaskingSection::AddLoadTimeData(
        IDS_OS_SETTINGS_SYSTEM_PREFERENCES_MULTITASKING_SNAP_WINDOW_DESCRIPTION},
   };
   html_source->AddLocalizedStrings(kLocalizedStrings);
-  html_source->AddBoolean("shouldShowMultitasking", ShouldShowMultitasking());
 }
 
 void MultitaskingSection::AddHandlers(content::WebUI* web_ui) {
@@ -88,8 +86,7 @@ mojom::Section MultitaskingSection::GetSection() const {
 }
 
 mojom::SearchResultIcon MultitaskingSection::GetSectionIcon() const {
-  // TODO(sophiewen): See if we should use a different section icon.
-  return mojom::SearchResultIcon::kSystemPreferences;
+  return mojom::SearchResultIcon::kSnapWindowSuggestions;
 }
 
 const char* MultitaskingSection::GetSectionPath() const {

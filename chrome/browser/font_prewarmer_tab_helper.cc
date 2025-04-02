@@ -14,7 +14,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/history_clusters/history_clusters_tab_helper.h"
-#include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/common/font_prewarmer.mojom.h"
@@ -205,15 +204,11 @@ void FontPrewarmerTabHelper::DidStartNavigation(
   if (!IsSearchResultsPageNavigation(navigation_handle))
     return;
 
-  const int expected_render_process_host_id =
+  expected_render_process_host_id_ =
       navigation_handle->GetExpectedRenderProcessHostId();
-  if (expected_render_process_host_id ==
-      content::ChildProcessHost::kInvalidUniqueID) {
-    expected_render_process_host_id_.reset();
-  } else {
-    expected_render_process_host_id_ = expected_render_process_host_id;
+  if (expected_render_process_host_id_) {
     content::RenderProcessHost* rph =
-        content::RenderProcessHost::FromID(expected_render_process_host_id);
+        content::RenderProcessHost::FromID(expected_render_process_host_id_);
     DCHECK(rph);
     FontPrewarmerCoordinator::ForProfile(GetProfile()).SendFontsToPrewarm(rph);
   }
@@ -228,8 +223,9 @@ void FontPrewarmerTabHelper::ReadyToCommitNavigation(
   DCHECK(rfh);
   FontPrewarmerCoordinator& coordinator =
       FontPrewarmerCoordinator::ForProfile(GetProfile());
-  if (expected_render_process_host_id_ != rfh->GetProcess()->GetID())
+  if (expected_render_process_host_id_ != rfh->GetProcess()->GetID()) {
     coordinator.SendFontsToPrewarm(rfh->GetProcess());
+  }
   coordinator.RequestFonts(rfh);
 }
 

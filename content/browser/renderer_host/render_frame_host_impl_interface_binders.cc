@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -147,7 +148,7 @@ class BackForwardCacheMessageFilter : public mojo::MessageFilter {
 
   void DidDispatchOrReject(mojo::Message* message, bool accepted) override {}
 
-  // TODO(https://crbug.com/1125996): Remove once a well-behaved frozen
+  // TODO(crbug.com/40147948): Remove once a well-behaved frozen
   // RenderFrame never send IPCs messages, even if there are active pages in the
   // process.
   bool ProcessHoldsNonCachedPages() {
@@ -265,7 +266,7 @@ void RenderFrameHostImpl::SetUpMojoConnection() {
             base::Unretained(this)));
   }
 
-  // TODO(crbug.com/1395830): Avoid binding the DomAutomationControllerHost
+  // TODO(crbug.com/40249262): Avoid binding the DomAutomationControllerHost
   // interface outside of tests.
   associated_registry_->AddInterface<mojom::DomAutomationControllerHost>(
       base::BindRepeating(
@@ -277,7 +278,7 @@ void RenderFrameHostImpl::SetUpMojoConnection() {
           base::Unretained(this)));
 
   file_system_manager_.reset(new FileSystemManagerImpl(
-      GetProcess()->GetID(),
+      GetProcess()->GetDeprecatedID(),
       GetProcess()->GetStoragePartition()->GetFileSystemContext(),
       ChromeBlobStorageContext::GetFor(GetProcess()->GetBrowserContext())));
 
@@ -331,19 +332,14 @@ void RenderFrameHostImpl::SetUpMojoConnection() {
       base::BindRepeating(&RenderFrameHostImpl::CreateBroadcastChannelProvider,
                           base::Unretained(this)));
 
-  if (base::FeatureList::IsEnabled(net::features::kSupportPartitionedBlobUrl)) {
-    associated_registry_->AddInterface<blink::mojom::BlobURLStore>(
-        base::BindRepeating(
-            &RenderFrameHostImpl::BindBlobUrlStoreAssociatedReceiver,
-            base::Unretained(this)));
-  }
+  associated_registry_->AddInterface<blink::mojom::BlobURLStore>(
+      base::BindRepeating(
+          &RenderFrameHostImpl::BindBlobUrlStoreAssociatedReceiver,
+          base::Unretained(this)));
 
-  if (base::FeatureList::IsEnabled(
-          blink::features::kEnableFileBackedBlobFactory)) {
-    associated_registry_->AddInterface<blink::mojom::FileBackedBlobFactory>(
-        base::BindRepeating(&RenderFrameHostImpl::BindFileBackedBlobFactory,
-                            base::Unretained(this)));
-  }
+  associated_registry_->AddInterface<blink::mojom::FileBackedBlobFactory>(
+      base::BindRepeating(&RenderFrameHostImpl::BindFileBackedBlobFactory,
+                          base::Unretained(this)));
 
   // Allow embedders to register their binders.
   GetContentClient()
@@ -359,11 +355,6 @@ void RenderFrameHostImpl::SetUpMojoConnection() {
   remote_interfaces_ = std::make_unique<service_manager::InterfaceProvider>(
       base::SingleThreadTaskRunner::GetCurrentDefault());
   remote_interfaces_->Bind(std::move(remote_interfaces));
-
-  // Called to bind the receiver for this interface to the local frame. We need
-  // to eagarly bind here because binding happens at normal priority on the main
-  // thread and future calls to this interface need to be high priority.
-  GetHighPriorityLocalFrame();
 }
 
 void RenderFrameHostImpl::TearDownMojoConnection() {
@@ -377,7 +368,6 @@ void RenderFrameHostImpl::TearDownMojoConnection() {
   find_in_page_.reset();
   local_frame_.reset();
   local_main_frame_.reset();
-  high_priority_local_frame_.reset();
 
   frame_host_associated_receiver_.reset();
   associated_interface_provider_receiver_.reset();

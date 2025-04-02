@@ -46,13 +46,17 @@ class TabCloseButton : public views::LabelButton,
   void OnMouseReleased(const ui::MouseEvent& event) override;
   void OnMouseMoved(const ui::MouseEvent& event) override;
   void OnGestureEvent(ui::GestureEvent* event) override;
+  void AddLayerToRegion(ui::Layer* new_layer,
+                        views::LayerRegion region) override;
+  void RemoveLayerFromRegions(ui::Layer* old_layer) override;
 
  protected:
   // Set/reset the image models for the icon with new colors.
   void UpdateIcon();
 
   // views::LabelButton:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
 
  private:
   // views::MaskedTargeterDelegate:

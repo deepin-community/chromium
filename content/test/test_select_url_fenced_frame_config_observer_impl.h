@@ -6,21 +6,21 @@
 #define CONTENT_TEST_TEST_SELECT_URL_FENCED_FRAME_CONFIG_OBSERVER_IMPL_H_
 
 #include "content/browser/fenced_frame/fenced_frame_config.h"
-#include "content/browser/shared_storage/shared_storage_worklet_host_manager.h"
+#include "content/browser/shared_storage/shared_storage_runtime_manager.h"
 
 class GURL;
 
 namespace content {
 
 class TestSelectURLFencedFrameConfigObserverImpl
-    : public SharedStorageWorkletHostManager::SharedStorageObserverInterface {
+    : public SharedStorageRuntimeManager::SharedStorageObserverInterface {
  public:
   TestSelectURLFencedFrameConfigObserverImpl();
   ~TestSelectURLFencedFrameConfigObserverImpl() override;
 
   void OnSharedStorageAccessed(const base::Time& access_time,
                                AccessType type,
-                               const std::string& main_frame_id,
+                               FrameTreeNodeId main_frame_id,
                                const std::string& owner_origin,
                                const SharedStorageEventParams& params) override;
   void OnUrnUuidGenerated(const GURL& urn_uuid) override;

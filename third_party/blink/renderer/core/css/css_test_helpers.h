@@ -51,6 +51,7 @@ class TestStyleSheet {
 };
 
 CSSStyleSheet* CreateStyleSheet(Document& document);
+RuleSet* CreateRuleSet(Document& document, String text);
 
 // Create a PropertyRegistration with the given name. An initial value must
 // be provided when the syntax is not "*".
@@ -81,7 +82,7 @@ void DeclareProperty(Document& document,
                      const std::optional<String>& initial_value,
                      bool is_inherited);
 
-scoped_refptr<CSSVariableData> CreateVariableData(String);
+CSSVariableData* CreateVariableData(String);
 const CSSValue* CreateCustomIdent(const char*);
 const CSSValue* ParseLonghand(Document& document,
                               const CSSProperty&,
@@ -90,6 +91,10 @@ const CSSPropertyValueSet* ParseDeclarationBlock(
     const String& block_text,
     CSSParserMode mode = kHTMLStandardMode);
 StyleRuleBase* ParseRule(Document& document, String text);
+StyleRuleBase* ParseNestedRule(Document& document,
+                               String text,
+                               CSSNestingType,
+                               StyleRule* parent_rule_for_nesting);
 
 // Parse a value according to syntax defined by:
 // https://drafts.css-houdini.org/css-properties-values-api-1/#syntax-strings
@@ -101,19 +106,7 @@ CSSSelectorList* ParseSelectorList(const String&);
 // (for kNesting), or the :scope pseudo-class (for kScope).
 CSSSelectorList* ParseSelectorList(const String&,
                                    CSSNestingType,
-                                   const StyleRule* parent_rule_for_nesting,
-                                   bool is_within_scope);
-
-// Make the incoming StyleRule carry the specified signal.
-StyleRule* MakeSignalingRule(StyleRule&&, CSSSelector::Signal);
-
-// Make the incoming StyleRule invisible. (See CSSSelector::IsInvisible).
-StyleRule* MakeInvisibleRule(StyleRule&&);
-
-StyleRule* ParseSignalingRule(Document& document,
-                              String text,
-                              CSSSelector::Signal);
-StyleRule* ParseInvisibleRule(Document& document, String text);
+                                   const StyleRule* parent_rule_for_nesting);
 
 }  // namespace css_test_helpers
 }  // namespace blink

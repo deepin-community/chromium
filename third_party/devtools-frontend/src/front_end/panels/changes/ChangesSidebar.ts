@@ -9,6 +9,7 @@ import * as Workspace from '../../models/workspace/workspace.js';
 import * as WorkspaceDiff from '../../models/workspace_diff/workspace_diff.js';
 import * as IconButton from '../../ui/components/icon_button/icon_button.js';
 import * as UI from '../../ui/legacy/legacy.js';
+import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 import * as Snippets from '../snippets/snippets.js';
 
 import changesSidebarStyles from './changesSidebar.css.js';
@@ -30,20 +31,22 @@ export class ChangesSidebar extends Common.ObjectWrapper.eventMixin<EventTypes, 
   private readonly workspaceDiff: WorkspaceDiff.WorkspaceDiff.WorkspaceDiffImpl;
   constructor(workspaceDiff: WorkspaceDiff.WorkspaceDiff.WorkspaceDiffImpl) {
     super();
-    this.treeoutline = new UI.TreeOutline.TreeOutlineInShadow();
+    this.treeoutline = new UI.TreeOutline.TreeOutlineInShadow(UI.TreeOutline.TreeVariant.NAVIGATION_TREE);
+    this.treeoutline.registerRequiredCSS(changesSidebarStyles);
     this.treeoutline.setFocusable(false);
-
+    this.treeoutline.hideOverflow();
     this.treeoutline.setComparator((a, b) => Platform.StringUtilities.compare(a.titleAsText(), b.titleAsText()));
     this.treeoutline.addEventListener(UI.TreeOutline.Events.ElementSelected, this.selectionChanged, this);
     UI.ARIAUtils.markAsTablist(this.treeoutline.contentElement);
 
     this.element.appendChild(this.treeoutline.element);
+    this.element.setAttribute('jslog', `${VisualLogging.pane('sidebar').track({resize: true})}`);
 
     this.treeElements = new Map();
     this.workspaceDiff = workspaceDiff;
     this.workspaceDiff.modifiedUISourceCodes().forEach(this.addUISourceCode.bind(this));
     this.workspaceDiff.addEventListener(
-        WorkspaceDiff.WorkspaceDiff.Events.ModifiedStatusChanged, this.uiSourceCodeMofiedStatusChanged, this);
+        WorkspaceDiff.WorkspaceDiff.Events.MODIFIED_STATUS_CHANGED, this.uiSourceCodeMofiedStatusChanged, this);
   }
 
   selectUISourceCode(uiSourceCode: Workspace.UISourceCode.UISourceCode, omitFocus?: boolean|undefined): void {
@@ -60,7 +63,7 @@ export class ChangesSidebar extends Common.ObjectWrapper.eventMixin<EventTypes, 
   }
 
   private selectionChanged(): void {
-    this.dispatchEventToListeners(Events.SelectedUISourceCodeChanged);
+    this.dispatchEventToListeners(Events.SELECTED_UI_SOURCE_CODE_CHANGED);
   }
 
   private uiSourceCodeMofiedStatusChanged(
@@ -102,19 +105,15 @@ export class ChangesSidebar extends Common.ObjectWrapper.eventMixin<EventTypes, 
       treeElement.select(true);
     }
   }
-  override wasShown(): void {
-    super.wasShown();
-    this.treeoutline.registerCSSFiles([changesSidebarStyles]);
-  }
 }
 
 export const enum Events {
-  SelectedUISourceCodeChanged = 'SelectedUISourceCodeChanged',
+  SELECTED_UI_SOURCE_CODE_CHANGED = 'SelectedUISourceCodeChanged',
 }
 
-export type EventTypes = {
-  [Events.SelectedUISourceCodeChanged]: void,
-};
+export interface EventTypes {
+  [Events.SELECTED_UI_SOURCE_CODE_CHANGED]: void;
+}
 
 export class UISourceCodeTreeElement extends UI.TreeOutline.TreeElement {
   uiSourceCode: Workspace.UISourceCode.UISourceCode;

@@ -32,7 +32,6 @@ ModuleScriptFetcher* WorkerModulatorImpl::CreateModuleScriptFetcher(
           global_scope, pass_key);
   }
   NOTREACHED();
-  return nullptr;
 }
 
 bool WorkerModulatorImpl::IsDynamicImportForbidden(String* reason) {

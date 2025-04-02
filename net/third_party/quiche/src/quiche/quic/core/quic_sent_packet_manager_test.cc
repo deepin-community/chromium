@@ -4,15 +4,19 @@
 
 #include "quiche/quic/core/quic_sent_packet_manager.h"
 
+#include <algorithm>
 #include <memory>
+#include <optional>
 #include <utility>
+#include <vector>
 
 #include "absl/base/macros.h"
 #include "absl/strings/string_view.h"
+#include "quiche/quic/core/frames/quic_ack_frame.h"
 #include "quiche/quic/core/frames/quic_ack_frequency_frame.h"
+#include "quiche/quic/core/quic_packet_number.h"
 #include "quiche/quic/core/quic_time.h"
 #include "quiche/quic/core/quic_types.h"
-#include "quiche/quic/platform/api/quic_expect_bug.h"
 #include "quiche/quic/platform/api/quic_flags.h"
 #include "quiche/quic/platform/api/quic_test.h"
 #include "quiche/quic/test_tools/quic_config_peer.h"
@@ -57,6 +61,13 @@ class MockDebugDelegate : public QuicSentPacketManager::DebugDelegate {
               (QuicPacketNumber lost_packet_number,
                EncryptionLevel encryption_level,
                TransmissionType transmission_type, QuicTime detection_time),
+              (override));
+  MOCK_METHOD(void, OnIncomingAck,
+              (QuicPacketNumber ack_packet_number,
+               EncryptionLevel ack_decrypted_level,
+               const QuicAckFrame& ack_frame, QuicTime ack_receive_time,
+               QuicPacketNumber largest_observed, bool rtt_updated,
+               QuicPacketNumber least_unacked_sent_packet),
               (override));
 };
 
@@ -553,6 +564,7 @@ TEST_F(QuicSentPacketManagerTest, RetransmitTwiceThenAckFirst) {
   manager_.OnAckFrameStart(QuicPacketNumber(1), QuicTime::Delta::Infinite(),
                            clock_.Now());
   manager_.OnAckRange(QuicPacketNumber(1), QuicPacketNumber(2));
+  EXPECT_CALL(debug_delegate, OnIncomingAck(_, _, _, _, _, _, _)).Times(1);
   EXPECT_EQ(PACKETS_NEWLY_ACKED,
             manager_.OnAckFrameEnd(clock_.Now(), QuicPacketNumber(1),
                                    ENCRYPTION_INITIAL, kEmptyCounts));
@@ -579,6 +591,7 @@ TEST_F(QuicSentPacketManagerTest, RetransmitTwiceThenAckFirst) {
                            clock_.Now());
   manager_.OnAckRange(QuicPacketNumber(3), QuicPacketNumber(5));
   manager_.OnAckRange(QuicPacketNumber(1), QuicPacketNumber(2));
+  EXPECT_CALL(debug_delegate, OnIncomingAck(_, _, _, _, _, _, _)).Times(1);
   EXPECT_EQ(PACKETS_NEWLY_ACKED,
             manager_.OnAckFrameEnd(clock_.Now(), QuicPacketNumber(2),
                                    ENCRYPTION_INITIAL, kEmptyCounts));
@@ -600,6 +613,7 @@ TEST_F(QuicSentPacketManagerTest, RetransmitTwiceThenAckFirst) {
                            clock_.Now());
   manager_.OnAckRange(QuicPacketNumber(3), QuicPacketNumber(6));
   manager_.OnAckRange(QuicPacketNumber(1), QuicPacketNumber(2));
+  EXPECT_CALL(debug_delegate, OnIncomingAck(_, _, _, _, _, _, _)).Times(1);
   EXPECT_EQ(PACKETS_NEWLY_ACKED,
             manager_.OnAckFrameEnd(clock_.Now(), QuicPacketNumber(3),
                                    ENCRYPTION_INITIAL, kEmptyCounts));
@@ -1243,6 +1257,24 @@ TEST_F(QuicSentPacketManagerTest, NegotiateCongestionControlFromOptions) {
   manager_.SetFromConfig(config);
   EXPECT_EQ(kRenoBytes, QuicSentPacketManagerPeer::GetSendAlgorithm(manager_)
                             ->GetCongestionControlType());
+
+  options.clear();
+  options.push_back(kPRGC);
+  QuicConfigPeer::SetReceivedConnectionOptions(&config, options);
+  EXPECT_CALL(*network_change_visitor_, OnCongestionChange());
+  manager_.SetFromConfig(config);
+  // The server does nothing on kPRGC.
+  EXPECT_EQ(kRenoBytes, QuicSentPacketManagerPeer::GetSendAlgorithm(manager_)
+                            ->GetCongestionControlType());
+
+  options.clear();
+  options.push_back(kCQBC);
+  QuicConfigPeer::SetReceivedConnectionOptions(&config, options);
+  EXPECT_CALL(*network_change_visitor_, OnCongestionChange());
+  manager_.SetFromConfig(config);
+  // The server does nothing on kCQBC.
+  EXPECT_EQ(kRenoBytes, QuicSentPacketManagerPeer::GetSendAlgorithm(manager_)
+                            ->GetCongestionControlType());
 }
 
 TEST_F(QuicSentPacketManagerTest, NegotiateClientCongestionControlFromOptions) {
@@ -1290,6 +1322,54 @@ TEST_F(QuicSentPacketManagerTest, NegotiateClientCongestionControlFromOptions) {
   manager_.SetFromConfig(config);
   EXPECT_EQ(kRenoBytes, QuicSentPacketManagerPeer::GetSendAlgorithm(manager_)
                             ->GetCongestionControlType());
+
+  // Prague Cubic is currently only supported on the client.
+  QuicSentPacketManagerPeer::SetPerspective(&manager_, Perspective::IS_SERVER);
+  options.clear();
+  options.push_back(kPRGC);
+  config.SetClientConnectionOptions(options);
+  EXPECT_CALL(*network_change_visitor_, OnCongestionChange());
+  manager_.SetFromConfig(config);
+  // This is the server, so the algorithm didn't change.
+  EXPECT_EQ(kRenoBytes, QuicSentPacketManagerPeer::GetSendAlgorithm(manager_)
+                            ->GetCongestionControlType());
+
+  QuicSentPacketManagerPeer::SetPerspective(&manager_, Perspective::IS_CLIENT);
+  options.clear();
+  options.push_back(kPRGC);
+  config.SetClientConnectionOptions(options);
+  EXPECT_CALL(*network_change_visitor_, OnCongestionChange());
+  manager_.SetFromConfig(config);
+  EXPECT_EQ(kPragueCubic, QuicSentPacketManagerPeer::GetSendAlgorithm(manager_)
+                              ->GetCongestionControlType());
+
+  options.clear();
+  options.push_back(kCQBC);
+  config.SetClientConnectionOptions(options);
+  EXPECT_CALL(*network_change_visitor_, OnCongestionChange());
+  manager_.SetFromConfig(config);
+  EXPECT_EQ(kCubicBytes, QuicSentPacketManagerPeer::GetSendAlgorithm(manager_)
+                             ->GetCongestionControlType());
+
+  // Test that kPRGC is not overriden by other options.
+  options.clear();
+  options.push_back(kPRGC);
+  options.push_back(kTBBR);
+  config.SetClientConnectionOptions(options);
+  EXPECT_CALL(*network_change_visitor_, OnCongestionChange());
+  manager_.SetFromConfig(config);
+  EXPECT_EQ(kPragueCubic, QuicSentPacketManagerPeer::GetSendAlgorithm(manager_)
+                              ->GetCongestionControlType());
+
+  // Test that kCQBC is not overriden by other options.
+  options.clear();
+  options.push_back(kCQBC);
+  options.push_back(kTBBR);
+  config.SetClientConnectionOptions(options);
+  EXPECT_CALL(*network_change_visitor_, OnCongestionChange());
+  manager_.SetFromConfig(config);
+  EXPECT_EQ(kCubicBytes, QuicSentPacketManagerPeer::GetSendAlgorithm(manager_)
+                             ->GetCongestionControlType());
 }
 
 TEST_F(QuicSentPacketManagerTest, UseInitialRoundTripTimeToSend) {
@@ -1847,7 +1927,7 @@ TEST_F(QuicSentPacketManagerTest, ComputingProbeTimeout) {
   // Verify PTO is correctly set.
   QuicTime::Delta expected_pto_delay =
       srtt + kPtoRttvarMultiplier * rtt_stats->mean_deviation() +
-      QuicTime::Delta::FromMilliseconds(kDefaultDelayedAckTimeMs);
+      QuicTime::Delta::FromMilliseconds(GetDefaultDelayedAckTimeMs());
   QuicTime packet1_sent_time = clock_.Now();
   EXPECT_EQ(clock_.Now() + expected_pto_delay,
             manager_.GetRetransmissionTime());
@@ -1889,7 +1969,7 @@ TEST_F(QuicSentPacketManagerTest, ComputingProbeTimeout) {
       rtt_stats->SmoothedOrInitialRtt() +
       std::max(kPtoRttvarMultiplier * rtt_stats->mean_deviation(),
                QuicTime::Delta::FromMilliseconds(1)) +
-      QuicTime::Delta::FromMilliseconds(kDefaultDelayedAckTimeMs);
+      QuicTime::Delta::FromMilliseconds(GetDefaultDelayedAckTimeMs());
 
   // Verify PTO is correctly re-armed based on sent time of packet 4.
   EXPECT_EQ(sent_time + expected_pto_delay, manager_.GetRetransmissionTime());
@@ -1914,7 +1994,7 @@ TEST_F(QuicSentPacketManagerTest, SendOneProbePacket) {
   // Verify PTO period is correctly set.
   QuicTime::Delta expected_pto_delay =
       srtt + kPtoRttvarMultiplier * rtt_stats->mean_deviation() +
-      QuicTime::Delta::FromMilliseconds(kDefaultDelayedAckTimeMs);
+      QuicTime::Delta::FromMilliseconds(GetDefaultDelayedAckTimeMs());
   // Verify PTO is set based on left edge.
   QuicTime deadline = packet1_sent_time + expected_pto_delay;
   EXPECT_EQ(deadline, manager_.GetRetransmissionTime());
@@ -2001,7 +2081,7 @@ TEST_F(QuicSentPacketManagerTest, PtoTimeoutRttVarMultiple) {
   // Verify PTO is correctly set based on 2 times rtt var.
   QuicTime::Delta expected_pto_delay =
       srtt + kPtoRttvarMultiplier * rtt_stats->mean_deviation() +
-      QuicTime::Delta::FromMilliseconds(kDefaultDelayedAckTimeMs);
+      QuicTime::Delta::FromMilliseconds(GetDefaultDelayedAckTimeMs());
   EXPECT_EQ(clock_.Now() + expected_pto_delay,
             manager_.GetRetransmissionTime());
 }
@@ -2109,7 +2189,7 @@ TEST_F(QuicSentPacketManagerTest, ClientMultiplePacketNumberSpacePtoTimeout) {
   // is armed by left edge.
   expected_pto_delay =
       srtt + kPtoRttvarMultiplier * rtt_stats->mean_deviation() +
-      QuicTime::Delta::FromMilliseconds(kDefaultDelayedAckTimeMs);
+      QuicTime::Delta::FromMilliseconds(GetDefaultDelayedAckTimeMs());
   EXPECT_EQ(packet4_sent_time + expected_pto_delay,
             manager_.GetRetransmissionTime());
 }
@@ -2166,7 +2246,7 @@ TEST_F(QuicSentPacketManagerTest, ServerMultiplePacketNumberSpacePtoTimeout) {
   manager_.SetHandshakeConfirmed();
   expected_pto_delay =
       srtt + kPtoRttvarMultiplier * rtt_stats->mean_deviation() +
-      QuicTime::Delta::FromMilliseconds(kDefaultDelayedAckTimeMs);
+      QuicTime::Delta::FromMilliseconds(GetDefaultDelayedAckTimeMs());
   // Verify PTO timeout is now based on packet 3 as handshake is
   // complete/confirmed.
   EXPECT_EQ(packet3_sent_time + expected_pto_delay,
@@ -2188,7 +2268,7 @@ TEST_F(QuicSentPacketManagerTest, ComputingProbeTimeoutByLeftEdge) {
   // Verify PTO is correctly set.
   QuicTime::Delta expected_pto_delay =
       srtt + kPtoRttvarMultiplier * rtt_stats->mean_deviation() +
-      QuicTime::Delta::FromMilliseconds(kDefaultDelayedAckTimeMs);
+      QuicTime::Delta::FromMilliseconds(GetDefaultDelayedAckTimeMs());
   const QuicTime packet1_sent_time = clock_.Now();
   EXPECT_EQ(packet1_sent_time + expected_pto_delay,
             manager_.GetRetransmissionTime());
@@ -2229,7 +2309,7 @@ TEST_F(QuicSentPacketManagerTest, ComputingProbeTimeoutByLeftEdge) {
       rtt_stats->SmoothedOrInitialRtt() +
       std::max(kPtoRttvarMultiplier * rtt_stats->mean_deviation(),
                QuicTime::Delta::FromMilliseconds(1)) +
-      QuicTime::Delta::FromMilliseconds(kDefaultDelayedAckTimeMs);
+      QuicTime::Delta::FromMilliseconds(GetDefaultDelayedAckTimeMs());
 
   // Verify PTO is correctly re-armed based on sent time of packet 4.
   EXPECT_EQ(packet3_sent_time + expected_pto_delay,
@@ -2251,7 +2331,7 @@ TEST_F(QuicSentPacketManagerTest, ComputingProbeTimeoutByLeftEdge2) {
   // Verify PTO is correctly set.
   QuicTime::Delta expected_pto_delay =
       srtt + kPtoRttvarMultiplier * rtt_stats->mean_deviation() +
-      QuicTime::Delta::FromMilliseconds(kDefaultDelayedAckTimeMs);
+      QuicTime::Delta::FromMilliseconds(GetDefaultDelayedAckTimeMs());
   const QuicTime packet1_sent_time = clock_.Now();
   EXPECT_EQ(packet1_sent_time + expected_pto_delay,
             manager_.GetRetransmissionTime());
@@ -2281,7 +2361,7 @@ TEST_F(QuicSentPacketManagerTest, ComputingProbeTimeoutByLeftEdge2) {
   // packet3 (right edge).
   expected_pto_delay =
       srtt + kPtoRttvarMultiplier * rtt_stats->mean_deviation() +
-      QuicTime::Delta::FromMilliseconds(kDefaultDelayedAckTimeMs);
+      QuicTime::Delta::FromMilliseconds(GetDefaultDelayedAckTimeMs());
   QuicTime packet3_sent_time = clock_.Now();
   EXPECT_EQ(packet3_sent_time + expected_pto_delay * 2,
             manager_.GetRetransmissionTime());
@@ -2299,7 +2379,7 @@ TEST_F(QuicSentPacketManagerTest, ComputingProbeTimeoutByLeftEdge2) {
       rtt_stats->SmoothedOrInitialRtt() +
       std::max(kPtoRttvarMultiplier * rtt_stats->mean_deviation(),
                QuicTime::Delta::FromMilliseconds(1)) +
-      QuicTime::Delta::FromMilliseconds(kDefaultDelayedAckTimeMs);
+      QuicTime::Delta::FromMilliseconds(GetDefaultDelayedAckTimeMs());
 
   // Verify PTO is correctly re-armed based on sent time of packet 3 (left
   // edge).
@@ -2363,7 +2443,7 @@ TEST_F(QuicSentPacketManagerTest,
   // complete/confirmed.
   expected_pto_delay =
       srtt + kPtoRttvarMultiplier * rtt_stats->mean_deviation() +
-      QuicTime::Delta::FromMilliseconds(kDefaultDelayedAckTimeMs);
+      QuicTime::Delta::FromMilliseconds(GetDefaultDelayedAckTimeMs());
   EXPECT_EQ(packet3_sent_time + expected_pto_delay,
             manager_.GetRetransmissionTime());
 
@@ -2430,7 +2510,7 @@ TEST_F(QuicSentPacketManagerTest,
   // complete/confirmed.
   expected_pto_delay =
       srtt + kPtoRttvarMultiplier * rtt_stats->mean_deviation() +
-      QuicTime::Delta::FromMilliseconds(kDefaultDelayedAckTimeMs);
+      QuicTime::Delta::FromMilliseconds(GetDefaultDelayedAckTimeMs());
   EXPECT_EQ(packet3_sent_time + expected_pto_delay,
             manager_.GetRetransmissionTime());
 
@@ -3195,9 +3275,8 @@ TEST_F(QuicSentPacketManagerTest, GetAvailableCongestionWindow) {
 }
 
 TEST_F(QuicSentPacketManagerTest, EcnCountsAreStored) {
-  if (!GetQuicRestartFlag(quic_support_ect1)) {
-    return;
-  }
+  EXPECT_CALL(*send_algorithm_, EnableECT1()).WillOnce(Return(true));
+  manager_.EnableECT1();
   std::optional<QuicEcnCounts> ecn_counts1, ecn_counts2, ecn_counts3;
   ecn_counts1 = {1, 0, 3};
   ecn_counts2 = {0, 3, 1};
@@ -3212,13 +3291,47 @@ TEST_F(QuicSentPacketManagerTest, EcnCountsAreStored) {
   SendDataPacket(8, ENCRYPTION_HANDSHAKE, ECN_ECT1);
   SendDataPacket(9, ENCRYPTION_FORWARD_SECURE, ECN_ECT1);
   SendDataPacket(10, ENCRYPTION_FORWARD_SECURE, ECN_ECT1);
+  MockDebugDelegate debug_delegate;
+  manager_.SetDebugDelegate(&debug_delegate);
+  bool correct_report = false;
+  EXPECT_CALL(debug_delegate, OnIncomingAck(_, _, _, _, _, _, _))
+      .WillOnce(Invoke(
+          [&](QuicPacketNumber /*ack_packet_number*/,
+              EncryptionLevel /*ack_decrypted_level*/,
+              const QuicAckFrame& ack_frame, QuicTime /*ack_receive_time*/,
+              QuicPacketNumber /*largest_observed*/, bool /*rtt_updated*/,
+              QuicPacketNumber /*least_unacked_sent_packet*/) {
+            correct_report = (ack_frame.ecn_counters == ecn_counts1);
+          }));
   manager_.OnAckFrameEnd(clock_.Now(), QuicPacketNumber(1), ENCRYPTION_INITIAL,
                          ecn_counts1);
+  EXPECT_TRUE(correct_report);
+  correct_report = false;
+  EXPECT_CALL(debug_delegate, OnIncomingAck(_, _, _, _, _, _, _))
+      .WillOnce(Invoke(
+          [&](QuicPacketNumber /*ack_packet_number*/,
+              EncryptionLevel /*ack_decrypted_level*/,
+              const QuicAckFrame& ack_frame, QuicTime /*ack_receive_time*/,
+              QuicPacketNumber /*largest_observed*/, bool /*rtt_updated*/,
+              QuicPacketNumber /*least_unacked_sent_packet*/) {
+            correct_report = (ack_frame.ecn_counters == ecn_counts2);
+          }));
   manager_.OnAckFrameEnd(clock_.Now(), QuicPacketNumber(2),
                          ENCRYPTION_HANDSHAKE, ecn_counts2);
-
+  EXPECT_TRUE(correct_report);
+  correct_report = false;
+  EXPECT_CALL(debug_delegate, OnIncomingAck(_, _, _, _, _, _, _))
+      .WillOnce(Invoke(
+          [&](QuicPacketNumber /*ack_packet_number*/,
+              EncryptionLevel /*ack_decrypted_level*/,
+              const QuicAckFrame& ack_frame, QuicTime /*ack_receive_time*/,
+              QuicPacketNumber /*largest_observed*/, bool /*rtt_updated*/,
+              QuicPacketNumber /*least_unacked_sent_packet*/) {
+            correct_report = (ack_frame.ecn_counters == ecn_counts3);
+          }));
   manager_.OnAckFrameEnd(clock_.Now(), QuicPacketNumber(3),
                          ENCRYPTION_FORWARD_SECURE, ecn_counts3);
+  EXPECT_TRUE(correct_report);
   EXPECT_EQ(
       *QuicSentPacketManagerPeer::GetPeerEcnCounts(&manager_, INITIAL_DATA),
       ecn_counts1);
@@ -3231,9 +3344,8 @@ TEST_F(QuicSentPacketManagerTest, EcnCountsAreStored) {
 }
 
 TEST_F(QuicSentPacketManagerTest, EcnCountsReceived) {
-  if (!GetQuicRestartFlag(quic_support_ect1)) {
-    return;
-  }
+  EXPECT_CALL(*send_algorithm_, EnableECT1()).WillOnce(Return(true));
+  manager_.EnableECT1();
   // Basic ECN reporting test. The reported counts are equal to the total sent,
   // but more than the total acked. This is legal per the spec.
   for (uint64_t i = 1; i <= 3; ++i) {
@@ -3258,9 +3370,8 @@ TEST_F(QuicSentPacketManagerTest, EcnCountsReceived) {
 }
 
 TEST_F(QuicSentPacketManagerTest, PeerDecrementsEcnCounts) {
-  if (!GetQuicRestartFlag(quic_support_ect1)) {
-    return;
-  }
+  EXPECT_CALL(*send_algorithm_, EnableECT1()).WillOnce(Return(true));
+  manager_.EnableECT1();
   for (uint64_t i = 1; i <= 5; ++i) {
     SendDataPacket(i, ENCRYPTION_FORWARD_SECURE, ECN_ECT1);
   }
@@ -3300,9 +3411,8 @@ TEST_F(QuicSentPacketManagerTest, PeerDecrementsEcnCounts) {
 }
 
 TEST_F(QuicSentPacketManagerTest, TooManyEcnCountsReported) {
-  if (!GetQuicRestartFlag(quic_support_ect1)) {
-    return;
-  }
+  EXPECT_CALL(*send_algorithm_, EnableECT1()).WillOnce(Return(true));
+  manager_.EnableECT1();
   for (uint64_t i = 1; i <= 3; ++i) {
     SendDataPacket(i, ENCRYPTION_FORWARD_SECURE, ECN_ECT1);
   }
@@ -3328,9 +3438,8 @@ TEST_F(QuicSentPacketManagerTest, TooManyEcnCountsReported) {
 }
 
 TEST_F(QuicSentPacketManagerTest, PeerReportsWrongCodepoint) {
-  if (!GetQuicRestartFlag(quic_support_ect1)) {
-    return;
-  }
+  EXPECT_CALL(*send_algorithm_, EnableECT1()).WillOnce(Return(true));
+  manager_.EnableECT1();
   for (uint64_t i = 1; i <= 3; ++i) {
     SendDataPacket(i, ENCRYPTION_FORWARD_SECURE, ECN_ECT1);
   }
@@ -3356,9 +3465,8 @@ TEST_F(QuicSentPacketManagerTest, PeerReportsWrongCodepoint) {
 }
 
 TEST_F(QuicSentPacketManagerTest, TooFewEcnCountsReported) {
-  if (!GetQuicRestartFlag(quic_support_ect1)) {
-    return;
-  }
+  EXPECT_CALL(*send_algorithm_, EnableECT1()).WillOnce(Return(true));
+  manager_.EnableECT1();
   for (uint64_t i = 1; i <= 3; ++i) {
     SendDataPacket(i, ENCRYPTION_FORWARD_SECURE, ECN_ECT1);
   }
@@ -3384,9 +3492,8 @@ TEST_F(QuicSentPacketManagerTest, TooFewEcnCountsReported) {
 
 TEST_F(QuicSentPacketManagerTest,
        EcnCountsNotValidatedIfLargestAckedUnchanged) {
-  if (!GetQuicRestartFlag(quic_support_ect1)) {
-    return;
-  }
+  EXPECT_CALL(*send_algorithm_, EnableECT1()).WillOnce(Return(true));
+  manager_.EnableECT1();
   for (uint64_t i = 1; i <= 3; ++i) {
     SendDataPacket(i, ENCRYPTION_FORWARD_SECURE, ECN_ECT1);
   }
@@ -3427,9 +3534,8 @@ TEST_F(QuicSentPacketManagerTest,
 }
 
 TEST_F(QuicSentPacketManagerTest, EcnAckedButNoMarksReported) {
-  if (!GetQuicRestartFlag(quic_support_ect1)) {
-    return;
-  }
+  EXPECT_CALL(*send_algorithm_, EnableECT1()).WillOnce(Return(true));
+  manager_.EnableECT1();
   for (uint64_t i = 1; i <= 3; ++i) {
     SendDataPacket(i, ENCRYPTION_FORWARD_SECURE, ECN_ECT1);
   }

@@ -44,7 +44,6 @@ std::optional<T> GetIntegerProperty(io_service_t service,
     type = kCFNumberSInt32Type;
   else {
     NOTREACHED();
-    return std::nullopt;
   }
   if (!CFNumberGetValue(static_cast<CFNumberRef>(cf_number.get()), type,
                         &value)) {
@@ -72,7 +71,6 @@ std::optional<T> GetStringProperty(io_service_t service, CFStringRef property) {
     return base::SysCFStringRefToUTF16(ref.get());
 
   NOTREACHED();
-  return std::nullopt;
 }
 }  // namespace device
 

@@ -16,7 +16,7 @@ NullCaptureModeSession::NullCaptureModeSession(
 views::Widget* NullCaptureModeSession::GetCaptureModeBarWidget() {
   // The null session will never have a bar widget, so this function should
   // never be called.
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 aura::Window* NullCaptureModeSession::GetSelectedWindow() const {
@@ -100,9 +100,10 @@ void NullCaptureModeSession::OnCameraPreviewBoundsOrVisibilityChanged(
 
 void NullCaptureModeSession::OnCameraPreviewDestroyed() {}
 
-void NullCaptureModeSession::MaybeDismissUserNudgeForever() {}
+void NullCaptureModeSession::MaybeDismissSunfishRegionNudgeForever() {}
 
-void NullCaptureModeSession::MaybeChangeRoot(aura::Window* new_root) {
+void NullCaptureModeSession::MaybeChangeRoot(aura::Window* new_root,
+                                             bool root_window_will_shutdown) {
   DCHECK(new_root->IsRootWindow());
   current_root_ = new_root;
 }
@@ -112,10 +113,39 @@ NullCaptureModeSession::GetWindowsToIgnoreFromWidgets() {
   return std::set<aura::Window*>();
 }
 
+void NullCaptureModeSession::OnPerformCaptureForSearchStarting(
+    PerformCaptureType capture_type) {}
+
+void NullCaptureModeSession::OnPerformCaptureForSearchEnded(
+    PerformCaptureType capture_type) {}
+
+base::WeakPtr<BaseCaptureModeSession>
+NullCaptureModeSession::GetImageSearchToken() {
+  return nullptr;
+}
+
+ActionButtonView* NullCaptureModeSession::AddActionButton(
+    views::Button::PressedCallback callback,
+    std::u16string text,
+    const gfx::VectorIcon* icon,
+    const ActionButtonRank rank,
+    ActionButtonViewID id) {
+  return nullptr;
+}
+
+void NullCaptureModeSession::AddSmartActionsButton() {}
+
+void NullCaptureModeSession::OnScannerActionsFetched(
+    std::vector<ScannerActionViewModel> scanner_actions) {}
+
 void NullCaptureModeSession::InitInternal() {
   layer()->SetName("NullCaptureModeSession");
 }
 
 void NullCaptureModeSession::ShutdownInternal() {}
+
+gfx::Rect NullCaptureModeSession::GetFeedbackWidgetScreenBounds() const {
+  return gfx::Rect();
+}
 
 }  // namespace ash

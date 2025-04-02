@@ -58,12 +58,11 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
   private readonly parentURLInternal: Platform.DevToolsPath.UrlString;
   private nameInternal: string;
   private contentTypeInternal: Common.ResourceType.ResourceType;
-  private requestContentPromise: Promise<TextUtils.ContentProvider.DeferredContent>|null;
+  private requestContentPromise: Promise<TextUtils.ContentData.ContentDataOrError>|null;
   private decorations: Map<string, any> = new Map();
   private hasCommitsInternal: boolean;
   private messagesInternal: Set<Message>|null;
-  private contentLoadedInternal: boolean;
-  private contentInternal: TextUtils.ContentProvider.DeferredContent|null;
+  private contentInternal: TextUtils.ContentData.ContentDataOrError|null;
   private forceLoadOnCheckContentInternal: boolean;
   private checkingContent: boolean;
   private lastAcceptedContent: string|null;
@@ -102,7 +101,6 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
     this.requestContentPromise = null;
     this.hasCommitsInternal = false;
     this.messagesInternal = null;
-    this.contentLoadedInternal = false;
     this.contentInternal = null;
     this.forceLoadOnCheckContentInternal = false;
     this.checkingContent = false;
@@ -162,10 +160,7 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
   }
 
   rename(newName: Platform.DevToolsPath.RawPathString): Promise<boolean> {
-    let fulfill: (arg0: boolean) => void;
-    const promise = new Promise<boolean>(x => {
-      fulfill = x;
-    });
+    const {resolve, promise} = Promise.withResolvers<boolean>();
     this.projectInternal.rename(this, newName, innerCallback.bind(this));
     return promise;
 
@@ -177,7 +172,7 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
             newName as Platform.DevToolsPath.RawPathString, newURL as Platform.DevToolsPath.UrlString,
             newContentType as Common.ResourceType.ResourceType);
       }
-      fulfill(success);
+      resolve(success);
     }
   }
 
@@ -200,7 +195,7 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
     }
     this.dispatchEventToListeners(Events.TitleChanged, this);
     this.project().workspace().dispatchEventToListeners(
-        WorkspaceImplEvents.UISourceCodeRenamed, {oldURL: oldURL, uiSourceCode: this});
+        WorkspaceImplEvents.UISourceCodeRenamed, {oldURL, uiSourceCode: this});
   }
 
   contentURL(): Platform.DevToolsPath.UrlString {
@@ -215,39 +210,41 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
     return this.projectInternal;
   }
 
-  requestContent({cachedWasmOnly}: {cachedWasmOnly?: boolean} = {}):
-      Promise<TextUtils.ContentProvider.DeferredContent> {
+  requestContentData({cachedWasmOnly}: {cachedWasmOnly?: boolean} = {}):
+      Promise<TextUtils.ContentData.ContentDataOrError> {
     if (this.requestContentPromise) {
       return this.requestContentPromise;
     }
 
-    if (this.contentLoadedInternal) {
-      return Promise.resolve(this.contentInternal as TextUtils.ContentProvider.DeferredContent);
+    if (this.contentInternal) {
+      return Promise.resolve(this.contentInternal);
     }
 
     if (cachedWasmOnly && this.mimeType() === 'application/wasm') {
-      return Promise.resolve(
-          {content: '', isEncoded: false, wasmDisassemblyInfo: new Common.WasmDisassembly.WasmDisassembly([], [], [])});
+      return Promise.resolve(new TextUtils.WasmDisassembly.WasmDisassembly([], [], []));
     }
 
     this.requestContentPromise = this.requestContentImpl();
     return this.requestContentPromise;
   }
 
-  private async requestContentImpl(): Promise<TextUtils.ContentProvider.DeferredContent> {
-    try {
-      const content = await this.projectInternal.requestFileContent(this);
-      if (!this.contentLoadedInternal) {
-        this.contentLoadedInternal = true;
-        this.contentInternal = content;
-        this.contentEncodedInternal = content.isEncoded;
-      }
-    } catch (err) {
-      this.contentLoadedInternal = true;
-      this.contentInternal = {content: null, error: err ? String(err) : '', isEncoded: false};
+  async requestContent(options: {cachedWasmOnly?: boolean} = {}): Promise<TextUtils.ContentProvider.DeferredContent> {
+    return TextUtils.ContentData.ContentData.asDeferredContent(await this.requestContentData(options));
+  }
+
+  private async requestContentImpl(): Promise<TextUtils.ContentData.ContentDataOrError> {
+    if (this.contentInternal) {
+      throw new Error(
+          'Called UISourceCode#requestContentImpl even though content is available for ' + this.urlInternal);
     }
 
-    return this.contentInternal as TextUtils.ContentProvider.DeferredContent;
+    try {
+      this.contentInternal = await this.projectInternal.requestFileContent(this);
+    } catch (err) {
+      this.contentInternal = {error: err ? String(err) : ''};
+    }
+
+    return this.contentInternal;
   }
 
   #decodeContent(content: TextUtils.ContentProvider.DeferredContent|null): string|null {
@@ -257,8 +254,16 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
     return content.isEncoded && content.content ? window.atob(content.content) : content.content;
   }
 
+  /** Only used to compare whether content changed */
+  #unsafeDecodeContentData(content: TextUtils.ContentData.ContentDataOrError|null): string|null {
+    if (!content || TextUtils.ContentData.ContentData.isError(content)) {
+      return null;
+    }
+    return content.createdFromBase64 ? window.atob(content.base64) : content.text;
+  }
+
   async checkContentUpdated(): Promise<void> {
-    if (!this.contentLoadedInternal && !this.forceLoadOnCheckContentInternal) {
+    if (!this.contentInternal && !this.forceLoadOnCheckContentInternal) {
       return;
     }
 
@@ -267,7 +272,8 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
     }
 
     this.checkingContent = true;
-    const updatedContent = await this.projectInternal.requestFileContent(this);
+    const updatedContent =
+        TextUtils.ContentData.ContentData.asDeferredContent(await this.projectInternal.requestFileContent(this));
     if ('error' in updatedContent) {
       return;
     }
@@ -282,7 +288,7 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
       return;
     }
 
-    if (this.#decodeContent(this.contentInternal) === this.#decodeContent(updatedContent)) {
+    if (this.#unsafeDecodeContentData(this.contentInternal) === this.#decodeContent(updatedContent)) {
       this.lastAcceptedContent = null;
       return;
     }
@@ -318,8 +324,8 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
 
   private contentCommitted(content: string, committedByUser: boolean): void {
     this.lastAcceptedContent = null;
-    this.contentInternal = {content, isEncoded: false};
-    this.contentLoadedInternal = true;
+    this.contentInternal =
+        new TextUtils.ContentData.ContentData(content, Boolean(this.contentEncodedInternal), this.mimeType());
     this.requestContentPromise = null;
 
     this.hasCommitsInternal = true;
@@ -346,17 +352,22 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
   }
 
   workingCopyContent(): TextUtils.ContentProvider.DeferredContent {
+    return this.workingCopyContentData().asDeferedContent();
+  }
+
+  workingCopyContentData(): TextUtils.ContentData.ContentData {
     if (this.workingCopyGetter) {
       this.workingCopyInternal = this.workingCopyGetter();
       this.workingCopyGetter = null;
     }
-    if (this.isDirty()) {
-      return {content: this.workingCopyInternal as string, isEncoded: false};
+    const contentData = this.contentInternal ?
+        TextUtils.ContentData.ContentData.contentDataOrEmpty(this.contentInternal) :
+        TextUtils.ContentData.EMPTY_TEXT_CONTENT_DATA;
+    if (this.workingCopyInternal !== null) {
+      return new TextUtils.ContentData.ContentData(
+          this.workingCopyInternal, /* isBase64 */ false, contentData.mimeType);
     }
-    if (this.contentInternal) {
-      return this.contentInternal;
-    }
-    return {content: '', isEncoded: false};
+    return contentData;
   }
 
   resetWorkingCopy(): void {
@@ -446,7 +457,10 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
   }
 
   content(): string {
-    return this.contentInternal?.content || '';
+    if (!this.contentInternal || 'error' in this.contentInternal) {
+      return '';
+    }
+    return this.contentInternal.text;
   }
 
   loadError(): string|null {
@@ -455,15 +469,15 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
 
   searchInContent(query: string, caseSensitive: boolean, isRegex: boolean):
       Promise<TextUtils.ContentProvider.SearchMatch[]> {
-    const content = this.content();
-    if (!content) {
+    if (!this.contentInternal || 'error' in this.contentInternal) {
       return this.projectInternal.searchInFileContent(this, query, caseSensitive, isRegex);
     }
-    return Promise.resolve(TextUtils.TextUtils.performSearchInContent(content, query, caseSensitive, isRegex));
+    return Promise.resolve(
+        TextUtils.TextUtils.performSearchInContentData(this.contentInternal, query, caseSensitive, isRegex));
   }
 
   contentLoaded(): boolean {
-    return this.contentLoadedInternal;
+    return Boolean(this.contentInternal);
   }
 
   uiLocation(lineNumber: number, columnNumber?: number): UILocation {
@@ -528,12 +542,14 @@ export class UISourceCode extends Common.ObjectWrapper.ObjectWrapper<EventTypes>
 }
 
 export enum Events {
+  /* eslint-disable @typescript-eslint/naming-convention -- Used by web_tests. */
   WorkingCopyChanged = 'WorkingCopyChanged',
   WorkingCopyCommitted = 'WorkingCopyCommitted',
   TitleChanged = 'TitleChanged',
   MessageAdded = 'MessageAdded',
   MessageRemoved = 'MessageRemoved',
   DecorationChanged = 'DecorationChanged',
+  /* eslint-enable @typescript-eslint/naming-convention */
 }
 
 export interface WorkingCopyCommitedEvent {
@@ -542,14 +558,14 @@ export interface WorkingCopyCommitedEvent {
   encoded: boolean|undefined;
 }
 
-export type EventTypes = {
-  [Events.WorkingCopyChanged]: UISourceCode,
-  [Events.WorkingCopyCommitted]: WorkingCopyCommitedEvent,
-  [Events.TitleChanged]: UISourceCode,
-  [Events.MessageAdded]: Message,
-  [Events.MessageRemoved]: Message,
-  [Events.DecorationChanged]: string,
-};
+export interface EventTypes {
+  [Events.WorkingCopyChanged]: UISourceCode;
+  [Events.WorkingCopyCommitted]: WorkingCopyCommitedEvent;
+  [Events.TitleChanged]: UISourceCode;
+  [Events.MessageAdded]: Message;
+  [Events.MessageRemoved]: Message;
+  [Events.DecorationChanged]: string;
+}
 
 export class UILocation {
   uiSourceCode: UISourceCode;
@@ -689,9 +705,9 @@ export class Message {
 
 export namespace Message {
   export const enum Level {
-    Error = 'Error',
-    Issue = 'Issue',
-    Warning = 'Warning',
+    ERROR = 'Error',
+    ISSUE = 'Issue',
+    WARNING = 'Warning',
   }
 }
 

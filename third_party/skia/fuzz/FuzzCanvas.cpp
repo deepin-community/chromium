@@ -7,7 +7,6 @@
 
 #include "fuzz/Fuzz.h"
 #include "fuzz/FuzzCommon.h"
-#include "include/codec/SkPngDecoder.h"
 #include "include/core/SkBitmap.h"
 #include "include/core/SkBlurTypes.h"
 #include "include/core/SkCanvas.h"
@@ -35,7 +34,6 @@
 #include "include/effects/SkImageFilters.h"
 #include "include/effects/SkLumaColorFilter.h"
 #include "include/effects/SkPerlinNoiseShader.h"
-#include "include/encode/SkPngEncoder.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "include/private/base/SkTo.h"
 #include "include/svg/SkSVGCanvas.h"
@@ -53,13 +51,13 @@
 #include "tools/fonts/FontToolUtils.h"
 
 #if defined(SK_GANESH)
-#include "include/gpu/GrDirectContext.h"
+#include "include/gpu/ganesh/GrDirectContext.h"
 #include "src/gpu/ganesh/GrDirectContextPriv.h"
 #include "tools/gpu/GrContextFactory.h"
 #endif
 
 #ifdef SK_GL
-#include "include/gpu/gl/GrGLFunctions.h"
+#include "include/gpu/ganesh/gl/GrGLFunctions.h"
 #include "src/gpu/ganesh/gl/GrGLGpu.h"
 #include "src/gpu/ganesh/gl/GrGLUtil.h"
 #endif
@@ -1519,6 +1517,10 @@ DEF_FUZZ(RasterN32Canvas, fuzz) {
     fuzz_canvas(fuzz, surface->getCanvas());
 }
 
+#if defined(SK_CODEC_DECODES_PNG_WITH_LIBPNG) && defined(SK_CODEC_ENCODES_PNG_WITH_LIBPNG)
+#include "include/codec/SkPngDecoder.h"
+#include "include/encode/SkPngEncoder.h"
+
 DEF_FUZZ(RasterN32CanvasViaSerialization, fuzz) {
     SkPictureRecorder recorder;
     fuzz_canvas(fuzz, recorder.beginRecording(SkIntToScalar(kCanvasSize.width()),
@@ -1541,12 +1543,19 @@ DEF_FUZZ(RasterN32CanvasViaSerialization, fuzz) {
     surface->getCanvas()->drawPicture(deserialized);
 }
 
+#endif
+
 DEF_FUZZ(ImageFilter, fuzz) {
+    SkBitmap bitmap;
+    if (!bitmap.tryAllocN32Pixels(256, 256)) {
+        SkDEBUGF("Could not allocate 256x256 bitmap in ImageFilter");
+        return;
+    }
+
     auto fil = make_fuzz_imageFilter(fuzz, 20);
 
     SkPaint paint;
     paint.setImageFilter(fil);
-    SkBitmap bitmap;
     SkCanvas canvas(bitmap);
     canvas.saveLayer(SkRect::MakeWH(500, 500), &paint);
 }

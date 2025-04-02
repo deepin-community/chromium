@@ -137,7 +137,7 @@ class MockSmartLockNotificationController
   MockSmartLockNotificationController& operator=(
       const MockSmartLockNotificationController&) = delete;
 
-  ~MockSmartLockNotificationController() override {}
+  ~MockSmartLockNotificationController() override = default;
 
   // SmartLockNotificationController:
   MOCK_METHOD0(ShowChromebookAddedNotification, void());
@@ -424,6 +424,7 @@ TEST_F(
   SetDisplaySize(gfx::Size(1920, 1200));
 
   ChromeSessionManager manager;
+  manager.OnUserManagerCreated(fake_user_manager_.Get());
 
   auto dialog = std::make_unique<FakeMultiDeviceSetupDialog>();
   multidevice_setup::MultiDeviceSetupDialog::SetInstanceForTesting(

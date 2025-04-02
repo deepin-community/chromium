@@ -11,14 +11,18 @@
 #include "ash/wm/overview/overview_item_base.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "ui/aura/window.h"
 
 namespace aura {
 class Window;
 }  // namespace aura
 
+namespace views {
+class View;
+}  // namespace views
+
 namespace ash {
 
-class OverviewGroupContainerView;
 class OverviewSession;
 
 // This class implements `OverviewItemBase` and represents a window group in
@@ -39,6 +43,12 @@ class OverviewGroupItem : public OverviewItemBase,
   ~OverviewGroupItem() override;
 
   // OverviewItemBase:
+  void SetOpacity(float opacity) override;
+  aura::Window::Windows GetWindowsForHomeGesture() override;
+  void HideForSavedDeskLibrary(bool animate) override;
+  void RevertHideForSavedDeskLibrary(bool animate) override;
+  void UpdateMirrorsForDragging(bool is_touch_dragging) override;
+  void DestroyMirrorsForDragging() override;
   aura::Window* GetWindow() override;
   std::vector<raw_ptr<aura::Window, VectorExperimental>> GetWindows() override;
   bool HasVisibleOnAllDesksWindow() override;
@@ -55,34 +65,28 @@ class OverviewGroupItem : public OverviewItemBase,
   float GetItemScale(int height) override;
   void ScaleUpSelectedItem(OverviewAnimationType animation_type) override;
   void EnsureVisible() override;
-  std::vector<OverviewFocusableView*> GetFocusableViews() const override;
+  std::vector<views::Widget*> GetFocusableWidgets() override;
   views::View* GetBackDropView() const override;
+  bool ShouldHaveShadow() const override;
   void UpdateRoundedCornersAndShadow() override;
-  void SetOpacity(float opacity) override;
   float GetOpacity() const override;
   void PrepareForOverview() override;
+  void SetShouldUseSpawnAnimation(bool value) override;
   void OnStartingAnimationComplete() override;
-  void HideForSavedDeskLibrary(bool animate) override;
-  void RevertHideForSavedDeskLibrary(bool animate) override;
-  void CloseWindows() override;
   void Restack() override;
   void StartDrag() override;
-  void OnOverviewItemDragStarted(OverviewItemBase* item) override;
+  void OnOverviewItemDragStarted() override;
   void OnOverviewItemDragEnded(bool snap) override;
   void OnOverviewItemContinuousScroll(const gfx::Transform& target_transform,
                                       float scroll_ratio) override;
-  void SetVisibleDuringItemDragging(bool visible, bool animate) override;
   void UpdateCannotSnapWarningVisibility(bool animate) override;
   void HideCannotSnapWarning(bool animate) override;
   void OnMovingItemToAnotherDesk() override;
-  void UpdateMirrorsForDragging(bool is_touch_dragging) override;
-  void DestroyMirrorsForDragging() override;
   void Shutdown() override;
   void AnimateAndCloseItem(bool up) override;
   void StopWidgetAnimation() override;
-  OverviewGridWindowFillMode GetWindowDimensionsType() const override;
-  void UpdateWindowDimensionsType() override;
-  gfx::Point GetMagnifierFocusPointInScreen() const override;
+  OverviewItemFillMode GetOverviewItemFillMode() const override;
+  void UpdateOverviewItemFillMode() override;
   const gfx::RoundedCornersF GetRoundedCorners() const override;
 
   // OverviewItem::WindowDestructionDelegate:
@@ -107,7 +111,7 @@ class OverviewGroupItem : public OverviewItemBase,
   std::vector<std::unique_ptr<OverviewItem>> overview_items_;
 
   // The contents view of the `item_widget_`.
-  raw_ptr<OverviewGroupContainerView> overview_group_container_view_ = nullptr;
+  raw_ptr<views::View> overview_group_container_view_ = nullptr;
 
   base::WeakPtrFactory<OverviewGroupItem> weak_ptr_factory_{this};
 };

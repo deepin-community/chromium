@@ -36,17 +36,14 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/map_util.h"
 #include "xla/service/collective_ops_utils.h"
-#include "xla/service/elemental_ir_emitter.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/cublas_cudnn.h"
 #include "xla/service/gpu/model/hlo_op_profile.pb.h"
-#include "xla/service/gpu/model/hlo_op_profiles.h"
 #include "xla/service/hlo_cost_analysis.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/status.h"
-#include "xla/stream_executor/device_description.h"
+#include "xla/xla_data.pb.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/statusor.h"
 
@@ -55,14 +52,14 @@ namespace gpu {
 
 // Use the "reserved" keys for these properties so lookups are fast.
 static constexpr absl::string_view kIRSizeKey = HloCostAnalysis::kReserved0Key;
-static constexpr absl::string_view kBasicBlockSplitCountKey =
-    HloCostAnalysis::kReserved1Key;
 
 // TODO TJ consider adding these in the fast lookup path
 static constexpr absl::string_view kCollAlgoScaleRatioKey =
     "Collective algorithm's scaling ratio";
 static constexpr absl::string_view kCollNumDevicesKey =
     "Number of devices of a collective group";
+static constexpr absl::string_view kCollBytesTransferred =
+    "Number of bytes transferred.";
 
 // We use static tables to look up system bandwidths for different
 // type of hardware below.
@@ -72,9 +69,6 @@ absl::Status GpuHloCostAnalysis::Preprocess(const HloInstruction* hlo) {
   TF_RETURN_IF_ERROR(HloCostAnalysis::Preprocess(hlo));
 
   current_properties_[kIRSizeKey] = 1;
-  current_properties_[kBasicBlockSplitCountKey] =
-      ElementalIrEmitter::OpInvalidatesCache(hlo);
-
   return absl::OkStatus();
 }
 
@@ -86,6 +80,10 @@ int64_t GpuHloCostAnalysis::NumOfDevices(const HloInstruction& hlo) const {
   return GetPropertyForHlo(hlo, kCollNumDevicesKey, hlo_properties_);
 }
 
+float GpuHloCostAnalysis::BytesTransferred(const HloInstruction& hlo) const {
+  return GetPropertyForHlo(hlo, kCollBytesTransferred, hlo_properties_);
+}
+
 int64_t GpuHloCostAnalysis::FusionParameterReadBytes(
     const HloInstruction* hlo) const {
   CHECK(hlo->IsFused() && (hlo->opcode() == HloOpcode::kParameter ||
@@ -94,7 +92,7 @@ int64_t GpuHloCostAnalysis::FusionParameterReadBytes(
   if (!options_.count_multiple_input_accesses) {
     utilization = fmin(utilization, 1.0);
   }
-  return GetShapeSize(hlo->shape()) * utilization;
+  return std::llround(GetShapeSize(hlo->shape()) * utilization);
 }
 
 absl::Status GpuHloCostAnalysis::FusionCalculateUtilizations(
@@ -128,7 +126,6 @@ absl::Status GpuHloCostAnalysis::FusionCalculateUtilizations(
   elementwise_use_roots_[root].insert(root);
 
   current_properties_[kFlopsKey] = 0;
-  current_properties_[kBasicBlockSplitCountKey] = 0;
   current_properties_[kIRSizeKey] = 0;
 
   for (const HloInstruction* instr : instructions) {
@@ -149,8 +146,6 @@ absl::Status GpuHloCostAnalysis::FusionCalculateUtilizations(
     current_properties_[kFlopsKey] +=
         cur_instr_utilization * instr_props[kFlopsKey];
     current_properties_[kIRSizeKey] += cur_instr_times_emitted;
-    current_properties_[kBasicBlockSplitCountKey] +=
-        cur_instr_times_emitted * ElementalIrEmitter::OpInvalidatesCache(instr);
 
     for (int operand_idx = 0; operand_idx < instr->operand_count();
          ++operand_idx) {
@@ -214,16 +209,8 @@ bool GpuHloCostAnalysis::ProducerConsumerMergedTooLarge(
   }
   VLOG(5) << producer.name() << " would be emitted by " << consumer.name()
           << " x" << producer_replication;
-  int64_t n_splits = producer_replication * IrBasicBlockSplitCount(producer) +
-                     IrBasicBlockSplitCount(consumer);
-  VLOG(5) << "Basic block split counts: " << IrBasicBlockSplitCount(producer)
-          << ", " << IrBasicBlockSplitCount(consumer) << " -> " << n_splits;
-  if (n_splits > kMaxBasicBlockSplitsPerFusion) {
-    return true;
-  }
   int64_t merged_ir_size =
-      (IrSize(producer) * producer_replication + IrSize(consumer)) *
-      (1 << n_splits);
+      (IrSize(producer) * producer_replication + IrSize(consumer));
   VLOG(5) << "IR sizes: " << IrSize(producer) << ", " << IrSize(consumer)
           << " -> " << merged_ir_size;
   return merged_ir_size > kMaxIRSize;
@@ -324,26 +311,24 @@ int64_t GpuHloCostAnalysis::GetConvolutionFlops(
                                               result_shape);
 }
 
-int64_t FlopsPerElement(const se::DeviceDescription* device_info,
-                        const PrimitiveType type, const HloOpcode opcode) {
-  auto device_profile = HloOpProfiles::Singleton().GetProfile(device_info);
+int64_t GpuHloCostAnalysis::GetFlopsPerElementwiseOpElement(
+    const PrimitiveType type, const HloOpcode opcode) {
   // Elementwise instructions typically take at least a few clock cycles.
   constexpr int64_t kDefaultFlopsPerElement = 3;
-  return FindOrDefault(device_profile, std::make_pair(opcode, type),
-                       kDefaultFlopsPerElement);
+  return FindOrDefault(hlo_elementwise_op_profile_,
+                       std::make_pair(opcode, type), kDefaultFlopsPerElement);
 }
 
-int64_t GetFlopsForElementwiseOp(const se::DeviceDescription* gpu_device_info,
-                                 const HloOpcode op_code, const Shape& shape) {
+int64_t GpuHloCostAnalysis::GetFlopsForElementwiseOp(const HloOpcode op_code,
+                                                     const Shape& shape) {
   int64_t flop_per_element =
-      FlopsPerElement(gpu_device_info, shape.element_type(), op_code);
+      GetFlopsPerElementwiseOpElement(shape.element_type(), op_code);
   return flop_per_element * ShapeUtil::ElementsInRecursive(shape);
 }
 
-int64_t GetFlopsForElementwiseOp(const se::DeviceDescription* gpu_device_info,
-                                 const HloInstruction* instr) {
-  return GetFlopsForElementwiseOp(gpu_device_info, instr->opcode(),
-                                  instr->shape());
+int64_t GpuHloCostAnalysis::GetFlopsForElementwiseOp(
+    const HloInstruction* instr) {
+  return GetFlopsForElementwiseOp(instr->opcode(), instr->shape());
 }
 
 absl::Status GpuHloCostAnalysis::HandleAllReduce(
@@ -386,13 +371,13 @@ absl::Status GpuHloCostAnalysis::HandleAllReduce(
     bytes_accessed += GetShapeSize(operand->shape());
   }
   current_properties_.set_output_bytes_accessed(output_bytes_accessed);
+  current_properties_[kCollBytesTransferred] = output_bytes_accessed;
   current_properties_[kBytesAccessedKey] = bytes_accessed;
   current_properties_[kCollNumDevicesKey] = num_ranks;
   // Since allreduce has compute, we need to get flops for the compute
   // part which is an elementwise op.
   current_properties_[kFlopsKey] = GetFlopsForElementwiseOp(
-      device_info_, allreduce->to_apply()->root_instruction()->opcode(),
-      allreduce->shape());
+      allreduce->to_apply()->root_instruction()->opcode(), allreduce->shape());
 
   // TODO TJ support multi-node case, we need to know how many nodes there are.
   int num_intra_steps = 2 * (num_ranks - 1);
@@ -431,38 +416,155 @@ absl::Status GpuHloCostAnalysis::HandleConcatenate(const HloInstruction* hlo) {
   return absl::OkStatus();
 }
 
-absl::Status GpuHloCostAnalysis::HandleElementwiseOp(
-    const HloInstruction* hlo) {
-  current_properties_[kFlopsKey] = GetFlopsForElementwiseOp(device_info_, hlo);
+absl::Status GpuHloCostAnalysis::HandleReduce(const HloInstruction* hlo) {
+  // HloCostAnalysis::HandleReduce computes FLOPs for the computation correctly,
+  // but `bytes_accessed` estimates are different for GPU.
+  TF_RETURN_IF_ERROR(HloCostAnalysis::HandleReduce(hlo));
+
+  const HloReduceInstruction* reduce = DynCast<HloReduceInstruction>(hlo);
+  auto output_shape = reduce->shape().IsArray()
+                          ? reduce->shape()
+                          : reduce->shape().tuple_shapes(0);
+
+  int64_t output_bytes_accessed = 0;
+  ShapeUtil::ForEachLeafShape(
+      reduce->shape(), [&](const Shape& sub_shape, const ShapeIndex& index) {
+        output_bytes_accessed += GetShapeSize(sub_shape);
+      });
+
+  current_properties_.set_output_bytes_accessed(output_bytes_accessed);
+
+  int64_t bytes_accessed = output_bytes_accessed;
+  for (int64_t input_operand_id = 0; input_operand_id < reduce->input_count();
+       ++input_operand_id) {
+    bytes_accessed +=
+        current_properties_.operand_bytes_accessed(input_operand_id);
+  }
+
+  int64_t output_shape_size = ShapeUtil::ElementsIn(output_shape);
+  for (int64_t init_operand_id = reduce->input_count();
+       init_operand_id < reduce->operand_count(); ++init_operand_id) {
+    auto init_operand = reduce->operand(init_operand_id);
+
+    int64_t operand_bytes_accessed =
+        output_shape_size * GetShapeSize(init_operand->shape());
+    current_properties_.set_operand_bytes_accessed(init_operand_id,
+                                                   operand_bytes_accessed);
+    current_properties_.set_operand_utilization(init_operand_id,
+                                                output_shape_size);
+
+    bytes_accessed += operand_bytes_accessed;
+  }
+
+  current_properties_[kBytesAccessedKey] = bytes_accessed;
+
   return absl::OkStatus();
 }
 
-absl::Status GpuHloCostAnalysis::HandleElementwiseUnary(
+absl::Status GpuHloCostAnalysis::HandleAllReduceStart(
     const HloInstruction* hlo) {
-  return HandleElementwiseOp(hlo);
+  int64_t output_bytes_accessed = 0;
+  ShapeUtil::ForEachLeafShape(
+      hlo->shape(), [&](const Shape& subshape, const ShapeIndex& index) {
+        if (subshape.IsArray()) {
+          output_bytes_accessed += GetShapeSize(subshape);
+        }
+      });
+  current_properties_.set_output_bytes_accessed(output_bytes_accessed);
+  current_properties_[kCollBytesTransferred] = output_bytes_accessed;
+  return absl::OkStatus();
 }
 
-absl::Status GpuHloCostAnalysis::HandleElementwiseBinary(
+absl::Status GpuHloCostAnalysis::HandleAllGather(const HloInstruction* hlo) {
+  int64_t output_bytes_accessed = 0;
+  ShapeUtil::ForEachLeafShape(
+      hlo->shape(), [&](const Shape& subshape, const ShapeIndex& index) {
+        if (subshape.IsArray()) {
+          output_bytes_accessed += GetShapeSize(subshape);
+        }
+      });
+  current_properties_.set_output_bytes_accessed(output_bytes_accessed);
+  current_properties_[kCollBytesTransferred] = output_bytes_accessed;
+  return absl::OkStatus();
+}
+
+absl::Status GpuHloCostAnalysis::HandleAllGatherStart(
     const HloInstruction* hlo) {
-  return HandleElementwiseOp(hlo);
+  int64_t output_bytes_accessed = 0;
+  ShapeUtil::ForEachLeafShape(
+      hlo->shape(), [&](const Shape& subshape, const ShapeIndex& index) {
+        // Skip first element of a tuple as it expresses the input of the
+        // collective operation.
+        if (index.empty() || index.front() == 0) {
+          return;
+        }
+        if (subshape.IsArray()) {
+          output_bytes_accessed += GetShapeSize(subshape);
+        }
+      });
+  current_properties_.set_output_bytes_accessed(output_bytes_accessed);
+  current_properties_[kCollBytesTransferred] = output_bytes_accessed;
+  return absl::OkStatus();
+}
+
+absl::Status GpuHloCostAnalysis::HandleAsyncStart(const HloInstruction* hlo) {
+  auto* async_start = DynCast<HloAsyncStartInstruction>(hlo);
+  if (async_start->async_wrapped_opcode() != HloOpcode::kReduceScatter) {
+    VLOG(2) << "Only Reduce Scatter is supported.";
+    return absl::OkStatus();
+  }
+  int index_to_skip = 1;
+  int64_t bytes_transferred = 0;
+  ShapeUtil::ForEachLeafShape(
+      hlo->shape(), [&](const Shape& subshape, const ShapeIndex& index) {
+        // Skip second element of a tuple as it is an output but it is not
+        // actual bytes transferred.
+        if (index.empty() || index.front() == index_to_skip) {
+          return;
+        }
+        if (subshape.IsArray()) {
+          bytes_transferred += GetShapeSize(subshape);
+        }
+      });
+
+  current_properties_[kCollBytesTransferred] = bytes_transferred;
+  return absl::OkStatus();
+}
+
+absl::Status GpuHloCostAnalysis::HandleReduceScatter(
+    const HloInstruction* hlo) {
+  int64_t bytes_transferred = 0;
+
+  for (auto* operand : hlo->operands()) {
+    ShapeUtil::ForEachLeafShape(
+        operand->shape(), [&](const Shape& subshape, const ShapeIndex& index) {
+          if (subshape.IsArray()) {
+            bytes_transferred += GetShapeSize(subshape);
+          }
+        });
+  }
+  current_properties_[kCollBytesTransferred] = bytes_transferred;
+
+  return absl::OkStatus();
+}
+
+absl::Status GpuHloCostAnalysis::HandleElementwiseOp(
+    const HloInstruction* hlo) {
+  current_properties_[kFlopsKey] = GetFlopsForElementwiseOp(hlo);
+  return absl::OkStatus();
 }
 
 std::unique_ptr<HloCostAnalysis>
 GpuHloCostAnalysis::CreateNestedCostAnalysis() {
-  return std::make_unique<GpuHloCostAnalysis>(options_, device_info_);
+  return std::make_unique<GpuHloCostAnalysis>(options_,
+                                              hlo_elementwise_op_profile_);
 }
 
 bool GpuHloCostAnalysis::KeyToCopyFromSubcomputation(
     absl::string_view key) const {
   return !absl::StartsWith(key, kBytesAccessedKey) &&
          !absl::StartsWith(key, kUtilizationKey) &&
-         !absl::StartsWith(key, kIRSizeKey) &&
-         !absl::StartsWith(key, kBasicBlockSplitCountKey);
-}
-
-float GpuHloCostAnalysis::IrBasicBlockSplitCount(
-    const HloInstruction& hlo) const {
-  return GetPropertyForHlo(hlo, kBasicBlockSplitCountKey, hlo_properties_);
+         !absl::StartsWith(key, kIRSizeKey);
 }
 
 float GpuHloCostAnalysis::IrSize(const HloInstruction& hlo) const {

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "net/socket/socks_client_socket.h"
 
 #include <utility>
@@ -134,14 +139,12 @@ NextProto SOCKSClientSocket::GetNegotiatedProtocol() const {
   if (transport_socket_)
     return transport_socket_->GetNegotiatedProtocol();
   NOTREACHED();
-  return kProtoUnknown;
 }
 
 bool SOCKSClientSocket::GetSSLInfo(SSLInfo* ssl_info) {
   if (transport_socket_)
     return transport_socket_->GetSSLInfo(ssl_info);
   NOTREACHED();
-  return false;
 }
 
 int64_t SOCKSClientSocket::GetTotalReceivedBytes() const {
@@ -280,8 +283,6 @@ int SOCKSClientSocket::DoLoop(int last_io_result) {
         break;
       default:
         NOTREACHED() << "bad state";
-        rv = ERR_UNEXPECTED;
-        break;
     }
   } while (rv != ERR_IO_PENDING && next_state_ != STATE_NONE);
   return rv;

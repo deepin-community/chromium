@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "net/proxy_resolution/proxy_config_service_linux.h"
 
 #include <errno.h>
@@ -119,7 +124,7 @@ ProxyConfigWithAnnotation GetConfigOrDirect(
 ProxyConfigServiceLinux::Delegate::~Delegate() = default;
 
 bool ProxyConfigServiceLinux::Delegate::GetProxyFromEnvVarForScheme(
-    base::StringPiece variable,
+    std::string_view variable,
     ProxyServer::Scheme scheme,
     ProxyChain* result_chain) {
   std::string env_value;
@@ -129,7 +134,7 @@ bool ProxyConfigServiceLinux::Delegate::GetProxyFromEnvVarForScheme(
   if (env_value.empty())
     return false;
 
-  env_value = FixupProxyHostScheme(scheme, env_value);
+  env_value = FixupProxyHostScheme(scheme, std::move(env_value));
   ProxyChain proxy_chain =
       ProxyUriToProxyChain(env_value, ProxyServer::SCHEME_HTTP);
   if (proxy_chain.IsValid() &&
@@ -142,7 +147,7 @@ bool ProxyConfigServiceLinux::Delegate::GetProxyFromEnvVarForScheme(
 }
 
 bool ProxyConfigServiceLinux::Delegate::GetProxyFromEnvVar(
-    base::StringPiece variable,
+    std::string_view variable,
     ProxyChain* result_chain) {
   return GetProxyFromEnvVarForScheme(variable, ProxyServer::SCHEME_HTTP,
                                      result_chain);
@@ -408,7 +413,7 @@ class SettingGetterImplGSettings
 
  private:
   bool GetStringByPath(GSettings* client,
-                       base::StringPiece key,
+                       std::string_view key,
                        std::string* result) {
     DCHECK(task_runner_->RunsTasksInCurrentSequence());
     gchar* value = g_settings_get_string(client, key.data());
@@ -418,18 +423,18 @@ class SettingGetterImplGSettings
     g_free(value);
     return true;
   }
-  bool GetBoolByPath(GSettings* client, base::StringPiece key, bool* result) {
+  bool GetBoolByPath(GSettings* client, std::string_view key, bool* result) {
     DCHECK(task_runner_->RunsTasksInCurrentSequence());
     *result = static_cast<bool>(g_settings_get_boolean(client, key.data()));
     return true;
   }
-  bool GetIntByPath(GSettings* client, base::StringPiece key, int* result) {
+  bool GetIntByPath(GSettings* client, std::string_view key, int* result) {
     DCHECK(task_runner_->RunsTasksInCurrentSequence());
     *result = g_settings_get_int(client, key.data());
     return true;
   }
   bool GetStringListByPath(GSettings* client,
-                           base::StringPiece key,
+                           std::string_view key,
                            std::vector<std::string>* result) {
     DCHECK(task_runner_->RunsTasksInCurrentSequence());
     gchar** list = g_settings_get_strv(client, key.data());
@@ -507,7 +512,7 @@ bool SettingGetterImplGSettings::CheckVersion(
 
 // Converts |value| from a decimal string to an int. If there was a failure
 // parsing, returns |default_value|.
-int StringToIntOrDefault(base::StringPiece value, int default_value) {
+int StringToIntOrDefault(std::string_view value, int default_value) {
   int result;
   if (base::StringToInt(value, &result))
     return result;
@@ -736,7 +741,7 @@ class SettingGetterImplKDE : public ProxyConfigServiceLinux::SettingGetter {
       // port number from the hostname. If we find this, we need to convert it.
       std::string fixed = value;
       fixed[space] = ':';
-      string_table_[host_key] = fixed;
+      string_table_[host_key] = std::move(fixed);
     } else {
       // We don't need to parse the port number out; GetProxyFromSettings()
       // would only append it right back again. So we just leave the port
@@ -1060,7 +1065,7 @@ bool ProxyConfigServiceLinux::Delegate::GetProxyFromSettings(
   ProxyServer::Scheme scheme = host_key == SettingGetter::PROXY_SOCKS_HOST
                                    ? ProxyServer::SCHEME_SOCKS5
                                    : ProxyServer::SCHEME_HTTP;
-  host = FixupProxyHostScheme(scheme, host);
+  host = FixupProxyHostScheme(scheme, std::move(host));
   ProxyServer proxy_server =
       ProxyUriToProxyServer(host, ProxyServer::SCHEME_HTTP);
   if (proxy_server.is_valid()) {

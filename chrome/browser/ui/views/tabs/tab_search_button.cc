@@ -11,6 +11,7 @@
 #include "chrome/browser/ui/views/tabs/tab_search_button.h"
 #include "chrome/browser/ui/views/tabs/tab_strip_control_button.h"
 #include "chrome/browser/ui/views/tabs/tab_strip_controller.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -23,33 +24,43 @@
 namespace {
 constexpr int kCRTabSearchCornerRadius = 10;
 constexpr int kCRTabSearchFlatCornerRadius = 4;
+constexpr int kComboButtonFlatCornerRadius = 0;
 }  // namespace
 
-TabSearchButton::TabSearchButton(TabStripController* tab_strip_controller,
-                                 Edge flat_edge)
+TabSearchButton::TabSearchButton(
+    TabStripController* tab_strip_controller,
+    BrowserWindowInterface* browser_window_interface,
+    Edge fixed_flat_edge,
+    Edge animated_flat_edge,
+    views::View* anchor_view,
+    TabStrip* tab_strip)
     : TabStripControlButton(tab_strip_controller,
                             PressedCallback(),
-                            features::IsChromeRefresh2023()
-                                ? vector_icons::kExpandMoreIcon
-                                : vector_icons::kCaretDownIcon,
-                            flat_edge),
-      tab_search_bubble_host_(std::make_unique<TabSearchBubbleHost>(
-          this,
-          tab_strip_controller->GetProfile())) {
+                            vector_icons::kExpandMoreIcon,
+                            fixed_flat_edge,
+                            animated_flat_edge),
+      tab_search_bubble_host_(
+          std::make_unique<TabSearchBubbleHost>(this,
+                                                browser_window_interface,
+                                                anchor_view,
+                                                tab_strip->AsWeakPtr())) {
   SetProperty(views::kElementIdentifierKey, kTabSearchButtonElementId);
 
   SetTooltipText(l10n_util::GetStringUTF16(IDS_TOOLTIP_TAB_SEARCH));
-  SetAccessibleName(l10n_util::GetStringUTF16(IDS_ACCNAME_TAB_SEARCH));
+  GetViewAccessibility().SetName(
+      l10n_util::GetStringUTF16(IDS_ACCNAME_TAB_SEARCH));
 
-  SetForegroundFrameActiveColorId(kColorNewTabButtonForegroundFrameActive);
-  SetForegroundFrameInactiveColorId(kColorNewTabButtonForegroundFrameInactive);
-  if (features::IsChromeRefresh2023()) {
+  if (!features::IsTabstripComboButtonEnabled() ||
+      features::HasTabstripComboButtonWithBackground()) {
+    SetForegroundFrameActiveColorId(kColorNewTabButtonForegroundFrameActive);
+    SetForegroundFrameInactiveColorId(
+        kColorNewTabButtonForegroundFrameInactive);
     SetBackgroundFrameActiveColorId(kColorNewTabButtonCRBackgroundFrameActive);
     SetBackgroundFrameInactiveColorId(
         kColorNewTabButtonCRBackgroundFrameInactive);
-  }
 
-  UpdateColors();
+    UpdateColors();
+  }
 }
 
 TabSearchButton::~TabSearchButton() = default;
@@ -64,13 +75,13 @@ void TabSearchButton::NotifyClick(const ui::Event& event) {
 }
 
 int TabSearchButton::GetCornerRadius() const {
-  return features::IsChromeRefresh2023()
-             ? kCRTabSearchCornerRadius
-             : TabStripControlButton::kButtonSize.width() / 2;
+  return kCRTabSearchCornerRadius;
 }
 
 int TabSearchButton::GetFlatCornerRadius() const {
-  return kCRTabSearchFlatCornerRadius;
+  return features::IsTabstripComboButtonEnabled()
+             ? kComboButtonFlatCornerRadius
+             : kCRTabSearchFlatCornerRadius;
 }
 
 BEGIN_METADATA(TabSearchButton)

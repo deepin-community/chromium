@@ -22,6 +22,8 @@
 #include "components/trusted_vault/trusted_vault_connection.h"
 #include "components/trusted_vault/trusted_vault_degraded_recoverability_handler.h"
 #include "components/trusted_vault/trusted_vault_histograms.h"
+#include "components/trusted_vault/trusted_vault_server_constants.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 
 namespace base {
@@ -29,7 +31,7 @@ class Clock;
 }  // namespace base
 
 namespace signin {
-struct AccountsInCookieJarInfo;
+class AccountsInCookieJarInfo;
 }  // namespace signin
 
 namespace trusted_vault {
@@ -72,6 +74,7 @@ class StandaloneTrustedVaultBackend
   // interaction with vault service (such as device registration, keys
   // downloading, etc.) will be disabled.
   StandaloneTrustedVaultBackend(
+      SecurityDomainId security_domain_id,
       const base::FilePath& file_path,
       std::unique_ptr<Delegate> delegate,
       std::unique_ptr<TrustedVaultConnection> connection);
@@ -99,7 +102,7 @@ class StandaloneTrustedVaultBackend
                  FetchKeysCallback callback);
 
   // Replaces keys for given |gaia_id| both in memory and in |file_path_|.
-  void StoreKeys(const std::string& gaia_id,
+  void StoreKeys(const GaiaId& gaia_id,
                  const std::vector<std::vector<uint8_t>>& keys,
                  int last_key_version);
 
@@ -125,7 +128,7 @@ class StandaloneTrustedVaultBackend
                                    base::OnceCallback<void(bool)> cb);
 
   // Registers a new trusted recovery method that can be used to retrieve keys.
-  void AddTrustedRecoveryMethod(const std::string& gaia_id,
+  void AddTrustedRecoveryMethod(const GaiaId& gaia_id,
                                 const std::vector<uint8_t>& public_key,
                                 int method_type_hint,
                                 base::OnceClosure cb);
@@ -135,15 +138,13 @@ class StandaloneTrustedVaultBackend
   std::optional<CoreAccountInfo> GetPrimaryAccountForTesting() const;
 
   trusted_vault_pb::LocalDeviceRegistrationInfo
-  GetDeviceRegistrationInfoForTesting(const std::string& gaia_id);
+  GetDeviceRegistrationInfoForTesting(const GaiaId& gaia_id);
 
   std::vector<uint8_t> GetLastAddedRecoveryMethodPublicKeyForTesting() const;
-  int GetLastKeyVersionForTesting(const std::string& gaia_id);
+  int GetLastKeyVersionForTesting(const GaiaId& gaia_id);
 
-  void SetDeviceRegisteredVersionForTesting(const std::string& gaia_id,
-                                            int version);
   void SetLastRegistrationReturnedLocalDataObsoleteForTesting(
-      const std::string& gaia_id);
+      const GaiaId& gaia_id);
 
   void SetClockForTesting(base::Clock* clock);
 
@@ -169,7 +170,7 @@ class StandaloneTrustedVaultBackend
   // Finds the per-user vault in |data_| for |gaia_id|. Returns null if not
   // found.
   trusted_vault_pb::LocalTrustedVaultPerUser* FindUserVault(
-      const std::string& gaia_id);
+      const GaiaId& gaia_id);
 
   // Attempts to register device in case it's not yet registered and currently
   // available local data is sufficient to do it. For the cases where
@@ -186,21 +187,20 @@ class StandaloneTrustedVaultBackend
   // Called when device registration for |gaia_id| is completed (either
   // successfully or not). |data_| must contain LocalTrustedVaultPerUser for
   // given |gaia_id|.
-  void OnDeviceRegistered(TrustedVaultRegistrationStatus status);
-  void OnDeviceRegisteredWithoutKeys(
-      TrustedVaultRegistrationStatus status,
-      const TrustedVaultKeyAndVersion& vault_key_and_version);
+  void OnDeviceRegistered(TrustedVaultRegistrationStatus status,
+                          int key_version_unused);
+  void OnDeviceRegisteredWithoutKeys(TrustedVaultRegistrationStatus status,
+                                     int key_version);
 
   void OnKeysDownloaded(TrustedVaultDownloadKeysStatus status,
                         const std::vector<std::vector<uint8_t>>& new_vault_keys,
                         int last_vault_key_version);
 
-  void OnTrustedRecoveryMethodAdded(base::OnceClosure cb,
-                                    TrustedVaultRegistrationStatus status);
+  void OnTrustedRecoveryMethodAdded(base::OnceClosure cb);
 
   // Invokes |callback| with currently available keys for |gaia_id|.
   void FulfillFetchKeys(
-      const std::string& gaia_id,
+      const GaiaId& gaia_id,
       FetchKeysCallback callback,
       std::optional<TrustedVaultDownloadKeysStatusForUMA> status_for_uma);
 
@@ -225,6 +225,8 @@ class StandaloneTrustedVaultBackend
 
   void WriteDataToDisk();
 
+  const SecurityDomainId security_domain_id_;
+
   const base::FilePath file_path_;
 
   const std::unique_ptr<Delegate> delegate_;
@@ -232,7 +234,7 @@ class StandaloneTrustedVaultBackend
   // Used for communication with trusted vault server. Can be null, in this case
   // functionality that involves interaction with vault service (such as device
   // registration, keys downloading, etc.) will be disabled.
-  // TODO(crbug.com/1113598): |connection_| can be null if URL passed as
+  // TODO(crbug.com/40143544): |connection_| can be null if URL passed as
   // kTrustedVaultServiceURLSwitch is not valid, consider making it non-nullable
   // even in this case and clean up related logic.
   const std::unique_ptr<TrustedVaultConnection> connection_;
@@ -258,7 +260,7 @@ class StandaloneTrustedVaultBackend
     PendingTrustedRecoveryMethod& operator=(PendingTrustedRecoveryMethod&&);
     ~PendingTrustedRecoveryMethod();
 
-    std::string gaia_id;
+    GaiaId gaia_id;
     std::vector<uint8_t> public_key;
     int method_type_hint;
     base::OnceClosure completion_callback;
@@ -279,7 +281,7 @@ class StandaloneTrustedVaultBackend
     OngoingFetchKeys& operator=(OngoingFetchKeys&&);
     ~OngoingFetchKeys();
 
-    std::string gaia_id;
+    GaiaId gaia_id;
     std::vector<FetchKeysCallback> callbacks;
     std::unique_ptr<TrustedVaultConnection::Request> request;
   };
@@ -290,7 +292,7 @@ class StandaloneTrustedVaultBackend
       ongoing_device_registration_request_;
 
   // Same as above, but specifically used for recoverability-related requests.
-  // TODO(crbug.com/1201659): Move elsewhere.
+  // TODO(crbug.com/40178774): Move elsewhere.
   std::unique_ptr<TrustedVaultConnection::Request>
       ongoing_add_recovery_method_request_;
 

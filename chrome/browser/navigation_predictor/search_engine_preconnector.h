@@ -17,6 +17,7 @@ class BrowserContext;
 namespace features {
 BASE_DECLARE_FEATURE(kPreconnectToSearch);
 BASE_DECLARE_FEATURE(kPreconnectToSearchNonGoogle);
+BASE_DECLARE_FEATURE(kPreconnectToSearchWithPrivacyModeEnabled);
 }  // namespace features
 
 // Class to preconnect to the user's default search engine at regular intervals.
@@ -48,6 +49,8 @@ class SearchEnginePreconnector {
   // Returns true if the browser app is likely to be in foreground and being
   // interacted by the user.
   bool IsBrowserAppLikelyInForeground() const;
+
+  int GetPreconnectIntervalSec() const;
 
   // Used to get keyed services.
   const raw_ptr<content::BrowserContext> browser_context_;

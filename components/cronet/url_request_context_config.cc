@@ -14,12 +14,10 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "components/cronet/stale_host_resolver.h"
 #include "net/base/address_family.h"
 #include "net/cert/caching_cert_verifier.h"
 #include "net/cert/cert_verifier.h"
@@ -28,6 +26,7 @@
 #include "net/dns/context_host_resolver.h"
 #include "net/dns/host_resolver.h"
 #include "net/dns/mapped_host_resolver.h"
+#include "net/dns/stale_host_resolver.h"
 #include "net/http/http_network_session.h"
 #include "net/http/http_server_properties.h"
 #include "net/log/net_log.h"
@@ -237,7 +236,7 @@ URLRequestContextConfig::QuicHint::QuicHint(const std::string& host,
                                             int alternate_port)
     : host(host), port(port), alternate_port(alternate_port) {}
 
-URLRequestContextConfig::QuicHint::~QuicHint() {}
+URLRequestContextConfig::QuicHint::~QuicHint() = default;
 
 URLRequestContextConfig::Pkp::Pkp(const std::string& host,
                                   bool include_subdomains,
@@ -246,7 +245,7 @@ URLRequestContextConfig::Pkp::Pkp(const std::string& host,
       include_subdomains(include_subdomains),
       expiration_date(expiration_date) {}
 
-URLRequestContextConfig::Pkp::~Pkp() {}
+URLRequestContextConfig::Pkp::~Pkp() = default;
 
 URLRequestContextConfig::PreloadedNelAndReportingHeader::
     PreloadedNelAndReportingHeader(const url::Origin& origin, std::string value)
@@ -269,7 +268,7 @@ URLRequestContextConfig::URLRequestContextConfig(
     std::unique_ptr<net::CertVerifier> mock_cert_verifier,
     bool enable_network_quality_estimator,
     bool bypass_public_key_pinning_for_local_trust_anchors,
-    std::optional<double> network_thread_priority)
+    std::optional<int> network_thread_priority)
     : enable_quic(enable_quic),
       enable_spdy(enable_spdy),
       enable_brotli(enable_brotli),
@@ -291,7 +290,7 @@ URLRequestContextConfig::URLRequestContextConfig(
   SetContextConfigExperimentalOptions();
 }
 
-URLRequestContextConfig::~URLRequestContextConfig() {}
+URLRequestContextConfig::~URLRequestContextConfig() = default;
 
 // static
 std::unique_ptr<URLRequestContextConfig>
@@ -309,7 +308,7 @@ URLRequestContextConfig::CreateURLRequestContextConfig(
     std::unique_ptr<net::CertVerifier> mock_cert_verifier,
     bool enable_network_quality_estimator,
     bool bypass_public_key_pinning_for_local_trust_anchors,
-    std::optional<double> network_thread_priority) {
+    std::optional<int> network_thread_priority) {
   std::optional<base::Value::Dict> experimental_options =
       ParseExperimentalOptions(unparsed_experimental_options);
   if (!experimental_options) {
@@ -389,7 +388,7 @@ void URLRequestContextConfig::SetContextBuilderExperimentalOptions(
   bool is_network_bound = bound_network != net::handles::kInvalidNetworkHandle;
   std::optional<net::HostResolver::HttpsSvcbOptions> https_svcb_options;
 
-  StaleHostResolver::StaleOptions stale_dns_options;
+  net::StaleHostResolver::StaleOptions stale_dns_options;
   const std::string* host_resolver_rules_string;
 
   for (auto iter = experimental_options.begin();
@@ -731,11 +730,11 @@ void URLRequestContextConfig::SetContextBuilderExperimentalOptions(
 
     if (!is_network_bound) {
       std::unique_ptr<net::HostResolver> host_resolver;
-      // TODO(crbug.com/934402): Consider using a shared HostResolverManager for
-      // Cronet HostResolvers.
+      // TODO(crbug.com/40614970): Consider using a shared HostResolverManager
+      // for Cronet HostResolvers.
       if (stale_dns_enable) {
         DCHECK(!disable_ipv6_on_wifi);
-        host_resolver = std::make_unique<StaleHostResolver>(
+        host_resolver = std::make_unique<net::StaleHostResolver>(
             net::HostResolver::CreateStandaloneContextResolver(
                 net::NetLog::Get(), std::move(host_resolver_manager_options)),
             stale_dns_options);
@@ -822,8 +821,8 @@ void URLRequestContextConfig::ConfigureURLRequestContextBuilder(
   // TODO(mef): Use |config| to set cookies.
 }
 
-URLRequestContextConfigBuilder::URLRequestContextConfigBuilder() {}
-URLRequestContextConfigBuilder::~URLRequestContextConfigBuilder() {}
+URLRequestContextConfigBuilder::URLRequestContextConfigBuilder() = default;
+URLRequestContextConfigBuilder::~URLRequestContextConfigBuilder() = default;
 
 std::unique_ptr<URLRequestContextConfig>
 URLRequestContextConfigBuilder::Build() {

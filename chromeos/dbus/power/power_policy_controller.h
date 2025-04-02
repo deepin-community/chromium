@@ -119,6 +119,8 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerPolicyController
     std::optional<bool> send_feedback_if_undimmed;
     // Only set adaptive_charging_enabled in policy proto if this field is set.
     std::optional<bool> adaptive_charging_enabled;
+    // Only set charge_limit_enabled in policy proto if this field is set.
+    std::optional<bool> charge_limit_enabled;
 
     // Adaptive charging configs, only set when adaptive_charging_enabled.
     // Configurable via base::FeatureParam.
@@ -127,9 +129,6 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerPolicyController
     double adaptive_charging_max_delay_percentile = -1.0;
     int adaptive_charging_min_days_history = -1;
     double adaptive_charging_min_full_on_ac_ratio = -1.0;
-
-    // Only set hibernate_delay_sec in policy proto if this field is set.
-    std::optional<uint32_t> hibernate_delay_sec;
   };
 
   // Converts |base::Value::Dict| to |std::vector<PeakShiftDayConfig>| and
@@ -200,6 +199,11 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerPolicyController
   // is overridden to ensure that the system doesn't suspend or shut
   // down.
   void NotifyChromeIsExiting();
+
+  // Adjusts idle action policy when set by demo mode. There are 2 states in
+  // demo mode: use power idle policy or use `DemoModeIdleHandler` which
+  // implements UI actions for idle.
+  void SetShouldDoNothingWhenIdleInDemoMode();
 
   // Adjusts policy when the display is forced off in response to the
   // user tapping the power button, or when it's no longer forced off.
@@ -305,6 +309,8 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerPolicyController
 
   // Indicates if screen autolock is enabled or not by policy.
   bool auto_screen_lock_enabled_ = false;
+
+  bool should_do_nothing_when_idle_in_demo_mode_ = false;
 };
 
 }  // namespace chromeos

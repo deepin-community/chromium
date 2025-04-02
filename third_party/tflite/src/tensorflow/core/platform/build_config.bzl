@@ -1,16 +1,7 @@
 """Provides a redirection point for platform specific implementations of starlark utilities."""
 
 load(
-    "//tensorflow/core/platform:build_config.default.bzl",
-    _tf_additional_binary_deps = "tf_additional_binary_deps",
-    _tf_dtensor_tpu_dependencies = "tf_dtensor_tpu_dependencies",
-    _tf_protos_all = "tf_protos_all",
-    _tf_tpu_dependencies = "tf_tpu_dependencies",
-)
-load(
-    "@local_tsl//tsl/platform:build_config.bzl",
-    _if_llvm_aarch64_available = "if_llvm_aarch64_available",
-    _if_llvm_system_z_available = "if_llvm_system_z_available",
+    "@local_xla//xla/tsl/platform:build_config.bzl",
     _pyx_library = "pyx_library",
     _tf_additional_all_protos = "tf_additional_all_protos",
     _tf_additional_core_deps = "tf_additional_core_deps",
@@ -20,7 +11,7 @@ load(
     _tf_additional_rpc_deps = "tf_additional_rpc_deps",
     _tf_additional_tensor_coding_deps = "tf_additional_tensor_coding_deps",
     _tf_additional_test_deps = "tf_additional_test_deps",
-    _tf_cuda_libdevice_path_deps = "tf_cuda_libdevice_path_deps",
+    _tf_cuda_root_path_deps = "tf_cuda_root_path_deps",
     _tf_fingerprint_deps = "tf_fingerprint_deps",
     _tf_google_mobile_srcs_no_runtime = "tf_google_mobile_srcs_no_runtime",
     _tf_google_mobile_srcs_only_runtime = "tf_google_mobile_srcs_only_runtime",
@@ -44,9 +35,14 @@ load(
     _tf_stream_executor_deps = "tf_stream_executor_deps",
     _tf_windows_aware_platform_deps = "tf_windows_aware_platform_deps",
 )
+load(
+    "//tensorflow/core/platform:build_config.default.bzl",
+    _tf_additional_binary_deps = "tf_additional_binary_deps",
+    _tf_dtensor_tpu_dependencies = "tf_dtensor_tpu_dependencies",
+    _tf_protos_all = "tf_protos_all",
+    _tf_tpu_dependencies = "tf_tpu_dependencies",
+)
 
-if_llvm_aarch64_available = _if_llvm_aarch64_available
-if_llvm_system_z_available = _if_llvm_system_z_available
 pyx_library = _pyx_library
 tf_additional_all_protos = _tf_additional_all_protos
 tf_additional_binary_deps = _tf_additional_binary_deps
@@ -57,7 +53,7 @@ tf_additional_lib_hdrs = _tf_additional_lib_hdrs
 tf_additional_rpc_deps = _tf_additional_rpc_deps
 tf_additional_tensor_coding_deps = _tf_additional_tensor_coding_deps
 tf_additional_test_deps = _tf_additional_test_deps
-tf_cuda_libdevice_path_deps = _tf_cuda_libdevice_path_deps
+tf_cuda_root_path_deps = _tf_cuda_root_path_deps
 tf_fingerprint_deps = _tf_fingerprint_deps
 tf_google_mobile_srcs_no_runtime = _tf_google_mobile_srcs_no_runtime
 tf_google_mobile_srcs_only_runtime = _tf_google_mobile_srcs_only_runtime

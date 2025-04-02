@@ -31,7 +31,6 @@ PersistedTabDataConfigAndroid::Get(const void* user_data_key,
         kSensitivityId);
   }
   NOTREACHED() << "Unknown UserDataKey";
-  return nullptr;
 }
 
 std::unique_ptr<std::vector<PersistedTabDataStorageAndroid*>>

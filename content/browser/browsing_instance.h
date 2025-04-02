@@ -14,8 +14,8 @@
 #include "base/lazy_instance.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "content/browser/coop_related_group.h"
 #include "content/browser/isolation_context.h"
+#include "content/browser/security/coop/coop_related_group.h"
 #include "content/browser/site_instance_group_manager.h"
 #include "content/browser/web_exposed_isolation_info.h"
 #include "content/common/content_export.h"
@@ -166,6 +166,23 @@ class CONTENT_EXPORT BrowsingInstance final
       const UrlInfo& url_info,
       bool allow_default_instance);
 
+  // Same as above, but if a new SiteInstance needs to be created, it will be
+  // part of `creation_group`. A SiteInstance in a different group may be
+  // returned, if a matching SiteInstance already exists in this
+  // BrowsingInstance.
+  scoped_refptr<SiteInstanceImpl> GetSiteInstanceForURL(
+      const UrlInfo& url_info,
+      SiteInstanceGroup* creation_group,
+      bool allow_default_instance);
+
+  // This is the same as GetSiteInstanceForURL, but requires a valid
+  // `creation_group`. The returned SiteInstance could be in a different group
+  // if it exists already. If it is being created, the new SiteInstance will be
+  // in `creation_group`.
+  scoped_refptr<SiteInstanceImpl> GetMaybeGroupRelatedSiteInstanceForURL(
+      const UrlInfo& url_info,
+      SiteInstanceGroup* creation_group);
+
   // Searches existing SiteInstances in the BrowsingInstance and returns a
   // pointer to the (unique) SiteInstance that matches `site_info`, if any.
   // If no matching SiteInstance is found, then a new SiteInstance is created
@@ -261,7 +278,8 @@ class CONTENT_EXPORT BrowsingInstance final
   // Map of SiteInfo to SiteInstance, to ensure we only have one SiteInstance
   // per SiteInfo. See https://crbug.com/1085275#c2 for the rationale behind
   // why SiteInfo is the right class to key this on.
-  typedef std::map<SiteInfo, SiteInstanceImpl*> SiteInstanceMap;
+  typedef std::map<SiteInfo, raw_ptr<SiteInstanceImpl, CtnExperimental>>
+      SiteInstanceMap;
 
   // Returns the cross-origin isolation status of the BrowsingInstance.
   const WebExposedIsolationInfo& web_exposed_isolation_info() const {
@@ -352,7 +370,7 @@ class CONTENT_EXPORT BrowsingInstance final
   // given, of only being able to DOM script same-origin same-COOP documents,
   // and to have limited cross-origin communication with all other pages.
   //
-  // TODO(https://crbug.com/1385827): This assumes that popups opened from
+  // TODO(crbug.com/40879437): This assumes that popups opened from
   // cross-origin iframes are opened with no-opener. Once COOP inheritance for
   // those cases is figured out, change the mentions of origin to "COOP origin".
   std::optional<url::Origin> common_coop_origin_;
@@ -361,8 +379,8 @@ class CONTENT_EXPORT BrowsingInstance final
   // navigations in the frames belonging to this BrowsingInstance. For <webview>
   // tags, this is always true.
   //
-  // TODO(crbug.com/1503007): We actually always want this behavior. Remove this
-  // bit when we are ready.
+  // TODO(crbug.com/40943418): We actually always want this behavior. Remove
+  // this bit when we are ready.
   const bool is_fixed_storage_partition_;
 
   // A token uniquely identifying this BrowsingInstance. This is used in case we

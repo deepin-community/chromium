@@ -9,14 +9,17 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "base/time/time.h"
+#include "components/sync/base/deletion_origin.h"
 #include "components/sync/protocol/entity_metadata.pb.h"
 
 namespace sync_pb {
 class EntitySpecifics;
+class UniquePosition;
 }  // namespace sync_pb
 
 namespace syncer {
@@ -27,7 +30,7 @@ struct CommitRequestData;
 struct CommitResponseData;
 struct UpdateResponseData;
 
-// This class is used by the ClientTagBasedModelTypeProcessor to track the state
+// This class is used by the ClientTagBasedDataTypeProcessor to track the state
 // of each entity with its type. It can be considered a helper class internal to
 // the processor. It manages the metadata for its entity and caches entity data
 // upon a local change until commit confirmation is received.
@@ -82,20 +85,26 @@ class ProcessorEntity {
 
   // Records an update from the server assuming its data is the new data for
   // this entity.
-  void RecordAcceptedRemoteUpdate(const UpdateResponseData& response_data,
-                                  sync_pb::EntitySpecifics trimmed_specifics);
+  void RecordAcceptedRemoteUpdate(
+      const UpdateResponseData& response_data,
+      sync_pb::EntitySpecifics trimmed_specifics,
+      std::optional<sync_pb::UniquePosition> unique_position);
 
   // Squashes a pending commit with an update from the server.
-  void RecordForcedRemoteUpdate(const UpdateResponseData& response_data,
-                                sync_pb::EntitySpecifics trimmed_specifics);
+  void RecordForcedRemoteUpdate(
+      const UpdateResponseData& response_data,
+      sync_pb::EntitySpecifics trimmed_specifics,
+      std::optional<sync_pb::UniquePosition> unique_position);
 
   // Applies a local change to this item.
-  void RecordLocalUpdate(std::unique_ptr<EntityData> data,
-                         sync_pb::EntitySpecifics trimmed_specifics);
+  void RecordLocalUpdate(
+      std::unique_ptr<EntityData> data,
+      sync_pb::EntitySpecifics trimmed_specifics,
+      std::optional<sync_pb::UniquePosition> unique_position);
 
   // Applies a local deletion to this item. Returns true if entity was
   // previously committed to server and tombstone should be sent.
-  bool RecordLocalDeletion();
+  bool RecordLocalDeletion(const DeletionOrigin& origin);
 
   // Initializes a message representing this item's uncommitted state
   // and assumes that it is forwarded to the sync engine for commiting.
@@ -130,14 +139,14 @@ class ProcessorEntity {
   // Check if the instance has cached commit data.
   bool HasCommitData() const;
 
-  // Check whether |data| matches the stored specifics hash.
+  // Check whether `data` matches the stored specifics hash.
   bool MatchesData(const EntityData& data) const;
 
   // Check whether the current metadata of an unsynced entity matches the stored
   // base specifics hash.
   bool MatchesOwnBaseData() const;
 
-  // Check whether |data| matches the stored base specifics hash.
+  // Check whether `data` matches the stored base specifics hash.
   bool MatchesBaseData(const EntityData& data) const;
 
   // Increment sequence number in the metadata. This will also update the
@@ -154,7 +163,7 @@ class ProcessorEntity {
   ProcessorEntity(const std::string& storage_key,
                   sync_pb::EntityMetadata metadata);
 
-  // Check whether |specifics| matches the stored specifics_hash.
+  // Check whether `specifics` matches the stored specifics_hash.
   bool MatchesSpecificsHash(const sync_pb::EntitySpecifics& specifics) const;
 
   // Update hash string for EntitySpecifics in the metadata.

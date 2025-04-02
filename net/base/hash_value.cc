@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "net/base/hash_value.h"
 
 #include <stdlib.h>
@@ -11,6 +16,7 @@
 
 #include "base/base64.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/notreached.h"
 #include "base/strings/string_split.h"
@@ -63,13 +69,13 @@ bool HashValue::FromString(std::string_view value) {
 }
 
 std::string HashValue::ToString() const {
-  std::string base64_str = base::Base64Encode(base::make_span(data(), size()));
+  std::string base64_str = base::Base64Encode(*this);
   switch (tag_) {
     case HASH_VALUE_SHA256:
       return std::string(kSha256Slash) + base64_str;
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 size_t HashValue::size() const {
@@ -78,7 +84,7 @@ size_t HashValue::size() const {
       return sizeof(fingerprint.sha256.data);
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 unsigned char* HashValue::data() {
@@ -91,7 +97,7 @@ const unsigned char* HashValue::data() const {
       return fingerprint.sha256.data;
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 bool operator==(const HashValue& lhs, const HashValue& rhs) {
@@ -103,7 +109,7 @@ bool operator==(const HashValue& lhs, const HashValue& rhs) {
       return lhs.fingerprint.sha256 == rhs.fingerprint.sha256;
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 bool operator!=(const HashValue& lhs, const HashValue& rhs) {
@@ -120,7 +126,6 @@ bool operator<(const HashValue& lhs, const HashValue& rhs) {
   }
 
   NOTREACHED();
-  return false;
 }
 
 bool operator>(const HashValue& lhs, const HashValue& rhs) {

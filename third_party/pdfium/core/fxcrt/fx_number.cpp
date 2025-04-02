@@ -6,14 +6,12 @@
 
 #include "core/fxcrt/fx_number.h"
 
-#include <ctype.h>
-
 #include <limits>
 
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_safe_types.h"
 #include "core/fxcrt/fx_string.h"
-#include "third_party/base/numerics/safe_conversions.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
 
 FX_Number::FX_Number() = default;
 
@@ -48,11 +46,11 @@ FX_Number::FX_Number(ByteStringView strc) {
     cc++;
   }
 
-  for (; cc < strc.GetLength() && isdigit(strc[cc]); ++cc) {
+  for (; cc < strc.GetLength() && FXSYS_IsDecimalDigit(strc.CharAt(cc)); ++cc) {
     // Deliberately not using FXSYS_DecimalCharToInt() in a tight loop to avoid
-    // a duplicate isdigit() call. Note that the order of operation is
-    // important to avoid unintentional overflows.
-    unsigned_val = unsigned_val * 10 + (strc[cc] - '0');
+    // a duplicate FXSYS_IsDecimalDigit() call. Note that the order of operation
+    // is important to avoid unintentional overflows.
+    unsigned_val = unsigned_val * 10 + (strc.CharAt(cc) - '0');
   }
 
   uint32_t uValue = unsigned_val.ValueOrDefault(0);
@@ -63,7 +61,7 @@ FX_Number::FX_Number(ByteStringView strc) {
 
   // We have a sign, so if the value was greater then the signed integer
   // limits, then we've overflowed and must reset to the default value.
-  constexpr uint32_t uLimit =
+  static constexpr uint32_t uLimit =
       static_cast<uint32_t>(std::numeric_limits<int>::max());
 
   if (uValue > (bNegative ? uLimit + 1 : uLimit))
@@ -100,7 +98,7 @@ int32_t FX_Number::GetSigned() const {
   if (absl::holds_alternative<int32_t>(value_)) {
     return absl::get<int32_t>(value_);
   }
-  return pdfium::base::saturated_cast<int32_t>(absl::get<float>(value_));
+  return pdfium::saturated_cast<int32_t>(absl::get<float>(value_));
 }
 
 float FX_Number::GetFloat() const {

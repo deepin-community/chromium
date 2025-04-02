@@ -13,6 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <optional>
+
+#include "xla/debug_options_flags.h"
 #include "xla/tests/hlo_test_base.h"
 
 namespace xla {
@@ -21,7 +24,7 @@ namespace {
 
 class InPlaceOpTest : public HloTestBase {
   // Don't override any flags.
-  DebugOptions GetDebugOptionsForTest() override {
+  DebugOptions GetDebugOptionsForTest() const override {
     return GetDebugOptionsFromFlags();
   }
 };

@@ -71,7 +71,6 @@ WebInputEventResult ToWebInputEventResult(DispatchEventResult result) {
       return WebInputEventResult::kHandledSuppressed;
     default:
       NOTREACHED();
-      return WebInputEventResult::kHandledSystem;
   }
 }
 

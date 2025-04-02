@@ -61,8 +61,7 @@ void GetUserAffiliationStatus(base::Value::Dict* dict, Profile* profile) {
       return;
     }
   }
-  dict->Set("isAffiliated",
-            chrome::enterprise_util::IsProfileAffiliated(profile));
+  dict->Set("isAffiliated", enterprise_util::IsProfileAffiliated(profile));
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
@@ -91,7 +90,7 @@ void GetUserManager(base::Value::Dict* dict, Profile* profile) {
   CHECK(profile);
 
   std::optional<std::string> account_manager =
-      chrome::GetAccountManagerIdentity(profile);
+      GetAccountManagerIdentity(profile);
   if (account_manager) {
     dict->Set(policy::kEnterpriseDomainManagerKey, *account_manager);
   }

@@ -12,7 +12,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
@@ -79,9 +78,11 @@ constexpr gfx::Size kMaxResolution(1920, 1080);
 // Command line arguments that should be passed to the mirroring service.
 static const char* kPassthroughSwitches[]{
     switches::kCastStreamingForceEnableHardwareH264,
-    switches::kCastStreamingForceDisableHardwareH264,
     switches::kCastStreamingForceEnableHardwareVp8,
-    switches::kCastStreamingForceDisableHardwareVp8};
+    switches::kCastStreamingForceEnableHardwareVp9,
+    switches::kCastStreamingForceDisableHardwareH264,
+    switches::kCastStreamingForceDisableHardwareVp8,
+    switches::kCastStreamingForceDisableHardwareVp9};
 
 mojo::SelfOwnedReceiverRef<media::mojom::VideoCaptureHost>
 CreateVideoCaptureHostOnIO(
@@ -237,7 +238,8 @@ void CastMirroringServiceHost::Start(
   ShowCaptureIndicator();
 }
 
-std::optional<int> CastMirroringServiceHost::GetTabSourceId() const {
+std::optional<content::FrameTreeNodeId>
+CastMirroringServiceHost::GetTabSourceId() const {
   if (web_contents()) {
     return web_contents()->GetPrimaryMainFrame()->GetFrameTreeNodeId();
   }
@@ -253,7 +255,7 @@ content::DesktopMediaID CastMirroringServiceHost::BuildMediaIdForWebContents(
   }
   media_id.type = content::DesktopMediaID::TYPE_WEB_CONTENTS;
   media_id.web_contents_id = content::WebContentsMediaCaptureId(
-      contents->GetPrimaryMainFrame()->GetProcess()->GetID(),
+      contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID(),
       contents->GetPrimaryMainFrame()->GetRoutingID(),
       true /* disable_local_echo */);
   return media_id;
@@ -300,8 +302,7 @@ gfx::Size CastMirroringServiceHost::GetClampedResolution(
 
 void CastMirroringServiceHost::BindGpu(
     mojo::PendingReceiver<viz::mojom::Gpu> receiver) {
-  gpu_client_ =
-      content::CreateGpuClient(std::move(receiver), base::DoNothing());
+  gpu_client_ = content::CreateGpuClient(std::move(receiver));
 }
 
 void CastMirroringServiceHost::GetVideoCaptureHost(
@@ -421,7 +422,7 @@ void CastMirroringServiceHost::CreateAudioStreamForTab(
           [](mojo::PendingRemote<mojom::AudioStreamCreatorClient> requestor,
              mojo::PendingRemote<AudioInputStream> stream,
              mojo::PendingReceiver<AudioInputStreamClient> client,
-             media::mojom::ReadOnlyAudioDataPipePtr data_pipe) {
+             media::mojom::ReadWriteAudioDataPipePtr data_pipe) {
             mojo::Remote<mojom::AudioStreamCreatorClient>(std::move(requestor))
                 ->StreamCreated(std::move(stream), std::move(client),
                                 std::move(data_pipe));
@@ -458,12 +459,12 @@ void CastMirroringServiceHost::CreateAudioStreamForDesktop(
           std::move(pipe_to_mirroring_service.handle0), 0),
       mojo::NullRemote(), mojo::NullRemote(),
       media::AudioDeviceDescription::kLoopbackWithMuteDeviceId, params,
-      total_segments, false, base::ReadOnlySharedMemoryRegion(), nullptr,
+      total_segments, false, nullptr,
       base::BindOnce(
           [](mojo::PendingRemote<mojom::AudioStreamCreatorClient> requestor,
              mojo::PendingRemote<AudioInputStream> stream,
              mojo::PendingReceiver<AudioInputStreamClient> client,
-             media::mojom::ReadOnlyAudioDataPipePtr data_pipe, bool,
+             media::mojom::ReadWriteAudioDataPipePtr data_pipe, bool,
              const std::optional<base::UnguessableToken>&) {
             mojo::Remote<mojom::AudioStreamCreatorClient>(std::move(requestor))
                 ->StreamCreated(std::move(stream), std::move(client),
@@ -523,7 +524,8 @@ void CastMirroringServiceHost::ShowCaptureIndicator() {
                          ->GetMediaStreamCaptureIndicator()
                          ->RegisterMediaStream(web_contents(), devices);
   media_stream_ui_->OnStarted(
-      base::RepeatingClosure(), content::MediaStreamUI::SourceCallback(),
+      /*stop_callback=*/base::DoNothing(),
+      content::MediaStreamUI::SourceCallback(),
       /*label=*/std::string(), /*screen_capture_ids=*/{},
       content::MediaStreamUI::StateChangeCallback());
 }
@@ -547,7 +549,8 @@ void CastMirroringServiceHost::ShowTabSharingUI(
       TabSharingUI::Create(capturer_id, source_media_id_, sink_name_,
                            /*favicons_used_for_switch_to_tab_button=*/false,
                            /*app_preferred_current_tab=*/false,
-                           TabSharingInfoBarDelegate::TabShareType::CAST);
+                           TabSharingInfoBarDelegate::TabShareType::CAST,
+                           /*captured_surface_control_active=*/false);
 
   media_stream_ui_ = MediaCaptureDevicesDispatcher::GetInstance()
                          ->GetMediaStreamCaptureIndicator()
@@ -567,7 +570,10 @@ void CastMirroringServiceHost::ShowTabSharingUI(
 }
 
 void CastMirroringServiceHost::SwitchMirroringSourceTab(
-    const content::DesktopMediaID& media_id) {
+    const content::DesktopMediaID& media_id,
+    bool captured_surface_control_active) {
+  DCHECK(!captured_surface_control_active) << "CSC not supported for casting.";
+
   source_media_id_ = media_id;
   source_media_id_.web_contents_id.disable_local_echo = true;
 

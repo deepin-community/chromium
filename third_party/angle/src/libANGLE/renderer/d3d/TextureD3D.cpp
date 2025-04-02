@@ -413,7 +413,7 @@ GLint TextureD3D::creationLevels(GLsizei width, GLsizei height, GLsizei depth) c
         mRenderer->getNativeExtensions().textureNpotOES)
     {
         // Maximum number of levels
-        return gl::log2(std::max(std::max(width, height), depth)) + 1;
+        return gl::log2(std::max({width, height, depth})) + 1;
     }
     else
     {
@@ -1168,8 +1168,9 @@ angle::Result TextureD3D_2D::copyImage(const gl::Context *context,
             isValidLevel(index.getLevelIndex()))
         {
             ANGLE_TRY(updateStorageLevel(context, index.getLevelIndex()));
-            ANGLE_TRY(mRenderer->copyImage2D(context, source, clippedArea, internalFormat,
-                                             destOffset, mTexStorage, index.getLevelIndex()));
+            ANGLE_TRY(mRenderer->copyImage2D(context, source, clippedArea,
+                                             internalFormatInfo.format, destOffset, mTexStorage,
+                                             index.getLevelIndex()));
         }
     }
 

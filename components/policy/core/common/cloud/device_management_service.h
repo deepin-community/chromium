@@ -27,10 +27,6 @@ namespace base {
 class SequencedTaskRunner;
 }
 
-namespace content {
-class BrowserContext;
-}
-
 namespace network {
 class SharedURLLoaderFactory;
 }
@@ -77,6 +73,7 @@ class POLICY_EXPORT DeviceManagementService {
   static constexpr int kRequestTooLarge = 413;
   static constexpr int kConsumerAccountWithPackagedLicense = 417;
   static constexpr int kInvalidPackagedDeviceForKiosk = 418;
+  static constexpr int kOrgUnitEnrollmentLimitExceeded = 419;
   static constexpr int kTooManyRequests = 429;
   static constexpr int kInternalServerError = 500;
   static constexpr int kServiceUnavailable = 503;
@@ -112,11 +109,6 @@ class POLICY_EXPORT DeviceManagementService {
 
     // Server endpoint for encrypted events.
     virtual std::string GetEncryptedReportingServerUrl() const = 0;
-
-    // Server at which to contact the real time reporting service for
-    // enterprise connectors.
-    virtual std::string GetReportingConnectorServerUrl(
-        content::BrowserContext* context) const = 0;
   };
 
   // A DeviceManagementService job manages network requests to the device
@@ -208,7 +200,7 @@ class POLICY_EXPORT DeviceManagementService {
       /* TYPE_REQUEST_LICENSE_TYPES = 16, */
       /*Deprecated, CloudPolicyClient no longer uses it.
         TYPE_UPLOAD_APP_INSTALL_REPORT = 17,*/
-      TYPE_TOKEN_ENROLLMENT = 18,
+      TYPE_BROWSER_REGISTRATION = 18,
       TYPE_CHROME_DESKTOP_REPORT = 19,
       TYPE_INITIAL_ENROLLMENT_STATE_RETRIEVAL = 20,
       TYPE_UPLOAD_POLICY_VALIDATION_REPORT = 21,
@@ -223,6 +215,9 @@ class POLICY_EXPORT DeviceManagementService {
       TYPE_BROWSER_UPLOAD_PUBLIC_KEY = 30,
       TYPE_CHROME_PROFILE_REPORT = 31,
       TYPE_OIDC_REGISTRATION = 32,
+      TYPE_TOKEN_BASED_DEVICE_REGISTRATION = 33,
+      TYPE_UPLOAD_FM_REGISTRATION_TOKEN = 34,
+      TYPE_POLICY_AGENT_REGISTRATION = 35,
     };
 
     // The set of HTTP query parameters of the request.

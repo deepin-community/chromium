@@ -40,7 +40,6 @@ void MojoDemuxerStreamImpl::Initialize(InitializeCallback callback) {
     video_config = stream_->video_decoder_config();
   } else {
     NOTREACHED() << "Unsupported stream type: " << stream_->type();
-    return;
   }
 
   mojo::ScopedDataPipeConsumerHandle remote_consumer_handle;

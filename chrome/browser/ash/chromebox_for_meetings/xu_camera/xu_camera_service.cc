@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/browser/ash/chromebox_for_meetings/xu_camera/xu_camera_service.h"
 
 #include <fcntl.h>
@@ -18,9 +23,9 @@
 #include "base/notreached.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_util.h"
+#include "base/types/fixed_array.h"
 #include "chrome/browser/media/webrtc/media_device_salt_service_factory.h"
 #include "chromeos/ash/components/dbus/chromebox_for_meetings/cfm_hotline_client.h"
-#include "chromeos/ash/services/chromebox_for_meetings/public/cpp/service_connection.h"
 #include "components/media_device_salt/media_device_salt_service.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -271,8 +276,10 @@ void XuCameraService::GetUnitIdWithDevicePath(
     }
   }
 
-  content::GetDeviceService().BindUsbDeviceManager(
-      usb_manager_.BindNewPipeAndPassReceiver());
+  if(!usb_manager_) {
+    content::GetDeviceService().BindUsbDeviceManager(
+        usb_manager_.BindNewPipeAndPassReceiver());
+  }
   device::mojom::UsbEnumerationOptionsPtr options =
       device::mojom::UsbEnumerationOptions::New();
   usb_manager_->GetDevices(
@@ -362,7 +369,7 @@ void XuCameraService::MapCtrlWithDevicePath(
     return;
   }
 
-  struct uvc_menu_info uvc_menus[mapping_ctrl->menu_entries->menu_info.size()];
+  base::FixedArray<struct uvc_menu_info> uvc_menus(mapping_ctrl->menu_entries->menu_info.size());
 
   int index = 0;
   for (auto menu_info = mapping_ctrl->menu_entries->menu_info.begin();
@@ -384,7 +391,7 @@ void XuCameraService::MapCtrlWithDevicePath(
       .offset = mapping_ctrl->offset,
       .v4l2_type = mapping_ctrl->v4l2_type,
       .data_type = mapping_ctrl->data_type,
-      .menu_info = uvc_menus,
+      .menu_info = uvc_menus.data(),
       .menu_count = static_cast<uint32_t>(index),
   };
 
@@ -540,7 +547,8 @@ uint8_t XuCameraService::QueryXuControl(const base::ScopedFD& file_descriptor,
 
   if (error < 0) {
     logging::SystemErrorCode err = logging::GetLastSystemErrorCode();
-    LOG(ERROR) << "ioctl call failed. error: " << logging::SystemErrorCodeToString(err);
+    LOG(ERROR) << "ioctl call failed. error: "
+               << logging::SystemErrorCodeToString(err);
     return err;
   }
   return error;

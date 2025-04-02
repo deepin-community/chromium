@@ -128,6 +128,91 @@ TEST_F(GetBindGroupLayoutTests, DefaultBindGroupLayoutPipelineCompatibility) {
     ASSERT_DEVICE_ERROR(utils::MakePipelineLayout(device, {pipeline.GetBindGroupLayout(0)}));
 }
 
+// Bind groups created from different default pipelines' GetBindGroupLayout aren't compatible, even
+// if they appear to be the same.
+TEST_F(GetBindGroupLayoutTests, DefaultBindGroupLayoutDifferentPipelines) {
+    wgpu::RenderPipeline pipeline1 = RenderPipelineFromFragmentShader(R"(
+        struct S {
+            pos : vec4f
+        }
+        @group(0) @binding(0) var<uniform> uniforms : S;
+
+        @fragment fn main() {
+            var pos : vec4f = uniforms.pos + 1;
+        })");
+    wgpu::RenderPipeline pipeline2 = RenderPipelineFromFragmentShader(R"(
+        struct S {
+            pos : vec4f
+        }
+        @group(0) @binding(0) var<uniform> uniforms : S;
+
+        @fragment fn main() {
+            var pos : vec4f = uniforms.pos + 2;
+        })");
+
+    constexpr uint64_t kBufferSize = 16u;
+    wgpu::BufferDescriptor bufferDescriptor;
+    bufferDescriptor.size = kBufferSize;
+    bufferDescriptor.usage = wgpu::BufferUsage::Uniform;
+    wgpu::Buffer buffer = device.CreateBuffer(&bufferDescriptor);
+
+    wgpu::BindGroup bg = utils::MakeBindGroup(device, pipeline2.GetBindGroupLayout(0),
+                                              {{0, buffer, 0, kBufferSize}});
+
+    constexpr uint32_t kTextureSize = 4u;
+    utils::BasicRenderPass renderPass =
+        utils::CreateBasicRenderPass(device, kTextureSize, kTextureSize);
+    wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+    wgpu::RenderPassEncoder rp = encoder.BeginRenderPass(&renderPass.renderPassInfo);
+    rp.SetPipeline(pipeline1);
+    rp.SetBindGroup(0, bg);
+    rp.Draw(1);
+    rp.End();
+    ASSERT_DEVICE_ERROR(encoder.Finish());
+}
+
+// Bind groups created from the exact same default pipelines' GetBindGroupLayout aren't compatible.
+TEST_F(GetBindGroupLayoutTests, DefaultBindGroupLayoutSamePipelines) {
+    wgpu::RenderPipeline pipeline1 = RenderPipelineFromFragmentShader(R"(
+        struct S {
+            pos : vec4f
+        }
+        @group(0) @binding(0) var<uniform> uniforms : S;
+
+        @fragment fn main() {
+            var pos : vec4f = uniforms.pos + 1;
+        })");
+    wgpu::RenderPipeline pipeline2 = RenderPipelineFromFragmentShader(R"(
+        struct S {
+            pos : vec4f
+        }
+        @group(0) @binding(0) var<uniform> uniforms : S;
+
+        @fragment fn main() {
+            var pos : vec4f = uniforms.pos + 1;
+        })");
+
+    constexpr uint64_t kBufferSize = 16u;
+    wgpu::BufferDescriptor bufferDescriptor;
+    bufferDescriptor.size = kBufferSize;
+    bufferDescriptor.usage = wgpu::BufferUsage::Uniform;
+    wgpu::Buffer buffer = device.CreateBuffer(&bufferDescriptor);
+
+    wgpu::BindGroup bg = utils::MakeBindGroup(device, pipeline2.GetBindGroupLayout(0),
+                                              {{0, buffer, 0, kBufferSize}});
+
+    constexpr uint32_t kTextureSize = 4u;
+    utils::BasicRenderPass renderPass =
+        utils::CreateBasicRenderPass(device, kTextureSize, kTextureSize);
+    wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+    wgpu::RenderPassEncoder rp = encoder.BeginRenderPass(&renderPass.renderPassInfo);
+    rp.SetPipeline(pipeline1);
+    rp.SetBindGroup(0, bg);
+    rp.Draw(1);
+    rp.End();
+    ASSERT_DEVICE_ERROR(encoder.Finish());
+}
+
 // Test that getBindGroupLayout defaults are correct
 // - shader stage visibility is the stage that adds the binding.
 // - dynamic offsets is false
@@ -400,7 +485,7 @@ TEST_F(GetBindGroupLayoutTests, BindingType) {
                     BindGroupLayoutCacheEq(pipeline.GetBindGroupLayout(0)));
     }
 
-    binding.buffer.type = wgpu::BufferBindingType::Undefined;
+    binding.buffer.type = wgpu::BufferBindingType::BindingNotUsed;
     binding.buffer.minBindingSize = 0;
     {
         binding.texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
@@ -426,7 +511,7 @@ TEST_F(GetBindGroupLayoutTests, BindingType) {
                     BindGroupLayoutCacheEq(pipeline.GetBindGroupLayout(0)));
     }
 
-    binding.texture.sampleType = wgpu::TextureSampleType::Undefined;
+    binding.texture.sampleType = wgpu::TextureSampleType::BindingNotUsed;
     {
         binding.sampler.type = wgpu::SamplerBindingType::Filtering;
         wgpu::RenderPipeline pipeline = RenderPipelineFromFragmentShader(R"(
@@ -1189,6 +1274,28 @@ TEST_F(GetBindGroupLayoutTests, FullOfEmptyBGLs) {
     )");
     wgpu::ComputePipeline pipeline = device.CreateComputePipeline(&pipelineDesc);
 
+    EXPECT_THAT(pipeline.GetBindGroupLayout(0), BindGroupLayoutEq(emptyBGL));
+    EXPECT_THAT(pipeline.GetBindGroupLayout(1), BindGroupLayoutEq(emptyBGL));
+    EXPECT_THAT(pipeline.GetBindGroupLayout(2), BindGroupLayoutEq(emptyBGL));
+    EXPECT_THAT(pipeline.GetBindGroupLayout(3), BindGroupLayoutEq(emptyBGL));
+}
+
+// Test that a pipeline full of explicitly null BGLs correctly reflects empty BGLs.
+TEST_F(GetBindGroupLayoutTests, NullBGLs) {
+    DAWN_SKIP_TEST_IF(UsesWire());
+
+    wgpu::PipelineLayout pl =
+        utils::MakePipelineLayout(device, {nullptr, nullptr, nullptr, nullptr});
+
+    wgpu::ComputePipelineDescriptor pipelineDesc;
+    pipelineDesc.layout = pl;
+    pipelineDesc.compute.module = utils::CreateShaderModule(device, R"(
+        @compute @workgroup_size(1) fn main() {
+        }
+    )");
+    wgpu::ComputePipeline pipeline = device.CreateComputePipeline(&pipelineDesc);
+
+    wgpu::BindGroupLayout emptyBGL = utils::MakeBindGroupLayout(device, {});
     EXPECT_THAT(pipeline.GetBindGroupLayout(0), BindGroupLayoutEq(emptyBGL));
     EXPECT_THAT(pipeline.GetBindGroupLayout(1), BindGroupLayoutEq(emptyBGL));
     EXPECT_THAT(pipeline.GetBindGroupLayout(2), BindGroupLayoutEq(emptyBGL));

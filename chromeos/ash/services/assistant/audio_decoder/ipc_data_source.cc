@@ -4,11 +4,11 @@
 
 #include "chromeos/ash/services/assistant/audio_decoder/ipc_data_source.h"
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
 #include "base/functional/bind.h"
-#include "base/ranges/algorithm.h"
 #include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/message.h"
 
@@ -63,16 +63,16 @@ void IPCDataSource::SetBitrate(int bitrate) {
 bool IPCDataSource::PassedTimingAllowOriginCheck() {
   // The mojo ipc channel doesn't support this yet, so cautiously return false,
   // for now.
-  // TODO(crbug/1377053): Rework this method to be asynchronous, if possible,
-  // so that the mojo interface can be queried.
+  // TODO(crbug.com/40243452): Rework this method to be asynchronous, if
+  // possible, so that the mojo interface can be queried.
   return false;
 }
 
 bool IPCDataSource::WouldTaintOrigin() {
   // The mojo ipc channel doesn't support this yet, so cautiously return true,
   // for now.
-  // TODO(crbug/1377053): Rework this method to be asynchronous, if possible,
-  // so that the mojo interface can be queried.
+  // TODO(crbug.com/40243452): Rework this method to be asynchronous, if
+  // possible, so that the mojo interface can be queried.
   return true;
 }
 
@@ -98,7 +98,7 @@ void IPCDataSource::ReadDone(uint8_t* destination,
     return;
   }
 
-  base::ranges::copy(data, destination);
+  std::ranges::copy(data, destination);
   std::move(callback).Run(data.size());
 }
 

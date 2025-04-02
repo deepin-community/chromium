@@ -16,6 +16,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/scoped_observation.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/file_manager/volume_manager_observer.h"
@@ -76,7 +77,6 @@ class GuestOsSharePath : public KeyedService,
     std::vector<std::string> launch_args;
   };
 
-  static GuestOsSharePath* GetForProfile(Profile* profile);
   explicit GuestOsSharePath(Profile* profile);
 
   GuestOsSharePath(const GuestOsSharePath&) = delete;
@@ -221,6 +221,10 @@ class GuestOsSharePath : public KeyedService,
   base::ObserverList<Observer>::Unchecked observers_;
   std::map<base::FilePath, SharedPathInfo> shared_paths_;
   base::flat_set<GuestId> guests_;
+
+  base::ScopedObservation<file_manager::VolumeManager,
+                          file_manager::VolumeManagerObserver>
+      volume_manager_observer_{this};
 
   base::WeakPtrFactory<GuestOsSharePath> weak_ptr_factory_{this};
 };  // class

@@ -3,22 +3,18 @@
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree.
 
-#include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
+#include <functional>
 #include <memory>
 #include <numeric>
-#include <random>
 #include <vector>
 
-#include <xnnpack.h>
-#include <xnnpack/node-type.h>
-#include <xnnpack/operator.h>
-#include <xnnpack/subgraph.h>
-
 #include <gtest/gtest.h>
+#include "xnnpack.h"
+#include "xnnpack/node-type.h"
+#include "xnnpack/subgraph.h"
+#include "runtime-flags.h"
 
 TEST(TransposeTestF32, Reshape)
 {
@@ -49,7 +45,6 @@ TEST(TransposeTestF32, Reshape)
   ASSERT_EQ(subgraph->num_nodes, 1);
   struct xnn_node* node = &subgraph->nodes[0];
   ASSERT_EQ(node->type, xnn_node_type_static_transpose);
-  ASSERT_EQ(node->compute_type, xnn_compute_type_fp32);
   ASSERT_EQ(node->num_inputs, 1);
   ASSERT_EQ(node->inputs[0], input_id);
   ASSERT_EQ(node->num_outputs, 1);
@@ -57,7 +52,7 @@ TEST(TransposeTestF32, Reshape)
   ASSERT_EQ(node->flags, 0);
 
   xnn_runtime_t runtime = nullptr;
-  ASSERT_EQ(xnn_status_success, xnn_create_runtime_v3(subgraph, nullptr, nullptr, /*flags=*/0, &runtime));
+  ASSERT_EQ(xnn_status_success, xnn_create_runtime_v3(subgraph, nullptr, nullptr, xnn_test_runtime_flags(), &runtime));
   ASSERT_NE(nullptr, runtime);
   std::unique_ptr<xnn_runtime, decltype(&xnn_delete_runtime)> auto_runtime(runtime, xnn_delete_runtime);
 

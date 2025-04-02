@@ -117,7 +117,6 @@ double NumberPropertyFunctions::ClampNumber(const CSSProperty& property,
 
     default:
       NOTREACHED();
-      return value;
   }
 }
 

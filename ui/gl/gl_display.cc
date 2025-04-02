@@ -17,6 +17,7 @@
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/synchronization/atomic_flag.h"
 #include "base/system/sys_info.h"
 #include "build/build_config.h"
 #include "ui/base/ozone_buildflags.h"
@@ -28,6 +29,7 @@
 #include "ui/gl/gl_features.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_surface.h"
+#include "ui/gl/startup_trace.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/build_info.h"
@@ -126,8 +128,6 @@
 #define EGL_ANGLE_feature_control 1
 #define EGL_FEATURE_NAME_ANGLE 0x3460
 #define EGL_FEATURE_CATEGORY_ANGLE 0x3461
-#define EGL_FEATURE_DESCRIPTION_ANGLE 0x3462
-#define EGL_FEATURE_BUG_ANGLE 0x3463
 #define EGL_FEATURE_STATUS_ANGLE 0x3464
 #define EGL_FEATURE_COUNT_ANGLE 0x3465
 #define EGL_FEATURE_OVERRIDES_ENABLED_ANGLE 0x3466
@@ -141,19 +141,9 @@ namespace gl {
 
 namespace {
 
-void AdjustAngleFeaturesFromChromeFeatures(
-    std::vector<std::string>& enabled_angle_features,
-    std::vector<std::string>& disabled_angle_features) {
-#if BUILDFLAG(IS_MAC)
-  if (base::FeatureList::IsEnabled(features::kWriteMetalShaderCacheToDisk)) {
-    disabled_angle_features.push_back("enableParallelMtlLibraryCompilation");
-    enabled_angle_features.push_back("compileMetalShaders");
-    enabled_angle_features.push_back("disableProgramCaching");
-  }
-  if (base::FeatureList::IsEnabled(features::kUseBuiltInMetalShaderCache)) {
-    enabled_angle_features.push_back("loadMetalShadersFromBlobCache");
-  }
-#endif
+base::AtomicFlag* GetANGLEDebugLayerFlag() {
+  static base::AtomicFlag* const flag = new base::AtomicFlag();
+  return flag;
 }
 
 std::vector<const char*> GetAttribArrayFromStringVector(
@@ -166,20 +156,13 @@ std::vector<const char*> GetAttribArrayFromStringVector(
   return attribs;
 }
 
-std::vector<std::string> GetStringVectorFromCommandLine(
-    const base::CommandLine* command_line,
-    const char switch_name[]) {
-  std::string command_string = command_line->GetSwitchValueASCII(switch_name);
-  return base::SplitString(command_string, ", ;", base::TRIM_WHITESPACE,
-                           base::SPLIT_WANT_NONEMPTY);
-}
-
 EGLDisplay GetPlatformANGLEDisplay(
     EGLNativeDisplayType display,
     EGLenum platform_type,
     const std::vector<std::string>& enabled_features,
     const std::vector<std::string>& disabled_features,
     const std::vector<EGLAttrib>& extra_display_attribs) {
+  GPU_STARTUP_TRACE_EVENT("gl_display::GetPlatformANGLEDisplay");
   std::vector<EGLAttrib> display_attribs(extra_display_attribs);
 
   display_attribs.push_back(EGL_PLATFORM_ANGLE_TYPE_ANGLE);
@@ -250,10 +233,9 @@ EGLDisplay GetPlatformANGLEDisplay(
     }
   }
 
-  if (base::FeatureList::IsEnabled(features::kANGLEDebugLayer)) {
-    display_attribs.push_back(EGL_PLATFORM_ANGLE_DEBUG_LAYERS_ENABLED_ANGLE);
-    display_attribs.push_back(EGL_TRUE);
-  }
+  display_attribs.push_back(EGL_PLATFORM_ANGLE_DEBUG_LAYERS_ENABLED_ANGLE);
+  display_attribs.push_back(GetANGLEDebugLayerFlag()->IsSet() ? EGL_TRUE
+                                                              : EGL_FALSE);
 
   display_attribs.push_back(EGL_NONE);
 
@@ -395,7 +377,6 @@ EGLDisplay GetDisplayFromType(
           disabled_angle_features, extra_display_attribs);
     default:
       NOTREACHED();
-      return EGL_NO_DISPLAY;
   }
 }
 
@@ -471,7 +452,6 @@ const char* DisplayTypeString(DisplayType display_type) {
       return "MetalNull";
     default:
       NOTREACHED();
-      return "Err";
   }
 }
 
@@ -555,12 +535,9 @@ GLDisplayPlatform* GLDisplay::GetAs() {
   switch (type_) {
     case NONE:
       NOTREACHED();
-      break;
 
     case EGL:
-#if defined(USE_EGL)
       type_checked = std::is_same<GLDisplayPlatform, GLDisplayEGL>::value;
-#endif  // defined(USE_EGL)
       break;
   }
   if (type_checked)
@@ -569,12 +546,9 @@ GLDisplayPlatform* GLDisplay::GetAs() {
   return nullptr;
 }
 
-#if defined(USE_EGL)
 template EXPORT_TEMPLATE_DEFINE(GL_EXPORT)
     GLDisplayEGL* GLDisplay::GetAs<GLDisplayEGL>();
-#endif  // defined(USE_EGL)
 
-#if defined(USE_EGL)
 GLDisplayEGL::EGLGpuSwitchingObserver::EGLGpuSwitchingObserver(
     EGLDisplay display)
     : display_(display) {
@@ -646,6 +620,11 @@ DisplayType GLDisplayEGL::GetDisplayType() const {
 GLDisplayEGL* GLDisplayEGL::GetDisplayForCurrentContext() {
   GLContext* context = GLContext::GetCurrent();
   return context ? context->GetGLDisplayEGL() : nullptr;
+}
+
+// static
+void GLDisplayEGL::EnableANGLEDebugLayer() {
+  GetANGLEDebugLayerFlag()->Set();
 }
 
 bool GLDisplayEGL::IsEGLSurfacelessContextSupported() {
@@ -727,6 +706,7 @@ bool GLDisplayEGL::InitializeDisplay(bool supports_angle,
                                      std::vector<DisplayType> init_displays,
                                      EGLDisplayPlatform native_display,
                                      gl::GLDisplayEGL* existing_display) {
+  GPU_STARTUP_TRACE_EVENT("gl::GLDisplayEGL::InitializeDisplay");
   if (display_ != EGL_NO_DISPLAY)
     return true;
 
@@ -737,17 +717,16 @@ bool GLDisplayEGL::InitializeDisplay(bool supports_angle,
     SetEglDebugMessageControl();
   }
 
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  if (g_driver_egl.client_ext.b_EGL_ANGLE_no_error &&
+      !features::IsANGLEValidationEnabled()) {
+    eglSetValidationEnabledANGLE(EGL_FALSE);
+  }
 
-  std::vector<std::string> enabled_angle_features =
-      GetStringVectorFromCommandLine(command_line,
-                                     switches::kEnableANGLEFeatures);
-  std::vector<std::string> disabled_angle_features =
-      GetStringVectorFromCommandLine(command_line,
-                                     switches::kDisableANGLEFeatures);
-
-  AdjustAngleFeaturesFromChromeFeatures(enabled_angle_features,
-                                        disabled_angle_features);
+  std::vector<std::string> enabled_angle_features;
+  std::vector<std::string> disabled_angle_features;
+  features::GetANGLEFeaturesFromCommandLineAndFinch(
+      base::CommandLine::ForCurrentProcess(), enabled_angle_features,
+      disabled_angle_features);
 
   for (size_t disp_index = 0; disp_index < init_displays.size(); ++disp_index) {
     DisplayType display_type = init_displays[disp_index];
@@ -780,13 +759,16 @@ bool GLDisplayEGL::InitializeDisplay(bool supports_angle,
       }
     }
 
-    if (!eglInitialize(display, nullptr, nullptr)) {
-      bool is_last = disp_index == init_displays.size() - 1;
+    {
+      GPU_STARTUP_TRACE_EVENT("eglInitializeFn display");
+      if (!eglInitialize(display, nullptr, nullptr)) {
+        bool is_last = disp_index == init_displays.size() - 1;
 
-      LOG(ERROR) << "eglInitialize " << DisplayTypeString(display_type)
-                 << " failed with error " << GetLastEGLErrorString()
-                 << (is_last ? "" : ", trying next display type");
-      continue;
+        LOG(ERROR) << "eglInitialize " << DisplayTypeString(display_type)
+                   << " failed with error " << GetLastEGLErrorString()
+                   << (is_last ? "" : ", trying next display type");
+        continue;
+      }
     }
 
     if (!existing_display) {
@@ -823,6 +805,7 @@ bool GLDisplayEGL::InitializeDisplay(bool supports_angle,
 }
 
 void GLDisplayEGL::InitializeCommon(bool for_testing) {
+  GPU_STARTUP_TRACE_EVENT("gl::GLDisplayEGL::InitializeCommon");
   // According to https://source.android.com/compatibility/android-cdd.html the
   // EGL_IMG_context_priority extension is mandatory for Virtual Reality High
   // Performance support, but due to a bug in Android Nougat the extension
@@ -879,7 +862,7 @@ void GLDisplayEGL::InitializeCommon(bool for_testing) {
   // a useless wrapper function. See crbug.com/775707 for details. In short, if
   // the symbol is present and we're on Android N or newer and we are not on
   // Android emulator, assume that it's usable even if the extension wasn't
-  // reported. TODO(https://crbug.com/1086781): Once this is fixed at the
+  // reported. TODO(crbug.com/40132708): Once this is fixed at the
   // Android level, update the heuristic to trust the reported extension from
   // that version onward.
   egl_android_native_fence_sync_supported_ =
@@ -892,6 +875,11 @@ void GLDisplayEGL::InitializeCommon(bool for_testing) {
       base::SysInfo::GetAndroidHardwareEGL() != "swiftshader" &&
       base::SysInfo::GetAndroidHardwareEGL() != "emulation") {
     egl_android_native_fence_sync_supported_ = true;
+  }
+
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kDisableAndroidNativeFenceSyncForTesting)) {
+    egl_android_native_fence_sync_supported_ = false;
   }
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -908,6 +896,5 @@ void GLDisplayEGL::InitializeCommon(bool for_testing) {
   InitMetalSharedEventStorage();
 #endif
 }
-#endif  // defined(USE_EGL)
 
 }  // namespace gl

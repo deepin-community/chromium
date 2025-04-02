@@ -8,28 +8,32 @@
 
 #include <utility>
 
-#include "core/fpdfapi/parser/cpdf_stream.h"
+#include "core/fpdfapi/parser/cpdf_stream_acc.h"
 #include "core/fxcodec/icc/icc_transform.h"
+#include "core/fxcrt/compiler_specific.h"
 
 namespace {
 
 bool DetectSRGB(pdfium::span<const uint8_t> span) {
   static const char kSRGB[] = "sRGB IEC61966-2.1";
-  return span.size() == 3144 && memcmp(&span[400], kSRGB, strlen(kSRGB)) == 0;
+  // SAFETY: size checked on LHS of &&-expression.
+  return span.size() == 3144 &&
+         UNSAFE_BUFFERS(memcmp(&span[400], kSRGB, strlen(kSRGB))) == 0;
 }
 
 }  // namespace
 
-CPDF_IccProfile::CPDF_IccProfile(RetainPtr<const CPDF_Stream> pStream,
-                                 pdfium::span<const uint8_t> span,
+CPDF_IccProfile::CPDF_IccProfile(RetainPtr<const CPDF_StreamAcc> stream_acc,
                                  uint32_t expected_components)
-    : m_bsRGB(DetectSRGB(span)), m_pStream(std::move(pStream)) {
+    : m_pStreamAcc(std::move(stream_acc)),
+      m_bsRGB(expected_components == 3 && DetectSRGB(m_pStreamAcc->GetSpan())) {
   if (m_bsRGB) {
     m_nSrcComponents = 3;
     return;
   }
 
-  auto transform = fxcodec::IccTransform::CreateTransformSRGB(span);
+  auto transform =
+      fxcodec::IccTransform::CreateTransformSRGB(m_pStreamAcc->GetSpan());
   if (!transform) {
     return;
   }
@@ -58,4 +62,8 @@ void CPDF_IccProfile::TranslateScanline(pdfium::span<uint8_t> pDest,
                                         pdfium::span<const uint8_t> pSrc,
                                         int pixels) {
   m_Transform->TranslateScanline(pDest, pSrc, pixels);
+}
+
+RetainPtr<const CPDF_StreamAcc> CPDF_IccProfile::GetStreamAcc() const {
+  return m_pStreamAcc;
 }

@@ -9,7 +9,6 @@
 #include "base/apple/foundation_util.h"
 #include "base/apple/osstatus_logging.h"
 #include "base/command_line.h"
-#include "base/debug/crash_logging.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -20,6 +19,8 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_switches.h"
 #include "net/base/apple/url_conversions.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/mac/coordinate_conversion.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
@@ -39,15 +40,16 @@ bool WorkspacePathRevealDisabledForTest() {
 
 void ShowItemInFolder(Profile* profile, const base::FilePath& full_path) {
   DCHECK([NSThread isMainThread]);
-  NSURL* url = base::apple::FilePathToNSURL(full_path);
 
   // The Finder creates a new window on each `full_path` reveal. Skip
   // revealing the path during testing to avoid an avalanche of new
   // Finder windows.
-  if (WorkspacePathRevealDisabledForTest()) {
+  if (WorkspacePathRevealDisabledForTest() ||
+      !internal::AreShellOperationsAllowed()) {
     return;
   }
 
+  NSURL* url = base::apple::FilePathToNSURL(full_path);
   [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[ url ]];
 }
 
@@ -89,14 +91,6 @@ void PlatformOpenVerifiedItem(const base::FilePath& path, OpenItemType type) {
 void OpenExternal(const GURL& url) {
   DCHECK([NSThread isMainThread]);
   NSURL* ns_url = net::NSURLWithGURL(url);
-
-  // https://crbug.com/1504165
-  static auto* const crash_key_string = base::debug::AllocateCrashKeyString(
-      "platform_util_OpenExternal", base::debug::CrashKeySize::Size64);
-  NSUInteger length = [ns_url absoluteString].length;
-  NSString* lengthString = [NSString stringWithFormat:@"%lu", length];
-  base::debug::ScopedCrashKeyString crash_key(
-      crash_key_string, base::SysNSStringToUTF8(lengthString));
 
   if (!ns_url || ![[NSWorkspace sharedWorkspace] openURL:ns_url]) {
     LOG(WARNING) << "NSWorkspace failed to open URL " << url;
@@ -160,6 +154,10 @@ bool IsSwipeTrackingFromScrollEventsEnabled() {
 
 NSWindow* GetActiveWindow() {
   return [NSApp keyWindow];
+}
+
+gfx::Rect GetWindowScreenBounds(gfx::NativeWindow window) {
+  return gfx::ScreenRectFromNSRect([window.GetNativeNSWindow() frame]);
 }
 
 }  // namespace platform_util

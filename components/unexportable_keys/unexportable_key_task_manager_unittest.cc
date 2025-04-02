@@ -59,7 +59,8 @@ class UnexportableKeyTaskManagerTest : public testing::Test {
   absl::variant<crypto::ScopedMockUnexportableKeyProvider,
                 crypto::ScopedNullUnexportableKeyProvider>
       scoped_key_provider_;
-  UnexportableKeyTaskManager task_manager_;
+  UnexportableKeyTaskManager task_manager_{
+      crypto::UnexportableKeyProvider::Config()};
 };
 
 TEST_F(UnexportableKeyTaskManagerTest, GenerateKeyAsync) {
@@ -88,9 +89,9 @@ TEST_F(UnexportableKeyTaskManagerTest,
   base::test::TestFuture<
       ServiceErrorOr<scoped_refptr<RefCountedUnexportableSigningKey>>>
       future;
-  // RSA is not supported by the mock key provider, so the key generation should
-  // fail.
-  auto unsupported_algorithm = {crypto::SignatureVerifier::RSA_PKCS1_SHA256};
+  // RSA_PKCS1_SHA1 is not supported by the protocol, so the key generation
+  // should fail.
+  auto unsupported_algorithm = {crypto::SignatureVerifier::RSA_PKCS1_SHA1};
 
   task_manager().GenerateSigningKeySlowlyAsync(
       unsupported_algorithm, BackgroundTaskPriority::kBestEffort,

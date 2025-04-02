@@ -3,11 +3,10 @@
 // found in the LICENSE file.
 
 import {getBrowserAndPages} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {setIgnoreListPattern} from '../helpers/settings-helpers.js';
 import {addBreakpointForLine, openSourceCodeEditorForFile} from '../helpers/sources-helpers.js';
 
-describe('SourceMap handling', async () => {
+describe('SourceMap handling', () => {
   it('can deal with a source map that has no mappings', async () => {
     const {frontend} = getBrowserAndPages();
 

@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <set>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -21,7 +22,6 @@
 #include "base/rand_util.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -188,10 +188,11 @@ GURL WebstoreInstaller::GetWebstoreInstallURL(
   if (cmd_line->HasSwitch(::switches::kAppsGalleryDownloadURL)) {
     std::string download_url =
         cmd_line->GetSwitchValueASCII(::switches::kAppsGalleryDownloadURL);
-    return GURL(base::StringPrintfNonConstexpr(download_url.c_str(),
-                                               extension_id.c_str()));
+    base::ReplaceFirstSubstringAfterOffset(&download_url, 0, "%s",
+                                           extension_id);
+    return GURL(download_url);
   }
-  std::vector<base::StringPiece> params;
+  std::vector<std::string_view> params;
   std::string extension_param = "id=" + extension_id;
   std::string installsource_param = "installsource=" + install_source;
   params.push_back(extension_param);
@@ -247,7 +248,7 @@ WebstoreInstaller::Approval::CreateWithNoInstallPrompt(
   return result;
 }
 
-WebstoreInstaller::Approval::~Approval() {}
+WebstoreInstaller::Approval::~Approval() = default;
 
 const WebstoreInstaller::Approval* WebstoreInstaller::GetAssociatedApproval(
     const DownloadItem& download) {
@@ -323,7 +324,7 @@ void WebstoreInstaller::Start() {
 
   tracker->OnBeginExtensionDownload(id_);
 
-  // TODO(crbug.com/305343): Query manifest of dependencies before
+  // TODO(crbug.com/41064141): Query manifest of dependencies before
   // downloading & installing those dependencies.
   DownloadNextPendingModule();
 }
@@ -586,7 +587,7 @@ void WebstoreInstaller::StartDownload(
   int render_process_host_id = web_contents_->GetPrimaryMainFrame()
                                    ->GetRenderViewHost()
                                    ->GetProcess()
-                                   ->GetID();
+                                   ->GetDeprecatedID();
 
   content::RenderFrameHost* render_frame_host =
       web_contents_->GetPrimaryMainFrame();
@@ -624,6 +625,7 @@ void WebstoreInstaller::StartDownload(
       download_url_, render_process_host_id, render_frame_host->GetRoutingID(),
       traffic_annotation));
   params->set_file_path(file);
+  params->set_initiator(render_frame_host->GetLastCommittedOrigin());
   if (controller.GetVisibleEntry()) {
     content::Referrer referrer = content::Referrer::SanitizeForRequest(
         download_url_,

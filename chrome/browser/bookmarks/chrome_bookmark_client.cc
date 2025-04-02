@@ -169,7 +169,7 @@ ChromeBookmarkClient::GetLoadManagedNodeCallback() {
   return managed_bookmark_service_->GetLoadManagedNodeCallback();
 }
 
-bool ChromeBookmarkClient::IsSyncFeatureEnabledIncludingBookmarksForUma() {
+bool ChromeBookmarkClient::IsSyncFeatureEnabledIncludingBookmarks() {
   return local_or_syncable_bookmark_sync_service_->IsTrackingMetadata();
 }
 
@@ -217,10 +217,9 @@ void ChromeBookmarkClient::DecodeAccountBookmarkSyncMetadata(
 }
 
 void ChromeBookmarkClient::OnBookmarkNodeRemovedUndoable(
-    bookmarks::BookmarkModel* model,
     const bookmarks::BookmarkNode* parent,
     size_t index,
     std::unique_ptr<bookmarks::BookmarkNode> node) {
-  bookmark_undo_service_->AddUndoEntryForRemovedNode(model, parent, index,
+  bookmark_undo_service_->AddUndoEntryForRemovedNode(parent, index,
                                                      std::move(node));
 }

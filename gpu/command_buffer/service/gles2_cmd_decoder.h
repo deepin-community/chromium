@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 // This file contains the GLES2Decoder class.
 
 #ifndef GPU_COMMAND_BUFFER_SERVICE_GLES2_CMD_DECODER_H_
@@ -11,6 +16,7 @@
 
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/functional/callback_forward.h"
@@ -120,7 +126,7 @@ class GPU_GLES2_EXPORT GLES2Decoder : public CommonDecoder,
                     const gfx::Rect& cleared_rect) override;
   void BeginDecoding() override;
   void EndDecoding() override;
-  base::StringPiece GetLogPrefix() override;
+  std::string_view GetLogPrefix() override;
 
   void set_initialized() {
     initialized_ = true;

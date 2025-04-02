@@ -24,14 +24,10 @@ constexpr char kTestDownloadContent[] = "Hello, World!";
 }  // namespace
 
 class BackgroundDownloaderWinTest : public testing::Test {
- public:
-  BackgroundDownloaderWinTest() = default;
-  ~BackgroundDownloaderWinTest() override = default;
-
+ protected:
   // Overrides from testing::Test
   void TearDown() override;
 
- protected:
   base::test::TaskEnvironment task_environment_;
   scoped_refptr<BackgroundDownloader> downloader_ =
       base::MakeRefCounted<BackgroundDownloader>(nullptr);
@@ -46,10 +42,9 @@ void BackgroundDownloaderWinTest::TearDown() {
 TEST_F(BackgroundDownloaderWinTest, CleansStaleDownloads) {
   base::FilePath download_dir_path;
   ASSERT_TRUE(base::CreateNewTempDirectory(kTestDirPrefix, &download_dir_path));
-  ASSERT_EQ(
+  ASSERT_TRUE(
       base::WriteFile(download_dir_path.AppendASCII(kTestDownloadFilename),
-                      kTestDownloadContent, sizeof(kTestDownloadContent)),
-      static_cast<int>(sizeof(kTestDownloadContent)));
+                      kTestDownloadContent));
 
   // Manipulate the creation time of the directory.
   FILETIME creation_filetime =
@@ -69,10 +64,9 @@ TEST_F(BackgroundDownloaderWinTest, CleansStaleDownloads) {
 TEST_F(BackgroundDownloaderWinTest, RetainsRecentDownloads) {
   base::FilePath download_dir_path;
   ASSERT_TRUE(base::CreateNewTempDirectory(kTestDirPrefix, &download_dir_path));
-  ASSERT_EQ(
+  ASSERT_TRUE(
       base::WriteFile(download_dir_path.AppendASCII(kTestDownloadFilename),
-                      kTestDownloadContent, sizeof(kTestDownloadContent)),
-      static_cast<int>(sizeof(kTestDownloadContent)));
+                      kTestDownloadContent));
   downloader_->CleanupStaleDownloads();
   EXPECT_TRUE(base::DirectoryExists(download_dir_path));
 }

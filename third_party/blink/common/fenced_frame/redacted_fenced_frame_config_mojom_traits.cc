@@ -20,7 +20,6 @@ EnumTraits<blink::mojom::Opaque, blink::FencedFrame::Opaque>::ToMojom(
       return blink::mojom::Opaque::kOpaque;
   }
   NOTREACHED();
-  return blink::mojom::Opaque::kOpaque;
 }
 
 // static
@@ -33,7 +32,6 @@ bool EnumTraits<blink::mojom::Opaque, blink::FencedFrame::Opaque>::FromMojom(
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -54,7 +52,6 @@ EnumTraits<blink::mojom::ReportingDestination,
       return blink::mojom::ReportingDestination::kDirectSeller;
   }
   NOTREACHED();
-  return blink::mojom::ReportingDestination::kBuyer;
 }
 
 // static
@@ -69,7 +66,6 @@ EnumTraits<blink::mojom::DeprecatedFencedFrameMode,
       return blink::mojom::DeprecatedFencedFrameMode::kOpaqueAds;
   }
   NOTREACHED();
-  return blink::mojom::DeprecatedFencedFrameMode::kDefault;
 }
 
 // static
@@ -86,7 +82,6 @@ bool EnumTraits<blink::mojom::DeprecatedFencedFrameMode,
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -112,7 +107,6 @@ bool EnumTraits<blink::mojom::ReportingDestination,
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -222,7 +216,6 @@ bool UnionTraits<blink::mojom::PotentiallyOpaqueURLDataView, Prop<GURL>>::Read(
     }
   }
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -256,7 +249,6 @@ bool UnionTraits<blink::mojom::PotentiallyOpaqueSizeDataView, Prop<gfx::Size>>::
     }
   }
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -287,7 +279,6 @@ bool UnionTraits<blink::mojom::PotentiallyOpaqueBoolDataView, Prop<bool>>::Read(
     }
   }
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -323,7 +314,6 @@ bool UnionTraits<blink::mojom::PotentiallyOpaqueAdAuctionDataDataView,
     }
   }
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -363,7 +353,6 @@ bool UnionTraits<
     }
   }
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -408,7 +397,6 @@ bool UnionTraits<
     }
   }
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -517,11 +505,13 @@ bool StructTraits<blink::mojom::FencedFramePropertiesDataView,
     }
   }
 
-  out_properties->has_fenced_frame_reporting_ =
-      data.has_fenced_frame_reporting();
-
   out_properties->can_disable_untrusted_network_ =
       data.can_disable_untrusted_network();
+
+  out_properties->is_cross_origin_content_ = data.is_cross_origin_content();
+
+  out_properties->allow_cross_origin_event_reporting_ =
+      data.allow_cross_origin_event_reporting();
   return true;
 }
 

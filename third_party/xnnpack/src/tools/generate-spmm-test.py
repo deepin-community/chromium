@@ -467,13 +467,11 @@ def main(args):
 //   Specification: {specification}
 //   Generator: {generator}
 
-
 #include <gtest/gtest.h>
-
-#include <xnnpack/common.h>
-#include <xnnpack/isa-checks.h>
-
-#include <xnnpack/spmm.h>
+#include "xnnpack/common.h"
+#include "xnnpack/isa-checks.h"
+#include "xnnpack/microparams-init.h"
+#include "xnnpack/spmm.h"
 #include "spmm-microkernel-tester.h"
 """.format(specification=options.spec, generator=sys.argv[0])
 
@@ -488,18 +486,17 @@ def main(args):
 //   Generator: {generator}
 
 #include <benchmark/benchmark.h>
-#include "bench/spmm-benchmark.h"
-#include "bench/utils.h"
-
-#include <xnnpack/gemm.h>
-#include <xnnpack/microfnptr.h>
-#include <xnnpack/microparams-init.h>
+#include "spmm-benchmark.h"
+#include "utils.h"
+#include "xnnpack/gemm.h"
+#include "xnnpack/microfnptr.h"
+#include "xnnpack/microparams-init.h"
 """.format(specification=options.spec, generator=sys.argv[0])
 
     test_outputs = collections.defaultdict(lambda: tests)
     bench_outputs = benches
     sorted_spec_yaml = collections.defaultdict(list)
-    isa_hierarchy = xnncommon._ISA_HIERARCHY_MAP
+    isa_hierarchy = xnncommon.isa_hierarchy_map()
 
     benches = [""] * len(isa_hierarchy)
     for ukernel_spec in spec_yaml:
@@ -523,7 +520,7 @@ def main(args):
 
     bench_outputs += """\n
 #ifndef XNNPACK_BENCHMARK_NO_MAIN
-BENCHMARK_MAIN();
+XNN_BENCHMARK_MAIN();
 #endif
 """
     for output_name in options.output_test:

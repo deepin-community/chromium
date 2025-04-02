@@ -6,23 +6,24 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <utility>
 
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/i18n/case_conversion.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/uuid.h"
+#include "components/history/core/browser/history_backend.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_match_type.h"
@@ -31,8 +32,16 @@
 #include "components/omnibox/browser/in_memory_url_index_types.h"
 #include "components/omnibox/browser/shortcuts_database.h"
 #include "components/omnibox/browser/tailored_word_break_iterator.h"
+#include "components/omnibox/common/omnibox_features.h"
 
 namespace {
+
+// The amount of time, in minutes, to wait after initialization before
+// attempting to expire old shortcuts. Used to avoid contention with other work
+// performed on profile loading and to outwait the 30 second delay before
+// `ExpireHistoryBackend` starts history deletions, in case the initialization
+// of that and `ShortcutsBackend` happen around the same time.
+const int kInitialExpirationDelayMinutes = 2;
 
 // Takes Match classification vector and removes all matched positions,
 // compacting repetitions if necessary.
@@ -188,7 +197,7 @@ std::u16string ExpandToFullWord(std::u16string trimmed_text,
   // Add on the missing letters of `text_last_word`, rather than replace it with
   // `best_word` to preserve capitalization.
   return best_word.empty()
-             ? trimmed_text
+             ? std::move(trimmed_text)
              : base::StrCat(
                    {trimmed_text, best_word.substr(text_last_word.length())});
 }
@@ -326,6 +335,12 @@ void ShortcutsBackend::AddOrUpdateShortcut(const std::u16string& text,
     return;
   }
 
+  // Answers are visually loud and context specific (e.g. history embedding
+  // answers are limited to the @history scope and question-like inputs).
+  // Showing them in a different context would look bad.
+  if (match.type == AutocompleteMatchType::HISTORY_EMBEDDINGS_ANSWER)
+    return;
+
   const std::u16string text_trimmed_lowercase(
       base::i18n::ToLower(text_trimmed));
   const base::Time now(base::Time::Now());
@@ -418,7 +433,7 @@ void ShortcutsBackend::ShutdownOnUIThread() {
   template_url_service_ = nullptr;
 }
 
-void ShortcutsBackend::OnURLsDeleted(
+void ShortcutsBackend::OnHistoryDeletions(
     history::HistoryService* history_service,
     const history::DeletionInfo& deletion_info) {
   if (!initialized())
@@ -431,21 +446,28 @@ void ShortcutsBackend::OnURLsDeleted(
 
   ShortcutsDatabase::ShortcutIDs shortcut_ids;
   for (const auto& guid_pair : guid_map_) {
-    if (base::ranges::any_of(
+    if (std::ranges::any_of(
             deletion_info.deleted_rows(),
             history::URLRow::URLRowHasURL(
                 guid_pair.second->second.match_core.destination_url))) {
       shortcut_ids.push_back(guid_pair.first);
     }
   }
+
+  UMA_HISTOGRAM_COUNTS_100(
+      "ShortcutsProvider.OldEntryDeletions.OnHistoryDeletions",
+      shortcut_ids.size());
+
   DeleteShortcutsWithIDs(shortcut_ids);
 }
 
 void ShortcutsBackend::InitInternal() {
   DCHECK(current_state_ == INITIALIZING);
   db_->Init();
+
   ShortcutsDatabase::GuidToShortcutMap shortcuts;
   db_->LoadShortcuts(&shortcuts);
+
   temp_shortcuts_map_ = std::make_unique<ShortcutMap>();
   temp_guid_map_ = std::make_unique<GuidMap>();
   for (ShortcutsDatabase::GuidToShortcutMap::const_iterator it(
@@ -454,6 +476,7 @@ void ShortcutsBackend::InitInternal() {
     (*temp_guid_map_)[it->first] = temp_shortcuts_map_->insert(
         std::make_pair(base::i18n::ToLower(it->second.text), it->second));
   }
+
   main_runner_->PostTask(
       FROM_HERE, base::BindOnce(&ShortcutsBackend::InitCompleted, this));
 }
@@ -463,14 +486,44 @@ void ShortcutsBackend::InitCompleted() {
   temp_shortcuts_map_->swap(shortcuts_map_);
   temp_shortcuts_map_.reset(nullptr);
   temp_guid_map_.reset(nullptr);
-  // This histogram is expired but the code was intentionally left behind so
-  // it can be easily re-enabled when launching Shortcuts provider on Android
-  // or iOS.
-  UMA_HISTOGRAM_COUNTS_10000("ShortcutsProvider.DatabaseSize",
-                             shortcuts_map_.size());
+
   current_state_ = INITIALIZED;
   for (ShortcutsBackendObserver& observer : observer_list_)
     observer.OnShortcutsLoaded();
+
+  ComputeDatabaseMetrics();
+
+  main_runner_->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(
+          base::IgnoreResult(&ShortcutsBackend::DeleteOldShortcuts),
+          weak_factory_.GetWeakPtr()),
+      base::Minutes(kInitialExpirationDelayMinutes));
+}
+
+void ShortcutsBackend::ComputeDatabaseMetrics() {
+  int num_shortcuts = shortcuts_map_.size();
+  UMA_HISTOGRAM_COUNTS_10000("ShortcutsProvider.DatabaseSize", num_shortcuts);
+
+  int num_old_shortcuts = 0;
+  const base::Time now(base::Time::Now());
+  for (const auto& shortcut_pair : shortcuts_map_) {
+    if (now - shortcut_pair.second.last_access_time >
+        base::Days(history::HistoryBackend::kExpireDaysThreshold)) {
+      num_old_shortcuts++;
+    }
+  }
+  UMA_HISTOGRAM_COUNTS_10000("ShortcutsProvider.DatabaseSize.OldEntries",
+                             num_old_shortcuts);
+
+  int tenth_percent_old_shortcuts = 0;
+  if (num_shortcuts > 0) {
+    tenth_percent_old_shortcuts =
+        static_cast<int>((num_old_shortcuts * 1000.0 / num_shortcuts));
+  }
+  UMA_HISTOGRAM_EXACT_LINEAR(
+      "ShortcutsProvider.DatabaseSize.OldEntriesPercentage",
+      tenth_percent_old_shortcuts, 1001);
 }
 
 bool ShortcutsBackend::AddShortcut(
@@ -567,4 +620,18 @@ bool ShortcutsBackend::DeleteAllShortcuts() {
              base::BindOnce(
                  base::IgnoreResult(&ShortcutsDatabase::DeleteAllShortcuts),
                  db_.get()));
+}
+
+bool ShortcutsBackend::DeleteOldShortcuts() {
+  ShortcutsDatabase::ShortcutIDs shortcut_ids;
+  const base::Time now(base::Time::Now());
+  for (const auto& guid_pair : guid_map_) {
+    if (now - guid_pair.second->second.last_access_time >
+        base::Days(history::HistoryBackend::kExpireDaysThreshold)) {
+      shortcut_ids.push_back(guid_pair.first);
+    }
+  }
+  UMA_HISTOGRAM_COUNTS_10000("ShortcutsProvider.OldEntryDeletions.OnInit",
+                             shortcut_ids.size());
+  return DeleteShortcutsWithIDs(shortcut_ids);
 }

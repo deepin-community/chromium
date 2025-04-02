@@ -13,9 +13,9 @@
 #include "core/fpdfapi/parser/cpdf_indirect_object_holder.h"
 #include "core/fpdfapi/parser/cpdf_parser.h"
 #include "core/fpdfapi/parser/cpdf_reference.h"
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/fx_string.h"
-#include "third_party/base/check.h"
-#include "third_party/base/notreached.h"
+#include "core/fxcrt/notreached.h"
 
 CPDF_Object::~CPDF_Object() = default;
 
@@ -89,7 +89,7 @@ const CPDF_Dictionary* CPDF_Object::GetDictInternal() const {
 }
 
 void CPDF_Object::SetString(const ByteString& str) {
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 CPDF_Array* CPDF_Object::AsMutableArray() {

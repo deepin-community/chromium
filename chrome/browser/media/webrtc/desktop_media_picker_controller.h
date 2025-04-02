@@ -24,8 +24,8 @@ class DesktopMediaPickerFactory;
 // user to select a desktop or an application window whose content will be made
 // available as a video stream.
 //
-// TODO(crbug.com/987001): Rename this class.  Consider merging with
-// DesktopMediaPickerViews and naming the merged class just DesktopMediaPicker.
+// TODO(crbug.com/40637301): Rename this class.  Consider merging with
+// DesktopMediaPickerImpl and naming the merged class just DesktopMediaPicker.
 class DesktopMediaPickerController : private content::WebContentsObserver {
  public:
   using Params = DesktopMediaPicker::Params;

@@ -13,18 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 --
-
--- Expose all clock snapshots as instant events.
-DROP VIEW IF EXISTS trace_metadata_event;
-CREATE PERFETTO VIEW trace_metadata_event AS
-SELECT
-  'slice' AS track_type,
-  'Clock Snapshots' AS track_name,
-  ts,
-  0 AS dur,
-  'Snapshot' AS slice_name
-FROM clock_snapshot
-GROUP BY ts;
+INCLUDE PERFETTO MODULE android.suspend;
 
 DROP VIEW IF EXISTS trace_metadata_output;
 CREATE PERFETTO VIEW trace_metadata_output AS
@@ -33,6 +22,9 @@ SELECT TraceMetadata(
   'trace_uuid', (SELECT str_value FROM metadata WHERE name = 'trace_uuid'),
   'android_build_fingerprint', (
     SELECT str_value FROM metadata WHERE name = 'android_build_fingerprint'
+  ),
+  'android_device_manufacturer', (
+    SELECT str_value FROM metadata WHERE name = 'android_device_manufacturer'
   ),
   'statsd_triggering_subscription_id', (
     SELECT int_value FROM metadata
@@ -51,6 +43,10 @@ SELECT TraceMetadata(
     FROM track JOIN slice ON track.id = slice.track_id
     WHERE track.name = 'Trace Triggers'
   ),
+  'trace_causal_trigger', (
+      SELECT str_value FROM metadata
+      WHERE name = 'trace_trigger'
+  ),
   'trace_config_pbtxt', (
     SELECT str_value FROM metadata
     WHERE name = 'trace_config_pbtxt'
@@ -61,5 +57,22 @@ SELECT TraceMetadata(
   'tracing_started_ns', (
     SELECT int_value FROM metadata
     WHERE name='tracing_started_ns'
+  ),
+  'android_sdk_version', (
+    SELECT int_value FROM metadata
+    WHERE name = 'android_sdk_version'
+  ),
+  'suspend_count', (
+    SELECT COUNT() FROM android_suspend_state WHERE power_state = 'suspended'
+  ),
+  'data_loss_count', (
+      SELECT COUNT()
+      FROM stats
+      WHERE severity = 'data_loss' AND value > 0
+  ),
+  'error_count', (
+      SELECT COUNT()
+      FROM stats
+      WHERE severity = 'error' AND value > 0
   )
 );

@@ -22,7 +22,6 @@ UserRemoteCommandsFactory::BuildJobForType(
       return std::make_unique<ClearBrowsingDataJob>(profile_);
     default:
       NOTREACHED() << "Received an unsupported remote command type: " << type;
-      return nullptr;
   }
 }
 }  // namespace enterprise_commands

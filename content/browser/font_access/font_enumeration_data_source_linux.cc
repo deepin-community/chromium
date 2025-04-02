@@ -2,11 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/browser/font_access/font_enumeration_data_source_linux.h"
 
 #include <fontconfig/fontconfig.h>
 
 #include <memory>
+#include <set>
 
 #include "base/check_op.h"
 #include "base/location.h"

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "crypto/encryptor.h"
 
 #include <stddef.h>
@@ -9,7 +14,6 @@
 
 #include "base/logging.h"
 #include "base/strings/string_util.h"
-#include "base/sys_byteorder.h"
 #include "crypto/openssl_util.h"
 #include "crypto/symmetric_key.h"
 #include "third_party/boringssl/src/include/openssl/aes.h"
@@ -38,7 +42,7 @@ Encryptor::Encryptor() : key_(nullptr), mode_(CBC) {}
 Encryptor::~Encryptor() = default;
 
 bool Encryptor::Init(const SymmetricKey* key, Mode mode, std::string_view iv) {
-  return Init(key, mode, base::as_bytes(base::make_span(iv)));
+  return Init(key, mode, base::as_byte_span(iv));
 }
 
 bool Encryptor::Init(const SymmetricKey* key,
@@ -47,7 +51,6 @@ bool Encryptor::Init(const SymmetricKey* key,
   DCHECK(key);
   DCHECK(mode == CBC || mode == CTR);
 
-  EnsureOpenSSLInit();
   if (mode == CBC && iv.size() != AES_BLOCK_SIZE)
     return false;
   // CTR mode passes the starting counter separately, via SetCounter().
@@ -82,7 +85,7 @@ bool Encryptor::Decrypt(base::span<const uint8_t> ciphertext,
 }
 
 bool Encryptor::SetCounter(std::string_view counter) {
-  return SetCounter(base::as_bytes(base::make_span(counter)));
+  return SetCounter(base::as_byte_span(counter));
 }
 
 bool Encryptor::SetCounter(base::span<const uint8_t> counter) {
@@ -100,11 +103,10 @@ bool Encryptor::CryptString(bool do_encrypt,
                             std::string* output) {
   std::string result(MaxOutput(do_encrypt, input.size()), '\0');
   std::optional<size_t> len =
-      (mode_ == CTR)
-          ? CryptCTR(do_encrypt, base::as_bytes(base::make_span(input)),
-                     base::as_writable_bytes(base::make_span(result)))
-          : Crypt(do_encrypt, base::as_bytes(base::make_span(input)),
-                  base::as_writable_bytes(base::make_span(result)));
+      (mode_ == CTR) ? CryptCTR(do_encrypt, base::as_byte_span(input),
+                                base::as_writable_byte_span(result))
+                     : Crypt(do_encrypt, base::as_byte_span(input),
+                             base::as_writable_byte_span(result));
   if (!len)
     return false;
 

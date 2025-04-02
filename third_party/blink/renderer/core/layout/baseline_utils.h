@@ -86,7 +86,6 @@ inline BaselineGroup DetermineBaselineGroup(
   }
 
   NOTREACHED();
-  return BaselineGroup::kMinor;
 }
 
 }  // namespace blink

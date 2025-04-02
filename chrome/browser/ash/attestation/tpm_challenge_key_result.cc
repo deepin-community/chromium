@@ -158,7 +158,6 @@ const char* TpmChallengeKeyResult::GetErrorMessage() const {
     case TpmChallengeKeyResultCode::kSuccess:
       // Not an error message.
       NOTREACHED();
-      return "";
   }
   NOTREACHED() << static_cast<int>(result_code);
 }

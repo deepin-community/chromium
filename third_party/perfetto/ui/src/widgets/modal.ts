@@ -13,10 +13,8 @@
 // limitations under the License.
 
 import m from 'mithril';
-
 import {defer} from '../base/deferred';
-
-import {scheduleFullRedraw} from './raf';
+import {Icon} from './icon';
 
 // This module deals with modal dialogs. Unlike most components, here we want to
 // render the DOM elements outside of the corresponding vdom tree. For instance
@@ -48,7 +46,7 @@ import {scheduleFullRedraw} from './raf';
 export interface ModalAttrs {
   title: string;
   buttons?: ModalButton[];
-  vAlign?: 'MIDDLE' /* default */|'TOP';
+  vAlign?: 'MIDDLE' /* default */ | 'TOP';
 
   // Used to disambiguate between different modal dialogs that might overlap
   // due to different client showing modal dialogs at the same time. This needs
@@ -63,7 +61,7 @@ export interface ModalAttrs {
   // The content/body of the modal dialog. This can be either:
   // 1. A static set of children, for simple dialogs which content never change.
   // 2. A factory method that returns a m() vnode for dyamic content.
-  content?: m.Children|(() => m.Children)
+  content?: m.Children | (() => m.Children);
 }
 
 export interface ModalButton {
@@ -80,7 +78,10 @@ export interface ModalButton {
 export class Modal implements m.ClassComponent<ModalAttrs> {
   onbeforeremove(vnode: m.VnodeDOM<ModalAttrs>) {
     const removePromise = defer<void>();
-    vnode.dom.addEventListener('animationend', () => removePromise.resolve());
+    vnode.dom.addEventListener('animationend', () => {
+      m.redraw();
+      removePromise.resolve();
+    });
     vnode.dom.classList.add('modal-fadeout');
 
     // Retuning `removePromise` will cause Mithril to defer the actual component
@@ -95,7 +96,6 @@ export class Modal implements m.ClassComponent<ModalAttrs> {
       // in turn will: (1) call the user's original attrs.onClose; (2) resolve
       // the promise returned by showModal().
       vnode.attrs.onClose();
-      scheduleFullRedraw();
     }
   }
 
@@ -113,10 +113,9 @@ export class Modal implements m.ClassComponent<ModalAttrs> {
       }
       // If the modal dialog is instantiated in a tall scrollable container,
       // make sure to scroll it into the view.
-      vnode.dom.scrollIntoView({'block': 'center'});
+      vnode.dom.scrollIntoView({block: 'center'});
     }
   }
-
 
   view(vnode: m.Vnode<ModalAttrs>) {
     const attrs = vnode.attrs;
@@ -124,7 +123,8 @@ export class Modal implements m.ClassComponent<ModalAttrs> {
     const buttons: m.Children = [];
     for (const button of attrs.buttons || []) {
       buttons.push(
-        m('button.modal-btn',
+        m(
+          'button.modal-btn',
           {
             class: button.primary ? 'modal-btn-primary' : '',
             id: button.id,
@@ -133,7 +133,9 @@ export class Modal implements m.ClassComponent<ModalAttrs> {
               if (button.action !== undefined) button.action();
             },
           },
-          button.text));
+          button.text,
+        ),
+      );
     }
 
     const aria = '[aria-labelledby=mm-title][aria-model][role=dialog]';
@@ -154,12 +156,13 @@ export class Modal implements m.ClassComponent<ModalAttrs> {
           m(
             'button[aria-label=Close Modal]',
             {onclick: () => closeModal(attrs.key)},
-            m.trust('&#x2715'),
+            m(Icon, {icon: 'close'}),
           ),
         ),
         m('main', vnode.children),
         buttons.length > 0 ? m('footer', buttons) : null,
-      ));
+      ),
+    );
   }
 
   onBackdropClick(attrs: ModalAttrs, e: MouseEvent) {
@@ -181,9 +184,8 @@ export class Modal implements m.ClassComponent<ModalAttrs> {
 }
 
 // Set by showModal().
-let currentModal: ModalAttrs|undefined = undefined;
+let currentModal: ModalAttrs | undefined = undefined;
 let generationCounter = 0;
-
 
 // This should be called only by app.ts and nothing else.
 // This generates the modal dialog at the root of the DOM, so it can overlay
@@ -212,7 +214,7 @@ export async function showModal(userAttrs: ModalAttrs): Promise<void> {
 
   // If the user doesn't specify a key (to match the closeModal), generate a
   // random key to distinguish two showModal({key:undefined}) calls.
-  const key = userAttrs.key || `${++generationCounter}`;
+  const key = userAttrs.key ?? `${++generationCounter}`;
   const attrs: ModalAttrs = {
     ...userAttrs,
     key,
@@ -222,8 +224,17 @@ export async function showModal(userAttrs: ModalAttrs): Promise<void> {
     },
   };
   currentModal = attrs;
-  scheduleFullRedraw();
+  redrawModal();
   return returnedClosePromise;
+}
+
+// Technically we don't need to redraw the whole app, but it's the more
+// pragmatic option. This is exposed to keep the plugin code more clear, so it's
+// evident why a redraw is requested.
+export function redrawModal() {
+  if (currentModal !== undefined) {
+    m.redraw();
+  }
 }
 
 // Closes the full-screen modal dialog (if any).
@@ -232,16 +243,18 @@ export async function showModal(userAttrs: ModalAttrs): Promise<void> {
 // in the meanwhile. If undefined, it closes whatever modal dialog is currently
 // open (if any).
 export function closeModal(key?: string) {
-  if (currentModal === undefined ||
-      (key !== undefined && currentModal.key !== key)) {
+  if (
+    currentModal === undefined ||
+    (key !== undefined && currentModal.key !== key)
+  ) {
     // Somebody else closed the modal dialog already, or opened a new one with
     // a different key.
     return;
   }
   currentModal = undefined;
-  scheduleFullRedraw();
+  m.redraw();
 }
 
-export function getCurrentModalKey(): string|undefined {
+export function getCurrentModalKey(): string | undefined {
   return currentModal?.key;
 }

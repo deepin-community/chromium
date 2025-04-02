@@ -291,10 +291,9 @@ class SamplerFilterAnisotropicTest : public DawnTest {
 };
 
 TEST_P(SamplerFilterAnisotropicTest, SlantedPlaneMipmap) {
-    // TODO(crbug.com/dawn/740): Test output is wrong with D3D12 + WARP.
-    DAWN_SUPPRESS_TEST_IF(IsD3D12() && IsWARP());
-
-    DAWN_SUPPRESS_TEST_IF(IsOpenGL() || IsOpenGLES());
+    // TODO(crbug.com/388318201): investigate
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
     const uint16_t maxAnisotropyLists[] = {1, 2, 16, 128};
     for (uint16_t t : maxAnisotropyLists) {
         TestFilterAnisotropic(t);

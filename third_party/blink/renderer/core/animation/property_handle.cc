@@ -37,7 +37,6 @@ unsigned PropertyHandle::GetHash() const {
       return WTF::GetHash(*svg_attribute_);
     default:
       NOTREACHED();
-      return 0;
   }
 }
 

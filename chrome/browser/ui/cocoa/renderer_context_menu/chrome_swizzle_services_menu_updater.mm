@@ -91,7 +91,6 @@ NSMutableArray* g_filtered_entries_array = nil;
     if (![NSClassFromString(@"_NSServiceEntry")
             instancesRespondToSelector:@selector(bundleIdentifier)]) {
       NOTREACHED();
-      return;
     }
 
     // Perform similar checks on the AppKit's private _NSServicesMenuUpdater
@@ -100,7 +99,6 @@ NSMutableArray* g_filtered_entries_array = nil;
     Class targetClass = NSClassFromString(@"_NSServicesMenuUpdater");
     if (![targetClass instancesRespondToSelector:targetSelector]) {
       NOTREACHED();
-      return;
     }
 
     // Replace the populateMenu:withServiceEntries:forDisplay: method in

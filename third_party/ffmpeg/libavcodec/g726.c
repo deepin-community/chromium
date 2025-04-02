@@ -302,7 +302,7 @@ static int16_t g726_encode(G726Context* c, int16_t sig)
 {
     uint8_t i;
 
-    i = av_mod_uintp2(quant(c, sig/4 - c->se), c->code_size);
+    i = av_zero_extend(quant(c, sig/4 - c->se), c->code_size);
     g726_decode(c, i);
     return i;
 }
@@ -388,6 +388,7 @@ static const AVOption options[] = {
 
 static const AVClass g726_class = {
     .class_name = "g726",
+    .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
 };

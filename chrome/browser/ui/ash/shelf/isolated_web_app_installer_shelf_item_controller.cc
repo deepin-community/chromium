@@ -13,7 +13,6 @@
 #include "ash/wm/window_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/ui/ash/shelf/isolated_web_app_installer_context_menu.h"
-#include "chrome/browser/ui/ash/shelf/lacros_shelf_item_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/aura/window.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -46,7 +45,7 @@ IsolatedWebAppInstallerShelfItemController::GetDefaultInstallerShelfIcon() {
 
 IsolatedWebAppInstallerShelfItemController::
     IsolatedWebAppInstallerShelfItemController(const ash::ShelfID& shelf_id)
-    : LacrosShelfItemController(shelf_id) {
+    : ash::ShelfItemDelegate(shelf_id) {
   context_menu_ = std::make_unique<IsolatedWebAppInstallerContextMenu>(
       base::BindOnce(&IsolatedWebAppInstallerShelfItemController::Close,
                      weak_factory_.GetWeakPtr()));
@@ -110,6 +109,10 @@ void IsolatedWebAppInstallerShelfItemController::AddWindow(
   UpdateShelfItem();
 }
 
+std::u16string IsolatedWebAppInstallerShelfItemController::GetTitle() {
+  return l10n_util::GetStringUTF16(IDS_IWA_INSTALLER_SHELF_ITEM_TITLE);
+}
+
 void IsolatedWebAppInstallerShelfItemController::OnWindowDestroying(
     aura::Window* window) {
   CHECK(window_);
@@ -125,8 +128,7 @@ void IsolatedWebAppInstallerShelfItemController::UpdateShelfItem() {
   CHECK(index != -1);
 
   ash::ShelfItem updated_item = *current_item;
-  updated_item.title =
-      l10n_util::GetStringUTF16(IDS_IWA_INSTALLER_SHELF_ITEM_TITLE);
+  updated_item.title = GetTitle();
   updated_item.type = ash::TYPE_DIALOG;
   if (updated_item.image.isNull()) {
     updated_item.image = GetDefaultInstallerShelfIcon();

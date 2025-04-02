@@ -4,8 +4,7 @@
 
 import {assert} from 'chai';
 
-import {click, enableExperiment, getBrowserAndPages, step, typeText, waitFor} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
+import {click, getBrowserAndPages, step, typeText, waitFor} from '../../shared/helper.js';
 import {
   addBreakpointForLine,
   openSourceCodeEditorForFile,
@@ -13,7 +12,7 @@ import {
   waitForStackTopMatch,
 } from '../helpers/sources-helpers.js';
 
-describe('Watch Expression Pane', async () => {
+describe('Watch Expression Pane', () => {
   it('collapses children when editing', async () => {
     const {frontend} = getBrowserAndPages();
     await openSourcesPanel();
@@ -30,12 +29,12 @@ describe('Watch Expression Pane', async () => {
 
     // Retrieve watch element and ensure that it is expanded
     const initialExpandCheck = await element.evaluate(e => e.classList.contains('expanded'));
-    assert.strictEqual(initialExpandCheck, true);
+    assert.isTrue(initialExpandCheck);
 
     // Begin editing and check that element is now collapsed.
     await frontend.keyboard.press('Enter');
     const editingExpandCheck = await element.evaluate(e => e.classList.contains('expanded'));
-    assert.strictEqual(editingExpandCheck, false);
+    assert.isFalse(editingExpandCheck);
 
     // Remove the watch so that it does not interfere with other tests.
     await frontend.keyboard.press('Escape');
@@ -44,7 +43,6 @@ describe('Watch Expression Pane', async () => {
 
   it('deobfuscates variable names', async () => {
     const {target, frontend} = getBrowserAndPages();
-    await enableExperiment('evaluateExpressionsWithSourceMaps');
 
     await openSourceCodeEditorForFile('sourcemap-scopes-minified.js', 'sourcemap-scopes-minified.html');
 

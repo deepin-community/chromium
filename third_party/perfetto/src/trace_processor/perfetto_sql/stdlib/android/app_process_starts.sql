@@ -103,40 +103,39 @@ JOIN _proc_start proc_start
   ON proc_start.process_name = cold_start.process_name AND cold_start.ts > proc_start.ts
 GROUP BY cold_start.upid;
 
--- TODO(b/323052521): Refactor this table name to android_startups.
 -- All app cold starts with information about their cold start reason:
 -- broadcast, service, activity or provider.
-CREATE PERFETTO TABLE _android_app_process_starts(
+CREATE PERFETTO TABLE android_app_process_starts(
   -- Slice id of the bindApplication slice in the app. Uniquely identifies a process start.
-  start_id INT,
+  start_id LONG,
   -- Slice id of intent received in the app.
-  id INT,
+  id LONG,
   -- Track id of the intent received in the app.
-  track_id INT,
+  track_id JOINID(track.id),
   -- Name of the process receiving the intent.
   process_name STRING,
   -- Pid of the process receiving the intent.
-  pid INT,
+  pid LONG,
   -- Upid of the process receiving the intent.
-  upid INT,
+  upid JOINID(process.id),
   -- Intent action or component responsible for the cold start.
   intent STRING,
   -- Process start reason: activity, broadcast, service or provider.
   reason STRING,
   -- Timestamp the process start was dispatched from system_server.
-  proc_start_ts INT,
+  proc_start_ts TIMESTAMP,
   -- Duration to dispatch the process start from system_server.
-  proc_start_dur INT,
+  proc_start_dur DURATION,
   -- Timestamp the bindApplication started in the app.
-  bind_app_ts INT,
+  bind_app_ts TIMESTAMP,
   -- Duration to complete bindApplication in the app.
-  bind_app_dur INT,
+  bind_app_dur DURATION,
   -- Timestamp the Intent was received in the app.
-  intent_ts INT,
+  intent_ts TIMESTAMP,
   -- Duration to handle intent in the app.
-  intent_dur INT,
+  intent_dur DURATION,
   -- Total duration from proc_start dispatched to intent completed.
-  total_dur INT
+  total_dur LONG
 ) AS
 SELECT
   bind_app_id AS start_id,

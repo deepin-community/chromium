@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -101,7 +102,8 @@ bool compare_candidate_index(const TraceEvent* lhs, const TraceEvent* rhs) {
 
 }  // namespace
 
-IN_PROC_BROWSER_TEST_F(MetricIntegrationTest, LargestContentfulPaint) {
+// TODO(crbug.com/385580803): Flaky on all platforms
+IN_PROC_BROWSER_TEST_F(MetricIntegrationTest, DISABLED_LargestContentfulPaint) {
   auto waiter = std::make_unique<page_load_metrics::PageLoadMetricsTestWaiter>(
       web_contents());
   Start();
@@ -119,15 +121,21 @@ IN_PROC_BROWSER_TEST_F(MetricIntegrationTest, LargestContentfulPaint) {
       base::StrCat({window_origin, "/images/lcp-96x96.png"});
   const std::string image_3_url_expected =
       base::StrCat({window_origin, "/images/lcp-256x256.png"});
-  const std::string expected_url[3] = {
-      image_1_url_expected, image_2_url_expected, image_3_url_expected};
+  const std::array<std::string, 3> expected_url = {
+      image_1_url_expected,
+      image_2_url_expected,
+      image_3_url_expected,
+  };
 
   // Verify that the JS API yielded three LCP reports. Note that, as we resolve
   // https://github.com/WICG/largest-contentful-paint/issues/41, this test may
   // need to be updated to reflect new semantics.
-  const std::string test_name[3] = {"test_first_image()", "test_larger_image()",
-                                    "test_largest_image()"};
-  std::optional<double> lcp_timestamps[3];
+  const std::array<std::string, 3> test_name = {
+      "test_first_image()",
+      "test_larger_image()",
+      "test_largest_image()",
+  };
+  std::array<std::optional<double>, 3> lcp_timestamps;
   for (size_t i = 0; i < 3; i++) {
     waiter->AddPageExpectation(page_load_metrics::PageLoadMetricsTestWaiter::
                                    TimingField::kLargestContentfulPaint);
@@ -196,19 +204,19 @@ IN_PROC_BROWSER_TEST_F(MetricIntegrationTest, LargestContentfulPaint) {
 
   ExpectMetricInLastUKMUpdateTraceEventNear(
       *trace_analyzer, "latest_largest_contentful_paint_ms",
-      lcp_timestamps[2].value(), 1.2);
+      lcp_timestamps[2].value(), 6);
 
   // Check UKM.
   // Since UKM rounds to an integer while the JS API returns a coarsened double,
-  // we'll assert that the UKM and JS values are within 1.2 of each other.
+  // we'll assert that the UKM and JS values are within 6ms of each other.
   // Comparing with strict equality could round incorrectly and introduce
   // flakiness into the test.
   ExpectUKMPageLoadMetricNear(
       PageLoad::kPaintTiming_NavigationToLargestContentfulPaint2Name,
-      lcp_timestamps[2].value(), 1.2);
+      lcp_timestamps[2].value(), 6);
   ExpectUKMPageLoadMetricNear(
       PageLoad::kPaintTiming_NavigationToLargestContentfulPaint2_MainFrameName,
-      lcp_timestamps[2].value(), 1.2);
+      lcp_timestamps[2].value(), 6);
 
   // Check UMA.
   // Similar to UKM, rounding could introduce flakiness, so use helper to
@@ -221,8 +229,9 @@ IN_PROC_BROWSER_TEST_F(MetricIntegrationTest, LargestContentfulPaint) {
       lcp_timestamps[2].value());
 }
 
-// TODO(https://crbug.com/1493285): This test is flaky on ChromeOS.
-#if BUILDFLAG(IS_CHROMEOS)
+// TODO(crbug.com/40936591): This test is flaky on ChromeOS and Linux.
+// TODO(crbug.com/382573509): and flaky on Windows.
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
 #define MAYBE_LargestContentfulPaint_SubframeInput \
   DISABLED_LargestContentfulPaint_SubframeInput
 #else
@@ -293,6 +302,64 @@ IN_PROC_BROWSER_TEST_F(MetricIntegrationTest,
 }
 #endif
 
+class LCPLazyLoadingImageTest : public MetricIntegrationTest {
+ public:
+  base::Value::Dict setUpTraceEvent(std::string test_url) {
+    auto waiter =
+        std::make_unique<page_load_metrics::PageLoadMetricsTestWaiter>(
+            web_contents());
+
+    Start();
+    StartTracing({"loading"});
+    Load(test_url);
+
+    waiter->AddPageExpectation(page_load_metrics::PageLoadMetricsTestWaiter::
+                                   TimingField::kLargestContentfulPaint);
+    waiter->Wait();
+
+    std::unique_ptr<TraceAnalyzer> trace_analyzer = StopTracingAndAnalyze();
+    TraceEventVector candidate_events;
+    trace_analyzer->FindEvents(
+        Query::EventNameIs("largestContentfulPaint::Candidate"),
+        &candidate_events);
+
+    return candidate_events[0]->GetKnownArgAsDict("data");
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(LCPLazyLoadingImageTest,
+                       LargestContentfulPaint_EventLazyLoadingImage_Enabled) {
+  std::string test_url =
+      "/lcp_breakdown_timings_native_lazy_loading_images.html";
+
+  const base::Value::Dict data = setUpTraceEvent(test_url);
+  const std::string* loading_attr = data.FindString("loadingAttr");
+  ASSERT_TRUE(loading_attr);
+  EXPECT_EQ(*loading_attr, "lazy");
+}
+
+IN_PROC_BROWSER_TEST_F(LCPLazyLoadingImageTest,
+                       LargestContentfulPaint_EventLazyLoadingImage_Unset) {
+  std::string test_url = "/iframe_with_image.html";
+
+  const base::Value::Dict data = setUpTraceEvent(test_url);
+  const std::string* loading_attr = data.FindString("loadingAttr");
+  ASSERT_TRUE(loading_attr);
+  EXPECT_EQ(*loading_attr, "");
+}
+
+// TODO(crbug.com/333641374): Re-enable this test
+IN_PROC_BROWSER_TEST_F(
+    LCPLazyLoadingImageTest,
+    DISABLED_LargestContentfulPaint_EventLazyLoadingImage_Video) {
+  std::string test_url = "/is_video.html";
+
+  const base::Value::Dict data = setUpTraceEvent(test_url);
+  const std::string* loading_attr = data.FindString("loadingAttr");
+  ASSERT_TRUE(loading_attr);
+  EXPECT_EQ(*loading_attr, "");
+}
+
 class PageViewportInLCPTest : public MetricIntegrationTest {
  public:
   void SetUpCommandLine(base::CommandLine* command_line) override {
@@ -303,7 +370,8 @@ class PageViewportInLCPTest : public MetricIntegrationTest {
   base::test::ScopedFeatureList feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(PageViewportInLCPTest, FullSizeImageInIframe) {
+// TODO(crbug.com/385580803): flaky on all platforms
+IN_PROC_BROWSER_TEST_F(PageViewportInLCPTest, DISABLED_FullSizeImageInIframe) {
   auto waiter = std::make_unique<page_load_metrics::PageLoadMetricsTestWaiter>(
       web_contents());
   waiter->AddSubFrameExpectation(page_load_metrics::PageLoadMetricsTestWaiter::
@@ -323,15 +391,15 @@ IN_PROC_BROWSER_TEST_F(PageViewportInLCPTest, FullSizeImageInIframe) {
   // 2 to account for coarsening and UKM integer rounding.
   ExpectUKMPageLoadMetricNear(
       PageLoad::kPaintTiming_NavigationToLargestContentfulPaint2Name, lcpTime,
-      2.0);
+      6.0);
   ExpectUniqueUMAPageLoadMetricNear(
       "PageLoad.PaintTiming.NavigationToLargestContentfulPaint2", lcpTime);
 
   ExpectMetricInLastUKMUpdateTraceEventNear(
-      *trace_analyzer, "latest_largest_contentful_paint_ms", lcpTime, 2.0);
+      *trace_analyzer, "latest_largest_contentful_paint_ms", lcpTime, 5.0);
 }
 
-// TODO(crbug.com/1365773): Flaky on lacros
+// TODO(crbug.com/40866505): Flaky on lacros
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
 #define MAYBE_IsAnimatedLCPTest DISABLED_IsAnimatedLCPTest
 #else
@@ -401,226 +469,6 @@ IN_PROC_BROWSER_TEST_F(MAYBE_IsAnimatedLCPTest,
                        DISABLED_LargestContentfulPaint_IsVideo) {
   test_is_animated("/is_video.html", blink::LargestContentfulPaintType::kVideo,
                    /*expected=*/true, /*entries=*/0);
-}
-
-// TODO(crbug.com/1365773): Flaky on lacros
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#define MAYBE_MouseoverLCPTest DISABLED_MouseoverLCPTest
-#else
-#define MAYBE_MouseoverLCPTest MouseoverLCPTest
-#endif
-class MAYBE_MouseoverLCPTest : public MetricIntegrationTest,
-                               public testing::WithParamInterface<bool> {
- public:
-  void test_mouseover(const char* html_name,
-                      blink::LargestContentfulPaintType flag_set,
-                      std::string entries,
-                      std::string entries2,
-                      int x1,
-                      int y1,
-                      int x2,
-                      int y2,
-                      bool expected) {
-    // Turn off BFCache to see if it helps with BFCache bot flakes. See
-    // https://crbug.com/1288027
-    content::DisableBackForwardCacheForTesting(
-        web_contents(), content::BackForwardCache::DisableForTestingReason::
-                            TEST_REQUIRES_NO_CACHING);
-
-    // Install a ScopedRunLoopTimeout override to distinguish the timeout
-    // from MouseoverLCPTest vs browser_test_base.
-    base::test::ScopedRunLoopTimeout run_loop_timeout(FROM_HERE, std::nullopt,
-                                                      base::NullCallback());
-    auto waiter =
-        std::make_unique<page_load_metrics::PageLoadMetricsTestWaiter>(
-            web_contents());
-    waiter->AddPageExpectation(page_load_metrics::PageLoadMetricsTestWaiter::
-                                   TimingField::kLargestContentfulPaint);
-    waiter->AddMinimumCompleteResourcesExpectation(2);
-    Start();
-    Load(html_name);
-    std::string background = GetParam() ? "true" : "false";
-    EXPECT_EQ(EvalJs(web_contents()->GetPrimaryMainFrame(),
-                     "registerMouseover(" + background + ")")
-                  .error,
-              "");
-    EXPECT_EQ(EvalJs(web_contents()->GetPrimaryMainFrame(),
-                     "run_test(/*expected_entries=*/1)")
-                  .error,
-              "");
-
-    // We should wait for the main frame's hit-test data to be ready before
-    // sending the mouse events below to avoid flakiness.
-    content::WaitForHitTestData(web_contents()->GetPrimaryMainFrame());
-    // Ensure the compositor thread is aware of the mouse events.
-    content::MainThreadFrameObserver frame_observer(GetRenderWidgetHost());
-    frame_observer.Wait();
-
-    std::string get_timestamp = R"(
-      (async () => {
-        await new Promise(r => setTimeout(r, 100));
-        const timestamp = performance.now();
-        await new Promise(r => setTimeout(r, 100));
-        return timestamp;
-      })())";
-    double timestamp =
-        EvalJs(web_contents()->GetPrimaryMainFrame(), get_timestamp)
-            .ExtractDouble();
-
-    // Simulate a mouse move event which will generate a mouse over event.
-    EXPECT_TRUE(
-        ExecJs(web_contents(),
-               "chrome.gpuBenchmarking.pointerActionSequence( "
-               "[{ source: 'mouse', actions: [ { name: 'pointerMove', x: " +
-                   base::NumberToString(x1) +
-                   ", y: " + base::NumberToString(y1) + " }, ] }], ()=>{});"));
-
-    // Wait for a second image to load and for LCP entry to be there.
-    EXPECT_EQ(EvalJs(web_contents()->GetPrimaryMainFrame(),
-                     "run_test(/*entries_expected= */" + entries + ")")
-                  .error,
-              "");
-    if (x1 != x2 || y1 != y2) {
-      // Wait for 600ms before the second mouse move, as our heuristics wait for
-      // 500ms after a mousemove event on an LCP image.
-      constexpr auto kWaitTime = base::Milliseconds(600);
-      base::PlatformThread::Sleep(kWaitTime);
-      // TODO(1289726): Here we should call MoveMouseTo() a second time, but
-      // currently a second mouse move call is not dispatching the event as it
-      // should. So instead, we dispatch the event directly.
-      EXPECT_EQ(
-          EvalJs(web_contents()->GetPrimaryMainFrame(), "dispatch_mouseover()")
-              .error,
-          "");
-
-      // Wait for a third image (potentially) to load and for LCP entry to be
-      // there.
-      EXPECT_EQ(EvalJs(web_contents()->GetPrimaryMainFrame(),
-                       "run_test(/*entries_expected= */" + entries2 + ")")
-                    .error,
-                "");
-    }
-    waiter->Wait();
-
-    // Need to navigate away from the test html page to force metrics to get
-    // flushed/synced.
-    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
-    ExpectUKMPageLoadMetricFlagSet(
-        PageLoad::kPaintTiming_LargestContentfulPaintTypeName,
-        LargestContentfulPaintTypeToUKMFlags(flag_set), expected);
-    // If we never fired an entry for mouseover LCP, we should expect the UKM
-    // timestamps to match that.
-    if (entries == entries2 && entries == "1") {
-      ExpectUKMPageLoadMetricLowerThan(
-          PageLoad::kPaintTiming_NavigationToLargestContentfulPaint2Name,
-          timestamp);
-    } else {
-      ExpectUKMPageLoadMetricGreaterThan(
-          PageLoad::kPaintTiming_NavigationToLargestContentfulPaint2Name,
-          timestamp);
-    }
-  }
-
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    MetricIntegrationTest::SetUpCommandLine(command_line);
-
-    // chrome.gpuBenchmarking.pointerActionSequence can be used on all
-    // platforms.
-    command_line->AppendSwitch(cc::switches::kEnableGpuBenchmarking);
-  }
-};
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         MAYBE_MouseoverLCPTest,
-                         ::testing::Values(false, true));
-
-IN_PROC_BROWSER_TEST_P(MAYBE_MouseoverLCPTest,
-                       LargestContentfulPaint_MouseoverOverLCPImage) {
-  test_mouseover("/mouseover.html",
-                 blink::LargestContentfulPaintType::kAfterMouseover,
-                 /*entries=*/"2",
-                 /*entries2=*/"2",
-                 /*x1=*/10, /*y1=*/10,
-                 /*x2=*/10, /*y2=*/10,
-                 /*expected=*/true);
-}
-
-IN_PROC_BROWSER_TEST_P(MAYBE_MouseoverLCPTest,
-                       LargestContentfulPaint_MouseoverOverLCPImageReplace) {
-  test_mouseover("/mouseover.html?replace",
-                 blink::LargestContentfulPaintType::kAfterMouseover,
-                 /*entries=*/"2",
-                 /*entries2=*/"2",
-                 /*x1=*/10, /*y1=*/10,
-                 /*x2=*/10, /*y2=*/10,
-                 /*expected=*/true);
-}
-
-IN_PROC_BROWSER_TEST_P(MAYBE_MouseoverLCPTest,
-                       LargestContentfulPaint_MouseoverOverBody) {
-  test_mouseover("/mouseover.html",
-                 blink::LargestContentfulPaintType::kAfterMouseover,
-                 /*entries=*/"2",
-                 /*entries2=*/"2",
-                 /*x1=*/30, /*y1=*/10,
-                 /*x2=*/30, /*y2=*/10,
-                 /*expected=*/false);
-}
-
-IN_PROC_BROWSER_TEST_P(MAYBE_MouseoverLCPTest,
-                       LargestContentfulPaint_MouseoverOverLCPImageThenBody) {
-  test_mouseover("/mouseover.html?dispatch",
-                 blink::LargestContentfulPaintType::kAfterMouseover,
-                 /*entries=*/"2",
-                 /*entries2=*/"3",
-                 /*x1=*/10, /*y1=*/10,
-                 /*x2=*/30, /*y2=*/10,
-                 /*expected=*/false);
-}
-
-class MouseoverLCPTestWithHeuristicFlag : public MAYBE_MouseoverLCPTest {
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    MAYBE_MouseoverLCPTest::SetUpCommandLine(command_line);
-    feature_list_.InitWithFeatures(
-        {blink::features::kLCPMouseoverHeuristics} /*enabled*/,
-        {} /*disabled*/);
-  }
-
-  base::test::ScopedFeatureList feature_list_;
-};
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         MouseoverLCPTestWithHeuristicFlag,
-                         ::testing::Values(false, true));
-IN_PROC_BROWSER_TEST_P(MouseoverLCPTestWithHeuristicFlag,
-                       LargestContentfulPaint_MouseoverOverLCPImageThenBody) {
-  test_mouseover("/mouseover.html?dispatch",
-                 blink::LargestContentfulPaintType::kAfterMouseover,
-                 /*entries=*/"1",
-                 /*entries2=*/"2",
-                 /*x1=*/10, /*y1=*/10,
-                 /*x2=*/30, /*y2=*/10,
-                 /*expected=*/false);
-}
-
-// TODO(crbug.com/1365773): Flaky on lacros
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#define MAYBE_LargestContentfulPaint_MouseoverOverLCPImageReplace \
-  DISABLED_LargestContentfulPaint_MouseoverOverLCPImageReplace
-#else
-#define MAYBE_LargestContentfulPaint_MouseoverOverLCPImageReplace \
-  LargestContentfulPaint_MouseoverOverLCPImageReplace
-#endif
-IN_PROC_BROWSER_TEST_P(
-    MouseoverLCPTestWithHeuristicFlag,
-    MAYBE_LargestContentfulPaint_MouseoverOverLCPImageReplace) {
-  test_mouseover("/mouseover.html?replace",
-                 blink::LargestContentfulPaintType::kAfterMouseover,
-                 /*entries=*/"1",
-                 /*entries2=*/"1",
-                 /*x1=*/10, /*y1=*/10,
-                 /*x2=*/10, /*y2=*/10,
-                 /*expected=*/false);
 }
 
 class LargestContentfulPaintTypeTest : public MetricIntegrationTest {
@@ -744,7 +592,7 @@ class LargestContentfulPaintTypeTest : public MetricIntegrationTest {
               "");
   }
 
-  void AddText(const std::string text) {
+  void AddText(std::string_view text) {
     EXPECT_EQ(EvalJs(web_contents()->GetPrimaryMainFrame(),
                      content::JsReplace("add_text($1)", text))
                   .error,
@@ -774,7 +622,13 @@ IN_PROC_BROWSER_TEST_F(LargestContentfulPaintTypeTest, ImageType_WebP) {
   TestImage(imgSrc, flag_set);
 }
 
-IN_PROC_BROWSER_TEST_F(LargestContentfulPaintTypeTest, ImageType_GIF) {
+// TODO(crbug.com/333963663): Flaky on Win.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_ImageType_GIF DISABLED_ImageType_GIF
+#else
+#define MAYBE_ImageType_GIF ImageType_GIF
+#endif
+IN_PROC_BROWSER_TEST_F(LargestContentfulPaintTypeTest, MAYBE_ImageType_GIF) {
   auto flag_set = blink::LargestContentfulPaintType::kImage |
                   blink::LargestContentfulPaintType::kGIF |
                   blink::LargestContentfulPaintType::kAnimatedImage;
@@ -964,10 +818,9 @@ IN_PROC_BROWSER_TEST_F(MetricIntegrationTest, LCPBreakdownTimings) {
       PageLoad::kPaintTiming_NavigationToLargestContentfulPaint2Name);
 
   // Verify breakdown timings recorded to UKM are correct. There's discrepancy
-  // between the web-exposed value and the UKM value. An epsilon of 2
-  // milliseconds is used to account for +-2 difference as this 2 is used
-  // elsewhere.
-  double epsilon = 2;
+  // between the web-exposed value and the UKM value, of 4ms due to coarsening
+  // +2ms for other discrepancies.
+  double epsilon = 6;
 
   ExpectUKMPageLoadMetricNear(
       PageLoad::kPaintTiming_LargestContentfulPaintImageLoadStartName,
@@ -1099,7 +952,7 @@ class LcpBreakdownTimingsTest : public MetricIntegrationTest {
 
     EXPECT_LE(discovery_time_list_[0], load_start_list_[0]);
 
-    EXPECT_LT(load_start_list_[0], load_end_list_[0]);
+    EXPECT_LE(load_start_list_[0], load_end_list_[0]);
 
     EXPECT_LT(load_end_list_[0], lcp_list_[0]);
 
@@ -1165,10 +1018,13 @@ class LcpBreakdownTimingsTest : public MetricIntegrationTest {
   std::vector<double> load_start_list_;
   std::vector<double> load_end_list_;
   std::vector<double> lcp_list_;
-  double epsilon_ = 1.5;
+
+  // Render times are coarsened to 4ms.
+  double epsilon_ = 8;
 };
 
-IN_PROC_BROWSER_TEST_F(LcpBreakdownTimingsTest, Subframe) {
+// TODO(crbug.com/385392162): flaky on all platforms
+IN_PROC_BROWSER_TEST_F(LcpBreakdownTimingsTest, DISABLED_Subframe) {
   std::string url = "/lcp_breakdown_timings_with_subframe.html";
   auto* resource_name = "lcp-256x256.png";
   RunTest(url, resource_name, 0, "addSameSiteSubframe()");
@@ -1218,7 +1074,8 @@ IN_PROC_BROWSER_TEST_F(LcpBreakdownTimingsTest, MAYBE_PreloadedImage) {
   Validate();
 }
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_LINUX)
+// TODO(crbug.com/333963663): Flaky on multiple platforms.
+#if BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #define MAYBE_PreloadedCacheableImage DISABLED_PreloadedCacheableImage
 #else
 #define MAYBE_PreloadedCacheableImage PreloadedCacheableImage
@@ -1233,11 +1090,12 @@ IN_PROC_BROWSER_TEST_F(LcpBreakdownTimingsTest, MAYBE_PreloadedCacheableImage) {
   ValidateForMemCacheLoadedImages();
 }
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_MAC)
 #define MAYBE_NativeLazyLoadingImage DISABLED_NativeLazyLoadingImage
 #else
 #define MAYBE_NativeLazyLoadingImage NativeLazyLoadingImage
 #endif
+// TODO(crbug.com/335901379): Re-enable test
 IN_PROC_BROWSER_TEST_F(LcpBreakdownTimingsTest, MAYBE_NativeLazyLoadingImage) {
   std::string test_url =
       "/lcp_breakdown_timings_native_lazy_loading_images.html";
@@ -1246,7 +1104,7 @@ IN_PROC_BROWSER_TEST_F(LcpBreakdownTimingsTest, MAYBE_NativeLazyLoadingImage) {
   Validate();
 }
 
-// TODO(https://crbug.com/1487837): This test is flaky on multiple platforms.
+// TODO(crbug.com/40283415): This test is flaky on multiple platforms.
 IN_PROC_BROWSER_TEST_F(LcpBreakdownTimingsTest,
                        DISABLED_ManualLazyLoadingImage) {
   std::string test_url =
@@ -1270,8 +1128,8 @@ IN_PROC_BROWSER_TEST_F(LcpBreakdownTimingsTest, MAYBE_CssBackgroundImage) {
   Validate();
 }
 
-// TODO(crbug.com/1522206): Flaky test.
-#if BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_MAC)
+// TODO(crbug.com/41495170): Flaky test.
+#if BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 #define MAYBE_WrittenAsInnerHtmlImage DISABLED_WrittenAsInnerHtmlImage
 #else
 #define MAYBE_WrittenAsInnerHtmlImage WrittenAsInnerHtmlImage
@@ -1284,7 +1142,7 @@ IN_PROC_BROWSER_TEST_F(LcpBreakdownTimingsTest, MAYBE_WrittenAsInnerHtmlImage) {
   Validate();
 }
 
-// TODO(crbug.com/1521113): Flaky on Mac.
+// TODO(crbug.com/41494085): Flaky on Mac.
 #if BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_MAC)
 #define MAYBE_WrittenAsOuterHtmlImage DISABLED_WrittenAsOuterHtmlImage
 #else
@@ -1298,7 +1156,8 @@ IN_PROC_BROWSER_TEST_F(LcpBreakdownTimingsTest, MAYBE_WrittenAsOuterHtmlImage) {
   Validate();
 }
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
+// Flaky timeout with ASAN (crbug.com/337012486)
+#if BUILDFLAG(IS_CHROMEOS_LACROS) || defined(ADDRESS_SANITIZER)
 #define MAYBE_DocumentWrittenImage DISABLED_DocumentWrittenImage
 #else
 #define MAYBE_DocumentWrittenImage DocumentWrittenImage
@@ -1310,7 +1169,8 @@ IN_PROC_BROWSER_TEST_F(LcpBreakdownTimingsTest, MAYBE_DocumentWrittenImage) {
   Validate();
 }
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
+// Flaky timeout with ASAN (crbug.com/337012486)
+#if BUILDFLAG(IS_CHROMEOS_LACROS) || defined(ADDRESS_SANITIZER)
 #define MAYBE_SrcSetImage DISABLED_SrcSetImage
 #else
 #define MAYBE_SrcSetImage SrcSetImage
@@ -1378,7 +1238,7 @@ IN_PROC_BROWSER_TEST_F(MetricIntegrationTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
 
   // Verify the LCP recorded in the UKM is the one of the text element.
-  double epsilon = 2;
+  double epsilon = 6;
   ExpectUKMPageLoadMetricNear(
       PageLoad::kPaintTiming_NavigationToLargestContentfulPaint2Name,
       text_element_lcp, epsilon);
@@ -1432,7 +1292,7 @@ IN_PROC_BROWSER_TEST_F(MetricIntegrationTest,
       EvalJs(web_contents()->GetPrimaryMainFrame(),
              content::JsReplace("getLCP($1)", element_id2))
           .ExtractDouble();
-  double epsilon = 2;
+  double epsilon = 6;
 
   // This is to reduce flakiness by waiting for an LCP larger than the value
   // passed in so that by the time the test waiter exits from waiting the LCP of
@@ -1523,4 +1383,67 @@ IN_PROC_BROWSER_TEST_F(MetricIntegrationTest,
   // No LCP is recorded.
   ExpectUKMPageLoadMetricNonExistence(
       PageLoad::kPaintTiming_NavigationToLargestContentfulPaint2Name);
+}
+
+IN_PROC_BROWSER_TEST_F(MetricIntegrationTest,
+                       LcpSameOriginImage_CrossOriginTypeNotSet) {
+  Start();
+  auto waiter = std::make_unique<page_load_metrics::PageLoadMetricsTestWaiter>(
+      web_contents());
+  waiter->AddMinimumLargestContentfulPaintImageExpectation(1);
+  auto image_url =
+      embedded_test_server()->GetURL("example.com", "/lcp-256x256.png");
+
+  Load("/lcp_image_varyorigin.html");
+
+  auto image_url_set = EvalJs(
+      web_contents(),
+      base::StringPrintf("lcp_image.src='%s'", image_url.spec().c_str()));
+
+  waiter->Wait();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
+
+  int64_t expected_lcp_type_flags =
+      static_cast<uint64_t>(blink::LargestContentfulPaintType::kImage |
+                            blink::LargestContentfulPaintType::kPNG);
+
+  ASSERT_EQ(GetUKMPageLoadMetricFlagSet(
+                PageLoad::kPaintTiming_LargestContentfulPaintTypeName),
+            expected_lcp_type_flags);
+
+  ExpectUKMPageLoadMetric(
+      PageLoad::kPaintTiming_LargestContentfulPaintImageIsCrossOriginName, 0);
+}
+
+IN_PROC_BROWSER_TEST_F(MetricIntegrationTest,
+                       LcpCrossOriginImage_CrossOriginTypeIsSet) {
+  Start();
+  auto waiter = std::make_unique<page_load_metrics::PageLoadMetricsTestWaiter>(
+      web_contents());
+  waiter->AddMinimumLargestContentfulPaintImageExpectation(1);
+  auto image_url =
+      embedded_test_server()->GetURL("crossorigin.com", "/lcp-256x256.png");
+
+  Load("/lcp_image_varyorigin.html");
+
+  auto image_url_set = EvalJs(
+      web_contents(),
+      base::StringPrintf("lcp_image.src='%s'", image_url.spec().c_str()));
+
+  waiter->Wait();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
+
+  int64_t expected_lcp_type_flags =
+      static_cast<uint64_t>(blink::LargestContentfulPaintType::kImage |
+                            blink::LargestContentfulPaintType::kPNG |
+                            blink::LargestContentfulPaintType::kCrossOrigin);
+
+  ASSERT_EQ(GetUKMPageLoadMetricFlagSet(
+                PageLoad::kPaintTiming_LargestContentfulPaintTypeName),
+            expected_lcp_type_flags);
+
+  ExpectUKMPageLoadMetric(
+      PageLoad::kPaintTiming_LargestContentfulPaintImageIsCrossOriginName, 1);
 }

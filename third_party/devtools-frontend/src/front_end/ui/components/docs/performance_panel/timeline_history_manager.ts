@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import * as FrontendHelpers from '../../../../../test/unittests/front_end/helpers/EnvironmentHelpers.js';
-import * as TraceLoader from '../../../../../test/unittests/front_end/helpers/TraceLoader.js';
-import * as TraceEngine from '../../../../models/trace/trace.js';
+import * as Trace from '../../../../models/trace/trace.js';
 import * as Timeline from '../../../../panels/timeline/timeline.js';
+import * as FrontendHelpers from '../../../../testing/EnvironmentHelpers.js';
+import * as TraceLoader from '../../../../testing/TraceLoader.js';
 import * as UI from '../../../legacy/legacy.js';
 import * as ComponentSetup from '../../helpers/helpers.js';
 
@@ -23,26 +23,23 @@ UI.ActionRegistration.registerActionExtension({
   },
 });
 
-// Adding the recording right after the profile is parsed is needed as
-// the recording relies on the trace bounds initialized in
-// |TraceLoader.allModels|
-
-// By default we run both engines in the dev server, but this can be overridden by passing the parameter.
-const {performanceModel: performanceModel1, traceParsedData: traceParsedData1} =
-    await TraceLoader.TraceLoader.allModels(null, 'multiple-navigations.json.gz');
+const {parsedTrace: parsedTrace1, metadata: metadata1} =
+    await TraceLoader.TraceLoader.traceEngine(null, 'multiple-navigations.json.gz');
+TraceLoader.TraceLoader.initTraceBoundsManager(parsedTrace1);
 
 new Timeline.TimelineHistoryManager.TimelineHistoryManager().addRecording({
   data: {
-    legacyModel: performanceModel1,
-    traceParseDataIndex: 0,
+    parsedTraceIndex: 0,
+    type: 'TRACE_INDEX',
   },
-  filmStripForPreview: TraceEngine.Extras.FilmStrip.fromTraceData(traceParsedData1),
-  traceParsedData: traceParsedData1,
-  startTime: null,
+  filmStripForPreview: Trace.Extras.FilmStrip.fromParsedTrace(parsedTrace1),
+  parsedTrace: parsedTrace1,
+  metadata: metadata1,
 });
 
-const {performanceModel: performanceModel2, traceParsedData: traceParsedData2} =
-    await TraceLoader.TraceLoader.allModels(null, 'web-dev.json.gz');
+const {parsedTrace: parsedTrace2, metadata: metadata2} =
+    await TraceLoader.TraceLoader.traceEngine(null, 'web-dev.json.gz');
+TraceLoader.TraceLoader.initTraceBoundsManager(parsedTrace2);
 const container = document.querySelector('.container');
 if (!container) {
   throw new Error('could not find container');
@@ -50,11 +47,11 @@ if (!container) {
 
 new Timeline.TimelineHistoryManager.TimelineHistoryManager().addRecording({
   data: {
-    legacyModel: performanceModel2,
-    traceParseDataIndex: 1,
+    parsedTraceIndex: 1,
+    type: 'TRACE_INDEX',
   },
-  filmStripForPreview: TraceEngine.Extras.FilmStrip.fromTraceData(traceParsedData2),
-  traceParsedData: traceParsedData2,
-  startTime: null,
+  filmStripForPreview: Trace.Extras.FilmStrip.fromParsedTrace(parsedTrace2),
+  parsedTrace: parsedTrace2,
+  metadata: metadata2,
 });
 await Timeline.TimelineHistoryManager.DropDown.show([0, 1], 1, container);

@@ -5,6 +5,7 @@
 #include "chrome/browser/usb/chrome_usb_delegate.h"
 
 #include <optional>
+#include <string_view>
 
 #include "base/barrier_closure.h"
 #include "base/test/gmock_callback_support.h"
@@ -32,7 +33,6 @@
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "base/command_line.h"
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "extensions/browser/extension_registry.h"
@@ -50,11 +50,11 @@ using ::base::test::TestFuture;
 using ::testing::_;
 using ::testing::NiceMock;
 
-constexpr base::StringPiece kDefaultTestUrl{"https://www.google.com/"};
-constexpr base::StringPiece kCrossOriginTestUrl{"https://www.chromium.org"};
+constexpr std::string_view kDefaultTestUrl{"https://www.google.com/"};
+constexpr std::string_view kCrossOriginTestUrl{"https://www.chromium.org"};
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-constexpr base::StringPiece kExtensionId{"ckcendljdlmgnhghiaomidhiiclmapok"};
+constexpr std::string_view kExtensionId{"ckcendljdlmgnhghiaomidhiiclmapok"};
 constexpr char kAllowlistedImprivataExtensionId[] =
     "dhodapiemamlmhlhblgcibabhdkohlen";
 constexpr char kAllowlistedSmartCardExtensionId[] =
@@ -177,7 +177,7 @@ class ChromeUsbTestHelper {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   // Creates a fake extension with the specified `extension_id` so that it can
   // exercise behaviors that are only enabled for privileged extensions.
-  std::optional<GURL> CreateExtensionWithId(base::StringPiece extension_id) {
+  std::optional<GURL> CreateExtensionWithId(std::string_view extension_id) {
     auto manifest = base::Value::Dict()
                         .Set("name", "Fake extension")
                         .Set("description", "For testing.")
@@ -213,7 +213,7 @@ class ChromeUsbTestHelper {
 
   void SetUpWebPageOriginUrl() { origin_url_ = GURL(kDefaultTestUrl); }
 
-  void SetUpExtensionOriginUrl(base::StringPiece extension_id) {
+  void SetUpExtensionOriginUrl(std::string_view extension_id) {
     auto extension_url = CreateExtensionWithId(extension_id);
     ASSERT_TRUE(extension_url);
     origin_url_ = *extension_url;
@@ -452,7 +452,8 @@ class ChromeUsbTestHelper {
     mojo::Remote<device::mojom::UsbDevice> device;
     service->GetDevice(device_info->guid, device.BindNewPipeAndPassReceiver());
     if (web_contents) {
-      EXPECT_FALSE(web_contents->IsConnectedToUsbDevice());
+      EXPECT_FALSE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kUSB));
     }
 
     // Open the device. Now the WebContents should indicate we are connected to
@@ -466,7 +467,8 @@ class ChromeUsbTestHelper {
     device->Open(open_future.GetCallback());
     EXPECT_TRUE(open_future.Get()->is_success());
     if (web_contents) {
-      EXPECT_TRUE(web_contents->IsConnectedToUsbDevice());
+      EXPECT_TRUE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kUSB));
     }
 
     // Close the device and check that the WebContents no longer indicates we
@@ -479,7 +481,8 @@ class ChromeUsbTestHelper {
     device->Close(loop.QuitClosure());
     loop.Run();
     if (web_contents) {
-      EXPECT_FALSE(web_contents->IsConnectedToUsbDevice());
+      EXPECT_FALSE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kUSB));
     }
   }
 
@@ -506,7 +509,8 @@ class ChromeUsbTestHelper {
     mojo::Remote<device::mojom::UsbDevice> device;
     service->GetDevice(device_info->guid, device.BindNewPipeAndPassReceiver());
     if (web_contents) {
-      EXPECT_FALSE(web_contents->IsConnectedToUsbDevice());
+      EXPECT_FALSE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kUSB));
     }
 
     // Open the device. Now the WebContents should indicate we are connected to
@@ -520,7 +524,8 @@ class ChromeUsbTestHelper {
     device->Open(open_future.GetCallback());
     EXPECT_TRUE(open_future.Get()->is_success());
     if (web_contents) {
-      EXPECT_TRUE(web_contents->IsConnectedToUsbDevice());
+      EXPECT_TRUE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kUSB));
     }
 
     // Remove the device and check that the WebContents no longer indicates we
@@ -538,7 +543,8 @@ class ChromeUsbTestHelper {
       base::RunLoop().RunUntilIdle();
     }
     if (web_contents) {
-      EXPECT_FALSE(web_contents->IsConnectedToUsbDevice());
+      EXPECT_FALSE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kUSB));
     }
   }
 
@@ -567,14 +573,16 @@ class ChromeUsbTestHelper {
     mojo::Remote<device::mojom::UsbDevice> device;
     service->GetDevice(device_info->guid, device.BindNewPipeAndPassReceiver());
     if (web_contents) {
-      EXPECT_FALSE(web_contents->IsConnectedToUsbDevice());
+      EXPECT_FALSE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kUSB));
     }
 
     TestFuture<device::mojom::UsbOpenDeviceResultPtr> open_future;
     device->Open(open_future.GetCallback());
     EXPECT_TRUE(open_future.Get()->is_success());
     if (web_contents) {
-      EXPECT_TRUE(web_contents->IsConnectedToUsbDevice());
+      EXPECT_TRUE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kUSB));
     }
 
     TestFuture<bool> set_configuration_future;
@@ -621,14 +629,16 @@ class ChromeUsbTestHelper {
       service->GetDevice(ccid_device_info->guid,
                          device.BindNewPipeAndPassReceiver());
       if (web_contents) {
-        EXPECT_FALSE(web_contents->IsConnectedToUsbDevice());
+        EXPECT_FALSE(web_contents->IsCapabilityActive(
+            content::WebContentsCapabilityType::kUSB));
       }
 
       TestFuture<device::mojom::UsbOpenDeviceResultPtr> open_future;
       device->Open(open_future.GetCallback());
       EXPECT_TRUE(open_future.Get()->is_success());
       if (web_contents) {
-        EXPECT_TRUE(web_contents->IsConnectedToUsbDevice());
+        EXPECT_TRUE(web_contents->IsCapabilityActive(
+            content::WebContentsCapabilityType::kUSB));
       }
 
       TestFuture<bool> set_configuration_future;
@@ -675,7 +685,7 @@ class ChromeUsbTestHelper {
   raw_ptr<MockUsbConnectionTracker, DanglingUntriaged> usb_connection_tracker_ =
       nullptr;
   // This flag is expected to be set to true only for the scenario of extension
-  // origin and kEnableWebUsbOnExtensionServiceWorker enabled.
+  // origin.
   bool supports_usb_connection_tracker_ = false;
 
  private:
@@ -726,7 +736,8 @@ class ChromeUsbDelegateRenderFrameTestBase
     mojo::Remote<device::mojom::UsbDevice> device;
     service->GetDevice(device_info->guid, device.BindNewPipeAndPassReceiver());
     if (web_contents) {
-      EXPECT_FALSE(web_contents->IsConnectedToUsbDevice());
+      EXPECT_FALSE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kUSB));
     }
 
     // Open the device. Now the WebContents should indicate we are connected to
@@ -737,7 +748,8 @@ class ChromeUsbDelegateRenderFrameTestBase
     device->Open(open_future.GetCallback());
     EXPECT_TRUE(open_future.Get()->is_success());
     if (web_contents) {
-      EXPECT_TRUE(web_contents->IsConnectedToUsbDevice());
+      EXPECT_TRUE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kUSB));
     }
 
     // Perform a cross-origin navigation. The WebContents should indicate we are
@@ -746,7 +758,8 @@ class ChromeUsbDelegateRenderFrameTestBase
     NavigateAndCommit(GURL(kCrossOriginTestUrl));
     base::RunLoop().RunUntilIdle();
     if (web_contents) {
-      EXPECT_FALSE(web_contents->IsConnectedToUsbDevice());
+      EXPECT_FALSE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kUSB));
     }
   }
 };
@@ -809,19 +822,6 @@ class ChromeUsbDelegateServiceWorkerTest
 };
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-class DisableWebUsbOnExtensionServiceWorkerHelper {
- public:
-  DisableWebUsbOnExtensionServiceWorkerHelper() {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{},
-        /*disabled_features=*/{
-            features::kEnableWebUsbOnExtensionServiceWorker});
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
 class ChromeUsbDelegateExtensionRenderFrameTest
     : public ChromeUsbDelegateRenderFrameTestBase {
  public:
@@ -853,35 +853,11 @@ class ChromeUsbDelegateSmartCardExtensionRenderFrameTest
   }
 };
 
-class ChromeUsbDelegateExtensionRenderFrameFeatureDisabledTest
-    : public ChromeUsbDelegateRenderFrameTestBase,
-      public DisableWebUsbOnExtensionServiceWorkerHelper {
- public:
-  ChromeUsbDelegateExtensionRenderFrameFeatureDisabledTest() {
-    // There is no usb connection tracker activity when
-    // features::kEnableWebUsbOnExtensionServiceWorker is disabled.
-    supports_usb_connection_tracker_ = false;
-  }
-  void SetUpOriginUrl() override { SetUpExtensionOriginUrl(kExtensionId); }
-};
-
 class ChromeUsbDelegateExtensionServiceWorkerTest
     : public ChromeUsbDelegateServiceWorkerTestBase {
  public:
   ChromeUsbDelegateExtensionServiceWorkerTest() {
     supports_usb_connection_tracker_ = true;
-  }
-  void SetUpOriginUrl() override { SetUpExtensionOriginUrl(kExtensionId); }
-};
-
-class ChromeUsbDelegateExtensionServiceWorkerFeatureDisabledTest
-    : public ChromeUsbDelegateServiceWorkerTestBase,
-      public DisableWebUsbOnExtensionServiceWorkerHelper {
- public:
-  ChromeUsbDelegateExtensionServiceWorkerFeatureDisabledTest() {
-    // There is no usb connection tracker activity when
-    // features::kEnableWebUsbOnExtensionServiceWorker is disabled.
-    supports_usb_connection_tracker_ = false;
   }
   void SetUpOriginUrl() override { SetUpExtensionOriginUrl(kExtensionId); }
 };
@@ -971,21 +947,6 @@ TEST_F(ChromeUsbDelegateSmartCardExtensionRenderFrameTest,
   TestAllowlistedSmartCardConnectorExtension(web_contents());
 }
 
-TEST_F(ChromeUsbDelegateExtensionRenderFrameFeatureDisabledTest,
-       OpenAndCloseDevice) {
-  TestOpenAndCloseDevice(web_contents());
-}
-
-TEST_F(ChromeUsbDelegateExtensionRenderFrameFeatureDisabledTest,
-       OpenAndDisconnectDevice) {
-  TestOpenAndDisconnectDevice(web_contents());
-}
-
-TEST_F(ChromeUsbDelegateExtensionServiceWorkerFeatureDisabledTest,
-       WebUsbServiceNotConnected) {
-  TestWebUsbServiceNotConnected();
-}
-
 TEST_F(ChromeUsbDelegateImprivataExtensionServiceWorkerTest,
        AllowlistedImprivataExtension) {
   TestAllowlistedImprivataExtension(nullptr);
@@ -1036,5 +997,5 @@ TEST(ChromeUsbDelegateBrowserContextTest, BrowserContextIsNull) {
                                  get_devices_future.GetCallback());
   EXPECT_TRUE(get_devices_future.Get().empty());
 
-  // TODO(crbug.com/1303193): Test GetDevice with null browser_context.
+  // TODO(crbug.com/40217296): Test GetDevice with null browser_context.
 }

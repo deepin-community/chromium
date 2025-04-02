@@ -27,6 +27,15 @@ http_archive(
     url = "https://github.com/abseil/abseil-cpp/releases/download/20240116.0/abseil-cpp-20240116.0.tar.gz"
 )
 
+http_archive(
+    name = "platforms",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/platforms/releases/download/0.0.10/platforms-0.0.10.tar.gz",
+        "https://github.com/bazelbuild/platforms/releases/download/0.0.10/platforms-0.0.10.tar.gz",
+    ],
+    sha256 = "218efe8ee736d26a3572663b374a253c012b716d8af0c07e842e82f238a0a7ee",
+)
+
 ################################################################################
 # Transitive dependencies for core FuzzTest
 ################################################################################
@@ -105,9 +114,9 @@ http_archive(
 
 http_archive(
     name = "com_google_googletest",
-    sha256 = "c12edde991f8346613d81ae34a78c4ddf36fc4275de12b0b0dd7eb5fa333c1a4",
-    strip_prefix = "googletest-456574145cf71a5375777cab58453acfd92a920b",
-    url = "https://github.com/google/googletest/archive/456574145cf71a5375777cab58453acfd92a920b.zip",
+    sha256 = "8ad598c73ad796e0d8280b082cebd82a630d73e73cd3c70057938a6501bba5d7",
+    strip_prefix = "googletest-1.14.0",
+    url = "https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz",
 )
 
 http_archive(
@@ -120,9 +129,9 @@ http_archive(
 
 http_archive(
     name = "com_google_protobuf",
-    integrity = "sha256-m9h7goDvcg0yQFFPiE5WpxLyIY8NaTtIBQyDYCiUCkI=",
-    strip_prefix = "protobuf-25.1",
-    url = "https://github.com/protocolbuffers/protobuf/releases/download/v25.1/protobuf-25.1.tar.gz"
+    integrity = "sha256-sjQKpH+vfvEKAygZAxnT877hsk9CbUzo9CU7byfOFts=",
+    strip_prefix = "protobuf-28.2",
+    url = "https://github.com/protocolbuffers/protobuf/releases/download/v28.2/protobuf-28.2.tar.gz"
 )
 
 load("@com_google_protobuf//:protobuf_deps.bzl", "protobuf_deps")

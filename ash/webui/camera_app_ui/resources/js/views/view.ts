@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import {assertExists, assertInstanceof} from '../assert.js';
+import {PtzController} from '../device/ptz_controller.js';
 import * as dom from '../dom.js';
 import {I18nString} from '../i18n_string.js';
 import * as state from '../state.js';
@@ -42,21 +43,11 @@ export type FlashEnterOptions = string;
 /**
  * Options for open PTZ panel.
  */
-export class PTZPanelOptions {
-  readonly stream: MediaStream;
+export class PtzPanelOptions {
+  readonly ptzController: PtzController;
 
-  readonly vidPid: string|null;
-
-  readonly resetPTZ: () => Promise<void>;
-
-  constructor({stream, vidPid, resetPTZ}: {
-    stream: MediaStream,
-    vidPid: string|null,
-    resetPTZ: () => Promise<void>,
-  }) {
-    this.stream = stream;
-    this.vidPid = vidPid;
-    this.resetPTZ = resetPTZ;
+  constructor(ptzController: PtzController) {
+    this.ptzController = ptzController;
   }
 }
 
@@ -109,14 +100,14 @@ export class OptionPanelOptions {
 // sort of "global" view registration, so we can enforce the enter / leave type
 // at compile time.
 export type EnterOptions = DialogEnterOptions|FlashEnterOptions|
-    OptionPanelOptions|PTZPanelOptions|WarningEnterOptions;
+    OptionPanelOptions|PtzPanelOptions|WarningEnterOptions;
 
 export type LeaveCondition = {
   kind: 'BACKGROUND_CLICKED'|'ESC_KEY_PRESSED'|'STREAMING_STOPPED',
 }|{
   kind: 'CLOSED',
   val?: unknown,
-}
+};
 
 interface ViewOptions {
   /**

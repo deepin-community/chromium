@@ -4,7 +4,7 @@
 
 #include "ash/system/overview/overview_button_tray.h"
 
-#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/constants/tray_background_view_catalog.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/resources/vector_icons/vector_icons.h"
@@ -30,6 +30,7 @@
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/image_view.h"
@@ -48,17 +49,7 @@ bool ShouldButtonBeVisible() {
     return false;
   }
 
-  // Check whether the button should be visible for 'kOverviewButton' feature,
-  // which is running as an experiment now. We want to enable it if the user has
-  // explicitly enabled `kOverviewButton` from chrome://flags or from the
-  // command line.
-  // Note: only check whether the feature is overridden from command line if the
-  // FeatureList is initialized.
-  const base::FeatureList* feature_list = base::FeatureList::GetInstance();
-  if ((feature_list && feature_list->IsFeatureOverriddenFromCommandLine(
-                           features::kOverviewButton.name,
-                           base::FeatureList::OVERRIDE_ENABLE_FEATURE)) ||
-      base::FeatureList::IsEnabled(features::kOverviewButton)) {
+  if (switches::IsOverviewButtonEnabledForTests()) {
     return true;
   }
 
@@ -93,6 +84,9 @@ OverviewButtonTray::OverviewButtonTray(Shelf* shelf)
   Shell::Get()->overview_controller()->AddObserver(this);
   Shell::Get()->tablet_mode_controller()->AddObserver(this);
   Shell::Get()->shelf_config()->AddObserver(this);
+
+  GetViewAccessibility().SetName(
+      l10n_util::GetStringUTF16(IDS_ASH_OVERVIEW_BUTTON_ACCESSIBLE_NAME));
 }
 
 OverviewButtonTray::~OverviewButtonTray() {
@@ -113,11 +107,11 @@ void OverviewButtonTray::SnapRippleToActivated() {
 
 void OverviewButtonTray::OnGestureEvent(ui::GestureEvent* event) {
   Button::OnGestureEvent(event);
-  // TODO(crbug/1374368): React to long press via `OnButtonPressed()` once this
-  // is enabled.
-  if (event->type() == ui::ET_GESTURE_LONG_PRESS) {
-    // TODO(crbug.com/970013): Properly implement the multi-display behavior (in
-    // tablet position with an external pointing device).
+  // TODO(crbug.com/40242435): React to long press via `OnButtonPressed()` once
+  // this is enabled.
+  if (event->type() == ui::EventType::kGestureLongPress) {
+    // TODO(crbug.com/40630467): Properly implement the multi-display behavior
+    // (in tablet position with an external pointing device).
     SplitViewController::Get(Shell::GetPrimaryRootWindow())
         ->OnOverviewButtonTrayLongPressed(event->location());
   }
@@ -144,15 +138,10 @@ void OverviewButtonTray::OnOverviewModeEnded() {
   SetIsActive(false);
 }
 
-void OverviewButtonTray::ClickedOutsideBubble() {}
+void OverviewButtonTray::ClickedOutsideBubble(const ui::LocatedEvent& event) {}
 
 void OverviewButtonTray::UpdateTrayItemColor(bool is_active) {
-  DCHECK(chromeos::features::IsJellyEnabled());
-  icon_->SetImage(GetIconImage());
-}
-
-std::u16string OverviewButtonTray::GetAccessibleNameForTray() {
-  return l10n_util::GetStringUTF16(IDS_ASH_OVERVIEW_BUTTON_ACCESSIBLE_NAME);
+  icon_->SetImage(ui::ImageModel::FromImageSkia(GetIconImage()));
 }
 
 void OverviewButtonTray::HandleLocaleChange() {}
@@ -163,7 +152,7 @@ void OverviewButtonTray::HideBubbleWithView(const TrayBubbleView* bubble_view) {
 
 void OverviewButtonTray::OnThemeChanged() {
   TrayBackgroundView::OnThemeChanged();
-  icon_->SetImage(GetIconImage());
+  icon_->SetImage(ui::ImageModel::FromImageSkia(GetIconImage()));
 }
 
 void OverviewButtonTray::HideBubble(const TrayBubbleView* bubble_view) {
@@ -239,7 +228,7 @@ void OverviewButtonTray::UpdateIconVisibility() {
 
 gfx::ImageSkia OverviewButtonTray::GetIconImage() {
   SkColor color;
-  if (GetColorProvider() && chromeos::features::IsJellyEnabled()) {
+  if (GetColorProvider()) {
     color = GetColorProvider()->GetColor(
         is_active() ? cros_tokens::kCrosSysSystemOnPrimaryContainer
                     : cros_tokens::kCrosSysOnSurface);

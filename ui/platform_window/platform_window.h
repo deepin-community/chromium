@@ -20,7 +20,6 @@ class scoped_refptr;
 
 namespace gfx {
 class ImageSkia;
-class Insets;
 class Point;
 class Rect;
 class SizeF;
@@ -70,6 +69,12 @@ class COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindow
   virtual void SetCapture() = 0;
   virtual void ReleaseCapture() = 0;
   virtual bool HasCapture() const = 0;
+
+  // Sets and releases video capture state for the platform-window.
+  virtual void SetVideoCapture();
+  // NOTE: This may not be called if the platform-window is deleted while
+  // video capture is still active.
+  virtual void ReleaseVideoCapture();
 
   // Enters or exits fullscreen when `fullscreen` is true or false respectively.
   // This operation may have no effect if the window is already in the specified
@@ -177,12 +182,6 @@ class COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindow
   // specifying the decoration insets.
   virtual bool CanSetDecorationInsets() const;
 
-  // Lets the WM know which portion of the window is the frame decoration.  The
-  // WM may use this to eg. snap windows to each other starting where the window
-  // begins rather than starting where the shadow begins.  If |insets_px| is
-  // nullptr, then any existing insets will be reset.
-  virtual void SetDecorationInsets(const gfx::Insets* insets_px);
-
   // Sets a hint for the compositor so it can avoid unnecessarily redrawing
   // occluded portions of windows.  If |region_px| is nullopt or empty, then any
   // existing region will be reset.
@@ -202,21 +201,6 @@ class COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindow
   // Notifies the DE that the app is done loading, so that it can dismiss any
   // loading animations.
   virtual void NotifyStartupComplete(const std::string& startup_id);
-
-  // Shows tooltip with this platform window as a parent window.
-  // `position` is relative to this platform window.
-  // `show_delay` and `hide_delay` specify the delay before showing or hiding
-  // tooltip on server side. `show_delay` may be set to zero only for testing.
-  // If `hide_delay` is zero, the tooltip will not be hidden by timer on server
-  // side.
-  virtual void ShowTooltip(const std::u16string& text,
-                           const gfx::Point& position,
-                           const PlatformWindowTooltipTrigger trigger,
-                           const base::TimeDelta show_delay,
-                           const base::TimeDelta hide_delay) {}
-
-  // Hides tooltip.
-  virtual void HideTooltip() {}
 };
 
 }  // namespace ui

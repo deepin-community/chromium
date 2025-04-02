@@ -8,10 +8,9 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
-#include "base/containers/cxx20_erase.h"
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
 #include "base/time/time.h"
 #include "cc/animation/animation.h"
 #include "cc/animation/animation_host.h"
@@ -81,6 +80,10 @@ void KeyframeEffect::SetNeedsPushProperties() {
   }
 
   animation_->SetNeedsPushProperties();
+}
+
+void KeyframeEffect::ResetNeedsPushProperties() {
+  needs_push_properties_ = false;
 }
 
 void KeyframeEffect::BindElementAnimations(
@@ -188,20 +191,18 @@ void KeyframeEffect::UpdateTickingState() {
   }
   if (was_ticking && !is_ticking_) {
     awaiting_deletion_ = false;
-    if (base::FeatureList::IsEnabled(features::kNoPreserveLastMutation)) {
-      for (const auto& keyframe_model : keyframe_models()) {
-        // deleted impl side keyframe models keep ticking until the commit
-        // removes them.
-        KeyframeModel* cc_keyframe_model =
-            KeyframeModel::ToCcKeyframeModel(keyframe_model.get());
-        if (keyframe_model->run_state() ==
-                gfx::KeyframeModel::WAITING_FOR_DELETION &&
-            cc_keyframe_model->is_controlling_instance() &&
-            !cc_keyframe_model->is_impl_only()) {
-          awaiting_deletion_ = true;
-          is_ticking_ = true;
-          break;
-        }
+    for (const auto& keyframe_model : keyframe_models()) {
+      // deleted impl side keyframe models keep ticking until the commit
+      // removes them.
+      KeyframeModel* cc_keyframe_model =
+          KeyframeModel::ToCcKeyframeModel(keyframe_model.get());
+      if (keyframe_model->run_state() ==
+              gfx::KeyframeModel::WAITING_FOR_DELETION &&
+          cc_keyframe_model->is_controlling_instance() &&
+          !cc_keyframe_model->is_impl_only()) {
+        awaiting_deletion_ = true;
+        is_ticking_ = true;
+        break;
       }
     }
   }
@@ -217,7 +218,7 @@ void KeyframeEffect::Pause(base::TimeTicks timeline_time,
                            PauseCondition pause_condition) {
   bool did_pause = false;
   for (auto& keyframe_model : keyframe_models()) {
-    // TODO(crbug.com/1076012): KeyframeEffect is paused with local time for
+    // TODO(crbug.com/40688021): KeyframeEffect is paused with local time for
     // scroll-linked animations. To make sure the start event of a keyframe
     // model is sent to blink, we should not set its run state to PAUSED until
     // such event is sent. This should be revisited once KeyframeEffect is able
@@ -247,7 +248,7 @@ void KeyframeEffect::AddKeyframeModel(
          keyframe_model->TargetProperty() == TargetProperty::SCROLL_OFFSET);
   // This is to make sure that keyframe models in the same group, i.e., start
   // together, don't animate the same property.
-  DCHECK(base::ranges::none_of(
+  DCHECK(std::ranges::none_of(
       keyframe_models(), [&](const auto& existing_keyframe_model) {
         auto* cc_existing_keyframe_model =
             KeyframeModel::ToCcKeyframeModel(existing_keyframe_model.get());
@@ -271,7 +272,7 @@ void KeyframeEffect::AddKeyframeModel(
     // We should never have more than one scroll offset animation queued on the
     // same scrolling element as this would result in multiple automated
     // scrolls.
-    DCHECK(base::ranges::none_of(
+    DCHECK(std::ranges::none_of(
         keyframe_models(), [&](const auto& existing_keyframe_model) {
           auto* cc_existing_keyframe_model =
               KeyframeModel::ToCcKeyframeModel(existing_keyframe_model.get());
@@ -448,7 +449,7 @@ bool KeyframeEffect::DispatchAnimationEventToKeyframeModel(
       break;
 
     case AnimationEvent::Type::kTakeOver:
-      // TODO(crbug.com/1018213): Routing TAKEOVER events is broken.
+      // TODO(crbug.com/40655283): Routing TAKEOVER events is broken.
       // We need to purge KeyframeModels marked for deletion on CT.
       SetNeedsPushProperties();
       dispatched = true;
@@ -459,7 +460,6 @@ bool KeyframeEffect::DispatchAnimationEventToKeyframeModel(
       // main thread worklet animations. Keyframe models are not involved in
       // this process.
       NOTREACHED();
-      break;
   }
   return dispatched;
 }
@@ -484,7 +484,7 @@ bool KeyframeEffect::RequiresInvalidation() const {
 
 bool KeyframeEffect::AffectsNativeProperty() const {
   for (const auto& it : keyframe_models()) {
-    // TODO(crbug.com/1257778): include the SCROLL_OFFSET here so that we won't
+    // TODO(crbug.com/40796582): include the SCROLL_OFFSET here so that we won't
     // create a compositor animation frame sequence tracker when there is a
     // composited scroll.
     if (it->TargetProperty() != TargetProperty::CSS_CUSTOM_PROPERTY &&
@@ -628,7 +628,7 @@ void KeyframeEffect::MarkAbortedKeyframeModelsForDeletion(
 }
 
 void KeyframeEffect::PurgeKeyframeModelsMarkedForDeletion(bool impl_only) {
-  base::EraseIf(keyframe_models(), [impl_only](const auto& keyframe_model) {
+  std::erase_if(keyframe_models(), [impl_only](const auto& keyframe_model) {
     return keyframe_model->run_state() ==
                gfx::KeyframeModel::WAITING_FOR_DELETION &&
            (!impl_only || KeyframeModel::ToCcKeyframeModel(keyframe_model.get())
@@ -637,7 +637,7 @@ void KeyframeEffect::PurgeKeyframeModelsMarkedForDeletion(bool impl_only) {
 }
 
 void KeyframeEffect::PurgeDeletedKeyframeModels() {
-  base::EraseIf(keyframe_models(), [](const auto& keyframe_model) {
+  std::erase_if(keyframe_models(), [](const auto& keyframe_model) {
     return keyframe_model->run_state() ==
                gfx::KeyframeModel::WAITING_FOR_DELETION &&
            !KeyframeModel::ToCcKeyframeModel(keyframe_model.get())
@@ -732,6 +732,8 @@ void KeyframeEffect::PushPropertiesTo(
   if (!needs_push_properties_)
     return;
   needs_push_properties_ = false;
+
+  keyframe_effect_impl->SetNeedsPushProperties();
 
   // Synchronize the keyframe_model target between main and impl side.
   if (element_id_ != keyframe_effect_impl->element_id_) {
@@ -1022,7 +1024,7 @@ void KeyframeEffect::MarkKeyframeModelsForDeletion(
                                       cc_keyframe_model->group());
 
     bool a_keyframe_model_in_same_group_is_not_finished =
-        base::ranges::any_of(keyframe_models_in_same_group, [&](size_t index) {
+        std::ranges::any_of(keyframe_models_in_same_group, [&](size_t index) {
           auto* keyframe_model =
               KeyframeModel::ToCcKeyframeModel(keyframe_models()[index].get());
           return !keyframe_model->is_finished() ||

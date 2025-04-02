@@ -111,7 +111,7 @@ class MarkupAccumulator::NamespaceContext final {
                             : local_default_namespace);
   }
 
-  const Vector<AtomicString> PrefixList(const AtomicString& ns) const {
+  Vector<AtomicString> PrefixList(const AtomicString& ns) const {
     auto it = ns_prefixes_map_.find(ns ? ns : g_empty_atom);
     return it != ns_prefixes_map_.end() ? it->value : Vector<AtomicString>();
   }
@@ -144,9 +144,11 @@ class MarkupAccumulator::ElementSerializationData final {
 MarkupAccumulator::MarkupAccumulator(
     AbsoluteURLs resolve_urls_method,
     SerializationType serialization_type,
-    const ShadowRootInclusion& shadow_root_inclusion)
+    const ShadowRootInclusion& shadow_root_inclusion,
+    AttributesMode attributes_mode)
     : formatter_(resolve_urls_method, serialization_type),
-      shadow_root_inclusion_(shadow_root_inclusion) {}
+      shadow_root_inclusion_(shadow_root_inclusion),
+      attributes_mode_(attributes_mode) {}
 
 MarkupAccumulator::~MarkupAccumulator() = default;
 
@@ -166,7 +168,6 @@ void MarkupAccumulator::AppendStartMarkup(const Node& node) {
       break;
     case Node::kElementNode:
       NOTREACHED();
-      break;
     case Node::kAttributeNode:
       // Only XMLSerializer can pass an Attr.  So, |documentIsHTML| flag is
       // false.
@@ -181,22 +182,26 @@ void MarkupAccumulator::AppendStartMarkup(const Node& node) {
 
 void MarkupAccumulator::AppendCustomAttributes(const Element&) {}
 
-bool MarkupAccumulator::ShouldIgnoreAttribute(
+MarkupAccumulator::EmitAttributeChoice MarkupAccumulator::WillProcessAttribute(
     const Element& element,
     const Attribute& attribute) const {
-  return false;
+  return EmitAttributeChoice::kEmit;
 }
 
-bool MarkupAccumulator::ShouldIgnoreElement(const Element& element) const {
-  return false;
+MarkupAccumulator::EmitElementChoice MarkupAccumulator::WillProcessElement(
+    const Element& element) {
+  return EmitElementChoice::kEmit;
 }
 
 AtomicString MarkupAccumulator::AppendElement(const Element& element) {
   const ElementSerializationData data = AppendStartTagOpen(element);
+  AttributeCollection attributes =
+      attributes_mode_ == AttributesMode::kSynchronized
+          ? element.Attributes()
+          : element.AttributesWithoutUpdate();
   if (SerializeAsHTML()) {
     // https://html.spec.whatwg.org/C/#html-fragment-serialisation-algorithm
 
-    AttributeCollection attributes = element.Attributes();
     // 3.2. Element: If current node's is value is not null, and the
     // element does not have an is attribute in its attribute list, ...
     const AtomicString& is_value = element.IsValue();
@@ -204,13 +209,15 @@ AtomicString MarkupAccumulator::AppendElement(const Element& element) {
       AppendAttribute(element, Attribute(html_names::kIsAttr, is_value));
     }
     for (const auto& attribute : attributes) {
-      if (!ShouldIgnoreAttribute(element, attribute))
+      if (EmitAttributeChoice::kEmit ==
+          WillProcessAttribute(element, attribute)) {
         AppendAttribute(element, attribute);
+      }
     }
   } else {
     // https://w3c.github.io/DOM-Parsing/#xml-serializing-an-element-node
 
-    for (const auto& attribute : element.Attributes()) {
+    for (const auto& attribute : attributes) {
       if (data.ignore_namespace_definition_attribute_ &&
           attribute.NamespaceURI() == xmlns_names::kNamespaceURI &&
           attribute.Prefix().empty()) {
@@ -219,8 +226,10 @@ AtomicString MarkupAccumulator::AppendElement(const Element& element) {
         if (!EqualIgnoringNullity(attribute.Value(), element.namespaceURI()))
           continue;
       }
-      if (!ShouldIgnoreAttribute(element, attribute))
+      if (EmitAttributeChoice::kEmit ==
+          WillProcessAttribute(element, attribute)) {
         AppendAttribute(element, attribute);
+      }
     }
   }
 
@@ -564,22 +573,25 @@ using Behavior = ShadowRootInclusion::Behavior;
 std::pair<ShadowRoot*, HTMLTemplateElement*> MarkupAccumulator::GetShadowTree(
     const Element& element) const {
   ShadowRoot* shadow_root = element.GetShadowRoot();
-  if (!shadow_root || shadow_root->GetType() == ShadowRootType::kUserAgent) {
+  if (!shadow_root || shadow_root->GetMode() == ShadowRootMode::kUserAgent) {
     // User agent shadow roots are never serialized.
     return std::pair<ShadowRoot*, HTMLTemplateElement*>();
   }
-  const bool explicitly_included =
-      shadow_root_inclusion_.include_shadow_roots.Contains(shadow_root);
-  if (!explicitly_included) {
-    const bool closed_root = shadow_root->GetType() == ShadowRootType::kClosed;
-    const bool only_if_explicitly_included =
-        shadow_root_inclusion_.behavior == Behavior::kOnlyProvidedShadowRoots;
-    const bool not_serializable =
-        shadow_root_inclusion_.behavior ==
-            Behavior::kIncludeAllSerializableShadowRoots &&
-        !shadow_root->serializable();
-    if (closed_root || only_if_explicitly_included || not_serializable) {
-      return std::pair<ShadowRoot*, HTMLTemplateElement*>();
+  if (!shadow_root_inclusion_.include_shadow_roots.Contains(shadow_root)) {
+    std::pair<ShadowRoot*, HTMLTemplateElement*> no_serialization;
+    switch (shadow_root_inclusion_.behavior) {
+      case Behavior::kOnlyProvidedShadowRoots:
+        return no_serialization;
+      case Behavior::kIncludeAllOpenShadowRoots:
+        if (shadow_root->GetMode() == ShadowRootMode::kClosed) {
+          return no_serialization;
+        }
+        break;
+      case Behavior::kIncludeAnySerializableShadowRoots:
+        if (!shadow_root->serializable()) {
+          return no_serialization;
+        }
+        break;
     }
   }
 
@@ -588,19 +600,18 @@ std::pair<ShadowRoot*, HTMLTemplateElement*> MarkupAccumulator::GetShadowTree(
   HTMLTemplateElement* template_element =
       MakeGarbageCollected<HTMLTemplateElement>(element.GetDocument());
   template_element->setAttribute(html_names::kShadowrootmodeAttr,
-                                 shadow_root->GetType() == ShadowRootType::kOpen
+                                 shadow_root->GetMode() == ShadowRootMode::kOpen
                                      ? keywords::kOpen
                                      : keywords::kClosed);
   if (shadow_root->delegatesFocus()) {
     template_element->SetBooleanAttribute(
         html_names::kShadowrootdelegatesfocusAttr, true);
   }
-  if (shadow_root->serializable() &&
-      RuntimeEnabledFeatures::DeclarativeShadowDOMSerializableEnabled()) {
-    template_element->SetBooleanAttribute(html_names::kSerializableAttr, true);
+  if (shadow_root->serializable()) {
+    template_element->SetBooleanAttribute(
+        html_names::kShadowrootserializableAttr, true);
   }
-  if (shadow_root->clonable() &&
-      RuntimeEnabledFeatures::ShadowRootClonableEnabled()) {
+  if (shadow_root->clonable()) {
     template_element->SetBooleanAttribute(html_names::kShadowrootclonableAttr,
                                           true);
   }
@@ -621,8 +632,10 @@ void MarkupAccumulator::SerializeNodesWithNamespaces(
   }
 
   const auto& target_element = To<Element>(target_node);
-  if (ShouldIgnoreElement(target_element))
+  EmitElementChoice emit_choice = WillProcessElement(target_element);
+  if (emit_choice == EmitElementChoice::kIgnore) {
     return;
+  }
 
   PushNamespaces(target_element);
 
@@ -633,29 +646,38 @@ void MarkupAccumulator::SerializeNodesWithNamespaces(
   bool has_end_tag =
       !(SerializeAsHTML() && ElementCannotHaveEndTag(target_element));
   if (has_end_tag) {
-    const Node* parent = &target_element;
-    if (auto* template_element =
-            DynamicTo<HTMLTemplateElement>(target_element)) {
-      // Declarative shadow roots that are currently being parsed will have a
-      // null content() - don't serialize contents in this case.
-      parent = template_element->content();
-    }
-    if (parent) {
-      for (const Node& child : Strategy::ChildrenOf(*parent))
-        SerializeNodesWithNamespaces<Strategy>(child, kIncludeNode);
-    }
+    if (emit_choice != EmitElementChoice::kEmitButIgnoreChildren) {
+      const Node* parent = &target_element;
+      if (auto* template_element =
+              DynamicTo<HTMLTemplateElement>(target_element)) {
+        // Declarative shadow roots that are currently being parsed will have a
+        // null content() - don't serialize contents in this case.
+        parent = template_element->content();
+      }
 
-    // Traverses the shadow tree.
-    std::pair<Node*, Element*> auxiliary_pair = GetShadowTree(target_element);
-    if (Node* auxiliary_tree = auxiliary_pair.first) {
-      Element* enclosing_element = auxiliary_pair.second;
-      AtomicString enclosing_element_prefix;
-      if (enclosing_element)
-        enclosing_element_prefix = AppendElement(*enclosing_element);
-      for (const Node& child : Strategy::ChildrenOf(*auxiliary_tree))
-        SerializeNodesWithNamespaces<Strategy>(child, kIncludeNode);
-      if (enclosing_element)
-        AppendEndTag(*enclosing_element, enclosing_element_prefix);
+      // Traverses the shadow tree.
+      std::pair<ShadowRoot*, Element*> auxiliary_pair =
+          GetShadowTree(target_element);
+      if (ShadowRoot* auxiliary_tree = auxiliary_pair.first) {
+        Element* enclosing_element = auxiliary_pair.second;
+        AtomicString enclosing_element_prefix;
+        if (enclosing_element) {
+          enclosing_element_prefix = AppendElement(*enclosing_element);
+        }
+        for (const Node& child : Strategy::ChildrenOf(*auxiliary_tree)) {
+          SerializeNodesWithNamespaces<Strategy>(child, kIncludeNode);
+        }
+        if (enclosing_element) {
+          WillCloseSyntheticTemplateElement(*auxiliary_tree);
+          AppendEndTag(*enclosing_element, enclosing_element_prefix);
+        }
+      }
+
+      if (parent) {
+        for (const Node& child : Strategy::ChildrenOf(*parent)) {
+          SerializeNodesWithNamespaces<Strategy>(child, kIncludeNode);
+        }
+      }
     }
 
     if (!children_only)

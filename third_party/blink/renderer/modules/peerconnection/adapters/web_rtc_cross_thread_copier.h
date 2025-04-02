@@ -12,11 +12,11 @@
 #include <vector>
 
 #include "base/unguessable_token.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/webrtc/api/rtc_error.h"
 #include "third_party/webrtc/api/scoped_refptr.h"
+#include "third_party/webrtc/api/transport/network_types.h"
 
 namespace cricket {
 class Candidate;
@@ -66,9 +66,9 @@ struct CrossThreadCopier<std::set<rtc::SocketAddress>>
 };
 
 template <>
-struct CrossThreadCopier<blink::WebVector<cricket::RelayServerConfig>>
+struct CrossThreadCopier<std::vector<cricket::RelayServerConfig>>
     : public CrossThreadCopierPassThrough<
-          blink::WebVector<cricket::RelayServerConfig>> {
+          std::vector<cricket::RelayServerConfig>> {
   STATIC_ONLY(CrossThreadCopier);
 };
 
@@ -150,6 +150,18 @@ struct CrossThreadCopier<rtc::scoped_refptr<webrtc::VideoTrackInterface>>
 template <>
 struct CrossThreadCopier<webrtc::DataBuffer>
     : public CrossThreadCopierPassThrough<webrtc::DataBuffer> {
+  STATIC_ONLY(CrossThreadCopier);
+};
+
+template <>
+struct CrossThreadCopier<webrtc::TransportPacketsFeedback>
+    : public CrossThreadCopierPassThrough<webrtc::TransportPacketsFeedback> {
+  STATIC_ONLY(CrossThreadCopier);
+};
+
+template <>
+struct CrossThreadCopier<webrtc::SentPacket>
+    : public CrossThreadCopierPassThrough<webrtc::SentPacket> {
   STATIC_ONLY(CrossThreadCopier);
 };
 

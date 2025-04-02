@@ -18,9 +18,11 @@ limitations under the License.
 
 #include <vector>
 
+#include "absl/status/status.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Value.h"
+#include "llvm/Support/AtomicOrdering.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/service/gpu/hlo_to_ir_bindings.h"
@@ -29,6 +31,7 @@ limitations under the License.
 #include "xla/service/llvm_ir/ir_array.h"
 #include "xla/service/llvm_ir/ir_builder_mixin.h"
 #include "xla/service/llvm_ir/loop_emitter.h"
+#include "xla/shape_util.h"
 
 namespace xla {
 namespace gpu {
@@ -72,7 +75,6 @@ class IrEmitter : public DfsHloVisitorWithDefault,
   absl::Status HandleParameter(HloInstruction* parameter) override;
   absl::Status HandleTuple(HloInstruction* tuple) override;
   absl::Status HandleScatter(HloInstruction* scatter) override;
-  absl::Status HandleFusion(HloInstruction* fusion) override;
   absl::Status HandleCall(HloInstruction* call) override;
   absl::Status HandleCustomCall(HloInstruction* custom_call) override;
   absl::Status HandleBatchNormInference(HloInstruction* batch_norm) override;
@@ -84,7 +86,7 @@ class IrEmitter : public DfsHloVisitorWithDefault,
     return absl::OkStatus();
   }
 
-  llvm::IRBuilder<>* builder() { return &b_; }
+  llvm::IRBuilderBase* builder() { return &b_; }
 
  protected:
   // Constructs an IrEmitter with the given IrEmitter context.
@@ -135,21 +137,6 @@ class IrEmitter : public DfsHloVisitorWithDefault,
   // Bind all argument IrArrays of `fusion` to `fused_emitter`.
   void BindFusionArguments(const HloInstruction* fusion,
                            FusedIrEmitter* fused_emitter);
-
-  // Emit a fence for AMDGPU if necessary.
-  void MaybeEmitFenceForAMDGPU(llvm::AtomicOrdering atomic_ordering,
-                               const char* sync_scope_id);
-
- private:
-  // A helper method for HandleSort(). It adds the inner comparison loop where
-  // we compare elements pointed to by 'keys_index' and 'compare_keys_index'.
-  void EmitCompareLoop(int64_t dimension_to_sort,
-                       const llvm_ir::IrArray::Index& keys_index,
-                       const llvm_ir::IrArray::Index& compare_keys_index,
-                       const llvm_ir::IrArray& keys_array);
-
-  // A convenience method to determine whether or not IR is emitted for AMDGPU.
-  bool IsEmittingForAMDGPU() const;
 };
 
 }  // namespace gpu

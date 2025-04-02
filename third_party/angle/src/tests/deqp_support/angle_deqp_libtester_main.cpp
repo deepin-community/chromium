@@ -59,7 +59,7 @@ ANGLE_LIBTESTER_EXPORT bool deqp_libtester_init_platform(int argc,
         setvbuf(stdout, DE_NULL, _IOLBF, 4 * 1024);
 #endif
         g_platform = CreateANGLEPlatform(reinterpret_cast<angle::LogErrorFunc>(logErrorFunc),
-                                         options.preRotation);
+                                         options.preRotation, options.driverOption);
 
         if (!deSetRoundingMode(DE_ROUNDINGMODE_TO_NEAREST_EVEN))
         {
@@ -71,7 +71,7 @@ ANGLE_LIBTESTER_EXPORT bool deqp_libtester_init_platform(int argc,
         char deqpDataDir[kMaxDataDirLen];
         if (!angle::FindTestDataPath(ANGLE_DEQP_DATA_DIR, deqpDataDir, kMaxDataDirLen))
         {
-            std::cout << "Failed to find dEQP data directory." << std::endl;
+            std::cout << "Failed to find dEQP data directory: " << ANGLE_DEQP_DATA_DIR << std::endl;
             return false;
         }
 

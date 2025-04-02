@@ -35,7 +35,7 @@ bool FFmpegH264ToAnnexBBitstreamConverter::ConvertPacket(AVPacket* packet) {
     if (!stream_codec_parameters_->extradata ||
         stream_codec_parameters_->extradata_size <= 0) {
       DVLOG(2) << __func__ << ": Empty extra data";
-      return false;
+      return true;
     }
 
     avc_config = std::make_unique<mp4::AVCDecoderConfigurationRecord>();
@@ -78,6 +78,10 @@ bool FFmpegH264ToAnnexBBitstreamConverter::ConvertPacket(AVPacket* packet) {
     DVLOG(2) << __func__ << ": ConvertNalUnitStreamToByteStream() failure";
     return false;
   }
+
+  // It is possible for the actual size to be smaller than the computed
+  // allocation size.
+  dest_packet.size = io_size;
 
   if (avc_config)
     configuration_processed_ = true;

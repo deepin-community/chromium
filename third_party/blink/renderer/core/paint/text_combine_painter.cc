@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/core/paint/paint_info.h"
 #include "third_party/blink/renderer/core/paint/text_decoration_painter.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
+#include "third_party/blink/renderer/platform/fonts/shaping/caching_word_shaper.h"
 #include "third_party/blink/renderer/platform/fonts/text_fragment_paint_info.h"
 #include "third_party/blink/renderer/platform/fonts/text_run_paint_info.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
@@ -16,11 +17,14 @@
 
 namespace blink {
 
-TextCombinePainter::TextCombinePainter(GraphicsContext& context,
-                                       const gfx::Rect& visual_rect,
-                                       const ComputedStyle& style,
-                                       const LineRelativeOffset& text_origin)
+TextCombinePainter::TextCombinePainter(
+    GraphicsContext& context,
+    const SvgContextPaints* svg_context_paints,
+    const gfx::Rect& visual_rect,
+    const ComputedStyle& style,
+    const LineRelativeOffset& text_origin)
     : TextPainter(context,
+                  svg_context_paints,
                   style.GetFont(),
                   visual_rect,
                   text_origin,
@@ -68,18 +72,19 @@ void TextCombinePainter::Paint(const PaintInfo& paint_info,
           style.GetWritingMode()));
 
   TextCombinePainter text_painter(paint_info.context,
+                                  paint_info.GetSvgContextPaints(),
                                   text_combine.VisualRectForPaint(paint_offset),
                                   style, text_frame_rect.offset);
-  const TextPaintStyle text_style = TextPainterBase::TextPaintingStyle(
+  const TextPaintStyle text_style = TextPainter::TextPaintingStyle(
       text_combine.GetDocument(), style, paint_info);
 
   // Setup arguments for painting text decorations
   std::optional<TextDecorationInfo> decoration_info;
   std::optional<TextDecorationPainter> decoration_painter;
   if (has_text_decoration) {
-    decoration_info.emplace(text_frame_rect.offset,
-                            text_frame_rect.InlineSize(), style,
-                            /* inline_context */ nullptr, std::nullopt);
+    decoration_info.emplace(
+        text_frame_rect.offset, text_frame_rect.InlineSize(), style,
+        /* inline_context */ nullptr, TextDecorationLine::kNone, Color());
     decoration_painter.emplace(text_painter, /* inline_context */ nullptr,
                                paint_info, style, text_style, text_frame_rect,
                                nullptr);
@@ -120,25 +125,49 @@ void TextCombinePainter::PaintEmphasisMark(const TextPaintStyle& text_style,
   SetEmphasisMark(style_.TextEmphasisMarkString(),
                   style_.GetTextEmphasisPosition());
   DCHECK(emphasis_mark_font.GetFontDescription().IsVerticalBaseline());
-  DCHECK(emphasis_mark_);
-  const SimpleFontData* const font_data = font_.PrimaryFont();
+  DCHECK(emphasis_mark());
+  const SimpleFontData* const font_data = font().PrimaryFont();
   DCHECK(font_data);
   if (!font_data) {
     return;
   }
   if (text_style.emphasis_mark_color != text_style.fill_color) {
     // See virtual/text-antialias/emphasis-combined-text.html
-    graphics_context_.SetFillColor(text_style.emphasis_mark_color);
+    graphics_context().SetFillColor(text_style.emphasis_mark_color);
   }
 
   const int font_ascent = font_data->GetFontMetrics().Ascent();
-  const TextRun placeholder_text_run(&kIdeographicFullStopCharacter, 1);
+  // https://drafts.csswg.org/css-writing-modes/#text-combine-layout
+  // > For other text layout purposes, e.g. emphasis marks, text-decoration,
+  // > spacing, etc. the resulting composition is treated as a single glyph
+  // > representing the Object Replacement Character U+FFFC.
+  //
+  // However the shape size of U+FFFC isn't suitable for emphasis mark
+  // positioning. We use Hiragana Letter A instead. See crbug.com/40386493
+  const TextRun placeholder_text_run(
+      base::span_from_ref(WTF::unicode::kHiraganaLetterACharacter));
   const gfx::PointF emphasis_mark_text_origin =
-      gfx::PointF(text_origin_) +
-      gfx::Vector2dF(0, font_ascent + emphasis_mark_offset_);
-  const TextRunPaintInfo text_run_paint_info(placeholder_text_run);
-  graphics_context_.DrawEmphasisMarks(
-      emphasis_mark_font, text_run_paint_info, emphasis_mark_,
+      gfx::PointF(text_origin()) +
+      gfx::Vector2dF(0, font_ascent + emphasis_mark_offset());
+
+  if (RuntimeEnabledFeatures::TextCombineEmphasisNGEnabled()) {
+    // TODO(crbug.com/389726691): Remove the CachingWordShaper usage.
+    CachingWordShaper word_shaper(emphasis_mark_font);
+    ShapeResultBuffer buffer;
+    word_shaper.FillResultBuffer(placeholder_text_run, &buffer);
+    if (buffer.ShapeResultSize() == 0) {
+      return;
+    }
+    graphics_context().DrawEmphasisMarks(
+        emphasis_mark_font,
+        TextFragmentPaintInfo{placeholder_text_run.ToStringView(), 0, 1,
+                              buffer.ViewAt(0)},
+        emphasis_mark(), emphasis_mark_text_origin,
+        PaintAutoDarkMode(style_, DarkModeFilter::ElementRole::kForeground));
+    return;
+  }
+  graphics_context().DrawEmphasisMarks(
+      emphasis_mark_font, placeholder_text_run, emphasis_mark(),
       emphasis_mark_text_origin,
       PaintAutoDarkMode(style_, DarkModeFilter::ElementRole::kForeground));
 }

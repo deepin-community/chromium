@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CHROME_BROWSER_KEYBOARD_ACCESSORY_ANDROID_MANUAL_FILLING_VIEW_INTERFACE_H_
-#define CHROME_BROWSER_KEYBOARD_ACCESSORY_ANDROID_MANUAL_FILLING_VIEW_INTERFACE_H_
+#ifndef CHROME_BROWSER_AUTOFILL_MANUAL_FILLING_VIEW_INTERFACE_H_
+#define CHROME_BROWSER_AUTOFILL_MANUAL_FILLING_VIEW_INTERFACE_H_
 
 #include <memory>
 #include <vector>
@@ -29,7 +29,8 @@ class WebContents;
 class ManualFillingViewInterface {
  public:
   // Defines which item types exist.
-  // TODO(crbug.com/902425): Remove this once AccessorySheetData is used on the
+  // TODO(crbug.com/40601211): Remove this once AccessorySheetData is used on
+  // the
   //                         frontend to represent data to present.
   // GENERATED_JAVA_ENUM_PACKAGE: (
   //   org.chromium.chrome.browser.autofill.keyboard_accessory)
@@ -94,4 +95,4 @@ class ManualFillingViewInterface {
       content::WebContents* web_contents);
 };
 
-#endif  // CHROME_BROWSER_KEYBOARD_ACCESSORY_ANDROID_MANUAL_FILLING_VIEW_INTERFACE_H_
+#endif  // CHROME_BROWSER_AUTOFILL_MANUAL_FILLING_VIEW_INTERFACE_H_

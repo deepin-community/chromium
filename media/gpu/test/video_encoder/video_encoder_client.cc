@@ -5,6 +5,7 @@
 #include "media/gpu/test/video_encoder/video_encoder_client.h"
 
 #include <algorithm>
+#include <array>
 #include <numeric>
 #include <string>
 #include <utility>
@@ -128,11 +129,11 @@ uint32_t VideoEncoderStats::LayerBitrate(size_t spatial_idx,
   // when the number of temporal layers is three, the ratio of framerate of
   // layers are 1/4, 1/4 and 1/2 for the first, second and third layer,
   // respectively.
-  constexpr size_t kFramerateDenom[][3] = {
+  constexpr auto kFramerateDenom = std::to_array<std::array<size_t, 3>>({
       {1, 0, 0},
       {2, 2, 0},
       {4, 4, 2},
-  };
+  });
 
   const double layer_framerate =
       static_cast<double>(framerate) /
@@ -418,6 +419,14 @@ void VideoEncoderClient::BitstreamBufferReady(
         current_stats_.num_encoded_frames_per_layer[0][temporal_id]++;
         current_stats_.encoded_frames_size_per_layer[0][temporal_id] +=
             metadata.payload_size_bytes;
+      } else if (metadata.svc_generic.has_value()) {
+        uint8_t temporal_id = metadata.svc_generic->temporal_idx;
+        uint8_t spatial_id = metadata.svc_generic->spatial_idx;
+        ASSERT_LT(spatial_id, current_stats_.num_spatial_layers);
+        ASSERT_LT(temporal_id, current_stats_.num_temporal_layers);
+        current_stats_.num_encoded_frames_per_layer[spatial_id][temporal_id]++;
+        current_stats_.encoded_frames_size_per_layer[spatial_id][temporal_id] +=
+            metadata.payload_size_bytes;
       }
     }
   }
@@ -443,7 +452,7 @@ void VideoEncoderClient::BitstreamBufferReady(
     }
   }
 
-  if (metadata.end_of_picture) {
+  if (metadata.end_of_picture()) {
     frame_index_++;
     CHECK_EQ(source_timestamps_.erase(metadata.timestamp), 1u);
   }
@@ -501,16 +510,18 @@ void VideoEncoderClient::CreateEncoderTask(const RawVideo* video,
   VideoEncodeAccelerator::Config config(
       video_->PixelFormat(), encoder_client_config_.output_resolution,
       encoder_client_config_.output_profile,
-      encoder_client_config_.bitrate_allocation.GetSumBitrate());
+      encoder_client_config_.bitrate_allocation.GetSumBitrate(),
+      encoder_client_config_.framerate,
+      encoder_client_config_.input_storage_type,
+      encoder_client_config_.content_type);
 
-  config.initial_framerate = encoder_client_config_.framerate;
-  config.storage_type = encoder_client_config_.input_storage_type;
-  config.content_type = encoder_client_config_.content_type;
   config.drop_frame_thresh_percentage =
       encoder_client_config_.drop_frame_thresh;
-
   config.spatial_layers = encoder_client_config_.spatial_layers;
   config.inter_layer_pred = encoder_client_config_.inter_layer_pred_mode;
+  if (encoder_client_config_.gop_length != 0) {
+    config.gop_length = encoder_client_config_.gop_length;
+  }
 
   encoder_ = GpuVideoEncodeAcceleratorFactory::CreateVEA(
       config, this, gpu::GpuPreferences(), gpu::GpuDriverBugWorkarounds(),

@@ -13,7 +13,6 @@
 #include "base/functional/bind.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/services/font/fontconfig_matching.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "pdf/buildflags.h"
@@ -61,7 +60,6 @@ int ConvertHinting(gfx::FontRenderParams::Hinting hinting) {
       return 3;
   }
   NOTREACHED() << "Unexpected hinting value " << hinting;
-  return 0;
 }
 
 font_service::mojom::RenderStyleSwitch ConvertSubpixelRendering(
@@ -76,7 +74,6 @@ font_service::mojom::RenderStyleSwitch ConvertSubpixelRendering(
       return font_service::mojom::RenderStyleSwitch::ON;
   }
   NOTREACHED() << "Unexpected subpixel rendering value " << rendering;
-  return font_service::mojom::RenderStyleSwitch::NO_PREFERENCE;
 }
 
 // The maximum number of entries to keep in the font family matching cache.

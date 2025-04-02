@@ -7,6 +7,7 @@
 
 #include <ostream>
 
+#include "base/component_export.h"
 #include "base/observer_list_types.h"
 #include "chromeos/ash/components/scalable_iph/iph_session.h"
 #include "chromeos/ash/components/scalable_iph/scalable_iph_constants.h"
@@ -20,7 +21,8 @@ namespace scalable_iph {
 // This delegate is responsible for:
 // - Show an IPH with a request from `ScalableIph`.
 // - Observe events in Ash, e.g. Network state change, etc.
-class ScalableIphDelegate {
+class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_SCALABLE_IPH)
+    ScalableIphDelegate {
  public:
   enum class SessionState { kUnknownInitialValue, kActive, kLocked, kOther };
 
@@ -143,13 +145,18 @@ class ScalableIphDelegate {
   // is owned by `ScalableIph` keyed service. `ScalableIph` keyed service
   // depends on `Tracker` keyed service and `ScalableIph` keyed service
   // destrcuts this `ScalableIphDelegate` in `ScalableIph::Shutdown`. Do NOT
-  // interact with `IphSession` once the destructor gets called.
-  virtual void ShowBubble(const BubbleParams& params,
+  // interact with `IphSession` once the destructor gets called. Returns true if
+  // it has requested the UI framework to show a bubble. Note that it's not
+  // guaranteed that the UI framework has actually shown a bubble.
+  virtual bool ShowBubble(const BubbleParams& params,
                           std::unique_ptr<IphSession> iph_session) = 0;
 
   // Same with `ShowBubble` method. But this method delivers a notification UI
-  // IPH to a user with specified behavior via `NotificationParams`.
-  virtual void ShowNotification(const NotificationParams& params,
+  // IPH to a user with specified behavior via `NotificationParams`. Returns
+  // true if it has requested the UI framework to show a notification. Note that
+  // it's not guaranteed that the UI framework has actually shown a
+  // notification.
+  virtual bool ShowNotification(const NotificationParams& params,
                                 std::unique_ptr<IphSession> iph_session) = 0;
 
   virtual void AddObserver(Observer* observer) = 0;
@@ -169,23 +176,40 @@ class ScalableIphDelegate {
   virtual void PerformActionForScalableIph(ActionType action_type) = 0;
 };
 
+COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_SCALABLE_IPH)
 std::ostream& operator<<(std::ostream& out,
                          ScalableIphDelegate::SessionState session_state);
+
+COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_SCALABLE_IPH)
 std::ostream& operator<<(std::ostream& out, ScalableIphDelegate::Action action);
+
+COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_SCALABLE_IPH)
 std::ostream& operator<<(std::ostream& out, ScalableIphDelegate::Button button);
+
+COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_SCALABLE_IPH)
 std::ostream& operator<<(std::ostream& out,
                          ScalableIphDelegate::BubbleIcon bubble_icon);
+
+COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_SCALABLE_IPH)
 std::ostream& operator<<(std::ostream& out,
                          ScalableIphDelegate::BubbleParams bubble_params);
+
+COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_SCALABLE_IPH)
 std::ostream& operator<<(
     std::ostream& out,
     ScalableIphDelegate::NotificationImageType notification_image_type);
+
+COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_SCALABLE_IPH)
 std::ostream& operator<<(
     std::ostream& out,
     ScalableIphDelegate::NotificationIcon notification_icon);
+
+COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_SCALABLE_IPH)
 std::ostream& operator<<(
     std::ostream& out,
     ScalableIphDelegate::NotificationSummaryText summary_text);
+
+COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_SCALABLE_IPH)
 std::ostream& operator<<(std::ostream& out,
                          ScalableIphDelegate::NotificationParams params);
 

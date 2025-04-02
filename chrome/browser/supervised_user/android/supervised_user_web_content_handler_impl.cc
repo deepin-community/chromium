@@ -13,20 +13,20 @@
 #include "chrome/browser/supervised_user/supervised_user_settings_service_factory.h"
 #include "components/supervised_user/core/browser/supervised_user_settings_service.h"
 #include "components/supervised_user/core/browser/supervised_user_utils.h"
+#include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "content/public/browser/web_contents.h"
 
 namespace {
 
-supervised_user::WebContentHandler::LocalApprovalResult
-AndroidOutcomeToLocalApprovalResult(
+supervised_user::LocalApprovalResult AndroidOutcomeToLocalApprovalResult(
     AndroidLocalWebApprovalFlowOutcome outcome) {
   switch (outcome) {
     case AndroidLocalWebApprovalFlowOutcome::kApproved:
-      return supervised_user::WebContentHandler::LocalApprovalResult::kApproved;
+      return supervised_user::LocalApprovalResult::kApproved;
     case AndroidLocalWebApprovalFlowOutcome::kRejected:
-      return supervised_user::WebContentHandler::LocalApprovalResult::kDeclined;
+      return supervised_user::LocalApprovalResult::kDeclined;
     case AndroidLocalWebApprovalFlowOutcome::kIncomplete:
-      return supervised_user::WebContentHandler::LocalApprovalResult::kCanceled;
+      return supervised_user::LocalApprovalResult::kCanceled;
   }
 }
 
@@ -34,7 +34,7 @@ AndroidOutcomeToLocalApprovalResult(
 
 SupervisedUserWebContentHandlerImpl::SupervisedUserWebContentHandlerImpl(
     content::WebContents* web_contents,
-    int frame_id,
+    content::FrameTreeNodeId frame_id,
     int64_t interstitial_navigation_id)
     : ChromeSupervisedUserWebContentHandlerBase(web_contents,
                                                 frame_id,
@@ -46,6 +46,8 @@ SupervisedUserWebContentHandlerImpl::~SupervisedUserWebContentHandlerImpl() =
 void SupervisedUserWebContentHandlerImpl::RequestLocalApproval(
     const GURL& url,
     const std::u16string& child_display_name,
+    const supervised_user::UrlFormatter& url_formatter,
+    const supervised_user::FilteringBehaviorReason& filtering_behavior_reason,
     ApprovalRequestInitiatedCallback callback) {
   CHECK(web_contents_);
   Profile* profile =
@@ -54,12 +56,14 @@ void SupervisedUserWebContentHandlerImpl::RequestLocalApproval(
   supervised_user::SupervisedUserSettingsService* settings_service =
       SupervisedUserSettingsServiceFactory::GetForKey(profile->GetProfileKey());
 
+  GURL target_url = url_formatter.FormatUrl(url);
+
   WebsiteParentApproval::RequestLocalApproval(
-      web_contents_, supervised_user::NormalizeUrl(url),
+      web_contents_, target_url,
       base::BindOnce(
           &SupervisedUserWebContentHandlerImpl::OnLocalApprovalRequestCompleted,
-          weak_ptr_factory_.GetWeakPtr(), std::ref(*settings_service), url,
-          base::TimeTicks::Now()),
+          weak_ptr_factory_.GetWeakPtr(), std::ref(*settings_service),
+          target_url, base::TimeTicks::Now()),
       *profile);
 
   // Runs the `callback` to inform the caller that the flow initiation was

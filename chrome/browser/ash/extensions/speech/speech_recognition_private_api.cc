@@ -2,13 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <string>
-
 #include "chrome/browser/ash/extensions/speech/speech_recognition_private_api.h"
 
 #include <optional>
+#include <string>
 
 #include "chrome/browser/ash/extensions/speech/speech_recognition_private_manager.h"
+#include "chrome/browser/ash/extensions/speech/speech_recognition_private_manager_factory.h"
 #include "chrome/browser/speech/speech_recognition_constants.h"
 #include "chrome/common/extensions/api/speech_recognition_private.h"
 #include "content/public/browser/browser_context.h"
@@ -35,7 +35,8 @@ ExtensionFunction::ResponseAction SpeechRecognitionPrivateStartFunction::Run() {
 
   // Get the manager for this context and ask it to handle this API call.
   SpeechRecognitionPrivateManager* manager =
-      SpeechRecognitionPrivateManager::Get(browser_context());
+      SpeechRecognitionPrivateManagerFactory::GetForBrowserContext(
+          browser_context());
   const std::string key = manager->CreateKey(extension_id(), client_id);
   manager->HandleStart(
       key, locale, interim_results,
@@ -69,7 +70,8 @@ ExtensionFunction::ResponseAction SpeechRecognitionPrivateStopFunction::Run() {
 
   // Get the manager for this context and ask it to handle this API call.
   SpeechRecognitionPrivateManager* manager =
-      SpeechRecognitionPrivateManager::Get(browser_context());
+      SpeechRecognitionPrivateManagerFactory::GetForBrowserContext(
+          browser_context());
   const std::string key = manager->CreateKey(extension_id(), client_id);
   manager->HandleStop(
       key, base::BindOnce(&SpeechRecognitionPrivateStopFunction::OnStop, this));

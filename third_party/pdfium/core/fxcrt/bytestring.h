@@ -10,21 +10,13 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>
 
-#include <functional>
 #include <iosfwd>
-#include <iterator>
-#include <optional>
 #include <utility>
 
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/fx_string_wrappers.h"
-#include "core/fxcrt/retain_ptr.h"
-#include "core/fxcrt/span.h"
-#include "core/fxcrt/string_data_template.h"
 #include "core/fxcrt/string_template.h"
-#include "core/fxcrt/string_view_template.h"
-#include "third_party/base/check.h"
 
 namespace fxcrt {
 
@@ -33,7 +25,6 @@ namespace fxcrt {
 class ByteString : public StringTemplate<char> {
  public:
   [[nodiscard]] static ByteString FormatInteger(int i);
-  [[nodiscard]] static ByteString FormatFloat(float f);
   [[nodiscard]] static ByteString Format(const char* pFormat, ...);
   [[nodiscard]] static ByteString FormatV(const char* pFormat, va_list argList);
 
@@ -44,6 +35,9 @@ class ByteString : public StringTemplate<char> {
   ByteString(ByteString&& other) noexcept = default;
 
   ~ByteString() = default;
+
+  UNSAFE_BUFFER_USAGE ByteString(const char* pStr, size_t len);
+  UNSAFE_BUFFER_USAGE ByteString(const uint8_t* pStr, size_t len);
 
   // Make a one-character string from a char.
   explicit ByteString(char ch);
@@ -56,22 +50,10 @@ class ByteString : public StringTemplate<char> {
   // NOLINTNEXTLINE(runtime/explicit)
   ByteString(wchar_t) = delete;
 
-  ByteString(const char* pStr, size_t len);
-  ByteString(const uint8_t* pStr, size_t len);
-
   explicit ByteString(ByteStringView bstrc);
   ByteString(ByteStringView str1, ByteStringView str2);
   ByteString(const std::initializer_list<ByteStringView>& list);
   explicit ByteString(const fxcrt::ostringstream& outStream);
-
-  // Explicit conversion to C-style string. The result is never nullptr,
-  // and is always NUL terminated.
-  // Note: Any subsequent modification of |this| will invalidate the result.
-  const char* c_str() const { return m_pData ? m_pData->m_String : ""; }
-
-  size_t GetStringLength() const {
-    return m_pData ? strlen(m_pData->m_String) : 0;
-  }
 
   int Compare(ByteStringView str) const;
   bool EqualNoCase(ByteStringView str) const;
@@ -108,17 +90,10 @@ class ByteString : public StringTemplate<char> {
   void MakeLower();
   void MakeUpper();
 
-  void Trim();
-  void Trim(char target);
-  void Trim(ByteStringView targets);
-
-  void TrimLeft();
-  void TrimLeft(char target);
-  void TrimLeft(ByteStringView targets);
-
-  void TrimRight();
-  void TrimRight(char target);
-  void TrimRight(ByteStringView targets);
+  // Remove a canonical set of characters from the string.
+  void TrimWhitespace();
+  void TrimWhitespaceBack();
+  void TrimWhitespaceFront();
 
   uint32_t GetID() const { return AsStringView().GetID(); }
 

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "services/accessibility/features/v8_manager.h"
 
 #include <memory>
@@ -55,6 +60,7 @@
 #include "v8-value.h"
 #include "v8/include/v8-context.h"
 #include "v8/include/v8-function.h"
+#include "v8/include/v8-isolate.h"
 #include "v8/include/v8-object.h"
 #include "v8/include/v8-template.h"
 
@@ -224,6 +230,7 @@ void V8Environment::RequestModuleContents(base::FilePath file_path) {
 
 void V8Environment::OnFileLoaded(std::string module_identifier,
                                  base::File file) {
+  v8::Isolate::Scope isolate_scope(GetIsolate());
   v8::HandleScope handle_scope(GetIsolate());
   Local<Context> context = GetContext();
   Context::Scope context_scope(context);
@@ -252,7 +259,7 @@ void V8Environment::OnFileLoaded(std::string module_identifier,
           .ToLocalChecked();
 
   v8::ScriptOrigin origin(
-      GetIsolate(), resource_name, /*resource_line_offset =*/0,
+      resource_name, /*resource_line_offset =*/0,
       /*resource_column_offset=*/0, /*resource_is_shared_cross_origin=*/false,
       /*script_id=*/-1,
       /*source_map_url=*/Local<v8::Value>(), /*resource_is_opaque=*/false,

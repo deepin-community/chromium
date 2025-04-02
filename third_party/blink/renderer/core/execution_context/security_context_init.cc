@@ -4,9 +4,12 @@
 
 #include "third_party/blink/renderer/core/execution_context/security_context_init.h"
 
+#include <optional>
+
 #include "base/metrics/histogram_macros.h"
 #include "services/network/public/cpp/web_sandbox_flags.h"
 #include "third_party/blink/public/common/frame/fenced_frame_permissions_policies.h"
+#include "third_party/blink/public/common/permissions_policy/permissions_policy.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-blink.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
@@ -24,7 +27,7 @@
 #include "third_party/blink/renderer/core/permissions_policy/permissions_policy_parser.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
-
+#include "url/gurl.h"
 namespace blink {
 namespace {
 
@@ -106,14 +109,16 @@ void SecurityContextInit::ApplyPermissionsPolicy(
     const FramePolicy& frame_policy,
     const std::optional<ParsedPermissionsPolicy>& isolated_app_policy,
     const base::optional_ref<const FencedFrame::RedactedFencedFrameProperties>
-        fenced_frame_properties) {
+        fenced_frame_properties,
+    const KURL& document_url) {
   const url::Origin origin =
       execution_context_->GetSecurityOrigin()->ToUrlOrigin();
   // If we are a HTMLViewSourceDocument we use container, header or
   // inherited policies. https://crbug.com/898688.
   if (frame.InViewSourceMode()) {
     execution_context_->GetSecurityContext().SetPermissionsPolicy(
-        PermissionsPolicy::CreateFromParentPolicy(nullptr, {}, origin));
+        PermissionsPolicy::CreateFromParentPolicy(nullptr, /*header_policy=*/{},
+                                                  {}, origin));
     return;
   }
 
@@ -186,17 +191,15 @@ void SecurityContextInit::ApplyPermissionsPolicy(
     // Enforcing the policy for sandbox frames (for context see
     // https://crbug.com/954349).
     DisallowFeatureIfNotPresent(
-        mojom::blink::PermissionsPolicyFeature::kFocusWithoutUserActivation,
+        network::mojom::PermissionsPolicyFeature::kFocusWithoutUserActivation,
         container_policy);
   }
 
   if (isolated_app_policy) {
     DCHECK(frame.IsOutermostMainFrame());
     std::unique_ptr<PermissionsPolicy> permissions_policy =
-        PermissionsPolicy::CreateFromParsedPolicy(isolated_app_policy.value(),
-                                                  origin);
-    permissions_policy->SetHeaderPolicyForIsolatedApp(
-        permissions_policy_header_);
+        PermissionsPolicy::CreateFromParsedPolicy(permissions_policy_header_,
+                                                  isolated_app_policy, origin);
     execution_context_->GetSecurityContext().SetPermissionsPolicy(
         std::move(permissions_policy));
   } else {
@@ -207,8 +210,8 @@ void SecurityContextInit::ApplyPermissionsPolicy(
         // enabled permissions or information about the embedder's permissions
         // policies, so we create a permissions policy with every permission
         // disabled.
-        permissions_policy =
-            PermissionsPolicy::CreateFixedForFencedFrame(origin, {});
+        permissions_policy = PermissionsPolicy::CreateFixedForFencedFrame(
+            origin, /*header_policy=*/permissions_policy_header_, {});
       } else if (fenced_frame_properties->parent_permissions_info()
                      .has_value()) {
         // Fenced frames with flexible permissions are allowed to inherit
@@ -217,21 +220,26 @@ void SecurityContextInit::ApplyPermissionsPolicy(
             PermissionsPolicy::CreateFromParsedPolicy(
                 fenced_frame_properties->parent_permissions_info()
                     ->parsed_permissions_policy,
+                /*base_policy=*/std::nullopt,
                 fenced_frame_properties->parent_permissions_info()->origin);
 
         permissions_policy = PermissionsPolicy::CreateFlexibleForFencedFrame(
-            parent_permissions_policy.get(), container_policy, origin);
+            parent_permissions_policy.get(),
+            /*header_policy=*/permissions_policy_header_, container_policy,
+            origin);
 
         // Warn if a disallowed permissions policy is attempted to be enabled.
         for (const auto& policy : container_policy) {
           if (!base::Contains(blink::kFencedFrameAllowedFeatures,
                               policy.feature)) {
+            bool is_isolated_context =
+                execution_context_ && execution_context_->IsIsolatedContext();
             execution_context_->AddConsoleMessage(
                 MakeGarbageCollected<ConsoleMessage>(
                     mojom::blink::ConsoleMessageSource::kSecurity,
                     mojom::blink::ConsoleMessageLevel::kWarning,
                     "The permissions policy '" +
-                        GetNameForFeature(policy.feature) +
+                        GetNameForFeature(policy.feature, is_isolated_context) +
                         "' is disallowed in fenced frames and will not be "
                         "enabled."));
           }
@@ -244,7 +252,8 @@ void SecurityContextInit::ApplyPermissionsPolicy(
         // checked separately in
         // NavigationRequest::CheckPermissionsPoliciesForFencedFrames.
         permissions_policy = PermissionsPolicy::CreateFixedForFencedFrame(
-            origin, fenced_frame_properties->effective_enabled_permissions());
+            origin, /*header_policy=*/permissions_policy_header_,
+            fenced_frame_properties->effective_enabled_permissions());
       }
     } else {
       auto* parent_permissions_policy = frame.Tree().Parent()
@@ -253,10 +262,13 @@ void SecurityContextInit::ApplyPermissionsPolicy(
                                                   ->GetSecurityContext()
                                                   ->GetPermissionsPolicy()
                                             : nullptr;
+      // Ideally we would use the URL in `execution_context_` but at this point,
+      // it has no `document_` and so does not know its URL.
       permissions_policy = PermissionsPolicy::CreateFromParentPolicy(
-          parent_permissions_policy, container_policy, origin);
+          parent_permissions_policy,
+          /*header_policy=*/permissions_policy_header_, container_policy,
+          origin, PermissionsPolicy::IsHeaderlessUrl(GURL(document_url)));
     }
-    permissions_policy->SetHeaderPolicy(permissions_policy_header_);
     execution_context_->GetSecurityContext().SetPermissionsPolicy(
         std::move(permissions_policy));
   }
@@ -272,10 +284,10 @@ void SecurityContextInit::ApplyPermissionsPolicy(
   if (!parsed_report_only_permissions_policy_header.empty()) {
     std::unique_ptr<PermissionsPolicy> report_only_policy =
         PermissionsPolicy::CreateFromParentPolicy(
-            nullptr /* parent_policy */, {} /* container_policy */,
+            nullptr /* parent_policy */,
+            /*header_policy=*/parsed_report_only_permissions_policy_header,
+            {} /* container_policy */,
             execution_context_->GetSecurityOrigin()->ToUrlOrigin());
-    report_only_policy->SetHeaderPolicy(
-        parsed_report_only_permissions_policy_header);
     execution_context_->GetSecurityContext().SetReportOnlyPermissionsPolicy(
         std::move(report_only_policy));
   }

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import m from 'mithril';
-
 import {HTMLAttrs} from './common';
 
 export interface SectionAttrs extends HTMLAttrs {
@@ -27,10 +26,7 @@ export class Section implements m.ClassComponent<SectionAttrs> {
     return m(
       'section.pf-section',
       htmlAttrs,
-      m(
-        'header',
-        m('h1', title),
-      ),
+      m('header', m('h1', title)),
       m('article', children),
     );
   }

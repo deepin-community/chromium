@@ -486,6 +486,14 @@ TEST_P(RenderPassLoadOpTests, LoadOpClearNormalizedFormatsOutOfBound) {
 // Test clearing multiple color attachments with different big signed and unsigned integers can
 // still work correctly.
 TEST_P(RenderPassLoadOpTests, LoadOpClearWithBig32BitIntegralValuesOnMultipleColorAttachments) {
+    // TODO(crbug.com/388318201): investigate: framebuffer incomplete
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
+
+    // TODO(383733873): ApplyClearBigIntegerColorValueWithDraw workaround doesn't work with multiple
+    // outputs in compat mode.
+    DAWN_TEST_UNSUPPORTED_IF(IsD3D11() && IsCompatibilityMode());
+
     constexpr int32_t kMaxInt32RepresentableInFloat = 1 << std::numeric_limits<float>::digits;
     constexpr int32_t kMinInt32RepresentableInFloat = -kMaxInt32RepresentableInFloat;
 
@@ -685,6 +693,10 @@ TEST_P(RenderPassLoadOpTests, MixedUseOfLoadOpLoadAndLoadOpClearWithBigIntegerVa
     // TODO(crbug.com/dawn/2295): diagnose this failure on Pixel 4 OpenGLES
     DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && IsQualcomm());
 
+    // TODO(383733873): ApplyClearBigIntegerColorValueWithDraw workaround doesn't work with multiple
+    // outputs in compat mode.
+    DAWN_TEST_UNSUPPORTED_IF(IsD3D11() && IsCompatibilityMode());
+
     constexpr int32_t kMaxUInt32RepresentableInFloat = 1 << std::numeric_limits<float>::digits;
 
     wgpu::TextureDescriptor textureDescriptor = {};
@@ -752,6 +764,7 @@ TEST_P(RenderPassLoadOpTests, MixedUseOfLoadOpLoadAndLoadOpClearWithBigIntegerVa
 
 DAWN_INSTANTIATE_TEST(RenderPassLoadOpTests,
                       D3D11Backend(),
+                      D3D11Backend({"clear_color_with_draw"}),
                       D3D12Backend(),
                       MetalBackend(),
                       OpenGLBackend(),

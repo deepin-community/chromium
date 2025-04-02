@@ -27,6 +27,7 @@
 namespace autofill {
 
 class PasswordAutofillAgent;
+class SynchronousFormCache;
 
 // This class is responsible for controlling communication for password
 // generation between the browser (which shows the popup and generates
@@ -58,6 +59,7 @@ class PasswordGenerationAgent : public content::RenderFrameObserver,
 
   // mojom::PasswordGenerationAgent:
   void GeneratedPasswordAccepted(const std::u16string& password) override;
+  void GeneratedPasswordRejected() override;
   void FoundFormEligibleForGeneration(
       const PasswordFormGenerationData& form) override;
   // Sets |generation_element_| to the focused password field and responds back
@@ -67,11 +69,16 @@ class PasswordGenerationAgent : public content::RenderFrameObserver,
   void FocusNextFieldAfterPasswords() override;
 
   // Returns true if the field being changed is one where a generated password
-  // is being offered. Updates the state of the popup if necessary.
-  bool TextDidChangeInTextField(const blink::WebInputElement& element);
+  // is being offered. Updates the state of the popup if necessary. `form_cache`
+  // can be used to optimize form extractions occurring synchronously after this
+  // function call.
+  bool TextDidChangeInTextField(const blink::WebInputElement& element,
+                                const SynchronousFormCache& form_cache);
 
   // Returns true if the newly focused node caused the generation UI to show.
-  bool ShowPasswordGenerationSuggestions(const blink::WebInputElement& element);
+  bool ShowPasswordGenerationSuggestions(
+      const blink::WebInputElement& element,
+      const SynchronousFormCache& form_cache);
 
   // Event forwarded by AutofillAgent from WebAutofillClient, informing that
   // the text field editing has ended, which means that the field is not
@@ -79,6 +86,11 @@ class PasswordGenerationAgent : public content::RenderFrameObserver,
   // to a non-focusable element doesn't result in |FocusedNodeHasChanged|
   // being called.
   void DidEndTextFieldEditing(const blink::WebInputElement& element);
+
+  // Event forwarded by AutofillAgent from WebAutofillClient, informing that the
+  // text field was cleared. For password fields this means that they are no
+  // longer generated and should be masked.
+  void TextFieldCleared(const blink::WebInputElement& element);
 
   // Called right before PasswordAutofillAgent filled |password_element|.
   void OnFieldAutofilled(const blink::WebInputElement& password_element);
@@ -100,10 +112,8 @@ class PasswordGenerationAgent : public content::RenderFrameObserver,
   // Previews the generation suggestion for the current generation element.
   void PreviewGenerationSuggestion(const std::u16string& password);
 
-  // Returns true if a generation suggestion was found and cleared successfully
-  // on |control_element|.
-  bool DidClearGenerationSuggestion(
-      const blink::WebFormControlElement& control_element);
+  // Clears the previewed field if it was previously previewed.
+  void ClearPreviewedForm();
 
  private:
   class DeferringPasswordGenerationDriver;
@@ -138,7 +148,7 @@ class PasswordGenerationAgent : public content::RenderFrameObserver,
   void AutomaticGenerationAvailable();
 
   // Show UI for editing a generated password at |generation_element_|.
-  void ShowEditingPopup();
+  void ShowEditingPopup(const SynchronousFormCache& form_cache);
 
   // Signals the browser that generation was rejected. This happens when the
   // user types more characters than the maximum offer size into the password
@@ -154,7 +164,8 @@ class PasswordGenerationAgent : public content::RenderFrameObserver,
   // created for |element| it is not recreated.
   void MaybeCreateCurrentGenerationItem(
       blink::WebInputElement element,
-      FieldRendererId confirmation_password_renderer_id);
+      FieldRendererId confirmation_password_renderer_id,
+      const SynchronousFormCache& form_cache);
 
   void LogMessage(SavePasswordProgressLogger::StringID message_id);
   void LogBoolean(SavePasswordProgressLogger::StringID message_id,
@@ -162,8 +173,11 @@ class PasswordGenerationAgent : public content::RenderFrameObserver,
 
   // Creates a FormData to presave a generated password. It copies behavior
   // of CreateFromDataFromWebForm/FromUnownedInputElements. If a form
-  // creating is failed, returns an empty unique_ptr.
-  std::unique_ptr<FormData> CreateFormDataToPresave();
+  // creating is failed, returns an empty unique_ptr. `form_cache` can be used
+  // to optimize form extractions occurring synchronously after this function
+  // call.
+  std::optional<FormData> CreateFormDataToPresave(
+      const SynchronousFormCache& form_cache);
 
   // Contains the current element where generation is offered at the moment. It
   // can be either automatic or manual password generation.

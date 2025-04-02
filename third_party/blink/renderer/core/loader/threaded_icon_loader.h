@@ -47,7 +47,7 @@ class CORE_EXPORT ThreadedIconLoader final
 
   // ThreadableLoaderClient interface.
   void DidReceiveResponse(uint64_t, const ResourceResponse& response) override;
-  void DidReceiveData(const char* data, unsigned length) override;
+  void DidReceiveData(base::span<const char> data) override;
   void DidFinishLoading(uint64_t resource_identifier) override;
   void DidFail(uint64_t, const ResourceError& error) override;
   void DidFailRedirectCheck(uint64_t) override;
@@ -61,7 +61,7 @@ class CORE_EXPORT ThreadedIconLoader final
 
   // Data received from |threadable_loader_|. Will be invalidated when decoding
   // of the image data starts.
-  scoped_refptr<SharedBuffer> data_;
+  SegmentedBuffer data_;
 
   String response_mime_type_;
 

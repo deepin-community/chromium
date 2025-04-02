@@ -2,8 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/browser/enterprise/connectors/test/deep_scanning_browsertest_base.h"
 
+#include "base/containers/span.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "chrome/browser/browser_process.h"
@@ -157,17 +164,29 @@ ContentAnalysisResponse DeepScanningBrowserTestBase::StatusCallback(
 void DeepScanningBrowserTestBase::CreateFilesForTest(
     const std::vector<std::string>& paths,
     const std::vector<std::string>& contents,
-    ContentAnalysisDelegate::Data* data) {
+    ContentAnalysisDelegate::Data* data,
+    const std::string& parent) {
   ASSERT_EQ(paths.size(), contents.size());
 
-  ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+  if (!temp_dir_.IsValid()) {
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+  }
+
+  base::FilePath parent_path = temp_dir_.GetPath();
+  if (!parent.empty()) {
+    parent_path = parent_path.AppendASCII(parent);
+    ASSERT_TRUE(CreateDirectoryAndGetError(parent_path, nullptr));
+    data->paths.emplace_back(parent_path);
+  }
 
   for (size_t i = 0; i < paths.size(); ++i) {
-    base::FilePath path = temp_dir_.GetPath().AppendASCII(paths[i]);
+    base::FilePath path = parent_path.AppendASCII(paths[i]);
     created_file_paths_.emplace_back(path);
     base::File file(path, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
-    file.WriteAtCurrentPos(contents[i].data(), contents[i].size());
-    data->paths.emplace_back(path);
+    file.WriteAtCurrentPos(base::as_byte_span(contents[i]));
+    if (parent.empty()) {
+      data->paths.emplace_back(path);
+    }
   }
 }
 

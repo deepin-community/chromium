@@ -14,7 +14,6 @@
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
-#include "components/origin_trials/common/features.h"
 #include "components/prefs/pref_service.h"
 #include "components/site_isolation/pref_names.h"
 #include "content/public/browser/browsing_data_filter_builder.h"
@@ -40,7 +39,8 @@ bool WebsiteSettingsFilterAdapter(
   // this filter is used for is DURABLE_STORAGE, which also only uses
   // origin-scoped patterns. Such patterns can be directly translated to a GURL.
   GURL url(primary_pattern.ToString());
-  DCHECK(url.is_valid());
+  DCHECK(url.is_valid()) << "url: '" << url.possibly_invalid_spec() << "' "
+                         << "pattern: '" << primary_pattern.ToString() << "'";
   return predicate.Run(url);
 }
 
@@ -214,14 +214,8 @@ void RemoveFederatedSiteSettingsData(
       delete_begin, delete_end, pattern_predicate);
 }
 
-int GetUniqueHostCount(
-    const browsing_data::LocalSharedObjectsContainer& local_shared_objects,
-    const BrowsingDataModel& browsing_data_model) {
+int GetUniqueHostCount(const BrowsingDataModel& browsing_data_model) {
   std::set<BrowsingDataModel::DataOwner> unique_hosts;
-  for (const std::string& host : local_shared_objects.GetHosts()) {
-    unique_hosts.insert(host);
-  }
-
   for (auto entry : browsing_data_model) {
     unique_hosts.insert(*entry.data_owner);
   }
@@ -231,7 +225,6 @@ int GetUniqueHostCount(
 
 int GetUniqueThirdPartyCookiesHostCount(
     const GURL& top_frame_url,
-    const browsing_data::LocalSharedObjectsContainer& local_shared_objects,
     const BrowsingDataModel& browsing_data_model) {
   std::string top_frame_domain =
       net::registry_controlled_domains::GetDomainAndRegistry(
@@ -239,16 +232,10 @@ int GetUniqueThirdPartyCookiesHostCount(
           net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
 
   std::set<BrowsingDataModel::DataOwner> unique_hosts;
-  for (const std::string& host : local_shared_objects.GetHosts()) {
-    if ((top_frame_domain.empty() && !IsSameHost(host, top_frame_url.host())) ||
-        (!top_frame_domain.empty() && !url::DomainIs(host, top_frame_domain))) {
-      unique_hosts.insert(host);
-    }
-  }
-
   for (auto entry : browsing_data_model) {
     std::string host = BrowsingDataModel::GetHost(entry.data_owner.get());
-    if ((top_frame_domain.empty() && !IsSameHost(host, top_frame_url.host())) ||
+    if (entry.data_details->blocked_third_party ||
+        (top_frame_domain.empty() && !IsSameHost(host, top_frame_url.host())) ||
         (!top_frame_domain.empty() && !url::DomainIs(host, top_frame_domain))) {
       for (auto storage_type : entry.data_details->storage_types) {
         if (browsing_data_model.IsBlockedByThirdPartyCookieBlocking(

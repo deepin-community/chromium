@@ -137,7 +137,6 @@ class TestListener : public internal::ShillPropertyHandler::Listener {
         return shill::kDevicesProperty;
     }
     NOTREACHED();
-    return std::string();
   }
 
   void UpdateEntries(const std::string& type,

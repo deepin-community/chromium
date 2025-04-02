@@ -176,7 +176,6 @@ class COMPONENT_EXPORT(NETWORK_CPP_BASE) DataElement {
     switch (variant_.index()) {
       case 0:
         NOTREACHED();
-        return Tag::kBytes;
       case 1:
         return Tag::kBytes;
       case 2:
@@ -187,7 +186,6 @@ class COMPONENT_EXPORT(NETWORK_CPP_BASE) DataElement {
         return Tag::kFile;
       default:
         NOTREACHED();
-        return Tag::kBytes;
     }
   }
 

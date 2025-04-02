@@ -5,7 +5,6 @@
 import {assert} from 'chai';
 
 import {clickElement, goToResource, waitForElementWithTextContent} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   assertSelectedElementsNodeTextIncludes,
   expandSelectedNodeRecursively,
@@ -18,7 +17,7 @@ import {
 
 const EXPECTED_TEXT_CONTENT = '<div class=\u200B"div2">\u200B last child \u200B</div>\u200B';
 
-describe('Element breadcrumbs', async () => {
+describe('Element breadcrumbs', () => {
   beforeEach(async function() {
     await goToResource('elements/element-breadcrumbs.html');
     await waitForElementsStyleSection();

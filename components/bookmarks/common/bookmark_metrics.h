@@ -10,6 +10,7 @@
 namespace bookmarks {
 
 struct UrlLoadStats;
+struct UserFolderLoadStats;
 
 namespace metrics {
 
@@ -47,9 +48,21 @@ enum class StorageStateForUma {
   kSyncEnabled,
 };
 
+// An enum class representing the two JSON files for storing bookmarks, used for
+// suffixing metrics.
+enum class StorageFileForUma {
+  // Represents `kLocalOrSyncableBookmarksFileName`.
+  kLocalOrSyncable,
+  // Represents `kAccountBookmarksFileName`.
+  kAccount,
+};
+
 // Records when a bookmark is added by the user.
+// `ancestor_user_folder_depth` is the count of user-generated folders which
+// are ancestors of this bookmark.
 void RecordUrlBookmarkAdded(BookmarkFolderTypeForUMA parent,
-                            StorageStateForUma storage_state);
+                            StorageStateForUma storage_state,
+                            int ancestor_user_folder_depth);
 
 // Records when a bookmark folder is added by the user.
 void RecordBookmarkFolderAdded(BookmarkFolderTypeForUMA parent,
@@ -59,10 +72,14 @@ void RecordBookmarkFolderAdded(BookmarkFolderTypeForUMA parent,
 void RecordBookmarkRemoved(BookmarkEditSource source);
 
 // Records when a bookmark is opened by the user.
+// `ancestor_user_folder_depth` is the count of user-generated folders which
+// are ancestors of this bookmark.
 void RecordBookmarkOpened(base::Time now,
                           base::Time date_last_used,
                           base::Time date_added,
-                          StorageStateForUma storage_state);
+                          StorageStateForUma storage_state,
+                          bool is_url_bookmark,
+                          int ancestor_user_folder_depth);
 
 // Records when a bookmark or bookmark folder is moved to a different parent
 // folder.
@@ -88,12 +105,21 @@ void RecordTitleEdit(BookmarkEditSource source);
 // Records the metrics derived from `stats`. Recording happens on profile load.
 void RecordUrlLoadStatsOnProfileLoad(const UrlLoadStats& stats);
 
+// Records the user-generated folder metrics derived from `stats`. Recording
+// happens on profile load.
+void RecordUserFolderLoadStatsOnProfileLoad(const UserFolderLoadStats& stats);
+
 // Records when a bookmark node is cloned. `num_cloned` is the number of
 // bookmarks that were selected.
 void RecordCloneBookmarkNode(int num_cloned);
 
 // Records the approximate average node size at startup.
 void RecordAverageNodeSizeAtStartup(size_t size_in_bytes);
+
+// Records whether or not node IDs were reassigned as a result of loading the
+// JSON file representing local-or-syncable bookmarks.
+void RecordIdsReassignedOnProfileLoad(StorageFileForUma storage_file,
+                                      bool ids_reassigned);
 
 }  // namespace metrics
 

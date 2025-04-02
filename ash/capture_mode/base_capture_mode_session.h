@@ -5,13 +5,21 @@
 #ifndef ASH_CAPTURE_MODE_BASE_CAPTURE_MODE_SESSION_H_
 #define ASH_CAPTURE_MODE_BASE_CAPTURE_MODE_SESSION_H_
 
+#include <vector>
+
 #include "ash/ash_export.h"
 #include "ash/capture_mode/capture_mode_behavior.h"
 #include "ash/capture_mode/capture_mode_controller.h"
+#include "ash/capture_mode/capture_mode_types.h"
+#include "ash/scanner/scanner_action_view_model.h"
 #include "ash/shell_observer.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/compositor/layer_owner.h"
+#include "ui/views/controls/button/button.h"
 
 namespace ash {
+
+class ActionButtonView;
 
 // An interface for different kinds of capture mode sessions. This class is a
 // LayerOwner and will transfer ownership of its texture layer to a recording
@@ -69,6 +77,10 @@ class ASH_EXPORT BaseCaptureModeSession : public ui::LayerOwner,
   // Gets the CaptureModeBarWidget. Should not be called for a null session, as
   // it does not have a bar widget.
   virtual views::Widget* GetCaptureModeBarWidget() = 0;
+
+  // Gets the feedback button widget screen bounds. Returns an empty rect if the
+  // button is not available.
+  virtual gfx::Rect GetFeedbackWidgetScreenBounds() const = 0;
 
   // Gets the current window selected for `kWindow` capture source. Returns
   // nullptr if no window is available for selection.
@@ -134,19 +146,54 @@ class ASH_EXPORT BaseCaptureModeSession : public ui::LayerOwner,
 
   // If there's a user nudge currently showing, it will be dismissed forever,
   // and will no longer be shown to the user.
-  virtual void MaybeDismissUserNudgeForever() = 0;
+  virtual void MaybeDismissSunfishRegionNudgeForever() = 0;
 
   // Handles changing `root_window_`. For example, moving the mouse cursor to
   // another display, a display was removed or the game window of the
   // `kGameDashboard` session was moved to another display. Moves the capture
   // mode widgets to `new_root` depending on the capture mode source and whether
-  // it was a display removal.
-  virtual void MaybeChangeRoot(aura::Window* new_root) = 0;
+  // it was a display removal (`root_window_will_shutdown` will be true in this
+  // case).
+  virtual void MaybeChangeRoot(aura::Window* new_root,
+                               bool root_window_will_shutdown) = 0;
 
   // Helper function for `GetTopMostCapturableWindowAtPoint()`. Returns the
   // native windows of the widgets associated with the session (bar widget,
   // label widget, etc.) that should be ignored as the topmost window.
   virtual std::set<aura::Window*> GetWindowsToIgnoreFromWidgets() = 0;
+
+  // Called just before performing capture for search.
+  // This will hide capture UI widgets if needed.
+  virtual void OnPerformCaptureForSearchStarting(
+      PerformCaptureType capture_type) = 0;
+  // Called just after finishing performing capture for search.
+  // This will reshow capture UI widgets if needed.
+  virtual void OnPerformCaptureForSearchEnded(
+      PerformCaptureType capture_type) = 0;
+
+  // Gets a weak pointer to a "token" which is automatically reset when any
+  // parameters relating to the capture (type, source, bounds - excluding
+  // window) change.
+  // Used for invalidating any image searches when these parameters change.
+  // Will be null if the session is shutting down.
+  virtual base::WeakPtr<BaseCaptureModeSession> GetImageSearchToken() = 0;
+
+  // Adds an action button below the selected region during an active session.
+  // Returns a pointer to the added button, or nullptr if no button was added.
+  virtual ActionButtonView* AddActionButton(
+      views::Button::PressedCallback callback,
+      std::u16string text,
+      const gfx::VectorIcon* icon,
+      ActionButtonRank rank,
+      ActionButtonViewID id) = 0;
+
+  // Adds an action button that can be clicked to fetch smart actions.
+  virtual void AddSmartActionsButton() = 0;
+
+  // Called when Scanner actions have been fetched. This will add action buttons
+  // corresponding to `scanner_actions` and stop loading animations if needed.
+  virtual void OnScannerActionsFetched(
+      std::vector<ScannerActionViewModel> scanner_actions) = 0;
 
   // ShellObserver:
   void OnRootWindowWillShutdown(aura::Window* root_window) override;

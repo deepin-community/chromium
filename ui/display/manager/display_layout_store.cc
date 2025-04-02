@@ -79,10 +79,6 @@ void DisplayLayoutStore::RegisterLayoutForDisplayIdList(
     NOTREACHED() << "Attempting to register an invalid layout: ids="
                  << DisplayIdListToString(list)
                  << ", layout=" << layout->ToString();
-    // We never allow to register an invalid layout, instead, we revert back to
-    // a default layout.
-    CreateDefaultDisplayLayout(list);
-    return;
   }
 
   layouts_[list] = std::move(layout);

@@ -4,6 +4,7 @@
 
 #include "ash/shelf/shelf_shutdown_confirmation_bubble.h"
 
+#include "ash/public/cpp/shelf_config.h"
 #include "ash/shelf/login_shelf_button.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_provider.h"
@@ -25,6 +26,7 @@
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/vector_icon_types.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/flex_layout.h"
@@ -146,13 +148,20 @@ ShelfShutdownConfirmationBubble::ShelfShutdownConfirmationBubble(
   GetBubbleFrameView()->SetBackgroundColor(GetBackgroundColor());
   // The bubble content size changes after border setting, therefore resize
   // the widget to its content.
-  // TODO(crbug.com/1520953): widget should autoresize to its content.
+  // TODO(crbug.com/41493925): widget should autoresize to its content.
   SizeToContents();
   GetWidget()->Show();
 
   base::UmaHistogramEnumeration(
       kActionHistogramName,
       ShelfShutdownConfirmationBubble::BubbleAction::kOpened);
+
+  GetViewAccessibility().SetRole(ax::mojom::Role::kDialog);
+  GetViewAccessibility().SetName(title_->GetText());
+
+  title_text_changed_subscription_ = title_->AddTextChangedCallback(
+      base::BindRepeating(&ShelfShutdownConfirmationBubble::OnTitleTextChanged,
+                          base::Unretained(this)));
 }
 
 ShelfShutdownConfirmationBubble::~ShelfShutdownConfirmationBubble() {
@@ -169,8 +178,8 @@ void ShelfShutdownConfirmationBubble::OnThemeChanged() {
 
   SkColor icon_color = color_provider->GetContentLayerColor(
       AshColorProvider::ContentLayerType::kButtonIconColor);
-  icon_->SetImage(
-      gfx::CreateVectorIcon(vector_icons::kWarningOutlineIcon, icon_color));
+  icon_->SetImage(ui::ImageModel::FromVectorIcon(
+      vector_icons::kWarningOutlineIcon, icon_color));
 
   SkColor label_color = color_provider->GetContentLayerColor(
       AshColorProvider::ContentLayerType::kTextColorPrimary);
@@ -180,12 +189,7 @@ void ShelfShutdownConfirmationBubble::OnThemeChanged() {
       AshColorProvider::ContentLayerType::kButtonLabelColor);
   cancel_->SetEnabledTextColors(button_color);
   confirm_->SetEnabledTextColors(button_color);
-}
-
-void ShelfShutdownConfirmationBubble::GetAccessibleNodeData(
-    ui::AXNodeData* node_data) {
-  node_data->role = ax::mojom::Role::kDialog;
-  node_data->SetNameChecked(title_->GetText());
+  set_color(ShelfConfig::Get()->GetDefaultShelfColor(GetWidget()));
 }
 
 std::u16string ShelfShutdownConfirmationBubble::GetAccessibleWindowTitle()
@@ -234,6 +238,12 @@ bool ShelfShutdownConfirmationBubble::ShouldCloseOnMouseExit() {
 void ShelfShutdownConfirmationBubble::ReportBubbleAction(
     ShelfShutdownConfirmationBubble::BubbleAction action) {
   base::UmaHistogramEnumeration(kActionHistogramName, action);
+}
+
+void ShelfShutdownConfirmationBubble::OnTitleTextChanged() {
+  if (GetWidget()) {
+    GetWidget()->UpdateAccessibleNameForRootView();
+  }
 }
 
 }  // namespace ash

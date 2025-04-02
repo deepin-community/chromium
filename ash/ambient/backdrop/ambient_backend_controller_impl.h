@@ -41,7 +41,8 @@ class AmbientBackendControllerImpl : public AmbientBackendController {
       int banner_height,
       int num_albums,
       OnSettingsAndAlbumsFetchedCallback callback) override;
-  void FetchWeather(FetchWeatherCallback callback) override;
+  void FetchWeather(std::optional<std::string> weather_client_id,
+                    FetchWeatherCallback callback) override;
   const std::array<const char*, 2>& GetBackupPhotoUrls() const override;
   std::array<const char*, 2> GetTimeOfDayVideoPreviewImageUrls(
       AmbientVideo video) const override;
@@ -61,7 +62,7 @@ class AmbientBackendControllerImpl : public AmbientBackendController {
                                      bool show_pair_personal_portraits,
                                      const gfx::Size& screen_size,
                                      OnScreenUpdateInfoFetchedCallback callback,
-                                     const std::string& gaia_id,
+                                     const GaiaId& gaia_id,
                                      const std::string& access_token);
 
   void OnScreenUpdateInfoFetched(
@@ -71,7 +72,7 @@ class AmbientBackendControllerImpl : public AmbientBackendController {
 
   void GetSettings(GetSettingsCallback callback);
   void StartToGetSettings(GetSettingsCallback callback,
-                          const std::string& gaia_id,
+                          const GaiaId& gaia_id,
                           const std::string& access_token);
 
   void OnGetSettings(GetSettingsCallback callback,
@@ -80,7 +81,7 @@ class AmbientBackendControllerImpl : public AmbientBackendController {
 
   void StartToUpdateSettings(const AmbientSettings& settings,
                              UpdateSettingsCallback callback,
-                             const std::string& gaia_id,
+                             const GaiaId& gaia_id,
                              const std::string& access_token);
 
   void OnUpdateSettings(UpdateSettingsCallback callback,
@@ -99,7 +100,7 @@ class AmbientBackendControllerImpl : public AmbientBackendController {
                                    int num_albums,
                                    const std::string& resume_token,
                                    OnPersonalAlbumsFetchedCallback callback,
-                                   const std::string& gaia_id,
+                                   const GaiaId& gaia_id,
                                    const std::string& access_token);
 
   void OnPersonalAlbumsFetched(

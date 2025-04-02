@@ -24,8 +24,8 @@
 
 #include "libavutil/avassert.h"
 #include "libavutil/hwcontext_d3d12va_internal.h"
-#include "hevc_data.h"
-#include "hevcdec.h"
+#include "hevc/data.h"
+#include "hevc/hevcdec.h"
 #include "dxva2_internal.h"
 #include "d3d12va_decode.h"
 #include <dxva.h>
@@ -53,7 +53,7 @@ static int d3d12va_hevc_start_frame(AVCodecContext *avctx, av_unused const uint8
 {
     const HEVCContext        *h       = avctx->priv_data;
     D3D12VADecodeContext     *ctx     = D3D12VA_DECODE_CONTEXT(avctx);
-    HEVCDecodePictureContext *ctx_pic = h->ref->hwaccel_picture_private;
+    HEVCDecodePictureContext *ctx_pic = h->cur_frame->hwaccel_picture_private;
 
     if (!ctx)
         return -1;
@@ -76,7 +76,7 @@ static int d3d12va_hevc_start_frame(AVCodecContext *avctx, av_unused const uint8
 static int d3d12va_hevc_decode_slice(AVCodecContext *avctx, const uint8_t *buffer, uint32_t size)
 {
     const HEVCContext        *h               = avctx->priv_data;
-    const HEVCFrame          *current_picture = h->ref;
+    const HEVCFrame          *current_picture = h->cur_frame;
     HEVCDecodePictureContext *ctx_pic         = current_picture->hwaccel_picture_private;
     unsigned position;
 
@@ -98,12 +98,8 @@ static int d3d12va_hevc_decode_slice(AVCodecContext *avctx, const uint8_t *buffe
 #define START_CODE_SIZE 3
 static int update_input_arguments(AVCodecContext *avctx, D3D12_VIDEO_DECODE_INPUT_STREAM_ARGUMENTS *input_args, ID3D12Resource *buffer)
 {
-    D3D12VADecodeContext   *ctx          = D3D12VA_DECODE_CONTEXT(avctx);
-    AVHWFramesContext      *frames_ctx   = D3D12VA_FRAMES_CONTEXT(avctx);
-    AVD3D12VAFramesContext *frames_hwctx = frames_ctx->hwctx;
-
     const HEVCContext        *h               = avctx->priv_data;
-    const HEVCFrame          *current_picture = h->ref;
+    const HEVCFrame          *current_picture = h->cur_frame;
     HEVCDecodePictureContext *ctx_pic         = current_picture->hwaccel_picture_private;
 
     int i;
@@ -111,7 +107,7 @@ static int update_input_arguments(AVCodecContext *avctx, D3D12_VIDEO_DECODE_INPU
     DXVA_Slice_HEVC_Short *slice;
     D3D12_VIDEO_DECODE_FRAME_ARGUMENT *args;
 
-    if (FAILED(ID3D12Resource_Map(buffer, 0, NULL, &mapped_data))) {
+    if (FAILED(ID3D12Resource_Map(buffer, 0, NULL, (void **)&mapped_data))) {
         av_log(avctx, AV_LOG_ERROR, "Failed to map D3D12 Buffer resource!\n");
         return AVERROR(EINVAL);
     }
@@ -153,29 +149,28 @@ static int update_input_arguments(AVCodecContext *avctx, D3D12_VIDEO_DECODE_INPU
 static int d3d12va_hevc_end_frame(AVCodecContext *avctx)
 {
     HEVCContext              *h       = avctx->priv_data;
-    HEVCDecodePictureContext *ctx_pic = h->ref->hwaccel_picture_private;
+    HEVCDecodePictureContext *ctx_pic = h->cur_frame->hwaccel_picture_private;
 
     int scale = ctx_pic->pp.dwCodingParamToolFlags & 1;
 
     if (ctx_pic->slice_count <= 0 || ctx_pic->bitstream_size <= 0)
         return -1;
 
-    return ff_d3d12va_common_end_frame(avctx, h->ref->frame, &ctx_pic->pp, sizeof(ctx_pic->pp),
+    return ff_d3d12va_common_end_frame(avctx, h->cur_frame->f, &ctx_pic->pp, sizeof(ctx_pic->pp),
                scale ? &ctx_pic->qm : NULL, scale ? sizeof(ctx_pic->qm) : 0, update_input_arguments);
 }
 
 static int d3d12va_hevc_decode_init(AVCodecContext *avctx)
 {
-    HEVCContext          *h   = avctx->priv_data;
     D3D12VADecodeContext *ctx = D3D12VA_DECODE_CONTEXT(avctx);
     DXVA_PicParams_HEVC pp;
 
     switch (avctx->profile) {
-    case FF_PROFILE_HEVC_MAIN_10:
+    case AV_PROFILE_HEVC_MAIN_10:
         ctx->cfg.DecodeProfile = D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN10;
         break;
 
-    case FF_PROFILE_HEVC_MAIN_STILL_PICTURE:
+    case AV_PROFILE_HEVC_MAIN_STILL_PICTURE:
         if (avctx->hwaccel_flags & AV_HWACCEL_FLAG_ALLOW_PROFILE_MISMATCH) {
             ctx->cfg.DecodeProfile = D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN;
             break;
@@ -184,7 +179,7 @@ static int d3d12va_hevc_decode_init(AVCodecContext *avctx)
             return AVERROR(EINVAL);
         }
 
-    case FF_PROFILE_HEVC_MAIN:
+    case AV_PROFILE_HEVC_MAIN:
     default:
         ctx->cfg.DecodeProfile = D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN;
         break;

@@ -1,3 +1,5 @@
+#![no_std]
+
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
@@ -7,6 +9,12 @@ use core::ffi::c_ulong;
 // Wrap the bindgen output in a module and re-export it, so we can override it
 // as needed.
 mod bindgen {
+    #[cfg(not(bindgen_rs_file))]
+    include!(concat!(env!("OUT_DIR"), "/bindgen.rs"));
+    // Some static build systems (e.g. bazel) do not support the `OUT_DIR`
+    // configuration used by Cargo. They can specify a complete path to the
+    // generated bindings as an environment variable.
+    #[cfg(bindgen_rs_file)]
     include!(env!("BINDGEN_RS_FILE"));
 }
 pub use bindgen::*;
@@ -42,22 +50,13 @@ pub const XN_FLAG_ONELINE: c_ulong = bindgen::XN_FLAG_ONELINE as c_ulong;
 
 // TODO(crbug.com/boringssl/596): Remove these wrappers.
 #[cfg(unsupported_inline_wrappers)]
-pub fn ERR_GET_LIB(packed_error: u32) -> i32 {
-    unsafe { ERR_GET_LIB_RUST(packed_error) }
-}
-
-#[cfg(unsupported_inline_wrappers)]
-pub fn ERR_GET_REASON(packed_error: u32) -> i32 {
-    unsafe { ERR_GET_REASON_RUST(packed_error) }
-}
-
-#[cfg(unsupported_inline_wrappers)]
-pub fn ERR_GET_FUNC(packed_error: u32) -> i32 {
-    unsafe { ERR_GET_FUNC_RUST(packed_error) }
-}
+pub use { ERR_GET_LIB_RUST as ERR_GET_LIB,
+          ERR_GET_REASON_RUST as ERR_GET_REASON,
+          ERR_GET_FUNC_RUST as ERR_GET_FUNC,
+          CBS_init_RUST as CBS_init,
+          CBS_len_RUST as CBS_len };
 
 pub fn init() {
-    unsafe {
-        CRYPTO_library_init();
-    }
+    // This function does nothing.
+    // TODO(davidben): Remove rust-openssl's dependency on this and remove this.
 }

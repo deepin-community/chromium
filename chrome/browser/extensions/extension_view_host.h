@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
+#include "base/observer_list.h"
 #include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "components/web_modal/web_contents_modal_dialog_host.h"
@@ -39,6 +40,7 @@ class ExtensionViewHost
   // hosted in ExternalTabContainer objects, which do not instantiate Browsers.
   ExtensionViewHost(const Extension* extension,
                     content::SiteInstance* site_instance,
+                    content::BrowserContext* browser_context,
                     const GURL& url,
                     mojom::ViewType host_type,
                     Browser* browser);
@@ -54,30 +56,28 @@ class ExtensionViewHost
   // Returns the browser associated with this ExtensionViewHost.
   virtual Browser* GetBrowser();
 
-  // Handles keyboard events that were not handled by HandleKeyboardEvent().
-  // Platform specific implementation may override this method to handle the
-  // event in platform specific way. Returns whether the events are handled.
-  virtual bool UnhandledKeyboardEvent(
-      content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event);
-
   // ExtensionHost
   void OnDidStopFirstLoad() override;
   void LoadInitialURL() override;
   bool IsBackgroundPage() const override;
 
+  // content::WebContentsObserver:
+  void ReadyToCommitNavigation(
+      content::NavigationHandle* navigation_handle) override;
+
   // content::WebContentsDelegate
   content::WebContents* OpenURLFromTab(
       content::WebContents* source,
-      const content::OpenURLParams& params) override;
+      const content::OpenURLParams& params,
+      base::OnceCallback<void(content::NavigationHandle&)>
+          navigation_handle_callback) override;
   bool ShouldAllowRendererInitiatedCrossProcessNavigation(
       bool is_outermost_main_frame_navigation) override;
   content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
       content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event) override;
-  bool HandleKeyboardEvent(
-      content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event) override;
+      const input::NativeWebKeyboardEvent& event) override;
+  bool HandleKeyboardEvent(content::WebContents* source,
+                           const input::NativeWebKeyboardEvent& event) override;
   bool PreHandleGestureEvent(content::WebContents* source,
                              const blink::WebGestureEvent& event) override;
   void RunFileChooser(content::RenderFrameHost* render_frame_host,
@@ -116,7 +116,13 @@ class ExtensionViewHost
  private:
   // Returns whether the provided event is a raw escape keypress in a
   // mojom::ViewType::kExtensionPopup.
-  bool IsEscapeInPopup(const content::NativeWebKeyboardEvent& event) const;
+  bool IsEscapeInPopup(const input::NativeWebKeyboardEvent& event) const;
+
+  // Handles keyboard events that were not handled by HandleKeyboardEvent().
+  // Platform specific implementation may override this method to handle the
+  // event in platform specific way. Returns whether the events are handled.
+  bool UnhandledKeyboardEvent(content::WebContents* source,
+                              const input::NativeWebKeyboardEvent& event);
 
   // The browser associated with the ExtensionView, if any. Note: since this
   // ExtensionViewHost could be associated with a browser even if `browser_` is
@@ -126,6 +132,9 @@ class ExtensionViewHost
 
   // View that shows the rendered content in the UI.
   raw_ptr<ExtensionView, DanglingUntriaged> view_ = nullptr;
+
+  base::ObserverList<web_modal::ModalDialogHostObserver>::Unchecked
+      modal_dialog_host_observers_;
 
   base::ScopedObservation<ExtensionHostRegistry,
                           ExtensionHostRegistry::Observer>

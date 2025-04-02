@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ash/login/ui/lock_debug_view.h"
 
 #include <algorithm>
@@ -10,12 +15,14 @@
 #include <optional>
 #include <utility>
 
+#include "ash/auth/views/auth_input_row_view.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/curtain/remote_maintenance_curtain_view.h"
 #include "ash/curtain/security_curtain_controller.h"
 #include "ash/detachable_base/detachable_base_pairing_status.h"
 #include "ash/ime/ime_controller_impl.h"
 #include "ash/login/login_screen_controller.h"
+#include "ash/login/ui/auth_panel_debug_view.h"
 #include "ash/login/ui/local_authentication_request_controller_impl.h"
 #include "ash/login/ui/lock_contents_view.h"
 #include "ash/login/ui/lock_contents_view_test_api.h"
@@ -27,13 +34,13 @@
 #include "ash/public/cpp/kiosk_app_menu.h"
 #include "ash/public/cpp/login/local_authentication_request_controller.h"
 #include "ash/public/cpp/login_types.h"
+#include "ash/public/cpp/shell_window_ids.h"
 #include "ash/public/cpp/smartlock_state.h"
 #include "ash/public/cpp/style/dark_light_mode_controller.h"
 #include "ash/shelf/login_shelf_view.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
-#include "ash/style/ash_color_provider.h"
 #include "ash/wallpaper/wallpaper_controller_impl.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
@@ -44,7 +51,10 @@
 #include "components/account_id/account_id.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/multi_user/multi_user_sign_in_policy.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "ui/base/ime/ash/ime_keyboard.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/chromeos/resources/grit/ui_chromeos_resources.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/controls/button/md_text_button.h"
@@ -52,6 +62,7 @@
 #include "ui/views/controls/scrollbar/overlay_scroll_bar.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/view.h"
+#include "ui/views/widget/widget.h"
 
 namespace ash {
 namespace {
@@ -115,6 +126,7 @@ struct UserMetadata {
 
   AccountId account_id;
   std::string display_name;
+  bool enable_password = true;
   bool enable_pin = false;
   bool pin_autosubmit = false;
   bool enable_tap_to_unlock = false;
@@ -199,12 +211,10 @@ class LockDebugView::DebugDataDispatcherTransformer
     : public LoginDataDispatcher::Observer {
  public:
   DebugDataDispatcherTransformer(
-      mojom::TrayActionState initial_lock_screen_note_state,
       LoginDataDispatcher* dispatcher,
       const base::RepeatingClosure& on_users_received,
       LockDebugView* lock_debug_view)
       : root_dispatcher_(dispatcher),
-        lock_screen_note_state_(initial_lock_screen_note_state),
         on_users_received_(on_users_received),
         lock_debug_view_(lock_debug_view) {
     root_dispatcher_->AddObserver(this);
@@ -216,6 +226,7 @@ class LockDebugView::DebugDataDispatcherTransformer
       const DebugDataDispatcherTransformer&) = delete;
 
   ~DebugDataDispatcherTransformer() override {
+    auth_panel_debug_widget_ = nullptr;
     root_dispatcher_->RemoveObserver(this);
   }
 
@@ -243,8 +254,8 @@ class LockDebugView::DebugDataDispatcherTransformer
         users[i].basic_user_info.account_id = AccountId::FromUserEmailGaiaId(
             users[i].basic_user_info.account_id.GetUserEmail() +
                 base::NumberToString(i),
-            users[i].basic_user_info.account_id.GetGaiaId() +
-                base::NumberToString(i));
+            GaiaId(users[i].basic_user_info.account_id.GetGaiaId().ToString() +
+                   base::NumberToString(i)));
       }
 
       // Setup user data based on the user type in debug_users_.
@@ -303,7 +314,8 @@ class LockDebugView::DebugDataDispatcherTransformer
           .SetUserPinLength(debug_user->account_id, 0);
     }
     debug_dispatcher_.SetPinEnabledForUser(debug_user->account_id,
-                                           debug_user->enable_pin);
+                                           debug_user->enable_pin,
+                                           /*available_at*/ std::nullopt);
   }
 
   void ToggleDarkLigntModeForUserIndex(size_t user_index) {
@@ -399,6 +411,37 @@ class LockDebugView::DebugDataDispatcherTransformer
     Shell::Get()->local_authentication_request_controller()->ShowWidget(
         base::BindOnce([](bool bla, std::unique_ptr<UserContext> ctx) {}),
         std::move(user_context));
+  }
+
+  // Activates AuthPanel for the user at |user_index|.
+  void AuthPanelRequestForUserIndex(size_t user_index,
+                                    bool use_legacy_authpanel) {
+    if (auth_panel_debug_widget_) {
+      LOG(ERROR) << "AuthPanelDebugWidget still exists.";
+      return;
+    }
+    auto delegate = std::make_unique<views::DialogDelegate>();
+    delegate->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+    delegate->SetModalType(ui::mojom::ModalType::kSystem);
+    delegate->SetOwnedByWidget(true);
+    delegate->SetCloseCallback(
+        base::BindOnce(&LockDebugView::DebugDataDispatcherTransformer::
+                           OnAuthPanelDebugWidgetClose,
+                       base::Unretained(this)));
+
+    DCHECK(user_index >= 0 && user_index < debug_users_.size());
+    UserMetadata* debug_user = &debug_users_[user_index];
+    const AccountId account_id = debug_user->account_id;
+    delegate->SetContentsView(
+        std::make_unique<AuthPanelDebugView>(account_id, use_legacy_authpanel));
+
+    auth_panel_debug_widget_ = views::DialogDelegate::CreateDialogWidget(
+        std::move(delegate),
+        /*context=*/nullptr,
+        /*parent=*/
+        Shell::GetPrimaryRootWindow()->GetChildById(
+            kShellWindowId_LockSystemModalContainer));
+    auth_panel_debug_widget_->Show();
   }
 
   // Cycles fingerprint state for the user at |user_index|.
@@ -536,16 +579,6 @@ class LockDebugView::DebugDataDispatcherTransformer
     NotifyUsers(std::move(users));
   }
 
-  void ToggleLockScreenNoteButton() {
-    if (lock_screen_note_state_ == mojom::TrayActionState::kAvailable) {
-      lock_screen_note_state_ = mojom::TrayActionState::kNotAvailable;
-    } else {
-      lock_screen_note_state_ = mojom::TrayActionState::kAvailable;
-    }
-
-    debug_dispatcher_.SetLockScreenNoteState(lock_screen_note_state_);
-  }
-
   void AddKioskApp(ShelfWidget* shelf_widget) {
     kiosk_apps_.emplace_back(KioskAppMenuEntry::AppType::kChromeApp,
                              kDebugKioskAppAccountId, kDebugKioskAppId,
@@ -587,13 +620,34 @@ class LockDebugView::DebugDataDispatcherTransformer
 
     on_users_received_.Run();
   }
-  void OnPinEnabledForUserChanged(const AccountId& user,
-                                  bool enabled) override {
+  void OnUserAuthFactorsChanged(
+      const AccountId& user,
+      cryptohome::AuthFactorsSet auth_factors,
+      cryptohome::PinLockAvailability pin_available_at) override {
     // Forward notification only if the user is currently being shown.
-    for (size_t i = 0u; i < debug_users_.size(); ++i) {
-      if (debug_users_[i].account_id == user) {
-        debug_users_[i].enable_pin = enabled;
-        debug_dispatcher_.SetPinEnabledForUser(user, enabled);
+    for (auto& debug_user : debug_users_) {
+      if (debug_user.account_id == user) {
+        debug_user.enable_password =
+            auth_factors.Has(cryptohome::AuthFactorType::kPassword);
+        debug_user.enable_pin =
+            auth_factors.Has(cryptohome::AuthFactorType::kPin);
+        debug_user.enable_challenge_response =
+            auth_factors.Has(cryptohome::AuthFactorType::kSmartCard);
+        debug_dispatcher_.SetAuthFactorsForUser(user, auth_factors,
+                                                pin_available_at);
+        break;
+      }
+    }
+  }
+  void OnPinEnabledForUserChanged(
+      const AccountId& user,
+      bool enabled,
+      cryptohome::PinLockAvailability available_at) override {
+    // Forward notification only if the user is currently being shown.
+    for (auto& debug_user : debug_users_) {
+      if (debug_user.account_id == user) {
+        debug_user.enable_pin = enabled;
+        debug_dispatcher_.SetPinEnabledForUser(user, enabled, available_at);
         break;
       }
     }
@@ -601,17 +655,13 @@ class LockDebugView::DebugDataDispatcherTransformer
   void OnTapToUnlockEnabledForUserChanged(const AccountId& user,
                                           bool enabled) override {
     // Forward notification only if the user is currently being shown.
-    for (size_t i = 0u; i < debug_users_.size(); ++i) {
-      if (debug_users_[i].account_id == user) {
-        debug_users_[i].enable_tap_to_unlock = enabled;
+    for (auto& debug_user : debug_users_) {
+      if (debug_user.account_id == user) {
+        debug_user.enable_tap_to_unlock = enabled;
         debug_dispatcher_.SetTapToUnlockEnabledForUser(user, enabled);
         break;
       }
     }
-  }
-  void OnLockScreenNoteStateChanged(mojom::TrayActionState state) override {
-    lock_screen_note_state_ = state;
-    debug_dispatcher_.SetLockScreenNoteState(state);
   }
   void OnDetachableBasePairingStatusChanged(
       DetachableBasePairingStatus pairing_status) override {
@@ -632,6 +682,8 @@ class LockDebugView::DebugDataDispatcherTransformer
         show_full_management_disclosure);
   }
 
+  void OnAuthPanelDebugWidgetClose() { auth_panel_debug_widget_ = nullptr; }
+
  private:
   // The debug overlay UI takes ground-truth data from |root_dispatcher_|,
   // applies a series of transformations to it, and exposes it to the UI via
@@ -645,14 +697,13 @@ class LockDebugView::DebugDataDispatcherTransformer
   // Metadata for users that the UI is displaying.
   std::vector<UserMetadata> debug_users_;
 
-  // The current lock screen note action state.
-  mojom::TrayActionState lock_screen_note_state_;
-
   // List of kiosk apps loaded.
   std::vector<KioskAppMenuEntry> kiosk_apps_;
 
   // Called when a new user list has been received.
   base::RepeatingClosure on_users_received_;
+
+  raw_ptr<views::Widget> auth_panel_debug_widget_ = nullptr;
 
   // Called for testing functions not belonging to the login data dispatcher.
   // In such a case, we want to bypass the event handling mechanism and do
@@ -797,10 +848,8 @@ class LockDebugView::DebugLoginDetachableBaseModel
   std::map<AccountId, int> last_used_bases_;
 };
 
-LockDebugView::LockDebugView(mojom::TrayActionState initial_note_action_state,
-                             LockScreen::ScreenType screen_type)
+LockDebugView::LockDebugView(LockScreen::ScreenType screen_type)
     : debug_data_dispatcher_(std::make_unique<DebugDataDispatcherTransformer>(
-          initial_note_action_state,
           Shell::Get()->login_screen_controller()->data_dispatcher(),
           base::BindRepeating(
               &LockDebugView::UpdatePerUserActionContainerAndLayout,
@@ -814,7 +863,7 @@ LockDebugView::LockDebugView(mojom::TrayActionState initial_note_action_state,
       std::make_unique<DebugLoginDetachableBaseModel>();
   debug_detachable_base_model_ = debug_detachable_base_model.get();
 
-  lock_ = new LockContentsView(initial_note_action_state, screen_type,
+  lock_ = new LockContentsView(screen_type,
                                debug_data_dispatcher_->debug_dispatcher(),
                                std::move(debug_detachable_base_model));
   AddChildView(lock_.get());
@@ -855,6 +904,12 @@ LockDebugView::LockDebugView(mojom::TrayActionState initial_note_action_state,
                                 base::Unretained(this), -1),
             change_users_container);
 
+  auto* login_ui_components_container = add_horizontal_container();
+  AddButton("Show AuthInputRowView",
+            base::BindRepeating(&LockDebugView::AuthInputRowView,
+                                base::Unretained(this)),
+            login_ui_components_container);
+
   auto* toggle_container = add_horizontal_container();
   AddButton("Blur", base::BindRepeating([]() {
               auto* const wallpaper_controller =
@@ -862,11 +917,6 @@ LockDebugView::LockDebugView(mojom::TrayActionState initial_note_action_state,
               wallpaper_controller->UpdateWallpaperBlurForLockState(
                   !wallpaper_controller->IsWallpaperBlurredForLockState());
             }),
-            toggle_container);
-  AddButton("Toggle note action",
-            base::BindRepeating(
-                &DebugDataDispatcherTransformer::ToggleLockScreenNoteButton,
-                base::Unretained(debug_data_dispatcher_.get())),
             toggle_container);
   AddButton("Toggle caps lock", base::BindRepeating([]() {
               ImeControllerImpl* ime_controller =
@@ -1035,6 +1085,50 @@ void LockDebugView::ToggleAuthButtonPressed() {
       ->set_force_fail_auth_for_debug_overlay(force_fail_auth_);
 }
 
+void LockDebugView::AuthInputRowView() {
+  if (auth_input_row_debug_widget_) {
+    LOG(ERROR) << "AuthInputRowWidget still exists.";
+    return;
+  }
+  auto delegate = std::make_unique<views::DialogDelegate>();
+  delegate->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+  delegate->SetModalType(ui::mojom::ModalType::kSystem);
+  delegate->SetOwnedByWidget(true);
+  delegate->SetCloseCallback(base::BindOnce(
+      &LockDebugView::OnAuthInputRowDebugWidgetClose, base::Unretained(this)));
+
+  auto container_view = std::make_unique<views::View>();
+
+  auto* layout =
+      container_view->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kVertical));
+  layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+  layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
+
+  container_view->SetPreferredSize(gfx::Size({500, 400}));
+
+  container_view->SetBackground(views::CreateThemedRoundedRectBackground(
+      cros_tokens::kCrosSysSystemBaseElevated, 0));
+
+  container_view->AddChildView(std::make_unique<ash::AuthInputRowView>(
+      ash::AuthInputRowView::AuthType::kPassword));
+
+  delegate->SetContentsView(std::move(container_view));
+
+  auth_input_row_debug_widget_ = views::DialogDelegate::CreateDialogWidget(
+      std::move(delegate),
+      /*context=*/nullptr,
+      /*parent=*/
+      Shell::GetPrimaryRootWindow()->GetChildById(
+          kShellWindowId_LockSystemModalContainer));
+  auth_input_row_debug_widget_->Show();
+}
+
+void LockDebugView::OnAuthInputRowDebugWidgetClose() {
+  auth_input_row_debug_widget_ = nullptr;
+}
+
 void LockDebugView::AddKioskAppButtonPressed() {
   debug_data_dispatcher_->AddKioskApp(
       Shelf::ForWindow(GetWidget()->GetNativeWindow())->shelf_widget());
@@ -1098,9 +1192,6 @@ void LockDebugView::ShowSecurityCurtainScreenButtonPressed() {
   // We don't support toggling this on and off, since once you are in the
   // curtain screen there is no way to leave it (by design).
   ash::curtain::SecurityCurtainController::InitParams params{
-      /*event_filter=*/base::BindRepeating([](const ui::Event& event) {
-        return curtain::FilterResult::kKeepEvent;
-      }),
       /*curtain_factory=*/base::BindRepeating(CreateCurtainOverlay)};
   controller.Enable(params);
 }
@@ -1251,6 +1342,20 @@ void LockDebugView::UpdatePerUserActionContainer() {
                                 CycleDisabledAuthMessageForUserIndex,
                             base::Unretained(debug_data_dispatcher_.get()), i),
         row);
+
+    AddButton("Show legacy AuthPanel",
+              base::BindRepeating(
+                  &DebugDataDispatcherTransformer::AuthPanelRequestForUserIndex,
+                  base::Unretained(debug_data_dispatcher_.get()), i,
+                  /*use_legacy_authpanel=*/true),
+              row);
+
+    AddButton("Show AuthPanel",
+              base::BindRepeating(
+                  &DebugDataDispatcherTransformer::AuthPanelRequestForUserIndex,
+                  base::Unretained(debug_data_dispatcher_.get()), i,
+                  /*use_legacy_authpanel=*/false),
+              row);
 
     AddButton("Show local authentication request",
               base::BindRepeating(

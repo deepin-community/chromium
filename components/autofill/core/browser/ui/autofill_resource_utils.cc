@@ -34,7 +34,10 @@ constexpr auto kDataResources = base::MakeFixedFlatMap<Suggestion::Icon, int>({
     {Suggestion::Icon::kCardMir, IDR_AUTOFILL_CC_MIR},
     {Suggestion::Icon::kCardTroy, IDR_AUTOFILL_CC_TROY},
     {Suggestion::Icon::kCardUnionPay, IDR_AUTOFILL_CC_UNIONPAY},
+    {Suggestion::Icon::kCardVerve, IDR_AUTOFILL_CC_VERVE},
     {Suggestion::Icon::kCardVisa, IDR_AUTOFILL_CC_VISA},
+    {Suggestion::Icon::kIban, IDR_AUTOFILL_IBAN},
+    {Suggestion::Icon::kBnpl, IDR_AUTOFILL_BNPL_GENERIC},
 #if BUILDFLAG(IS_ANDROID)
     {Suggestion::Icon::kHttpWarning, IDR_ANDROID_AUTOFILL_HTTP_WARNING},
     {Suggestion::Icon::kHttpsInvalid,
@@ -66,7 +69,10 @@ constexpr auto kNewCardArtAndNetworkDataResources =
         {Suggestion::Icon::kCardMir, IDR_AUTOFILL_METADATA_CC_MIR},
         {Suggestion::Icon::kCardTroy, IDR_AUTOFILL_METADATA_CC_TROY},
         {Suggestion::Icon::kCardUnionPay, IDR_AUTOFILL_METADATA_CC_UNIONPAY},
+        {Suggestion::Icon::kCardVerve, IDR_AUTOFILL_METADATA_CC_VERVE},
         {Suggestion::Icon::kCardVisa, IDR_AUTOFILL_METADATA_CC_VISA},
+        {Suggestion::Icon::kIban, IDR_AUTOFILL_IBAN},
+        {Suggestion::Icon::kBnpl, IDR_AUTOFILL_METADATA_BNPL_GENERIC},
 #if BUILDFLAG(IS_ANDROID)
         {Suggestion::Icon::kHttpWarning, IDR_ANDROID_AUTOFILL_HTTP_WARNING},
         {Suggestion::Icon::kHttpsInvalid,
@@ -96,10 +102,10 @@ int GetIconResourceID(Suggestion::Icon resource_name) {
 #endif
   const auto& kDataResource =
       base::FeatureList::IsEnabled(
-          autofill::features::kAutofillEnableNewCardArtAndNetworkImages)
+          features::kAutofillEnableNewCardArtAndNetworkImages)
           ? kNewCardArtAndNetworkDataResources
           : kDataResources;
-  auto* it = kDataResource.find(resource_name);
+  auto it = kDataResource.find(resource_name);
   return it == kDataResource.end() ? kResourceNotFoundId : it->second;
 }
 

@@ -37,8 +37,8 @@ struct AffectedCookie {
 };
 
 struct AffectedRequest {
-  string request_id;
-  string? url;
+  string? request_id;
+  string url;
 };
 
 struct AffectedFrame {
@@ -92,6 +92,12 @@ enum AttributionReportingIssueType {
   kWebAndOsHeaders,
   kNoWebOrOsSupport,
   kNavigationRegistrationWithoutTransientUserActivation,
+  kInvalidInfoHeader,
+  kNoRegisterSourceHeader,
+  kNoRegisterTriggerHeader,
+  kNoRegisterOsSourceHeader,
+  kNoRegisterOsTriggerHeader,
+  kNavigationRegistrationUniqueScopeAlreadySet,
 };
 
 struct AttributionReportingIssueDetails {
@@ -148,6 +154,8 @@ enum CookieExclusionReason {
   kExcludeSameSiteStrict,
   kExcludeDomainNonASCII,
   kExcludeThirdPartyPhaseout,
+  kExcludePortMismatch,
+  kExcludeSchemeMismatch,
 };
 
 // Reasons to warn about a cookie, see net/cookies/cookie_inclusion_status.h
@@ -205,40 +213,48 @@ struct LowTextContrastIssue {
 enum FederatedAuthRequestResult {
   kSuccess,
   kShouldEmbargo,
-  kErrorDisabledInSettings,
-  kErrorTooManyRequests,
-  kErrorFetchingWellKnownHttpNotFound,
-  kErrorFetchingWellKnownNoResponse,
-  kErrorFetchingWellKnownInvalidResponse,
-  kErrorFetchingWellKnownListEmpty,
-  kErrorFetchingWellKnownInvalidContentType,
-  kErrorConfigNotInWellKnown,
-  kErrorWellKnownTooBig,
-  kErrorFetchingConfigHttpNotFound,
-  kErrorFetchingConfigNoResponse,
-  kErrorFetchingConfigInvalidResponse,
-  kErrorFetchingConfigInvalidContentType,
-  kErrorFetchingClientMetadataHttpNotFound,
-  kErrorFetchingClientMetadataNoResponse,
-  kErrorFetchingClientMetadataInvalidResponse,
-  kErrorFetchingClientMetadataInvalidContentType,
-  kErrorFetchingAccountsHttpNotFound,
-  kErrorFetchingAccountsNoResponse,
-  kErrorFetchingAccountsInvalidResponse,
-  kErrorFetchingAccountsListEmpty,
-  kErrorFetchingAccountsInvalidContentType,
-  kErrorFetchingIdTokenHttpNotFound,
-  kErrorFetchingIdTokenNoResponse,
-  kErrorFetchingIdTokenInvalidResponse,
-  kErrorFetchingIdTokenIdpErrorResponse,
-  kErrorFetchingIdTokenCrossSiteIdpErrorResponse,
-  kErrorFetchingIdTokenInvalidContentType,
-  kErrorCanceled,
-  kErrorRpPageNotVisible,
-  kErrorSilentMediationFailure,
-  kErrorThirdPartyCookiesBlocked,
-  kErrorNotSignedInWithIdp,
+  kIdpNotPotentiallyTrustworthy,
+  kDisabledInSettings,
+  kDisabledInFlags,
+  kTooManyRequests,
+  kWellKnownHttpNotFound,
+  kWellKnownNoResponse,
+  kWellKnownInvalidResponse,
+  kWellKnownListEmpty,
+  kWellKnownInvalidContentType,
+  kConfigNotInWellKnown,
+  kWellKnownTooBig,
+  kConfigHttpNotFound,
+  kConfigNoResponse,
+  kConfigInvalidResponse,
+  kConfigInvalidContentType,
+  kClientMetadataHttpNotFound,
+  kClientMetadataNoResponse,
+  kClientMetadataInvalidResponse,
+  kClientMetadataInvalidContentType,
+  kAccountsHttpNotFound,
+  kAccountsNoResponse,
+  kAccountsInvalidResponse,
+  kAccountsListEmpty,
+  kAccountsInvalidContentType,
+  kIdTokenHttpNotFound,
+  kIdTokenNoResponse,
+  kIdTokenInvalidResponse,
+  kIdTokenIdpErrorResponse,
+  kIdTokenCrossSiteIdpErrorResponse,
+  kIdTokenInvalidContentType,
+  kCanceled,
+  kRpPageNotVisible,
+  kSilentMediationFailure,
+  kThirdPartyCookiesBlocked,
+  kNotSignedInWithIdp,
+  kMissingTransientUserActivation,
+  kReplacedByActiveMode,
+  kInvalidFieldsSpecified,
+  kRelyingPartyOriginIsOpaque,
+  kTypeNotMatching,
   kError,
+  kUiDismissedNoEmbargo,
 };
 
 struct FederatedAuthRequestIssueDetails {
@@ -275,10 +291,12 @@ struct BounceTrackingIssueDetails {
 
 struct CookieDeprecationMetadataIssueDetails {
   array<string> allowed_sites;
+  uint32 opt_out_percentage;
+  bool is_opt_out_top_level;
+  CookieOperation operation;
 };
 
 enum GenericIssueErrorType {
-  kCrossOriginPortalPostMessageError,
   kFormLabelForNameError,
   kFormDuplicateIdForInputError,
   kFormInputWithNoLabelError,

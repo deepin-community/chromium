@@ -2,15 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/platform/audio/vector_math.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <numeric>
 #include <random>
 
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
@@ -77,13 +82,15 @@ class TestVector {
     STACK_ALLOCATED();
 
    public:
-    // These types are used by std::iterator_traits used by base::ranges::equal
+    // These types are used by std::iterator_traits used by std::ranges::equal
     // used by TestVector::operator==.
     using difference_type = ptrdiff_t;
     using iterator_category = std::bidirectional_iterator_tag;
     using pointer = T*;
     using reference = T&;
     using value_type = T;
+
+    constexpr Iterator() = default;
 
     Iterator(T* p, int stride) : p_(p), stride_(stride) {}
 
@@ -110,8 +117,8 @@ class TestVector {
     T& operator*() const { return *p_; }
 
    private:
-    T* p_;
-    size_t stride_;
+    T* p_ = nullptr;
+    size_t stride_ = 0;
   };
 
  public:
@@ -141,7 +148,7 @@ class TestVector {
   int stride() const { return static_cast<int>(memory_layout()->stride); }
 
   bool operator==(const TestVector& other) const {
-    return base::ranges::equal(*this, other, Equal);
+    return std::ranges::equal(*this, other, Equal);
   }
   T& operator[](size_t i) const { return p_[i * stride()]; }
 
@@ -160,8 +167,8 @@ class TestVector {
     return reinterpret_cast<size_t>(p) % kMaxByteAlignment;
   }
 
-  raw_ptr<T, ExperimentalRenderer | AllowPtrArithmetic> p_;
-  raw_ptr<const MemoryLayout, ExperimentalRenderer> memory_layout_;
+  raw_ptr<T, AllowPtrArithmetic> p_;
+  raw_ptr<const MemoryLayout> memory_layout_;
   size_t size_;
 };
 
@@ -402,7 +409,7 @@ TEST_F(VectorMathTest, Vsma) {
       expected_dest[i] = dest_source[i] + scale * source[i];
     }
     for (auto& dest : GetSecondaryVectors(GetDestination(1u), source)) {
-      base::ranges::copy(dest_source, dest.begin());
+      std::ranges::copy(dest_source, dest.begin());
       Vsma(source.p(), source.stride(), &scale, dest.p(), dest.stride(),
            source.size());
       // Different optimizations may use different precisions for intermediate

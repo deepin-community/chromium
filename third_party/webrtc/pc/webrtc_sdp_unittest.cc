@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -23,8 +24,9 @@
 #include "absl/memory/memory.h"
 #include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
-#include "absl/types/optional.h"
 #include "api/array_view.h"
+#include "api/candidate.h"
+#include "api/jsep.h"
 #include "api/jsep_session_description.h"
 #include "api/media_types.h"
 #include "api/rtp_parameters.h"
@@ -61,9 +63,7 @@ using cricket::ContentInfo;
 using cricket::ICE_CANDIDATE_COMPONENT_RTCP;
 using cricket::ICE_CANDIDATE_COMPONENT_RTP;
 using cricket::kFecSsrcGroupSemantics;
-using cricket::LOCAL_PORT_TYPE;
 using cricket::MediaProtocolType;
-using cricket::RELAY_PORT_TYPE;
 using cricket::RidDescription;
 using cricket::RidDirection;
 using cricket::SctpDataContentDescription;
@@ -71,14 +71,15 @@ using cricket::SessionDescription;
 using cricket::SimulcastDescription;
 using cricket::SimulcastLayer;
 using cricket::StreamParams;
-using cricket::STUN_PORT_TYPE;
 using cricket::TransportDescription;
 using cricket::TransportInfo;
 using cricket::VideoContentDescription;
 using ::testing::ElementsAre;
 using ::testing::Field;
+using ::testing::Property;
 using webrtc::IceCandidateCollection;
 using webrtc::IceCandidateInterface;
+using webrtc::IceCandidateType;
 using webrtc::JsepIceCandidate;
 using webrtc::JsepSessionDescription;
 using webrtc::RtpExtension;
@@ -1004,42 +1005,42 @@ class WebRtcSdpTest : public ::testing::Test {
     int port = 1234;
     rtc::SocketAddress address("192.168.1.5", port++);
     Candidate candidate1(ICE_CANDIDATE_COMPONENT_RTP, "udp", address,
-                         kCandidatePriority, "", "", LOCAL_PORT_TYPE,
+                         kCandidatePriority, "", "", IceCandidateType::kHost,
                          kCandidateGeneration, kCandidateFoundation1);
     address.SetPort(port++);
     Candidate candidate2(ICE_CANDIDATE_COMPONENT_RTCP, "udp", address,
-                         kCandidatePriority, "", "", LOCAL_PORT_TYPE,
+                         kCandidatePriority, "", "", IceCandidateType::kHost,
                          kCandidateGeneration, kCandidateFoundation1);
     address.SetPort(port++);
     Candidate candidate3(ICE_CANDIDATE_COMPONENT_RTCP, "udp", address,
-                         kCandidatePriority, "", "", LOCAL_PORT_TYPE,
+                         kCandidatePriority, "", "", IceCandidateType::kHost,
                          kCandidateGeneration, kCandidateFoundation1);
     address.SetPort(port++);
     Candidate candidate4(ICE_CANDIDATE_COMPONENT_RTP, "udp", address,
-                         kCandidatePriority, "", "", LOCAL_PORT_TYPE,
+                         kCandidatePriority, "", "", IceCandidateType::kHost,
                          kCandidateGeneration, kCandidateFoundation1);
 
     // v6 host
     rtc::SocketAddress v6_address("::1", port++);
     cricket::Candidate candidate5(cricket::ICE_CANDIDATE_COMPONENT_RTP, "udp",
                                   v6_address, kCandidatePriority, "", "",
-                                  cricket::LOCAL_PORT_TYPE,
-                                  kCandidateGeneration, kCandidateFoundation2);
+                                  IceCandidateType::kHost, kCandidateGeneration,
+                                  kCandidateFoundation2);
     v6_address.SetPort(port++);
     cricket::Candidate candidate6(cricket::ICE_CANDIDATE_COMPONENT_RTCP, "udp",
                                   v6_address, kCandidatePriority, "", "",
-                                  cricket::LOCAL_PORT_TYPE,
-                                  kCandidateGeneration, kCandidateFoundation2);
+                                  IceCandidateType::kHost, kCandidateGeneration,
+                                  kCandidateFoundation2);
     v6_address.SetPort(port++);
     cricket::Candidate candidate7(cricket::ICE_CANDIDATE_COMPONENT_RTCP, "udp",
                                   v6_address, kCandidatePriority, "", "",
-                                  cricket::LOCAL_PORT_TYPE,
-                                  kCandidateGeneration, kCandidateFoundation2);
+                                  IceCandidateType::kHost, kCandidateGeneration,
+                                  kCandidateFoundation2);
     v6_address.SetPort(port++);
     cricket::Candidate candidate8(cricket::ICE_CANDIDATE_COMPONENT_RTP, "udp",
                                   v6_address, kCandidatePriority, "", "",
-                                  cricket::LOCAL_PORT_TYPE,
-                                  kCandidateGeneration, kCandidateFoundation2);
+                                  IceCandidateType::kHost, kCandidateGeneration,
+                                  kCandidateFoundation2);
 
     // stun
     int port_stun = 2345;
@@ -1047,16 +1048,16 @@ class WebRtcSdpTest : public ::testing::Test {
     rtc::SocketAddress rel_address_stun("192.168.1.5", port_stun++);
     cricket::Candidate candidate9(cricket::ICE_CANDIDATE_COMPONENT_RTP, "udp",
                                   address_stun, kCandidatePriority, "", "",
-                                  STUN_PORT_TYPE, kCandidateGeneration,
-                                  kCandidateFoundation3);
+                                  IceCandidateType::kSrflx,
+                                  kCandidateGeneration, kCandidateFoundation3);
     candidate9.set_related_address(rel_address_stun);
 
     address_stun.SetPort(port_stun++);
     rel_address_stun.SetPort(port_stun++);
     cricket::Candidate candidate10(cricket::ICE_CANDIDATE_COMPONENT_RTCP, "udp",
                                    address_stun, kCandidatePriority, "", "",
-                                   STUN_PORT_TYPE, kCandidateGeneration,
-                                   kCandidateFoundation3);
+                                   IceCandidateType::kSrflx,
+                                   kCandidateGeneration, kCandidateFoundation3);
     candidate10.set_related_address(rel_address_stun);
 
     // relay
@@ -1064,13 +1065,13 @@ class WebRtcSdpTest : public ::testing::Test {
     rtc::SocketAddress address_relay("74.125.224.39", port_relay++);
     cricket::Candidate candidate11(cricket::ICE_CANDIDATE_COMPONENT_RTCP, "udp",
                                    address_relay, kCandidatePriority, "", "",
-                                   cricket::RELAY_PORT_TYPE,
+                                   IceCandidateType::kRelay,
                                    kCandidateGeneration, kCandidateFoundation4);
     address_relay.SetPort(port_relay++);
     cricket::Candidate candidate12(cricket::ICE_CANDIDATE_COMPONENT_RTP, "udp",
                                    address_relay, kCandidatePriority, "", "",
-                                   RELAY_PORT_TYPE, kCandidateGeneration,
-                                   kCandidateFoundation4);
+                                   IceCandidateType::kRelay,
+                                   kCandidateGeneration, kCandidateFoundation4);
 
     // voice
     candidates_.push_back(candidate1);
@@ -1417,7 +1418,7 @@ class WebRtcSdpTest : public ::testing::Test {
       const cricket::ContentInfo& c1 = desc1.contents().at(i);
       const cricket::ContentInfo& c2 = desc2.contents().at(i);
       // ContentInfo properties.
-      EXPECT_EQ(c1.name, c2.name);
+      EXPECT_EQ(c1.mid(), c2.mid());
       EXPECT_EQ(c1.type, c2.type);
       EXPECT_EQ(c1.rejected, c2.rejected);
       EXPECT_EQ(c1.bundle_only, c2.bundle_only);
@@ -1882,15 +1883,15 @@ class WebRtcSdpTest : public ::testing::Test {
         GetFirstVideoContentDescription(jdesc_output->description());
     ASSERT_TRUE(vcd);
     ASSERT_FALSE(vcd->codecs().empty());
-    cricket::VideoCodec vp8 = vcd->codecs()[0];
+    cricket::Codec vp8 = vcd->codecs()[0];
     EXPECT_EQ("VP8", vp8.name);
     EXPECT_EQ(99, vp8.id);
-    cricket::VideoCodec rtx = vcd->codecs()[1];
+    cricket::Codec rtx = vcd->codecs()[1];
     EXPECT_EQ("RTX", rtx.name);
     EXPECT_EQ(95, rtx.id);
     VerifyCodecParameter(rtx.params, "apt", vp8.id);
     // VP9 is listed last in the m= line so should come after VP8 and RTX.
-    cricket::VideoCodec vp9 = vcd->codecs()[2];
+    cricket::Codec vp9 = vcd->codecs()[2];
     EXPECT_EQ("VP9", vp9.name);
     EXPECT_EQ(96, vp9.id);
   }
@@ -1937,7 +1938,7 @@ class WebRtcSdpTest : public ::testing::Test {
         GetFirstVideoContentDescription(jdesc_output->description());
     ASSERT_TRUE(vcd);
     ASSERT_FALSE(vcd->codecs().empty());
-    cricket::VideoCodec vp8 = vcd->codecs()[0];
+    cricket::Codec vp8 = vcd->codecs()[0];
     EXPECT_EQ(vp8.name, "VP8");
     EXPECT_EQ(101, vp8.id);
     EXPECT_TRUE(vp8.HasFeedbackParam(cricket::FeedbackParam(
@@ -2233,9 +2234,10 @@ TEST_F(WebRtcSdpTest, SerializeCandidates) {
 
 TEST_F(WebRtcSdpTest, SerializeHostnameCandidate) {
   rtc::SocketAddress address("a.test", 1234);
-  cricket::Candidate candidate(
-      cricket::ICE_CANDIDATE_COMPONENT_RTP, "udp", address, kCandidatePriority,
-      "", "", LOCAL_PORT_TYPE, kCandidateGeneration, kCandidateFoundation1);
+  cricket::Candidate candidate(cricket::ICE_CANDIDATE_COMPONENT_RTP, "udp",
+                               address, kCandidatePriority, "", "",
+                               IceCandidateType::kHost, kCandidateGeneration,
+                               kCandidateFoundation1);
   JsepIceCandidate jcandidate(std::string("audio_content_name"), 0, candidate);
   std::string message = webrtc::SdpSerializeCandidate(jcandidate);
   EXPECT_EQ(std::string(kRawHostnameCandidate), message);
@@ -2244,7 +2246,7 @@ TEST_F(WebRtcSdpTest, SerializeHostnameCandidate) {
 TEST_F(WebRtcSdpTest, SerializeTcpCandidates) {
   Candidate candidate(ICE_CANDIDATE_COMPONENT_RTP, "tcp",
                       rtc::SocketAddress("192.168.1.5", 9), kCandidatePriority,
-                      "", "", LOCAL_PORT_TYPE, kCandidateGeneration,
+                      "", "", IceCandidateType::kHost, kCandidateGeneration,
                       kCandidateFoundation1);
   candidate.set_tcptype(cricket::TCPTYPE_ACTIVE_STR);
   std::unique_ptr<IceCandidateInterface> jcandidate(
@@ -2281,7 +2283,9 @@ TEST_F(WebRtcSdpTest, ParseSslTcpCandidate) {
 }
 
 TEST_F(WebRtcSdpTest, SerializeSessionDescriptionWithH264) {
-  cricket::VideoCodec h264_codec = cricket::CreateVideoCodec("H264");
+  cricket::Codec h264_codec = cricket::CreateVideoCodec("H264");
+  // Id must be valid, but value doesn't matter.
+  h264_codec.id = 123;
   h264_codec.SetParam("profile-level-id", "42e01f");
   h264_codec.SetParam("level-asymmetry-allowed", "1");
   h264_codec.SetParam("packetization-mode", "1");
@@ -2369,7 +2373,7 @@ TEST_F(WebRtcSdpTest, DeserializeSessionDescriptionWithoutRtpmap) {
   EXPECT_TRUE(SdpDeserialize(kSdpNoRtpmapString, &jdesc));
   cricket::AudioContentDescription* audio =
       cricket::GetFirstAudioContentDescription(jdesc.description());
-  cricket::AudioCodecs ref_codecs;
+  cricket::Codecs ref_codecs;
   // The codecs in the AudioContentDescription should be in the same order as
   // the payload types (<fmt>s) on the m= line.
   ref_codecs.push_back(cricket::CreateAudioCodec(0, "PCMU", 8000, 1));
@@ -2648,7 +2652,7 @@ TEST_F(WebRtcSdpTest, DeserializeCandidate) {
   // Make a cricket::Candidate equivalent to kSdpTcpCandidate string.
   Candidate candidate(ICE_CANDIDATE_COMPONENT_RTP, "tcp",
                       rtc::SocketAddress("192.168.1.5", 9), kCandidatePriority,
-                      "", "", LOCAL_PORT_TYPE, kCandidateGeneration,
+                      "", "", IceCandidateType::kHost, kCandidateGeneration,
                       kCandidateFoundation1);
   std::unique_ptr<IceCandidateInterface> jcandidate_template(
       new JsepIceCandidate(std::string("audio_content_name"), 0, candidate));
@@ -3233,7 +3237,7 @@ TEST_F(WebRtcSdpTest, DeserializeVideoFmtp) {
       GetFirstVideoContentDescription(jdesc_output.description());
   ASSERT_TRUE(vcd);
   ASSERT_FALSE(vcd->codecs().empty());
-  cricket::VideoCodec vp8 = vcd->codecs()[0];
+  cricket::Codec vp8 = vcd->codecs()[0];
   EXPECT_EQ("VP8", vp8.name);
   EXPECT_EQ(120, vp8.id);
   webrtc::CodecParameterMap::iterator found =
@@ -3267,7 +3271,7 @@ TEST_F(WebRtcSdpTest, DeserializeVideoFmtpWithSprops) {
       GetFirstVideoContentDescription(jdesc_output.description());
   ASSERT_TRUE(vcd);
   ASSERT_FALSE(vcd->codecs().empty());
-  cricket::VideoCodec h264 = vcd->codecs()[0];
+  cricket::Codec h264 = vcd->codecs()[0];
   EXPECT_EQ("H264", h264.name);
   EXPECT_EQ(98, h264.id);
   webrtc::CodecParameterMap::const_iterator found =
@@ -3300,7 +3304,7 @@ TEST_F(WebRtcSdpTest, DeserializeVideoFmtpWithSpace) {
       GetFirstVideoContentDescription(jdesc_output.description());
   ASSERT_TRUE(vcd);
   ASSERT_FALSE(vcd->codecs().empty());
-  cricket::VideoCodec vp8 = vcd->codecs()[0];
+  cricket::Codec vp8 = vcd->codecs()[0];
   EXPECT_EQ("VP8", vp8.name);
   EXPECT_EQ(120, vp8.id);
   webrtc::CodecParameterMap::iterator found =
@@ -3346,24 +3350,24 @@ TEST_F(WebRtcSdpTest, DeserializePacketizationAttributeWithIllegalValue) {
       GetFirstVideoContentDescription(jdesc_output.description());
   ASSERT_TRUE(vcd);
   ASSERT_THAT(vcd->codecs(), testing::SizeIs(3));
-  cricket::VideoCodec vp8 = vcd->codecs()[0];
+  cricket::Codec vp8 = vcd->codecs()[0];
   EXPECT_EQ(vp8.name, "VP8");
   EXPECT_EQ(vp8.id, 120);
   EXPECT_EQ(vp8.packetization, "raw");
-  cricket::VideoCodec vp9 = vcd->codecs()[1];
+  cricket::Codec vp9 = vcd->codecs()[1];
   EXPECT_EQ(vp9.name, "VP9");
   EXPECT_EQ(vp9.id, 121);
-  EXPECT_EQ(vp9.packetization, absl::nullopt);
-  cricket::VideoCodec h264 = vcd->codecs()[2];
+  EXPECT_EQ(vp9.packetization, std::nullopt);
+  cricket::Codec h264 = vcd->codecs()[2];
   EXPECT_EQ(h264.name, "H264");
   EXPECT_EQ(h264.id, 122);
-  EXPECT_EQ(h264.packetization, absl::nullopt);
+  EXPECT_EQ(h264.packetization, std::nullopt);
 }
 
 TEST_F(WebRtcSdpTest, SerializeAudioFmtpWithUnknownParameter) {
   AudioContentDescription* acd = GetFirstAudioContentDescription(&desc_);
 
-  cricket::AudioCodecs codecs = acd->codecs();
+  cricket::Codecs codecs = acd->codecs();
   codecs[0].params["unknown-future-parameter"] = "SomeFutureValue";
   acd->set_codecs(codecs);
 
@@ -3380,7 +3384,7 @@ TEST_F(WebRtcSdpTest, SerializeAudioFmtpWithUnknownParameter) {
 TEST_F(WebRtcSdpTest, SerializeAudioFmtpWithKnownFmtpParameter) {
   AudioContentDescription* acd = GetFirstAudioContentDescription(&desc_);
 
-  cricket::AudioCodecs codecs = acd->codecs();
+  cricket::Codecs codecs = acd->codecs();
   codecs[0].params["stereo"] = "1";
   acd->set_codecs(codecs);
 
@@ -3396,7 +3400,7 @@ TEST_F(WebRtcSdpTest, SerializeAudioFmtpWithKnownFmtpParameter) {
 TEST_F(WebRtcSdpTest, SerializeAudioFmtpWithPTimeAndMaxPTime) {
   AudioContentDescription* acd = GetFirstAudioContentDescription(&desc_);
 
-  cricket::AudioCodecs codecs = acd->codecs();
+  cricket::Codecs codecs = acd->codecs();
   codecs[0].params["ptime"] = "20";
   codecs[0].params["maxptime"] = "120";
   acd->set_codecs(codecs);
@@ -3415,7 +3419,7 @@ TEST_F(WebRtcSdpTest, SerializeAudioFmtpWithPTimeAndMaxPTime) {
 TEST_F(WebRtcSdpTest, SerializeAudioFmtpWithTelephoneEvent) {
   AudioContentDescription* acd = GetFirstAudioContentDescription(&desc_);
 
-  cricket::AudioCodecs codecs = acd->codecs();
+  cricket::Codecs codecs = acd->codecs();
   cricket::Codec dtmf =
       cricket::CreateAudioCodec(105, "telephone-event", 8000, 1);
   dtmf.params[""] = "0-15";
@@ -3438,7 +3442,7 @@ TEST_F(WebRtcSdpTest, SerializeAudioFmtpWithTelephoneEvent) {
 TEST_F(WebRtcSdpTest, SerializeVideoFmtp) {
   VideoContentDescription* vcd = GetFirstVideoContentDescription(&desc_);
 
-  cricket::VideoCodecs codecs = vcd->codecs();
+  cricket::Codecs codecs = vcd->codecs();
   codecs[0].params["x-google-min-bitrate"] = "10";
   vcd->set_codecs(codecs);
 
@@ -3454,7 +3458,7 @@ TEST_F(WebRtcSdpTest, SerializeVideoFmtp) {
 TEST_F(WebRtcSdpTest, SerializeVideoPacketizationAttribute) {
   VideoContentDescription* vcd = GetFirstVideoContentDescription(&desc_);
 
-  cricket::VideoCodecs codecs = vcd->codecs();
+  cricket::Codecs codecs = vcd->codecs();
   codecs[0].packetization = "raw";
   vcd->set_codecs(codecs);
 
@@ -4735,8 +4739,8 @@ TEST_F(WebRtcSdpTest, ParseNoMid) {
   ASSERT_TRUE(webrtc::SdpDeserialize(sdp, &output, &error));
 
   EXPECT_THAT(output.description()->contents(),
-              ElementsAre(Field("name", &cricket::ContentInfo::name, ""),
-                          Field("name", &cricket::ContentInfo::name, "")));
+              ElementsAre(Property("name", &cricket::ContentInfo::mid, ""),
+                          Property("name", &cricket::ContentInfo::mid, "")));
 }
 
 TEST_F(WebRtcSdpTest, SerializeWithDefaultSctpProtocol) {
@@ -4840,8 +4844,8 @@ TEST_F(WebRtcSdpTest, DeserializeSdpWithUnsupportedMediaType) {
   EXPECT_TRUE(jdesc_output.description()->contents()[0].rejected);
   EXPECT_TRUE(jdesc_output.description()->contents()[1].rejected);
 
-  EXPECT_EQ(jdesc_output.description()->contents()[0].name, "bogusmid");
-  EXPECT_EQ(jdesc_output.description()->contents()[1].name, "somethingmid");
+  EXPECT_EQ(jdesc_output.description()->contents()[0].mid(), "bogusmid");
+  EXPECT_EQ(jdesc_output.description()->contents()[1].mid(), "somethingmid");
 }
 
 TEST_F(WebRtcSdpTest, MediaTypeProtocolMismatch) {
@@ -5123,4 +5127,25 @@ TEST_F(WebRtcSdpTest, BackfillsDefaultFmtpValues) {
   EXPECT_EQ(value, "93");
   EXPECT_TRUE(codecs[3].GetParam("tx-mode", &value));
   EXPECT_EQ(value, "SRST");
+}
+
+TEST_F(WebRtcSdpTest, ParsesKeyValueFmtpParameterSet) {
+  std::string params = "key1=value1;key2=value2";
+  webrtc::CodecParameterMap codec_params;
+  SdpParseError error;
+
+  ASSERT_TRUE(webrtc::ParseFmtpParameterSet(params, codec_params, &error));
+  EXPECT_EQ(2U, codec_params.size());
+  EXPECT_EQ(codec_params["key1"], "value1");
+  EXPECT_EQ(codec_params["key2"], "value2");
+}
+
+TEST_F(WebRtcSdpTest, ParsesNonKeyValueFmtpParameterSet) {
+  std::string params = "not-in-key-value-format";
+  webrtc::CodecParameterMap codec_params;
+  SdpParseError error;
+
+  ASSERT_TRUE(webrtc::ParseFmtpParameterSet(params, codec_params, &error));
+  EXPECT_EQ(1U, codec_params.size());
+  EXPECT_EQ(codec_params[""], "not-in-key-value-format");
 }

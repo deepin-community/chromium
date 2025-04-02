@@ -24,7 +24,8 @@ class BubbleSignInPromoSignInButtonView;
 // * If Chrome has at least one account in web, then the promo button is
 // personalized with the user full name and avatar icon and allows the user to
 // sign in to Chrome.
-// * TODO(b/319411476): signed in paused state
+// * If Chrome is in sign in pending state, then the promo is personalized with
+// the user full name and avatar icon and allows the user to reauth.
 class BubbleSignInPromoView : public views::View {
   METADATA_HEADER(BubbleSignInPromoView, views::View)
 
@@ -47,6 +48,8 @@ class BubbleSignInPromoView : public views::View {
   BubbleSignInPromoView(const BubbleSignInPromoView&) = delete;
   BubbleSignInPromoView& operator=(const BubbleSignInPromoView&) = delete;
   ~BubbleSignInPromoView() override;
+
+  View* GetSignInButton() const;
 
  private:
   // Used to sign in in the DiceAccountsMenu and when |signin_button_| is

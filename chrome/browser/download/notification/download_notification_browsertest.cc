@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <stddef.h>
 
 #include <memory>
@@ -54,6 +59,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/download_test_observer.h"
 #include "content/public/test/url_loader_interceptor.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "net/http/http_util.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/network/public/cpp/features.h"
@@ -64,18 +70,14 @@
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "components/user_manager/user_manager.h"
+#include "components/user_manager/user_manager_pref_names.h"
 #elif BUILDFLAG(IS_CHROMEOS_LACROS)
 #include "chromeos/startup/browser_init_params.h"
 #endif
 
 namespace {
-
-enum {
-  DUMMY_ACCOUNT_INDEX = 0,
-  PRIMARY_ACCOUNT_INDEX = 1,
-  SECONDARY_ACCOUNT_INDEX_START = 2,
-};
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 // Structure to describe an account info.
@@ -243,11 +245,11 @@ class SlowDownloadInterceptor {
         mojo::CreateDataPipe(data.size(), producer_handle, consumer_handle),
         MOJO_RESULT_OK);
 
-    uint32_t write_size = data.size();
-    MojoResult result = producer_handle->WriteData(data.c_str(), &write_size,
-                                                   MOJO_WRITE_DATA_FLAG_NONE);
+    size_t bytes_written = 0;
+    MojoResult result = producer_handle->WriteData(
+        base::as_byte_span(data), MOJO_WRITE_DATA_FLAG_NONE, bytes_written);
     ASSERT_EQ(MOJO_RESULT_OK, result);
-    ASSERT_EQ(data.size(), write_size);
+    ASSERT_EQ(data.size(), bytes_written);
     ASSERT_TRUE(consumer_handle.is_valid());
     params->client->OnReceiveResponse(std::move(head),
                                       std::move(consumer_handle), std::nullopt);
@@ -747,12 +749,13 @@ IN_PROC_BROWSER_TEST_F(DownloadNotificationTest,
   GetDownloadManager(browser())->GetAllDownloads(&downloads);
   ASSERT_EQ(2u, downloads.size());
   download::DownloadItem* download2;
-  if (download1 == downloads[0])
+  if (download1 == downloads[0]) {
     download2 = downloads[1];
-  else if (download1 == downloads[1])
+  } else if (download1 == downloads[1]) {
     download2 = downloads[0];
-  else
+  } else {
     NOTREACHED();
+  }
   EXPECT_NE(download1, download2);
 
   notifications = GetDownloadNotifications();
@@ -890,7 +893,7 @@ IN_PROC_BROWSER_TEST_F(DownloadNotificationTest,
   EXPECT_EQ(download::DownloadItem::CANCELLED, downloads[0]->GetState());
 }
 
-// TODO(crbug.com/938672): Reenable this.
+// TODO(crbug.com/41445173): Reenable this.
 IN_PROC_BROWSER_TEST_F(DownloadNotificationTest,
                        DISABLED_IncognitoDownloadFile) {
   PrepareIncognitoBrowser();
@@ -934,7 +937,7 @@ IN_PROC_BROWSER_TEST_F(DownloadNotificationTest,
   chrome::CloseWindow(incognito_browser());
 }
 
-// TODO(crbug.com/938672): Reenable this.
+// TODO(crbug.com/41445173): Reenable this.
 IN_PROC_BROWSER_TEST_F(DownloadNotificationTest,
                        DISABLED_SimultaneousIncognitoAndNormalDownloads) {
   PrepareIncognitoBrowser();
@@ -1016,7 +1019,7 @@ IN_PROC_BROWSER_TEST_F(DownloadNotificationTest,
 }
 
 // These tests have ash dependency so they are only available for ash.
-// TODO(crbug.com/1266950): Enable these tests for Lacros.
+// TODO(crbug.com/40204280): Enable these tests for Lacros.
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 
 //////////////////////////////////////////////////
@@ -1040,9 +1043,9 @@ class MultiProfileDownloadNotificationTest
 
     // Logs in to a dummy profile.
     command_line->AppendSwitchASCII(ash::switches::kLoginUser,
-                                    kTestAccounts[DUMMY_ACCOUNT_INDEX].email);
+                                    kTestAccounts[0].email);
     command_line->AppendSwitchASCII(ash::switches::kLoginProfile,
-                                    kTestAccounts[DUMMY_ACCOUNT_INDEX].hash);
+                                    kTestAccounts[0].hash);
     // Don't require policy for our sessions - this is required because
     // this test creates a secondary profile synchronously, so we need to
     // let the policy code know not to expect cached policy.
@@ -1050,24 +1053,24 @@ class MultiProfileDownloadNotificationTest
                                     "false");
   }
 
-  // Logs in to the primary profile.
-  void SetUpOnMainThread() override {
-    const TestAccountInfo& info = kTestAccounts[PRIMARY_ACCOUNT_INDEX];
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    InProcessBrowserTest::SetUpLocalStatePrefService(local_state);
 
-    AddUser(info, true);
-    DownloadNotificationTestBase::SetUpOnMainThread();
+    // Register a persisted user.
+    ScopedListPrefUpdate prefs_user_update(
+        local_state, user_manager::prefs::kRegularUsersPref);
+    for (const auto& test_account : kTestAccounts) {
+      prefs_user_update->Append(test_account.email);
+    }
   }
 
-  // Loads all users to the current session and sets up necessary fields.
-  // This is used for preparing all accounts in PRE_ test setup, and for testing
-  // actual login behavior.
-  void AddAllUsers() {
-    for (size_t i = 0; i < std::size(kTestAccounts); ++i) {
-      // The primary account was already set up in SetUpOnMainThread, so skip it
-      // here.
-      if (i == PRIMARY_ACCOUNT_INDEX)
-        continue;
-      AddUser(kTestAccounts[i], i >= SECONDARY_ACCOUNT_INDEX_START);
+  // Logs in to the primary profile.
+  void SetUpOnMainThread() override {
+    DownloadNotificationTestBase::SetUpOnMainThread();
+
+    // Add all users, except the first one, which is already logged in.
+    for (size_t i = 1; i < std::size(kTestAccounts); ++i) {
+      AddUser(kTestAccounts[i]);
     }
   }
 
@@ -1078,14 +1081,13 @@ class MultiProfileDownloadNotificationTest
   }
 
   // Adds a new user for testing to the current session.
-  void AddUser(const TestAccountInfo& info, bool log_in) {
-    if (log_in) {
-      session_manager::SessionManager::Get()->CreateSession(
-          AccountId::FromUserEmailGaiaId(info.email, info.gaia_id), info.hash,
-          false);
-    }
+  void AddUser(const TestAccountInfo& info) {
+    session_manager::SessionManager::Get()->CreateSession(
+        AccountId::FromUserEmailGaiaId(info.email, GaiaId(info.gaia_id)),
+        info.hash, false);
+
     user_manager::UserManager::Get()->SaveUserDisplayName(
-        AccountId::FromUserEmailGaiaId(info.email, info.gaia_id),
+        AccountId::FromUserEmailGaiaId(info.email, GaiaId(info.gaia_id)),
         base::UTF8ToUTF16(info.display_name));
     Profile& profile = profiles::testing::CreateProfileSync(
         g_browser_process->profile_manager(),
@@ -1103,14 +1105,7 @@ class MultiProfileDownloadNotificationTest
 };
 
 IN_PROC_BROWSER_TEST_F(MultiProfileDownloadNotificationTest,
-                       PRE_DownloadMultipleFiles) {
-  AddAllUsers();
-}
-
-IN_PROC_BROWSER_TEST_F(MultiProfileDownloadNotificationTest,
                        DownloadMultipleFiles) {
-  AddAllUsers();
-
   GURL url(SlowDownloadInterceptor::kUnknownSizeUrl);
 
   Profile* profile1 = GetProfileByIndex(1);

@@ -1,16 +1,16 @@
-/* Copyright (c) 2017, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2017 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #ifndef OPENSSL_HEADER_SSL_SPAN_H
 #define OPENSSL_HEADER_SSL_SPAN_H
@@ -24,10 +24,27 @@ extern "C++" {
 #include <stdlib.h>
 
 #include <algorithm>
+#include <string_view>
 #include <type_traits>
 
-#if __cplusplus >= 201703L
-#include <string_view>
+#if __has_include(<version>)
+#include <version>
+#endif
+
+#if defined(__cpp_lib_ranges) && __cpp_lib_ranges >= 201911L
+#include <ranges>
+BSSL_NAMESPACE_BEGIN
+template <typename T>
+class Span;
+BSSL_NAMESPACE_END
+
+// Mark `Span` as satisfying the `view` and `borrowed_range` concepts. This
+// should be done before the definition of `Span`, so that any inlined calls to
+// range functionality use the correct specializations.
+template <typename T>
+inline constexpr bool std::ranges::enable_view<bssl::Span<T>> = true;
+template <typename T>
+inline constexpr bool std::ranges::enable_borrowed_range<bssl::Span<T>> = true;
 #endif
 
 BSSL_NAMESPACE_BEGIN
@@ -49,6 +66,14 @@ class SpanBase {
 
   friend bool operator!=(Span<T> lhs, Span<T> rhs) { return !(lhs == rhs); }
 };
+
+// Heuristically test whether C is a container type that can be converted into
+// a Span<T> by checking for data() and size() member functions.
+template <typename C, typename T>
+using EnableIfContainer = std::enable_if_t<
+    std::is_convertible_v<decltype(std::declval<C>().data()), T *> &&
+    std::is_integral_v<decltype(std::declval<C>().size())>>;
+
 }  // namespace internal
 
 // A Span<T> is a non-owning reference to a contiguous array of objects of type
@@ -74,26 +99,16 @@ class SpanBase {
 //
 // FooMutate(bssl::Span<uint8_t>(vec));
 //
-// You can also use the |MakeSpan| and |MakeConstSpan| factory methods to
-// construct Spans in order to deduce the type of the Span automatically.
+// You can also use C++17 class template argument deduction to construct Spans
+// in order to deduce the type of the Span automatically.
 //
-// FooMutate(bssl::MakeSpan(vec));
+// FooMutate(bssl::Span(vec));
 //
 // Note that Spans have value type sematics. They are cheap to construct and
 // copy, and should be passed by value whenever a method would otherwise accept
 // a reference or pointer to a container or array.
 template <typename T>
 class Span : private internal::SpanBase<const T> {
- private:
-  // Heuristically test whether C is a container type that can be converted into
-  // a Span by checking for data() and size() member functions.
-  //
-  // TODO(davidben): Require C++17 support for std::is_convertible_v, etc.
-  template <typename C>
-  using EnableIfContainer = std::enable_if_t<
-      std::is_convertible<decltype(std::declval<C>().data()), T *>::value &&
-      std::is_integral<decltype(std::declval<C>().size())>::value>;
-
  public:
   static const size_t npos = static_cast<size_t>(-1);
 
@@ -114,12 +129,12 @@ class Span : private internal::SpanBase<const T> {
   template <size_t N>
   constexpr Span(T (&array)[N]) : Span(array, N) {}
 
-  template <typename C, typename = EnableIfContainer<C>,
+  template <typename C, typename = internal::EnableIfContainer<C, T>,
             typename = std::enable_if_t<std::is_const<T>::value, C>>
   constexpr Span(const C &container)
       : data_(container.data()), size_(container.size()) {}
 
-  template <typename C, typename = EnableIfContainer<C>,
+  template <typename C, typename = internal::EnableIfContainer<C, T>,
             typename = std::enable_if_t<!std::is_const<T>::value, C>>
   constexpr explicit Span(C &container)
       : data_(container.data()), size_(container.size()) {}
@@ -189,6 +204,16 @@ template <typename T>
 const size_t Span<T>::npos;
 
 template <typename T>
+Span(T *, size_t) -> Span<T>;
+template <typename T, size_t size>
+Span(T (&array)[size]) -> Span<T>;
+template <
+    typename C,
+    typename T = std::remove_pointer_t<decltype(std::declval<C>().data())>,
+    typename = internal::EnableIfContainer<C, T>>
+Span(C &) -> Span<T>;
+
+template <typename T>
 constexpr Span<T> MakeSpan(T *ptr, size_t size) {
   return Span<T>(ptr, size);
 }
@@ -196,6 +221,11 @@ constexpr Span<T> MakeSpan(T *ptr, size_t size) {
 template <typename C>
 constexpr auto MakeSpan(C &c) -> decltype(MakeSpan(c.data(), c.size())) {
   return MakeSpan(c.data(), c.size());
+}
+
+template <typename T, size_t N>
+constexpr Span<T> MakeSpan(T (&array)[N]) {
+  return Span<T>(array, N);
 }
 
 template <typename T>
@@ -214,7 +244,6 @@ constexpr Span<const T> MakeConstSpan(T (&array)[size]) {
   return array;
 }
 
-#if __cplusplus >= 201703L
 inline Span<const uint8_t> StringAsBytes(std::string_view s) {
   return MakeConstSpan(reinterpret_cast<const uint8_t *>(s.data()), s.size());
 }
@@ -222,7 +251,6 @@ inline Span<const uint8_t> StringAsBytes(std::string_view s) {
 inline std::string_view BytesAsStringView(bssl::Span<const uint8_t> b) {
   return std::string_view(reinterpret_cast<const char *>(b.data()), b.size());
 }
-#endif
 
 BSSL_NAMESPACE_END
 

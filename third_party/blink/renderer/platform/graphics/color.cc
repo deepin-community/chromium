@@ -27,6 +27,7 @@
 
 #include <math.h>
 
+#include <array>
 #include <optional>
 #include <tuple>
 
@@ -37,6 +38,7 @@
 #include "third_party/blink/renderer/platform/geometry/blend.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -58,7 +60,8 @@ const RGBA32 kDarkenedWhite = 0xFFABABAB;
 // For lch/oklch colors, the value of chroma underneath which the color is
 // considered to be "achromatic", relevant for color conversions.
 // https://www.w3.org/TR/css-color-4/#lab-to-lch
-const float kAchromaticChromaThreshold = 1e-6;
+// This is set to be slightly higher than white's chroma value of 0.0188.
+const float kAchromaticChromaThreshold = 0.02;
 
 const int kCStartAlpha = 153;     // 60%
 const int kCEndAlpha = 204;       // 80%;
@@ -74,32 +77,34 @@ int BlendComponent(int c, int a) {
 
 // originally moved here from the CSS parser
 template <typename CharacterType>
-inline bool ParseHexColorInternal(const CharacterType* name,
-                                  unsigned length,
+inline bool ParseHexColorInternal(base::span<const CharacterType> name,
                                   Color& color) {
-  if (length != 3 && length != 4 && length != 6 && length != 8)
+  if (name.size() != 3 && name.size() != 4 && name.size() != 6 &&
+      name.size() != 8) {
     return false;
-  if ((length == 8 || length == 4) &&
-      !RuntimeEnabledFeatures::CSSHexAlphaColorEnabled())
+  }
+  if ((name.size() == 8 || name.size() == 4) &&
+      !RuntimeEnabledFeatures::CSSHexAlphaColorEnabled()) {
     return false;
-  unsigned value = 0;
-  for (unsigned i = 0; i < length; ++i) {
+  }
+  uint32_t value = 0;
+  for (unsigned i = 0; i < name.size(); ++i) {
     if (!IsASCIIHexDigit(name[i]))
       return false;
     value <<= 4;
     value |= ToASCIIHexValue(name[i]);
   }
-  if (length == 6) {
+  if (name.size() == 6) {
     color = Color::FromRGBA32(0xFF000000 | value);
     return true;
   }
-  if (length == 8) {
+  if (name.size() == 8) {
     // We parsed the values into RGBA order, but the RGBA32 type
     // expects them to be in ARGB order, so we right rotate eight bits.
     color = Color::FromRGBA32(value << 24 | value >> 8);
     return true;
   }
-  if (length == 4) {
+  if (name.size() == 4) {
     // #abcd converts to ddaabbcc in RGBA32.
     color = Color::FromRGBA32((value & 0xF) << 28 | (value & 0xF) << 24 |
                               (value & 0xF000) << 8 | (value & 0xF000) << 4 |
@@ -116,18 +121,18 @@ inline bool ParseHexColorInternal(const CharacterType* name,
 }
 
 inline const NamedColor* FindNamedColor(const String& name) {
-  char buffer[64];  // easily big enough for the longest color name
-  unsigned length = name.length();
-  if (length > sizeof(buffer) - 1)
+  std::array<char, 64> buffer;  // easily big enough for the longest color name
+  wtf_size_t length = name.length();
+  if (length > buffer.size() - 1) {
     return nullptr;
-  for (unsigned i = 0; i < length; ++i) {
-    UChar c = name[i];
+  }
+  for (wtf_size_t i = 0; i < length; ++i) {
+    const UChar c = name[i];
     if (!c || c > 0x7F)
       return nullptr;
     buffer[i] = ToASCIILower(static_cast<char>(c));
   }
-  buffer[length] = '\0';
-  return FindColor(buffer, length);
+  return FindColor(base::as_string_view(base::span(buffer).first(length)));
 }
 
 constexpr int RedChannel(RGBA32 color) {
@@ -245,7 +250,6 @@ Color Color::FromColorMix(Color::ColorSpace interpolation_space,
                           Color color2,
                           float percentage,
                           float alpha_multiplier) {
-  DCHECK(percentage >= 0.0f && percentage <= 1.0f);
   DCHECK(alpha_multiplier >= 0.0f && alpha_multiplier <= 1.0f);
   Color result = InterpolateColors(interpolation_space, hue_method, color1,
                                    color2, percentage);
@@ -268,7 +272,6 @@ float Color::HueInterpolation(float value1,
                               Color::HueInterpolationMethod hue_method) {
   DCHECK(value1 >= 0.0f && value1 < 360.0f) << value1;
   DCHECK(value2 >= 0.0f && value2 < 360.0f) << value2;
-  DCHECK(percentage >= 0.0f && percentage <= 1.0f);
   // Adapt values of angles if needed, depending on the hue_method.
   switch (hue_method) {
     case Color::HueInterpolationMethod::kShorter: {
@@ -401,8 +404,6 @@ Color Color::InterpolateColors(Color::ColorSpace interpolation_space,
                                Color color1,
                                Color color2,
                                float percentage) {
-  DCHECK(percentage >= 0.0f && percentage <= 1.0f);
-
   // https://www.w3.org/TR/css-color-4/#missing:
   // When interpolating colors, missing components do not behave as zero values
   // for color space conversions.
@@ -418,7 +419,6 @@ Color Color::InterpolateColors(Color::ColorSpace interpolation_space,
 
   if (!SubstituteMissingParameters(color1, color2)) {
     NOTREACHED();
-    return Color();
   }
 
   float alpha1 = color1.PremultiplyColor();
@@ -512,7 +512,6 @@ std::tuple<float, float, float> Color::ExportAsXYZD50Floats() const {
     }
     case ColorSpace::kNone:
       NOTREACHED();
-      return std::tuple<float, float, float>();
   }
 }
 
@@ -734,8 +733,9 @@ void Color::ConvertToColorSpace(ColorSpace destination_color_space,
             gfx::SRGBToHSL(param0_, param1_, param2_);
       }
 
-      // Hue component is powerless for fully transparent colors.
-      if (IsFullyTransparent()) {
+      // Hue component is powerless for fully transparent or achromatic (s==0)
+      // colors.
+      if (IsFullyTransparent() || param1_ == 0) {
         param0_is_none_ = true;
       }
 
@@ -763,8 +763,8 @@ void Color::ConvertToColorSpace(ColorSpace destination_color_space,
             gfx::SRGBToHWB(param0_, param1_, param2_);
       }
 
-      // Hue component is powerless for fully transparent colors.
-      if (IsFullyTransparent()) {
+      // Hue component is powerless for fully transparent or achromatic colors.
+      if (IsFullyTransparent() || param1_ + param2_ >= 1) {
         param0_is_none_ = true;
       }
 
@@ -793,30 +793,6 @@ bool Color::IsBakedGamutMappingEnabled() {
 }
 
 SkColor4f Color::ToSkColor4fInternal(bool gamut_map_oklab_oklch) const {
-  // Used value of an lab/lch color with lightness outside of the range
-  // (0, 100) maps to black/white respectively.
-  // The same is true for oklab/oklch, except the range is (0, 1).
-  // See: https://github.com/w3c/csswg-drafts/issues/8794
-  if (IsLightnessFirstComponent(color_space_) && !param0_is_none_) {
-    float upper_bound = 100.0;
-    if (color_space_ == ColorSpace::kOklab ||
-        color_space_ == ColorSpace::kOklch) {
-      upper_bound = 1.0;
-    }
-
-    if (IsBakedGamutMappingEnabled() && (color_space_ == ColorSpace::kOklab ||
-                                         color_space_ == ColorSpace::kOklch)) {
-      // Disable this behavior for oklab and oklch in the baked gamut mapping
-      // prototype.
-    } else {
-      if (param0_ >= upper_bound) {
-        return SkColor4f{1.f, 1.f, 1.f, alpha_};
-      }
-      if (param0_ <= 0.0) {
-        return SkColor4f{0.f, 0.f, 0.f, alpha_};
-      }
-    }
-  }
   switch (color_space_) {
     case ColorSpace::kSRGB:
       return SkColor4f{param0_, param1_, param2_, alpha_};
@@ -896,20 +872,12 @@ void Color::UnpremultiplyColor() {
   }
 }
 
-// This converts -0.0 to 0.0, so that they have the same hash value. This
-// ensures that equal FontDescription have the same hash value.
-float NormalizeSign(float number) {
-  if (UNLIKELY(number == 0.0))
-    return 0.0;
-  return number;
-}
-
 unsigned Color::GetHash() const {
   unsigned result = WTF::HashInt(static_cast<uint8_t>(color_space_));
-  WTF::AddFloatToHash(result, NormalizeSign(param0_));
-  WTF::AddFloatToHash(result, NormalizeSign(param1_));
-  WTF::AddFloatToHash(result, NormalizeSign(param2_));
-  WTF::AddFloatToHash(result, NormalizeSign(alpha_));
+  WTF::AddFloatToHash(result, param0_);
+  WTF::AddFloatToHash(result, param1_);
+  WTF::AddFloatToHash(result, param2_);
+  WTF::AddFloatToHash(result, alpha_);
   WTF::AddIntToHash(result, param0_is_none_);
   WTF::AddIntToHash(result, param1_is_none_);
   WTF::AddIntToHash(result, param2_is_none_);
@@ -931,20 +899,20 @@ RGBA32 Color::Rgb() const {
   return toSkColor4f().toSkColor();
 }
 
-bool Color::ParseHexColor(const LChar* name, unsigned length, Color& color) {
-  return ParseHexColorInternal(name, length, color);
+bool Color::ParseHexColor(base::span<const LChar> name, Color& color) {
+  return ParseHexColorInternal(name, color);
 }
 
-bool Color::ParseHexColor(const UChar* name, unsigned length, Color& color) {
-  return ParseHexColorInternal(name, length, color);
+bool Color::ParseHexColor(base::span<const UChar> name, Color& color) {
+  return ParseHexColorInternal(name, color);
 }
 
 bool Color::ParseHexColor(const StringView& name, Color& color) {
   if (name.empty())
     return false;
-  if (name.Is8Bit())
-    return ParseHexColor(name.Characters8(), name.length(), color);
-  return ParseHexColor(name.Characters16(), name.length(), color);
+  return VisitCharacters(name, [&color](auto chars) {
+    return ParseHexColorInternal(chars, color);
+  });
 }
 
 int DifferenceSquared(const Color& c1, const Color& c2) {
@@ -958,9 +926,9 @@ bool Color::SetFromString(const String& name) {
   // TODO(https://crbug.com/1434423): Implement CSS Color level 4 parsing.
   if (name[0] != '#')
     return SetNamedColor(name);
-  if (name.Is8Bit())
-    return ParseHexColor(name.Characters8() + 1, name.length() - 1, *this);
-  return ParseHexColor(name.Characters16() + 1, name.length() - 1, *this);
+  return VisitCharacters(name, [this](auto chars) {
+    return ParseHexColorInternal(chars.template subspan<1>(), *this);
+  });
 }
 
 // static
@@ -991,14 +959,13 @@ String Color::ColorSpaceToString(Color::ColorSpace color_space) {
     case Color::ColorSpace::kOklch:
       return "oklch";
     case Color::ColorSpace::kSRGBLegacy:
-      return "RGB Legacy";
+      return "rgb";
     case Color::ColorSpace::kHSL:
-      return "HSL";
+      return "hsl";
     case Color::ColorSpace::kHWB:
-      return "HWB";
+      return "hwb";
     case ColorSpace::kNone:
       NOTREACHED();
-      return "None";
   }
 }
 
@@ -1200,21 +1167,13 @@ Color Color::Blend(const Color& source) const {
     return *this;
   }
 
-  int source_alpha = source.AlphaAsInteger();
-  int alpha = AlphaAsInteger();
-
-  int d = 255 * (alpha + source_alpha) - alpha * source_alpha;
-  int a = d / 255;
-  int r = (Red() * alpha * (255 - source_alpha) +
-           255 * source_alpha * source.Red()) /
-          d;
-  int g = (Green() * alpha * (255 - source_alpha) +
-           255 * source_alpha * source.Green()) /
-          d;
-  int b = (Blue() * alpha * (255 - source_alpha) +
-           255 * source_alpha * source.Blue()) /
-          d;
-  return Color(r, g, b, a);
+  const SkRGBA4f<kPremul_SkAlphaType> pm_src = source.toSkColor4f().premul();
+  auto pm_result = this->toSkColor4f().premul() * (1.0f - pm_src.fA);
+  pm_result.fA += pm_src.fA;
+  pm_result.fR += pm_src.fR;
+  pm_result.fG += pm_src.fG;
+  pm_result.fB += pm_src.fB;
+  return Color(pm_result.unpremul());
 }
 
 Color Color::BlendWithWhite() const {
@@ -1387,12 +1346,17 @@ String Color::SerializeInterpolationSpace(
     case Color::ColorSpace::kNone:
       result.Append("none");
       break;
-    // These are not yet implemented as interpolation spaces.
     case ColorSpace::kDisplayP3:
+      result.Append("display-p3");
+      break;
     case ColorSpace::kA98RGB:
+      result.Append("a98-rgb");
+      break;
     case ColorSpace::kProPhotoRGB:
+      result.Append("prophoto-rgb");
+      break;
     case ColorSpace::kRec2020:
-      NOTREACHED();
+      result.Append("rec2020");
       break;
   }
 

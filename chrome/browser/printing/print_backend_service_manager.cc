@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/check_op.h"
@@ -16,6 +17,7 @@
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
@@ -69,14 +71,13 @@ constexpr char kEmptyPrinterName[] = "";
 PrintBackendServiceManager* g_print_backend_service_manager_singleton = nullptr;
 
 #if BUILDFLAG(ENABLE_OOP_BASIC_PRINT_DIALOG)
-// TODO(crbug.com/809738):  Update for other platforms as they are made able
+// TODO(crbug.com/40561724):  Update for other platforms as they are made able
 // to support modal dialogs from OOP.
 uint32_t NativeViewToUint(gfx::NativeView view) {
 #if BUILDFLAG(IS_WIN)
   return base::win::HandleToUint32(views::HWNDForNativeView(view));
 #else
   NOTREACHED();
-  return 0;
 #endif
 }
 #endif
@@ -104,6 +105,14 @@ PrintBackendServiceManager::PrintBackendServiceManager() = default;
 PrintBackendServiceManager::~PrintBackendServiceManager() = default;
 
 // static
+void PrintBackendServiceManager::LaunchPersistentService() {
+  PrintBackendServiceManager& service_mgr = GetInstance();
+  // Registering a query client causes a service to be launched.
+  service_mgr.persistent_service_ = true;
+  std::ignore = service_mgr.RegisterQueryClient();
+}
+
+// static
 std::string PrintBackendServiceManager::ClientTypeToString(
     ClientType client_type) {
   switch (client_type) {
@@ -118,7 +127,7 @@ std::string PrintBackendServiceManager::ClientTypeToString(
 
 // static
 void PrintBackendServiceManager::LogCallToRemote(
-    base::StringPiece name,
+    std::string_view name,
     const CallbackContext& context) {
   DVLOG(1) << "Sending " << name << " on remote `" << context.remote_id
            << "`, saved callback ID of " << context.saved_callback_id;
@@ -126,7 +135,7 @@ void PrintBackendServiceManager::LogCallToRemote(
 
 // static
 void PrintBackendServiceManager::LogCallbackFromRemote(
-    base::StringPiece name,
+    std::string_view name,
     const CallbackContext& context) {
   DVLOG(1) << name << " completed for remote `" << context.remote_id
            << "` saved callback ID " << context.saved_callback_id;
@@ -136,7 +145,7 @@ void PrintBackendServiceManager::SetCrashKeys(const std::string& printer_name) {
   if (sandboxed_service_remote_for_test_)
     return;
 
-  // TODO(crbug.com/1227561)  Remove local call for driver info, don't want
+  // TODO(crbug.com/40777132)  Remove local call for driver info, don't want
   // any residual accesses left into the printer drivers from the browser
   // process.
   base::ScopedAllowBlocking allow_blocking;
@@ -162,12 +171,19 @@ PrintBackendServiceManager::RegisterPrintDocumentClient(
   return *RegisterClient(ClientType::kPrintDocument, printer_name);
 }
 
-PrintBackendServiceManager::ClientId
+std::optional<PrintBackendServiceManager::ClientId>
 PrintBackendServiceManager::RegisterPrintDocumentClientReusingClientRemote(
     ClientId id) {
-  DCHECK(query_with_ui_clients_.contains(id));
-  return *RegisterClient(ClientType::kPrintDocument,
-                         query_with_ui_clients_[id]);
+  const auto iter = query_with_ui_clients_.find(id);
+  if (iter == query_with_ui_clients_.end()) {
+    // If the client is gone then that suggests that the renderer process
+    // terminated while the system print dialog was displayed.  Proceeding
+    // with printing will not be possible in such a case.
+    VLOG(1) << "Registering a print document client reusing client " << id
+            << " failed because that client is no longer registered";
+    return std::nullopt;
+  }
+  return RegisterClient(ClientType::kPrintDocument, iter->second);
 }
 
 void PrintBackendServiceManager::UnregisterClient(ClientId id) {
@@ -597,6 +613,10 @@ void PrintBackendServiceManager::
 void PrintBackendServiceManager::SetServiceForTesting(
     mojo::Remote<mojom::PrintBackendService>* remote) {
   sandboxed_service_remote_for_test_ = remote;
+  if (!sandboxed_service_remote_for_test_) {
+    return;
+  }
+
   // Safe to use base::Unretained(this) since `this` is a global singleton
   // which never goes away.
   sandboxed_service_remote_for_test_->set_disconnect_handler(base::BindOnce(
@@ -608,6 +628,10 @@ void PrintBackendServiceManager::SetServiceForTesting(
 void PrintBackendServiceManager::SetServiceForFallbackTesting(
     mojo::Remote<mojom::PrintBackendService>* remote) {
   unsandboxed_service_remote_for_test_ = remote;
+  if (!unsandboxed_service_remote_for_test_) {
+    return;
+  }
+
   // Safe to use base::Unretained(this) since `this` is a global singleton
   // which never goes away.
   unsandboxed_service_remote_for_test_->set_disconnect_handler(base::BindOnce(
@@ -675,7 +699,7 @@ PrintBackendServiceManager::GetRemoteIdForPrintDocumentClientId(
       return item.first;
     }
   }
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 std::optional<PrintBackendServiceManager::ClientId>
@@ -732,7 +756,13 @@ PrintBackendServiceManager::RegisterClient(
   } else {
     // Service not already available, so launch it now so that it will be
     // ready by the time the client gets to point of invoking a Mojo call.
-    DCHECK(absl::holds_alternative<std::string>(destination));
+    if (absl::holds_alternative<RemoteId>(destination)) {
+      // When the destination is to reuse an existing remote, and that remote
+      // is gone, then any expected context in that remote is also gone.  Such
+      // a loss of context should be treated as a failure for the user's request
+      // to print the document, so return nullopt for the client ID.
+      return std::nullopt;
+    }
     bool should_sandbox = ShouldServiceBeSandboxed(
         /*printer_name=*/absl::get<std::string>(destination), client_type);
     GetService(remote_id, client_type, should_sandbox);
@@ -891,9 +921,13 @@ PrintBackendServiceManager::GetServiceFromBundle(
   return service;
 }
 
-// static
 constexpr base::TimeDelta PrintBackendServiceManager::GetClientTypeIdleTimeout(
-    ClientType client_type) {
+    ClientType client_type) const {
+  if (persistent_service_) {
+    // Intentionally keep service around indefinitely.
+    return base::TimeDelta::Max();
+  }
+
   switch (client_type) {
     case ClientType::kQuery:
       // Want a long timeout so that the service is available across typical
@@ -1076,7 +1110,7 @@ void PrintBackendServiceManager::SetServiceIdleHandler(
       base::BindRepeating(&PrintBackendServiceManager::OnIdleTimeout,
                           base::Unretained(this), sandboxed, remote_id));
 
-  // TODO(crbug.com/1225111)  Make a superfluous call to the service, just to
+  // TODO(crbug.com/40775634)  Make a superfluous call to the service, just to
   // cause an IPC that will in turn make the adjusted timeout value actually
   // take effect.
   service->Poke();
@@ -1325,12 +1359,12 @@ void PrintBackendServiceManager::ServiceCallbackDone(
     const base::UnguessableToken& saved_callback_id,
     X... data) {
   auto found_callback_map = saved_callbacks.find(remote_id);
-  DCHECK(found_callback_map != saved_callbacks.end());
+  CHECK(found_callback_map != saved_callbacks.end(), base::NotFatalUntil::M130);
 
   SavedCallbacks<T...>& callback_map = found_callback_map->second;
 
   auto callback_entry = callback_map.find(saved_callback_id);
-  DCHECK(callback_entry != callback_map.end());
+  CHECK(callback_entry != callback_map.end(), base::NotFatalUntil::M130);
   auto callback = std::move(callback_entry->second);
   callback_map.erase(callback_entry);
 

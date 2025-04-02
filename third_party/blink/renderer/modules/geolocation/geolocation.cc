@@ -27,10 +27,13 @@
 
 #include "third_party/blink/renderer/modules/geolocation/geolocation.h"
 
+#include <optional>
+
+#include "base/notreached.h"
 #include "base/task/single_thread_task_runner.h"
 #include "services/device/public/mojom/geoposition.mojom-blink.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -61,10 +64,16 @@ Geoposition* CreateGeoposition(
   auto* coordinates = MakeGarbageCollected<GeolocationCoordinates>(
       position.latitude, position.longitude,
       // Lowest point on land is at approximately -400 meters.
-      position.altitude > -10000., position.altitude, position.accuracy,
-      position.altitude_accuracy >= 0., position.altitude_accuracy,
-      position.heading >= 0. && position.heading <= 360., position.heading,
-      position.speed >= 0., position.speed);
+      position.altitude > -10000. ? std::make_optional(position.altitude)
+                                  : std::nullopt,
+      position.accuracy,
+      position.altitude_accuracy >= 0.
+          ? std::make_optional(position.altitude_accuracy)
+          : std::nullopt,
+      position.heading >= 0. && position.heading <= 360.
+          ? std::make_optional(position.heading)
+          : std::nullopt,
+      position.speed >= 0. ? std::optional(position.speed) : std::nullopt);
   return MakeGarbageCollected<Geoposition>(
       coordinates, ConvertTimeToEpochTimeStamp(position.timestamp));
 }
@@ -78,6 +87,13 @@ GeolocationPositionError* CreatePositionError(
       error_code = GeolocationPositionError::kPermissionDenied;
       break;
     case device::mojom::blink::GeopositionErrorCode::kPositionUnavailable:
+      error_code = GeolocationPositionError::kPositionUnavailable;
+      break;
+    default:
+      // On the Blink side, it should only handle W3C-defined error codes. If it
+      // reaches here, that means a platform-specific error type is being
+      // propagated to Blink. We will now just use kPositionUnavailable until
+      // more explicit error codes are defined in the W3C spec.
       error_code = GeolocationPositionError::kPositionUnavailable;
       break;
   }
@@ -197,6 +213,11 @@ void Geolocation::getCurrentPosition(V8PositionCallback* success_callback,
   if (!GetFrame())
     return;
 
+  if (GetFrame()->IsAdScriptInStack()) {
+    UseCounter::Count(GetExecutionContext(),
+                      WebFeature::kAdScriptInStackOnGeoLocation);
+  }
+
   probe::BreakableLocation(GetExecutionContext(),
                            "Geolocation.getCurrentPosition");
 
@@ -242,7 +263,7 @@ void Geolocation::StartRequest(GeoNotifier* notifier) {
   }
 
   if (!GetExecutionContext()->IsFeatureEnabled(
-          mojom::blink::PermissionsPolicyFeature::kGeolocation,
+          network::mojom::PermissionsPolicyFeature::kGeolocation,
           ReportOptions::kReportOnFailure, kFeaturePolicyConsoleWarning)) {
     UseCounter::Count(GetExecutionContext(),
                       WebFeature::kGeolocationDisabledByFeaturePolicy);
@@ -448,8 +469,9 @@ void Geolocation::StartUpdating(GeoNotifier* notifier) {
   updating_ = true;
   if (notifier->Options()->enableHighAccuracy() && !enable_high_accuracy_) {
     enable_high_accuracy_ = true;
-    if (geolocation_.is_bound())
-      geolocation_->SetHighAccuracy(true);
+    if (geolocation_.is_bound()) {
+      geolocation_->SetHighAccuracyHint(/*high_accuracy=*/true);
+    }
   }
   UpdateGeolocationConnection(notifier);
 }
@@ -487,8 +509,9 @@ void Geolocation::UpdateGeolocationConnection(GeoNotifier* notifier) {
 
   geolocation_.set_disconnect_handler(WTF::BindOnce(
       &Geolocation::OnGeolocationConnectionError, WrapWeakPersistent(this)));
-  if (enable_high_accuracy_)
-    geolocation_->SetHighAccuracy(true);
+  if (enable_high_accuracy_) {
+    geolocation_->SetHighAccuracyHint(/*high_accuracy=*/true);
+  }
   QueryNextPosition();
 }
 

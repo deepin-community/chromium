@@ -61,7 +61,7 @@
 #include "src/tint/lang/wgsl/program/program.h"
 #include "src/tint/lang/wgsl/sem/array_count.h"
 #include "src/tint/lang/wgsl/sem/struct.h"
-#include "src/tint/utils/id/generation_id.h"
+#include "src/tint/utils/generation_id.h"
 #include "src/tint/utils/text/string.h"
 
 #ifdef CURRENTLY_IN_TINT_PUBLIC_HEADER
@@ -99,8 +99,8 @@ class ProgramBuilder : public ast::Builder {
     /// existing immutable program.
     /// As the returned ProgramBuilder wraps `program`, `program` must not be
     /// destructed or assigned while using the returned ProgramBuilder.
-    /// TODO(bclayton) - Evaluate whether there are safer alternatives to this
-    /// function. See crbug.com/tint/460.
+    /// TODO(crbug.com/tint/460) - Evaluate whether there are safer alternatives to this
+    /// function.
     /// @param program the immutable Program to wrap
     /// @return the ProgramBuilder that wraps `program`
     static ProgramBuilder Wrap(const Program& program);

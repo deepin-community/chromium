@@ -6,9 +6,10 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+
 #include "base/hash/sha1.h"
 #include "base/rand_util.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/stringprintf.h"
 #include "build/chromeos_buildflags.h"
 #include "rlz/lib/assert.h"
@@ -33,7 +34,7 @@ bool GetMachineId(std::string* machine_id) {
   // hex character for 45 characters.
   unsigned char bytes[23];
   std::string str_bytes;
-  base::RandBytes(bytes, sizeof(bytes));
+  base::RandBytes(bytes);
   rlz_lib::BytesToString(bytes, sizeof(bytes), &str_bytes);
   str_bytes.resize(45);
   machine_id->clear();
@@ -89,7 +90,7 @@ bool GetMachineIdImpl(const std::u16string& sid_string,
     // Note that digest can have embedded nulls.
     std::string digest(base::SHA1HashString(sid_string_buffer));
     VERIFY(digest.size() == base::kSHA1Length);
-    base::ranges::copy(digest, id_binary.begin());
+    std::ranges::copy(digest, id_binary.begin());
   }
 
   // Convert from int to binary (makes big-endian).

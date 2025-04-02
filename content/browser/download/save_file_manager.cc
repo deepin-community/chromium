@@ -4,6 +4,7 @@
 
 #include "content/browser/download/save_file_manager.h"
 
+#include <string_view>
 #include <utility>
 
 #include "base/containers/contains.h"
@@ -11,7 +12,6 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "components/download/public/common/download_task_runner.h"
@@ -115,8 +115,9 @@ class SaveFileManager::SimpleURLLoaderHelper
                          const network::mojom::URLResponseHead& response_head) {
     std::string content_disposition;
     if (response_head.headers) {
-      response_head.headers->GetNormalizedHeader("Content-Disposition",
-                                                 &content_disposition);
+      content_disposition =
+          response_head.headers->GetNormalizedHeader("Content-Disposition")
+              .value_or(std::string());
     }
 
     auto info = std::make_unique<SaveFileCreateInfo>(
@@ -128,7 +129,7 @@ class SaveFileManager::SimpleURLLoaderHelper
   }
 
   // network::SimpleURLLoaderStreamConsumer implementation:
-  void OnDataReceived(base::StringPiece string_piece,
+  void OnDataReceived(std::string_view string_piece,
                       base::OnceClosure resume) override {
     // TODO(jcivelli): we should make threading sane and avoid copying
     // |string_piece| bytes.
@@ -295,7 +296,7 @@ void SaveFileManager::SaveURL(
       auto partition_domain =
           rfh->GetSiteInstance()->GetPartitionDomain(storage_partition_impl);
       factory_remote.Bind(CreateFileSystemURLLoaderFactory(
-          rfh->GetProcess()->GetID(), rfh->GetFrameTreeNodeId(),
+          rfh->GetProcess()->GetDeprecatedID(), rfh->GetFrameTreeNodeId(),
           storage_partition->GetFileSystemContext(), partition_domain,
           static_cast<RenderFrameHostImpl*>(rfh)->GetStorageKey()));
       factory = factory_remote.get();

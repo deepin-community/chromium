@@ -12,11 +12,11 @@
 #include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/image/image_unittest_util.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/apps/app_service/publishers/arc_apps.h"
 #include "chrome/browser/apps/app_service/publishers/arc_apps_factory.h"
 #include "components/services/app_service/public/cpp/features.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace apps {
 
@@ -72,16 +72,7 @@ bool AppServiceTest::AreIconImageEqual(const gfx::ImageSkia& src,
 }
 
 void WaitForAppServiceProxyReady(AppServiceProxy* proxy) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (!base::FeatureList::IsEnabled(kAppServiceStorage)) {
-    return;
-  }
-
-  base::test::TestFuture<void> result;
-  CHECK(proxy->OnReady());
-  proxy->OnReady()->Post(FROM_HERE, result.GetCallback());
-  CHECK(result.Wait());
-#endif
+  // TODO(b/329521029): Remove once all tests that used this are reverted.
 }
 
 }  // namespace apps

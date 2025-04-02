@@ -47,7 +47,6 @@ TopIconAnimationView::TopIconAnimationView(AppsGridView* grid,
     icon_background_ = AddChildView(std::make_unique<views::View>());
     if (item_in_folder_icon_) {
       icon_background_->SetPaintToLayer(ui::LAYER_SOLID_COLOR);
-      icon_background_->layer()->SetFillsBoundsOpaquely(false);
     } else {
       const int background_diameter =
           app_list_config->GetShortcutBackgroundContainerDimension();
@@ -65,7 +64,7 @@ TopIconAnimationView::TopIconAnimationView(AppsGridView* grid,
   gfx::ImageSkia resized(gfx::ImageSkiaOperations::CreateResizedImage(
       icon, skia::ImageOperations::RESIZE_BEST, icon_size_));
   auto icon_image = std::make_unique<views::ImageView>();
-  icon_image->SetImage(resized);
+  icon_image->SetImage(ui::ImageModel::FromImageSkia(resized));
   icon_ = AddChildView(std::move(icon_image));
   if (icon_background_ && icon_background_->layer()) {
     icon_->SetPaintToLayer();
@@ -91,8 +90,9 @@ TopIconAnimationView::TopIconAnimationView(AppsGridView* grid,
     const gfx::Size badge_icon_size =
         gfx::Size(app_list_config->shortcut_host_badge_icon_dimension(),
                   app_list_config->shortcut_host_badge_icon_dimension());
-    badge_icon_view->SetImage(gfx::ImageSkiaOperations::CreateResizedImage(
-        badge_icon, skia::ImageOperations::RESIZE_BEST, badge_icon_size));
+    badge_icon_view->SetImage(ui::ImageModel::FromImageSkia(
+        gfx::ImageSkiaOperations::CreateResizedImage(
+            badge_icon, skia::ImageOperations::RESIZE_BEST, badge_icon_size)));
   }
 
   auto title_label = std::make_unique<views::Label>();
@@ -223,7 +223,8 @@ void TopIconAnimationView::TransformView(base::TimeDelta duration) {
   }
 }
 
-gfx::Size TopIconAnimationView::CalculatePreferredSize() const {
+gfx::Size TopIconAnimationView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(grid_->app_list_config()->grid_tile_width(),
                    grid_->app_list_config()->grid_tile_height());
 }
@@ -231,7 +232,7 @@ gfx::Size TopIconAnimationView::CalculatePreferredSize() const {
 void TopIconAnimationView::OnThemeChanged() {
   views::View::OnThemeChanged();
 
-  if (icon_background_) {
+  if (icon_background_ && icon_background_->layer()) {
     icon_background_->layer()->SetColor(
         GetColorProvider()->GetColor(cros_tokens::kCrosSysSystemOnBaseOpaque));
   }
@@ -264,7 +265,8 @@ void TopIconAnimationView::Layout(PassKey) {
         gfx::Size(badge_container_diameter, badge_container_diameter)));
   }
   title_->SetBoundsRect(AppListItemView::GetTitleBoundsForTargetViewBounds(
-      grid_->app_list_config(), rect, title_->GetPreferredSize(),
+      grid_->app_list_config(), rect,
+      title_->GetPreferredSize(views::SizeBounds(title_->width(), {})),
       /*icon_scale=*/1.0f));
 }
 

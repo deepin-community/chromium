@@ -62,11 +62,9 @@ bool GetPyProtoPath(base::FilePath* dir) {
 
 }  // namespace
 
-WVTestLicenseServerConfig::WVTestLicenseServerConfig() {
-}
+WVTestLicenseServerConfig::WVTestLicenseServerConfig() = default;
 
-WVTestLicenseServerConfig::~WVTestLicenseServerConfig() {
-}
+WVTestLicenseServerConfig::~WVTestLicenseServerConfig() = default;
 
 bool WVTestLicenseServerConfig::GetServerCommandLine(
     base::CommandLine* command_line) {
@@ -159,7 +157,7 @@ bool WVTestLicenseServerConfig::SelectServerPort() {
 }
 
 bool WVTestLicenseServerConfig::IsPlatformSupported() {
-// TODO(crbug.com/1175344): Reenable OS_LINUX once license server
+// TODO(crbug.com/40167923): Reenable OS_LINUX once license server
 // (or Widevine CDM) updated.
 #if BUILDFLAG(IS_CHROMEOS) && defined(ARCH_CPU_X86_64)
   return true;

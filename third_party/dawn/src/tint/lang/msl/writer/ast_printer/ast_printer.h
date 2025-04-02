@@ -34,12 +34,10 @@
 #include <unordered_set>
 #include <vector>
 
-#include "src/tint/api/options/array_length_from_uniform.h"
 #include "src/tint/lang/core/builtin_value.h"
 #include "src/tint/lang/msl/writer/common/options.h"
 #include "src/tint/lang/wgsl/ast/assignment_statement.h"
 #include "src/tint/lang/wgsl/ast/binary_expression.h"
-#include "src/tint/lang/wgsl/ast/bitcast_expression.h"
 #include "src/tint/lang/wgsl/ast/break_statement.h"
 #include "src/tint/lang/wgsl/ast/continue_statement.h"
 #include "src/tint/lang/wgsl/ast/discard_statement.h"
@@ -56,8 +54,8 @@
 #include "src/tint/lang/wgsl/program/program_builder.h"
 #include "src/tint/lang/wgsl/sem/struct.h"
 #include "src/tint/utils/containers/scope_stack.h"
-#include "src/tint/utils/generator/text_generator.h"
 #include "src/tint/utils/text/string_stream.h"
+#include "src/tint/utils/text_generator.h"
 
 namespace tint::sem {
 class BuiltinFn;
@@ -81,9 +79,6 @@ struct SanitizedResult {
     Program program;
     /// True if the shader needs a UBO of buffer sizes.
     bool needs_storage_buffer_sizes = false;
-    /// Indices into the array_length_from_uniform binding that are statically
-    /// used.
-    std::unordered_set<uint32_t> used_array_length_from_uniform_indices;
 };
 
 /// Sanitize a program in preparation for generating MSL.
@@ -97,7 +92,8 @@ class ASTPrinter : public tint::TextGenerator {
   public:
     /// Constructor
     /// @param program the program to generate
-    explicit ASTPrinter(const Program& program);
+    /// @param options emission options
+    explicit ASTPrinter(const Program& program, const Options& options = {});
     ~ASTPrinter() override;
 
     /// @returns true on successful generation; false otherwise
@@ -134,7 +130,7 @@ class ASTPrinter : public tint::TextGenerator {
     /// @param out the output of the expression stream
     /// @param expr the bitcast expression
     /// @returns true if the bitcast was emitted
-    bool EmitBitcast(StringStream& out, const ast::BitcastExpression* expr);
+    bool EmitBitcastCall(StringStream& out, const ast::CallExpression* expr);
     /// Handles a block statement
     /// @param stmt the statement to emit
     /// @returns true if the statement was emitted successfully
@@ -378,8 +374,18 @@ class ASTPrinter : public tint::TextGenerator {
                               const ast::CallExpression* expr,
                               const sem::BuiltinFn* builtin);
 
-    /// Lazilly generates the TINT_ISOLATE_UB macro, used to prevent UB statements from affecting
-    /// later logic.
+    /// If robustness is required, emits code to prevent the MSL compiler
+    /// from believing the loop is infinite.
+    /// Otherwise does nothing.
+    void IsolateUBIfNeeded();
+
+    /// Lazily generates the TINT_ISOLATE_UB macro, and returns a call to
+    /// the macro, passing in a unique identifier. The call tricks the MSL
+    /// compiler into thinking it might execute a `break`, but otherwise
+    /// has no effect in the generated code.
+    ///
+    /// Invoke this inside the body of a loop to prevent the MSL compiler
+    /// from inferring the loop never terminates.
     /// @return the MSL to call the TINT_ISOLATE_UB macro.
     std::string IsolateUB();
 
@@ -430,6 +436,7 @@ class ASTPrinter : public tint::TextGenerator {
     }
 
     ProgramBuilder builder_;
+    Options options_;
 
     TextBuffer helpers_;  // Helper functions emitted at the top of the output
 

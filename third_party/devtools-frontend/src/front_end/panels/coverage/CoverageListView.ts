@@ -118,9 +118,9 @@ export function coverageTypeToString(type: CoverageType): string {
   if (type & CoverageType.CSS) {
     types.push(i18nString(UIStrings.css));
   }
-  if (type & CoverageType.JavaScriptPerFunction) {
+  if (type & CoverageType.JAVA_SCRIPT_PER_FUNCTION) {
     types.push(i18nString(UIStrings.jsPerFunction));
-  } else if (type & CoverageType.JavaScript) {
+  } else if (type & CoverageType.JAVA_SCRIPT) {
     types.push(i18nString(UIStrings.jsPerBlock));
   }
   return types.join('+');
@@ -134,6 +134,7 @@ export class CoverageListView extends UI.Widget.VBox {
 
   constructor(isVisibleFilter: (arg0: URLCoverageInfo) => boolean) {
     super(true);
+    this.registerRequiredCSS(coverageListViewStyles);
     this.nodeForCoverageInfo = new Map();
     this.isVisibleFilter = isVisibleFilter;
     this.highlightRegExp = null;
@@ -155,7 +156,7 @@ export class CoverageListView extends UI.Widget.VBox {
         width: '60px',
         fixedWidth: true,
         sortable: true,
-        align: DataGrid.DataGrid.Align.Right,
+        align: DataGrid.DataGrid.Align.RIGHT,
         weight: 1,
       },
       {
@@ -164,7 +165,7 @@ export class CoverageListView extends UI.Widget.VBox {
         width: '100px',
         fixedWidth: true,
         sortable: true,
-        align: DataGrid.DataGrid.Align.Right,
+        align: DataGrid.DataGrid.Align.RIGHT,
         sort: DataGrid.DataGrid.Order.Descending,
         weight: 1,
       },
@@ -184,19 +185,18 @@ export class CoverageListView extends UI.Widget.VBox {
       refreshCallback: undefined,
       deleteCallback: undefined,
     });
-    this.dataGrid.setResizeMethod(DataGrid.DataGrid.ResizeMethod.Last);
+    this.dataGrid.setResizeMethod(DataGrid.DataGrid.ResizeMethod.LAST);
     this.dataGrid.setStriped(true);
     this.dataGrid.element.classList.add('flex-auto');
-    this.dataGrid.element.addEventListener('keydown', this.onKeyDown.bind(this), false);
-    this.dataGrid.addEventListener(DataGrid.DataGrid.Events.OpenedNode, this.onOpenedNode, this);
-    this.dataGrid.addEventListener(DataGrid.DataGrid.Events.SortingChanged, this.sortingChanged, this);
+    this.dataGrid.addEventListener(DataGrid.DataGrid.Events.OPENED_NODE, this.onOpenedNode, this);
+    this.dataGrid.addEventListener(DataGrid.DataGrid.Events.SORTING_CHANGED, this.sortingChanged, this);
 
     const dataGridWidget = this.dataGrid.asWidget();
     dataGridWidget.show(this.contentElement);
     this.setDefaultFocusedChild(dataGridWidget);
   }
 
-  update(coverageInfo: URLCoverageInfo[]): void {
+  update(coverageInfo: URLCoverageInfo[] = []): void {
     let hadUpdates = false;
     const maxSize = coverageInfo.reduce((acc, entry) => Math.max(acc, entry.size()), 0);
     const rootNode = this.dataGrid.rootNode();
@@ -305,14 +305,6 @@ export class CoverageListView extends UI.Widget.VBox {
     void this.revealSourceForSelectedNode();
   }
 
-  private onKeyDown(event: KeyboardEvent): void {
-    if (!(event.key === 'Enter')) {
-      return;
-    }
-    event.consume(true);
-    void this.revealSourceForSelectedNode();
-  }
-
   private async revealSourceForSelectedNode(): Promise<void> {
     const node = this.dataGrid.selectedNode;
     if (!node) {
@@ -343,10 +335,6 @@ export class CoverageListView extends UI.Widget.VBox {
       return;
     }
     this.dataGrid.sortNodes(sortFunction, !this.dataGrid.isSortOrderAscending());
-  }
-  override wasShown(): void {
-    super.wasShown();
-    this.registerCSSFiles([coverageListViewStyles]);
   }
 }
 
@@ -423,9 +411,9 @@ export class GridNode extends DataGrid.SortableDataGrid.SortableDataGridNode<Gri
       }
       case 'type': {
         cell.textContent = coverageTypeToString(this.coverageInfo.type());
-        if (this.coverageInfo.type() & CoverageType.JavaScriptPerFunction) {
+        if (this.coverageInfo.type() & CoverageType.JAVA_SCRIPT_PER_FUNCTION) {
           UI.Tooltip.Tooltip.install(cell, i18nString(UIStrings.jsCoverageWithPerFunction));
-        } else if (this.coverageInfo.type() & CoverageType.JavaScript) {
+        } else if (this.coverageInfo.type() & CoverageType.JAVA_SCRIPT) {
           UI.Tooltip.Tooltip.install(cell, i18nString(UIStrings.jsCoverageWithPerBlock));
         }
         break;
@@ -458,13 +446,13 @@ export class GridNode extends DataGrid.SortableDataGrid.SortableDataGridNode<Gri
         if (this.coverageInfo.unusedSize() > 0) {
           const unusedSizeBar = barContainer.createChild('div', 'bar bar-unused-size');
           unusedSizeBar.style.width = ((this.coverageInfo.unusedSize() / this.maxSize) * 100 || 0) + '%';
-          if (this.coverageInfo.type() & CoverageType.JavaScriptPerFunction) {
+          if (this.coverageInfo.type() & CoverageType.JAVA_SCRIPT_PER_FUNCTION) {
             UI.Tooltip.Tooltip.install(
                 unusedSizeBar,
                 i18nString(
                     UIStrings.sBytesSBelongToFunctionsThatHave,
                     {PH1: this.coverageInfo.unusedSize(), PH2: unusedPercent}));
-          } else if (this.coverageInfo.type() & CoverageType.JavaScript) {
+          } else if (this.coverageInfo.type() & CoverageType.JAVA_SCRIPT) {
             UI.Tooltip.Tooltip.install(
                 unusedSizeBar,
                 i18nString(
@@ -474,13 +462,13 @@ export class GridNode extends DataGrid.SortableDataGrid.SortableDataGridNode<Gri
         if (this.coverageInfo.usedSize() > 0) {
           const usedSizeBar = barContainer.createChild('div', 'bar bar-used-size');
           usedSizeBar.style.width = ((this.coverageInfo.usedSize() / this.maxSize) * 100 || 0) + '%';
-          if (this.coverageInfo.type() & CoverageType.JavaScriptPerFunction) {
+          if (this.coverageInfo.type() & CoverageType.JAVA_SCRIPT_PER_FUNCTION) {
             UI.Tooltip.Tooltip.install(
                 usedSizeBar,
                 i18nString(
                     UIStrings.sBytesSBelongToFunctionsThatHaveExecuted,
                     {PH1: this.coverageInfo.usedSize(), PH2: usedPercent}));
-          } else if (this.coverageInfo.type() & CoverageType.JavaScript) {
+          } else if (this.coverageInfo.type() & CoverageType.JAVA_SCRIPT) {
             UI.Tooltip.Tooltip.install(
                 usedSizeBar,
                 i18nString(

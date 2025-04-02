@@ -5,10 +5,12 @@
 #include "chrome/browser/usb/usb_chooser_controller.h"
 
 #include <stddef.h>
+
+#include <algorithm>
 #include <utility>
 
 #include "base/functional/bind.h"
-#include "base/ranges/algorithm.h"
+#include "base/not_fatal_until.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -137,7 +139,7 @@ std::u16string UsbChooserController::GetOption(size_t index) const {
   DCHECK_LT(index, devices_.size());
   const std::u16string& device_name = devices_[index].second;
   const auto& it = device_name_map_.find(device_name);
-  DCHECK(it != device_name_map_.end());
+  CHECK(it != device_name_map_.end(), base::NotFatalUntil::M130);
 
   if (it->second == 1)
     return device_name;
@@ -202,10 +204,11 @@ void UsbChooserController::Close() {}
 void UsbChooserController::OpenHelpCenterUrl() const {
   WebContents::FromRenderFrameHost(requesting_frame_)
       ->OpenURL(content::OpenURLParams(
-          GURL(chrome::kChooserUsbOverviewURL), content::Referrer(),
-          WindowOpenDisposition::NEW_FOREGROUND_TAB,
-          ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
-          false /* is_renderer_initialized */));
+                    GURL(chrome::kChooserUsbOverviewURL), content::Referrer(),
+                    WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                    ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
+                    false /* is_renderer_initialized */),
+                /*navigation_handle_callback=*/{});
 }
 
 void UsbChooserController::OnDeviceAdded(
@@ -267,7 +270,7 @@ bool UsbChooserController::DisplayDevice(
     return false;
   }
 
-  if (base::ranges::any_of(
+  if (std::ranges::any_of(
           options_->exclusion_filters, [&device_info](const auto& filter) {
             return device::UsbDeviceFilterMatches(*filter, device_info);
           })) {
@@ -279,7 +282,7 @@ bool UsbChooserController::DisplayDevice(
     is_usb_unrestricted =
         requesting_frame_ &&
         requesting_frame_->IsFeatureEnabled(
-            blink::mojom::PermissionsPolicyFeature::kUsbUnrestricted) &&
+            network::mojom::PermissionsPolicyFeature::kUsbUnrestricted) &&
         content::HasIsolatedContextCapability(requesting_frame_);
   }
   // Isolated context with permission to access the policy-controlled feature

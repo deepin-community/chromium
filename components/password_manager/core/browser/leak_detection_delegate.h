@@ -44,7 +44,8 @@ class LeakDetectionDelegate : public LeakDetectionDelegateInterface {
 #endif  // defined(UNIT_TEST)
 
   void StartLeakCheck(LeakDetectionInitiator initiator,
-                      const PasswordForm& credentials);
+                      const PasswordForm& credentials,
+                      const GURL& form_url);
 
  private:
   // LeakDetectionDelegateInterface:
@@ -62,6 +63,7 @@ class LeakDetectionDelegate : public LeakDetectionDelegateInterface {
       IsReused is_reused,
       GURL url,
       std::u16string username,
+      std::u16string password,
       std::vector<GURL> all_urls_with_leaked_credentials);
 
   void OnError(LeakDetectionError error) override;

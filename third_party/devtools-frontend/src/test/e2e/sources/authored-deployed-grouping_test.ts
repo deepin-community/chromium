@@ -11,7 +11,6 @@ import {
   waitFor,
   waitForNone,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   createSelectorsForWorkerFile,
   expandFileTree,
@@ -211,7 +210,7 @@ const folderlessGroupedExpectedTree = [
   'multi-workers.min.js',
 ];
 
-describe('Source Panel grouping', async function() {
+describe('Source Panel grouping', function() {
   const targetPage = 'sources/multi-workers-sourcemap.html';
   const scriptFile = 'multi-workers.min.js';
   function workerFileSelectors(workerIndex: number) {

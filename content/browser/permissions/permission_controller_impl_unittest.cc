@@ -71,7 +71,8 @@ class TestPermissionManager : public MockPermissionManager {
 
   PermissionStatus GetPermissionStatusForCurrentDocument(
       PermissionType permission,
-      RenderFrameHost* render_frame_host) override {
+      RenderFrameHost* render_frame_host,
+      bool should_include_device_status) override {
     RenderFrameHost* top_frame = render_frame_host->GetParentOrOuterDocument();
     GURL url;
 
@@ -177,7 +178,9 @@ class PermissionControllerImplTest : public ::testing::Test {
   PermissionControllerImplTest& operator=(const PermissionControllerImplTest&) =
       delete;
 
-  ~PermissionControllerImplTest() override {}
+  ~PermissionControllerImplTest() override {
+    browser_context_.SetPermissionControllerDelegate(nullptr);
+  }
 
   void SetUp() override {
     ON_CALL(*mock_manager(), IsPermissionOverridable)
@@ -423,12 +426,13 @@ TEST_F(PermissionControllerImplTest,
 
   base::MockCallback<PermissionStatusCallback> geo_callback;
   permission_controller()->SubscribeToPermissionStatusChange(
-      PermissionType::GEOLOCATION, nullptr, nullptr, kUrl, geo_callback.Get());
+      PermissionType::GEOLOCATION, nullptr, nullptr, kUrl,
+      /*should_include_device_status=*/false, geo_callback.Get());
 
   base::MockCallback<PermissionStatusCallback> sync_callback;
   permission_controller()->SubscribeToPermissionStatusChange(
       PermissionType::BACKGROUND_SYNC, nullptr, nullptr, kUrl,
-      sync_callback.Get());
+      /*should_include_device_status=*/false, sync_callback.Get());
 
   // Geolocation should change status, so subscriber is updated.
   EXPECT_CALL(geo_callback, Run(PermissionStatus::ASK));
@@ -557,10 +561,10 @@ class PermissionControllerImplWithDelegateTest
   content::RenderFrameHost* AddChildRFH(
       content::RenderFrameHost* parent,
       const GURL& origin,
-      blink::mojom::PermissionsPolicyFeature feature =
-          blink::mojom::PermissionsPolicyFeature::kNotFound) {
+      network::mojom::PermissionsPolicyFeature feature =
+          network::mojom::PermissionsPolicyFeature::kNotFound) {
     blink::ParsedPermissionsPolicy frame_policy = {};
-    if (feature != blink::mojom::PermissionsPolicyFeature::kNotFound) {
+    if (feature != network::mojom::PermissionsPolicyFeature::kNotFound) {
       frame_policy.emplace_back(
           feature,
           std::vector{*blink::OriginWithPossibleWildcards::FromOrigin(
@@ -621,7 +625,7 @@ TEST_F(PermissionControllerImplWithDelegateTest, PermissionPolicyTest) {
 
   content::RenderFrameHost* child_with_policy =
       AddChildRFH(parent, GURL(kOrigin2),
-                  blink::mojom::PermissionsPolicyFeature::kGeolocation);
+                  network::mojom::PermissionsPolicyFeature::kGeolocation);
   ASSERT_TRUE(child_with_policy);
 
   // The top-level frame has no permission, hence a cross-origin iframe has no

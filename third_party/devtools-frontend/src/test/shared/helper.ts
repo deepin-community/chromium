@@ -3,18 +3,17 @@
 // found in the LICENSE file.
 
 import {assert, AssertionError} from 'chai';
-import * as os from 'os';
 import type * as puppeteer from 'puppeteer-core';
 
-import {type DevToolsFrontendReloadOptions} from '../conductor/frontend_tab.js';
+import {AsyncScope} from '../conductor/async-scope.js';
+import type {DevToolsFrontendReloadOptions} from '../conductor/frontend_tab.js';
 import {getDevToolsFrontendHostname, reloadDevTools} from '../conductor/hooks.js';
+import {platform} from '../conductor/mocha-interface-helpers.js';
 import {getBrowserAndPages, getTestServerPort} from '../conductor/puppeteer-state.js';
-import {getTestRunnerConfigSetting} from '../conductor/test_runner_config.js';
 
-import {AsyncScope} from './async-scope.js';
+export {platform} from '../conductor/mocha-interface-helpers.js';
 
 declare global {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface Window {
     // eslint-disable-next-line @typescript-eslint/naming-convention
     __pendingEvents: Map<string, Event[]>;
@@ -25,22 +24,6 @@ declare global {
     // eslint-disable-next-line @typescript-eslint/naming-convention
     __getRenderCoordinatorPendingFrames(): number;
   }
-}
-
-export type Platform = 'mac'|'win32'|'linux';
-export let platform: Platform;
-switch (os.platform()) {
-  case 'darwin':
-    platform = 'mac';
-    break;
-
-  case 'win32':
-    platform = 'win32';
-    break;
-
-  default:
-    platform = 'linux';
-    break;
 }
 
 // TODO: Remove once Chromium updates its version of Node.js to 12+.
@@ -102,7 +85,7 @@ async function performActionOnSelector(
     try {
       await action(element);
       return element;
-    } catch (err) {
+    } catch {
       // A bit of delay to not retry too often.
       await new Promise(resolve => setTimeout(resolve, 50));
     }
@@ -247,6 +230,12 @@ export const getTextContent =
   return text ?? undefined;
 };
 
+export const getAllTextContents =
+    async(selector: string, root?: puppeteer.JSHandle, handler = 'pierce'): Promise<Array<string|null>> => {
+  const allElements = await $$(selector, root, handler);
+  return Promise.all(allElements.map(e => e.evaluate(e => e.textContent)));
+};
+
 /**
  * Match multiple elements based on a selector and return their textContents, but only for those
  * elements that are visible.
@@ -297,8 +286,9 @@ export const waitForNone =
                                }, asyncScope), `Waiting for no elements to match selector '${selector}'`);
 };
 
-export const waitForAria = (selector: string, root?: puppeteer.JSHandle, asyncScope = new AsyncScope()) => {
-  return waitFor(selector, root, asyncScope, 'aria');
+export const waitForAria = <ElementType extends Element = Element>(
+    selector: string, root?: puppeteer.JSHandle, asyncScope = new AsyncScope()) => {
+  return waitFor<ElementType>(selector, root, asyncScope, 'aria');
 };
 
 export const waitForAriaNone = (selector: string, root?: puppeteer.JSHandle, asyncScope = new AsyncScope()) => {
@@ -334,16 +324,13 @@ export const waitForNoElementsWithTextContent =
                              }, asyncScope), `Waiting for no elements with textContent '${textContent}'`);
     };
 
-export const TIMEOUT_ERROR_MESSAGE = 'Test timed out';
-
 export const waitForFunction =
     async<T>(fn: () => Promise<T|undefined>, asyncScope = new AsyncScope(), description?: string) => {
   const innerFunction = async () => {
     while (true) {
-      if (asyncScope.isCanceled()) {
-        throw new Error(TIMEOUT_ERROR_MESSAGE);
-      }
+      AsyncScope.abortSignal?.throwIfAborted();
       const result = await fn();
+      AsyncScope.abortSignal?.throwIfAborted();
       if (result) {
         return result;
       }
@@ -436,6 +423,10 @@ export const setDevToolsSettings = async (settings: Record<string, string>) => {
   await reloadDevTools();
 };
 
+export function goToHtml(html: string): Promise<void> {
+  return goTo(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+}
+
 export const goTo = async (url: string, options: puppeteer.WaitForOptions = {}) => {
   const {target} = getBrowserAndPages();
   await target.goto(url, options);
@@ -461,11 +452,7 @@ export const goToResourceWithCustomHost = async (host: string, path: string) => 
 };
 
 export const getResourcesPath = (host: string = 'localhost') => {
-  let resourcesPath = getTestRunnerConfigSetting('hosted-server-e2e-resources-path', '/test/e2e/resources');
-  if (!resourcesPath.startsWith('/')) {
-    resourcesPath = `/${resourcesPath}`;
-  }
-  return `https://${host}:${getTestServerPort()}${resourcesPath}`;
+  return `https://${host}:${getTestServerPort()}/test/e2e/resources`;
 };
 
 export const step = async (description: string, step: Function) => {
@@ -521,7 +508,7 @@ export const activeElementTextContent = async () => {
 
 export const activeElementAccessibleName = async () => {
   const element = await activeElement();
-  return element.evaluate(node => node.getAttribute('aria-label'));
+  return element.evaluate(node => node.getAttribute('aria-label') || node.getAttribute('title'));
 };
 
 export const tabForward = async (page?: puppeteer.Page) => {
@@ -836,4 +823,12 @@ export async function raf(page: puppeteer.Page): Promise<void> {
   await page.evaluate(() => {
     return new Promise(resolve => window.requestAnimationFrame(resolve));
   });
+}
+
+export async function readClipboard() {
+  const {frontend, browser} = getBrowserAndPages();
+  await browser.defaultBrowserContext().overridePermissions(frontend.url(), ['clipboard-read']);
+  const clipboard = await frontend.evaluate(async () => navigator.clipboard.readText());
+  await browser.defaultBrowserContext().clearPermissionOverrides();
+  return clipboard;
 }

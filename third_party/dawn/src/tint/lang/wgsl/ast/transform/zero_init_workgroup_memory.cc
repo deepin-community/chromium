@@ -119,7 +119,7 @@ struct ZeroInitWorkgroupMemory::State {
         ArrayIndices array_indices;
 
         /// @returns true if the expr is not null (null usually indicates a failure)
-        operator bool() const { return expr != nullptr; }
+        explicit operator bool() const { return expr != nullptr; }
     };
 
     /// Statement holds information about a statement that will zero workgroup
@@ -219,6 +219,10 @@ struct ZeroInitWorkgroupMemory::State {
 
             // Determine the block type used to emit these statements.
 
+            // TODO(crbug.com/tint/2143): Always emit an if statement around zero init, even when
+            // workgroup size matches num_iteration, to work around bugs in certain drivers.
+            constexpr bool kWorkaroundUnconditionalZeroInitDriverBug = true;
+
             if (workgroup_size_const == 0 || num_iterations > workgroup_size_const) {
                 // Either the workgroup size is dynamic, or smaller than num_iterations.
                 // In either case, we need to generate a for loop to ensure we
@@ -243,14 +247,14 @@ struct ZeroInitWorkgroupMemory::State {
                 }
                 auto* for_loop = b.For(init, cond, cont, b.Block(block));
                 init_body.Push(for_loop);
-            } else if (num_iterations < workgroup_size_const) {
+            } else if (num_iterations < workgroup_size_const ||
+                       kWorkaroundUnconditionalZeroInitDriverBug) {
                 // Workgroup size is a known constant, but is greater than
                 // num_iterations. Emit an if statement:
                 //
                 //  if (local_index < num_iterations) {
                 //    ...
                 //  }
-
                 auto* cond = b.LessThan(local_idx, u32(num_iterations));
                 auto block = DeclareArrayIndices(num_iterations, array_indices,
                                                  [&] { return b.Expr(local_idx); });
@@ -294,8 +298,7 @@ struct ZeroInitWorkgroupMemory::State {
         std::function<const ast::Expression*()> local_index;
         for (auto* param : fn->params) {
             if (auto* builtin_attr = GetAttribute<BuiltinAttribute>(param->attributes)) {
-                auto builtin = sem.Get(builtin_attr)->Value();
-                if (builtin == core::BuiltinValue::kLocalInvocationIndex) {
+                if (builtin_attr->builtin == core::BuiltinValue::kLocalInvocationIndex) {
                     return b.Expr(ctx.Clone(param->name->symbol));
                 }
             }
@@ -381,8 +384,8 @@ struct ZeroInitWorkgroupMemory::State {
                 //      `(idx % modulo) / division`
                 auto count = arr->ConstantCount();
                 if (!count) {
-                    ctx.dst->Diagnostics().AddError(diag::System::Transform,
-                                                    core::type::Array::kErrExpectedConstantCount);
+                    ctx.dst->Diagnostics().AddError(Source{})
+                        << core::type::Array::kErrExpectedConstantCount;
                     return Expression{};  // error
                 }
                 auto modulo = num_values * count.value();
@@ -401,7 +404,6 @@ struct ZeroInitWorkgroupMemory::State {
         }
 
         TINT_UNREACHABLE() << "could not zero workgroup type: " << ty->FriendlyName();
-        return false;
     }
 
     /// DeclareArrayIndices returns a list of statements that contain the `let`

@@ -111,11 +111,6 @@ bool IsScrollBlockingEvent(const AtomicString& event_type) {
          IsWheelScrollBlockingEvent(event_type);
 }
 
-bool IsInstrumentedForAsyncStack(const AtomicString& event_type) {
-  return event_type == event_type_names::kLoad ||
-         event_type == event_type_names::kError;
-}
-
 base::TimeDelta BlockedEventsWarningThreshold(ExecutionContext* context,
                                               const Event& event) {
   if (!event.cancelable())
@@ -293,7 +288,7 @@ void ObservableEventListener::Trace(Visitor* visitor) const {
 }
 
 // This is the synthetic subscribe callback that we construct `Observable`s with
-// that are created by `EventTarget#on()`. `OnSubscribe()` adds a brand new
+// that are created by `EventTarget#when()`. `OnSubscribe()` adds a brand new
 // `ObservableEventListener` as a new event listener for events named
 // `event_type_`. When events are received, they are propagated directly to
 // `Subscriber`.
@@ -311,7 +306,7 @@ class ObservableSubscribeDelegate final : public Observable::SubscribeDelegate {
  private:
   // This is the event target for which we will vend per-subscriber event
   // listeners. The typical flow here looks like this:
-  //   1.) `EventTarget::on()` is called, returning an observable whose
+  //   1.) `EventTarget::when()` is called, returning an observable whose
   //       subscribe callback is `this` (instead of a JS-provided v8
   //       callback).
   //   2.) `Observable::subscribe()` is called by JS, and thus `OnSubscribe()`
@@ -339,23 +334,25 @@ void ObservableSubscribeDelegate::OnSubscribe(Subscriber* subscriber,
   // getting here.
   CHECK(script_state->ContextIsValid());
 
+  // The weak `event_target_` could be null at this point, if the target has
+  // been garbage collected by the time `this`'s associated Observable has been
+  // subscribed to. We early return in this case, as to avoid setting up the
+  // entire event listener / abort signal mechanism.
+  //
+  // "If event target is null, abort these steps."
+  if (!event_target_) {
+    return;
+  }
+
   // If the subscriber is already aborted, early return because there is no use
   // in adding the event listener, since it will never be able to removed again.
   // It is possible for the subscriber to be aborted at this point if
   // `Observable#subscribe()` is called with an already-aborted signal in
   // `SubscribeOptions`.
   //
-  // TODO(crbug.com/1485981): Once we agree on proper spec text for this, quote
-  // it here.
+  // "If subscriber's subscription controller's signal is aborted, abort these
+  // steps."
   if (subscriber->signal()->aborted()) {
-    return;
-  }
-
-  // The weak `event_target_` could be null at this point, if the target has
-  // been garbage collected by the time `this`'s associated Observable has been
-  // subscribed to. We early return in this case, as to avoid setting up the
-  // entire event listener / abort signal mechanism.
-  if (!event_target_) {
     return;
   }
 
@@ -411,9 +408,7 @@ ServiceWorker* EventTarget::ToServiceWorker() {
   return nullptr;
 }
 
-PortalHost* EventTarget::ToPortalHost() {
-  return nullptr;
-}
+void EventTarget::ResetEventQueueStatus(const AtomicString& event_type) {}
 
 // An instance of EventTargetImpl is returned because EventTarget
 // is an abstract class, and making it non-abstract is unfavorable
@@ -516,8 +511,8 @@ void EventTarget::SetDefaultAddEventListenerOptions(
   }
 }
 
-Observable* EventTarget::on(const AtomicString& event_type,
-                            const ObservableEventListenerOptions* options) {
+Observable* EventTarget::when(const AtomicString& event_type,
+                              const ObservableEventListenerOptions* options) {
   DCHECK(RuntimeEnabledFeatures::ObservableAPIEnabled());
   return MakeGarbageCollected<Observable>(
       GetExecutionContext(), MakeGarbageCollected<ObservableSubscribeDelegate>(
@@ -561,7 +556,6 @@ bool EventTarget::addEventListener(
   }
 
   NOTREACHED();
-  return false;
 }
 
 bool EventTarget::addEventListener(const AtomicString& event_type,
@@ -616,7 +610,7 @@ bool EventTarget::AddEventListenerInternal(
       !RuntimeEnabledFeatures::DeprecateUnloadOptOutEnabled(
           execution_context) &&
       !execution_context->IsFeatureEnabled(
-          mojom::blink::PermissionsPolicyFeature::kUnload,
+          network::mojom::PermissionsPolicyFeature::kUnload,
           ReportOptions::kReportOnFailure)) {
     return false;
   }
@@ -641,8 +635,7 @@ bool EventTarget::AddEventListenerInternal(
     Vector<String> argv;
     argv.push_back(ToNode() ? ToNode()->nodeName() : InterfaceName());
     argv.push_back(event_type);
-    activity_logger->LogEvent(execution_context, "blinkAddEventListener",
-                              argv.size(), argv.data());
+    activity_logger->LogEvent(execution_context, "blinkAddEventListener", argv);
   }
 
   RegisteredEventListener* registered_listener = nullptr;
@@ -677,11 +670,6 @@ bool EventTarget::AddEventListenerInternal(
     }
 
     AddedEventListener(event_type, *registered_listener);
-    if (IsA<JSBasedEventListener>(listener) &&
-        IsInstrumentedForAsyncStack(event_type)) {
-      listener->async_task_context()->Schedule(GetExecutionContext(),
-                                               event_type);
-    }
   }
   return added;
 }
@@ -710,24 +698,27 @@ void EventTarget::AddedEventListener(
           WebFeature::kContentVisibilityAutoStateChangeHandlerRegistered);
     } else if (event_type == event_type_names::kScrollend) {
       UseCounter::Count(*document, WebFeature::kScrollend);
+    } else if (event_util::IsSnapEventType(event_type)) {
+      UseCounter::Count(*document, WebFeature::kSnapEvent);
+    } else if (RuntimeEnabledFeatures::WindowOnMoveEventEnabled() &&
+               (event_type == event_type_names::kMove)) {
+      UseCounter::Count(*document, WebFeature::kMoveEvent);
     }
   }
 
-  WebFeature mutation_event_feature;
-  Document::ListenerType listener_type;
-  if (event_util::IsDOMMutationEventType(event_type, mutation_event_feature,
-                                         listener_type)) {
+  auto info = event_util::IsDOMMutationEventType(event_type);
+  if (info.is_mutation_event) {
     if (ExecutionContext* context = GetExecutionContext()) {
       if (RuntimeEnabledFeatures::MutationEventsEnabled(context) &&
           (!document || document->SupportsLegacyDOMMutations())) {
         String message_text = String::Format(
-            "Listener added for a synchronous '%s' DOM Mutation Event. "
-            "This event type is deprecated "
-            "(https://w3c.github.io/uievents/#legacy-event-types) "
-            "and work is underway to remove it from this browser. Usage of "
-            "this event listener will cause performance issues today, and "
-            "represents a risk of future incompatibility. Consider using "
-            "MutationObserver instead.",
+            "Listener added for a '%s' mutation event. This event type is "
+            "deprecated, and will be removed from this browser VERY soon. "
+            "Usage of this event listener will cause performance issues today, "
+            "and represents a large risk of imminent site breakage. Consider "
+            "using MutationObserver instead. See "
+            "https://chromestatus.com/feature/5083947249172480 for more "
+            "information.",
             event_type.GetString().Utf8().c_str());
         PerformanceMonitor::ReportGenericViolation(
             context, PerformanceMonitor::kDiscouragedAPIUse, message_text,
@@ -735,17 +726,39 @@ void EventTarget::AddedEventListener(
         context->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
             mojom::blink::ConsoleMessageSource::kDeprecation,
             mojom::blink::ConsoleMessageLevel::kWarning, message_text));
-        Deprecation::CountDeprecation(context, mutation_event_feature);
+        Deprecation::CountDeprecation(context, info.listener_feature);
+        UseCounter::Count(context, WebFeature::kAnyMutationEventListenerAdded);
       } else {
-        String message_text = String::Format(
-            "Listener added for a '%s' DOM Mutation Event. This event type has "
-            "been deprecated and removed, and will no longer be fired. See "
-            "https://chromestatus.com/feature/5083947249172480 for more "
-            "detail.",
-            event_type.GetString().Utf8().c_str());
+        String message_text;
+        // Only show the special trial message if mutation events are disabled
+        // via the feature flag, and not via lack of embedder support.
+        if (!RuntimeEnabledFeatures::MutationEventsEnabled(context) &&
+            RuntimeEnabledFeatures::MutationEventsSpecialTrialMessageEnabled(
+                context)) {
+          message_text = String::Format(
+              "Usage of mutation events (%s) was detected. This event type has "
+              "been deprecated, and an early trial-run of complete removal is "
+              "underway. In this browser, mutation events are currently not "
+              "being fired. If you are a *user* experiencing a problem, please "
+              "report the issue to the operator of the website. If you are a "
+              "site owner, and you think this trial is causing an unexpected "
+              "issue, please report a bug at "
+              "https://issues.chromium.org/issues/"
+              "new?component=1456718&template=1948649. Note that these events "
+              "will stop being fired for ALL USERS starting in version 127, "
+              "which is the next release.",
+              event_type.GetString().Utf8().c_str());
+        } else {
+          message_text = String::Format(
+              "Listener added for a '%s' mutation event. Support for this "
+              "event type has been removed, and this event will no longer be "
+              "fired. See https://chromestatus.com/feature/5083947249172480 "
+              "for more information.",
+              event_type.GetString().Utf8().c_str());
+        }
         context->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
             mojom::blink::ConsoleMessageSource::kDeprecation,
-            mojom::blink::ConsoleMessageLevel::kWarning, message_text));
+            mojom::blink::ConsoleMessageLevel::kError, message_text));
       }
     }
   }
@@ -778,7 +791,6 @@ bool EventTarget::removeEventListener(
   }
 
   NOTREACHED();
-  return false;
 }
 
 bool EventTarget::removeEventListener(const AtomicString& event_type,
@@ -847,11 +859,6 @@ bool EventTarget::SetAttributeEventListener(const AtomicString& event_type,
     return false;
   }
   if (registered_listener) {
-    if (IsA<JSBasedEventListener>(listener) &&
-        IsInstrumentedForAsyncStack(event_type)) {
-      listener->async_task_context()->Schedule(GetExecutionContext(),
-                                               event_type);
-    }
     registered_listener->SetCallback(listener);
     return true;
   }
@@ -1058,7 +1065,7 @@ bool EventTarget::FireEventListeners(Event& event,
   bool fired_listener = false;
 
   for (auto& registered_listener : entry) {
-    if (UNLIKELY(registered_listener->Removed())) {
+    if (registered_listener->Removed()) [[unlikely]] {
       continue;
     }
 
@@ -1083,9 +1090,6 @@ bool EventTarget::FireEventListeners(Event& event,
     event.SetHandlingPassive(EventPassiveMode(*registered_listener));
 
     probe::UserCallback probe(context, nullptr, event.type(), false, this);
-    probe::AsyncTask async_task(context, listener->async_task_context(),
-                                "event",
-                                IsInstrumentedForAsyncStack(event.type()));
 
     // To match Mozilla, the AT_TARGET phase fires both capturing and bubbling
     // event listeners, even though that violates some versions of the DOM spec.
@@ -1157,6 +1161,7 @@ void EventTarget::DispatchEnqueuedEvent(Event* event,
     event->async_task_context()->Cancel();
     return;
   }
+  this->ResetEventQueueStatus(event->type());
   probe::AsyncTask async_task(context, event->async_task_context());
   DispatchEvent(*event);
 }

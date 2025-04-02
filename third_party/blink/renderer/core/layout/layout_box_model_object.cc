@@ -26,13 +26,13 @@
 #include "third_party/blink/renderer/core/layout/layout_box_model_object.h"
 
 #include "cc/input/main_thread_scrolling_reason.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/editing/ime/input_method_controller.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/html_body_element.h"
+#include "third_party/blink/renderer/core/html/html_html_element.h"
 #include "third_party/blink/renderer/core/layout/constraint_space.h"
 #include "third_party/blink/renderer/core/layout/geometry/transform_state.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_cursor.h"
@@ -43,6 +43,7 @@
 #include "third_party/blink/renderer/core/layout/layout_result.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/legacy_layout_tree_walking.h"
+#include "third_party/blink/renderer/core/layout/svg/svg_resources.h"
 #include "third_party/blink/renderer/core/layout/table/layout_table_section.h"
 #include "third_party/blink/renderer/core/page/scrolling/sticky_position_scrolling_constraints.h"
 #include "third_party/blink/renderer/core/paint/inline_paint_context.h"
@@ -78,12 +79,11 @@ bool NeedsAnchorPositionScrollData(Element& element,
   if (!style.HasOutOfFlowPosition()) {
     return false;
   }
-  // There's an explicitly set default anchor or additional fallback-bounds rect
-  // to track.
-  if (style.AnchorDefault() || style.PositionFallbackBounds()) {
+  // There's an explicitly set default anchor.
+  if (style.PositionAnchor()) {
     return true;
   }
-  // Now we have `anchor-default: implicit`. We need `AnchorPositionScrollData`
+  // Now we have `position-anchor: auto`. We need `AnchorPositionScrollData`
   // only if there's an implicit anchor element to track.
   return element.ImplicitAnchorElement();
 }
@@ -123,8 +123,8 @@ void LayoutBoxModelObject::StyleWillChange(StyleDifference diff,
                                            const ComputedStyle& new_style) {
   NOT_DESTROYED();
   // Change of stacked/stacking context status may cause change of this or
-  // descendant PaintLayer's CompositingContainer, so we need to eagerly
-  // invalidate the current compositing container chain which may have painted
+  // descendant PaintLayer's PaintingContainer, so we need to eagerly
+  // invalidate the current PaintingContainer chain which may have painted
   // cached subsequences containing this object or descendant objects.
   if (Style() &&
       (IsStacked() != IsStacked(new_style) ||
@@ -196,7 +196,7 @@ void LayoutBoxModelObject::StyleDidChange(StyleDifference diff,
       CreateLayerAfterStyleChange();
     }
   } else if (Layer() && Layer()->Parent()) {
-    Layer()->UpdateFilters(old_style, StyleRef());
+    Layer()->UpdateFilters(diff, old_style, StyleRef());
     Layer()->UpdateBackdropFilters(old_style, StyleRef());
     Layer()->UpdateClipPath(old_style, StyleRef());
     Layer()->UpdateOffsetPath(old_style, StyleRef());
@@ -265,10 +265,10 @@ void LayoutBoxModelObject::StyleDidChange(StyleDifference diff,
   }
 
   if (Layer()) {
-    // The previous CompositingContainer chain was marked for repaint via
+    // The previous PaintingContainer chain was marked for repaint via
     // |LayoutBoxModelObject::StyleWillChange| but changes to stacking can
-    // change the compositing container so we need to ensure the new
-    // CompositingContainer is also marked for repaint.
+    // change the PaintingContainer so we need to ensure the new
+    // PaintingContainer is also marked for repaint.
     if (old_style &&
         (IsStacked() != IsStacked(*old_style) ||
          IsStackingContext() != IsStackingContext(*old_style)) &&
@@ -385,11 +385,11 @@ void LayoutBoxModelObject::AddOutlineRectsForDescendant(
   }
 
   if (descendant.HasLayer()) {
-    OutlineRectCollector* descendant_collector =
+    std::unique_ptr<OutlineRectCollector> descendant_collector =
         collector.ForDescendantCollector();
     descendant.AddOutlineRects(*descendant_collector, nullptr, PhysicalOffset(),
                                include_block_overflows);
-    collector.Combine(descendant_collector, descendant, this,
+    collector.Combine(descendant_collector.get(), descendant, this,
                       additional_offset);
     return;
   }
@@ -448,22 +448,21 @@ bool LayoutBoxModelObject::ShouldBeHandledAsInline(
   // type creates a domain-specific LayoutObject such as LayoutImage, such
   // anonymous <table> is not created, and the LayoutObject should adjust
   // IsInline flag for inlinifying.
-  //
-  // LayoutRubyBase and LayoutRubyText should be blocks even in a ruby.
-  return style.IsInInlinifyingDisplay() && !IsTablePart() && !IsRubyBase() &&
-         !IsRubyText();
+  return style.IsInInlinifyingDisplay() && !IsTablePart();
 }
 
 void LayoutBoxModelObject::UpdateFromStyle() {
   NOT_DESTROYED();
-  const ComputedStyle& style_to_use = StyleRef();
-  SetHasBoxDecorationBackground(style_to_use.HasBoxDecorationBackground());
-  SetInline(ShouldBeHandledAsInline(style_to_use));
-  SetPositionState(style_to_use.GetPosition());
-  SetHorizontalWritingMode(style_to_use.IsHorizontalWritingMode());
+  const ComputedStyle& style = StyleRef();
+  SetHasBoxDecorationBackground(style.HasBoxDecorationBackground());
+  SetInline(ShouldBeHandledAsInline(style));
+  SetPositionState(style.GetPosition());
+  SetHorizontalWritingMode(style.IsHorizontalWritingMode());
+
+  const bool is_fixed_container = ComputeIsFixedContainer(style);
+  SetCanContainFixedPositionObjects(is_fixed_container);
   SetCanContainAbsolutePositionObjects(
-      ComputeIsAbsoluteContainer(&style_to_use));
-  SetCanContainFixedPositionObjects(ComputeIsFixedContainer(&style_to_use));
+      ComputeIsAbsoluteContainer(style, is_fixed_container));
   SetIsBackgroundAttachmentFixedObject(
       !BackgroundTransfersToView() &&
       StyleRef().HasFixedAttachmentBackgroundImage());
@@ -484,15 +483,25 @@ PhysicalRect LayoutBoxModelObject::VisualOverflowRectIncludingFilters() const {
 PhysicalRect LayoutBoxModelObject::ApplyFiltersToRect(
     const PhysicalRect& rect) const {
   NOT_DESTROYED();
-  if (!StyleRef().HasFilter()) {
+  if (!HasReflection() && !StyleRef().HasFilter()) {
     return rect;
   }
   gfx::RectF float_rect(rect);
-  gfx::RectF filter_reference_box = Layer()->FilterReferenceBox();
-  if (!filter_reference_box.size().IsZero()) {
-    float_rect.UnionEvenIfEmpty(filter_reference_box);
+  if (auto* layer = Layer()) {
+    const gfx::RectF filter_reference_box = layer->FilterReferenceBox();
+    if (!filter_reference_box.size().IsZero()) {
+      float_rect.UnionEvenIfEmpty(filter_reference_box);
+    }
+    float_rect = layer->MapRectForFilter(float_rect);
+  } else {
+    CHECK(IsSVGChild());
+    const gfx::RectF filter_reference_box =
+        SVGResources::ReferenceBoxForEffects(*this);
+    if (!filter_reference_box.size().IsZero()) {
+      float_rect.UnionEvenIfEmpty(filter_reference_box);
+    }
+    float_rect = StyleRef().Filter().MapRect(float_rect);
   }
-  float_rect = Layer()->MapRectForFilter(float_rect);
   return PhysicalRect::EnclosingRect(float_rect);
 }
 
@@ -529,8 +538,9 @@ LayoutBoxModelObject::ComputeStickyPositionConstraints() const {
   const PhysicalOffset scroll_container_border_offset(
       scroll_container->BorderLeft(), scroll_container->BorderTop());
 
-  MapCoordinatesFlags flags =
-      kIgnoreTransforms | kIgnoreScrollOffset | kIgnoreStickyOffset;
+  MapCoordinatesFlags flags = kIgnoreTransforms | kIgnoreScrollOffset |
+                              kIgnoreStickyOffset |
+                              kIgnoreScrollOriginAndOffset;
 
   // Compute the sticky-container rect.
   {
@@ -627,13 +637,13 @@ LayoutBoxModelObject::ComputeStickyPositionConstraints() const {
     const PhysicalSize available_size = constraints->constraining_rect.size;
     const auto& style = StyleRef();
     std::optional<LayoutUnit> left =
-        ResolveInset(style.UsedLeft(), available_size.width);
+        ResolveInset(style.Left(), available_size.width);
     std::optional<LayoutUnit> right =
-        ResolveInset(style.UsedRight(), available_size.width);
+        ResolveInset(style.Right(), available_size.width);
     std::optional<LayoutUnit> top =
-        ResolveInset(style.UsedTop(), available_size.height);
+        ResolveInset(style.Top(), available_size.height);
     std::optional<LayoutUnit> bottom =
-        ResolveInset(style.UsedBottom(), available_size.height);
+        ResolveInset(style.Bottom(), available_size.height);
 
     // Skip the end inset if there is not enough space to honor both insets.
     if (left && right) {
@@ -669,6 +679,17 @@ PhysicalOffset LayoutBoxModelObject::StickyPositionOffset() const {
   // present, but there are callsites within Layout for it.
   auto* constraints = StickyConstraints();
   return constraints ? constraints->StickyOffset() : PhysicalOffset();
+}
+
+PhysicalOffset LayoutBoxModelObject::OffsetFromContainerInternal(
+    const LayoutObject* container,
+    MapCoordinatesFlags mode) const {
+  NOT_DESTROYED();
+  PhysicalOffset offset;
+  if (IsStickyPositioned() && !(mode & kIgnoreStickyOffset)) {
+    offset += StickyPositionOffset();
+  }
+  return offset + LayoutObject::OffsetFromContainerInternal(container, mode);
 }
 
 PhysicalOffset LayoutBoxModelObject::AdjustedPositionRelativeTo(
@@ -714,9 +735,9 @@ PhysicalOffset LayoutBoxModelObject::AdjustedPositionRelativeTo(
         reference_point +=
             To<LayoutBox>(offset_parent_object)->PhysicalLocation();
       }
-    } else if (UNLIKELY(IsBox() &&
-                        To<LayoutBox>(this)
-                            ->NeedsAnchorPositionScrollAdjustment())) {
+    } else if (IsBox() &&
+               To<LayoutBox>(this)->NeedsAnchorPositionScrollAdjustment())
+        [[unlikely]] {
       reference_point +=
           To<LayoutBox>(this)->AnchorPositionScrollTranslationOffset();
     }
@@ -753,8 +774,9 @@ LayoutUnit LayoutBoxModelObject::ComputedCSSPadding(
     const Length& padding) const {
   NOT_DESTROYED();
   LayoutUnit w;
-  if (padding.IsPercentOrCalc())
+  if (padding.HasPercent()) {
     w = ContainingBlockLogicalWidthForContent();
+  }
   return MinimumValueForLength(padding, w);
 }
 

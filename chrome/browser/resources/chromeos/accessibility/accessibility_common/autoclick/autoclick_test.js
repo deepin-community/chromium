@@ -9,11 +9,6 @@ GEN_INCLUDE(['../../common/testing/mock_accessibility_private.js']);
  * Automatic clicks feature using accessibility common extension browser tests.
  */
 AutoclickE2ETest = class extends E2ETestBase {
-  constructor() {
-    super();
-    this.navigateLacrosWithAutoComplete = true;
-  }
-
   async setUpDeferred() {
     this.mockAccessibilityPrivate = new MockAccessibilityPrivate();
     chrome.accessibilityPrivate = this.mockAccessibilityPrivate;
@@ -144,7 +139,7 @@ AX_TEST_F('AutoclickE2ETest', 'RemovesAndAddsAutoclick', async function() {
   this.assertSameRect(focusRings[0].rects[0], expected);
 });
 
-// TODO(crbug.com/978163): Add tests for when the scrollable area is scrolled
+// TODO(crbug.com/41467584): Add tests for when the scrollable area is scrolled
 // all the way up or down, left or right. Add tests for nested scrollable areas.
 // Add tests for root types like toolbar, dialog, and window to ensure
 // we don't break boundaries when searching for scroll bars.

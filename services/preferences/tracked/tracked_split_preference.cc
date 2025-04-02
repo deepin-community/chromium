@@ -39,7 +39,6 @@ void TrackedSplitPreference::OnNewValue(
     PrefHashStoreTransaction* transaction) const {
   if (value && !value->is_dict()) {
     NOTREACHED();
-    return;
   }
 
   transaction->StoreSplitHash(pref_path_, value ? &value->GetDict() : nullptr);

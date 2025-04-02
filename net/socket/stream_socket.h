@@ -8,8 +8,10 @@
 #include <stdint.h>
 
 #include <optional>
+#include <string_view>
 
 #include "base/functional/bind.h"
+#include "base/notreached.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_export.h"
 #include "net/dns/public/resolve_error_info.h"
@@ -117,7 +119,7 @@ class NET_EXPORT StreamSocket : public Socket {
   // Get data received from peer in ALPS TLS extension.
   // Returns a (possibly empty) value if a TLS version supporting ALPS was used
   // and ALPS was negotiated, nullopt otherwise.
-  virtual std::optional<base::StringPiece> GetPeerApplicationSettings() const;
+  virtual std::optional<std::string_view> GetPeerApplicationSettings() const;
 
   // Gets the SSL connection information of the socket.  Returns false if
   // SSL was not used by this socket.
@@ -144,7 +146,7 @@ class NET_EXPORT StreamSocket : public Socket {
   // retagged with a different tag. Sockets wrapping multiplexed sockets
   // (e.g. sockets who proxy through a QUIC or Spdy stream) cannot be tagged as
   // the tag would inadvertently affect other streams; calling ApplySocketTag()
-  // in this case will result in CHECK(false).
+  // in this case will result in NOTREACHED().
   virtual void ApplySocketTag(const SocketTag& tag) = 0;
 };
 

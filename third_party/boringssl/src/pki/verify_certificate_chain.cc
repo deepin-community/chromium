@@ -1,6 +1,16 @@
 // Copyright 2015 The Chromium Authors
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "verify_certificate_chain.h"
 
@@ -19,7 +29,7 @@
 #include "trust_store.h"
 #include "verify_signed_data.h"
 
-namespace bssl {
+BSSL_NAMESPACE_BEGIN
 
 namespace {
 
@@ -229,6 +239,23 @@ void VerifyExtendedKeyUsage(const ParsedCertificate &cert,
     }
   }
 
+  // Apply strict only to leaf certificates in these cases.
+  if (required_key_purpose == KeyPurpose::CLIENT_AUTH_STRICT_LEAF) {
+    if (!is_target_cert) {
+      required_key_purpose = KeyPurpose::CLIENT_AUTH;
+    } else {
+      required_key_purpose = KeyPurpose::CLIENT_AUTH_STRICT;
+    }
+  }
+
+  if (required_key_purpose == KeyPurpose::SERVER_AUTH_STRICT_LEAF) {
+    if (!is_target_cert) {
+      required_key_purpose = KeyPurpose::SERVER_AUTH;
+    } else {
+      required_key_purpose = KeyPurpose::SERVER_AUTH_STRICT;
+    }
+  }
+
   auto add_error_if_strict = [&](CertErrorId id) {
     if (required_key_purpose == KeyPurpose::SERVER_AUTH_STRICT ||
         required_key_purpose == KeyPurpose::CLIENT_AUTH_STRICT) {
@@ -300,6 +327,8 @@ void VerifyExtendedKeyUsage(const ParsedCertificate &cert,
 
   switch (required_key_purpose) {
     case KeyPurpose::ANY_EKU:
+    case KeyPurpose::CLIENT_AUTH_STRICT_LEAF:
+    case KeyPurpose::SERVER_AUTH_STRICT_LEAF:
       assert(0);  // NOTREACHED
       return;
     case KeyPurpose::SERVER_AUTH:
@@ -1023,6 +1052,15 @@ void PathVerifier::BasicCertificateProcessing(
       *shortcircuit_chain_validation = true;
       errors->AddError(cert_errors::kVerifySignedDataFailed);
     }
+  } else {
+    // If `working_public_key_` is null, that indicates the SPKI of the issuer
+    // could not be parsed. Handle this the same way as an invalid signature by
+    // shortcircuiting the rest of verification.
+    // An error should already have been added by ParseAndCheckPublicKey, but
+    // it's added on the CertErrors for the issuer, so we can't BSSL_CHECK
+    // errors->ContainsAnyErrorWithSeverity here. (It will be BSSL_CHECKed when
+    // the shortcircuit_chain_validation is acted on in PathVerifier::Run.)
+    *shortcircuit_chain_validation = true;
   }
   if (*shortcircuit_chain_validation) {
     return;
@@ -1060,7 +1098,7 @@ void PathVerifier::BasicCertificateProcessing(
   // The key purpose is checked not just for the end-entity certificate, but
   // also interpreted as a constraint when it appears in intermediates. This
   // goes beyond what RFC 5280 describes, but is the de-facto standard. See
-  // https://wiki.mozilla.org/CA:CertificatePolicyV2.1#Frequently_Asked_Questions
+  // https://wiki.mozilla.org/CA/CertificatePolicyV2.1#Frequently_Asked_Questions
   VerifyExtendedKeyUsage(cert, required_key_purpose, errors, is_target_cert,
                          is_target_cert_issuer);
 }
@@ -1192,6 +1230,8 @@ void VerifyTargetCertIsNotCA(const ParsedCertificate &cert,
         break;
       case KeyPurpose::SERVER_AUTH_STRICT:
       case KeyPurpose::CLIENT_AUTH_STRICT:
+      case KeyPurpose::CLIENT_AUTH_STRICT_LEAF:
+      case KeyPurpose::SERVER_AUTH_STRICT_LEAF:
         errors->AddError(cert_errors::kTargetCertShouldNotBeCa);
         break;
     }
@@ -1570,11 +1610,11 @@ void PathVerifier::Run(
                                time, required_key_purpose, cert_errors,
                                &shortcircuit_chain_validation);
     if (shortcircuit_chain_validation) {
-      // Signature errors should short-circuit the rest of the verification, as
-      // accumulating more errors from untrusted certificates would not be
-      // meaningful.
+      // Signature errors or unparsable SPKIs should short-circuit the rest of
+      // the verification, as accumulating more errors from untrusted
+      // certificates would not be meaningful.
       BSSL_CHECK(
-          cert_errors->ContainsAnyErrorWithSeverity(CertError::SEVERITY_HIGH));
+          errors->ContainsAnyErrorWithSeverity(CertError::SEVERITY_HIGH));
       return;
     }
     if (!is_target_cert) {
@@ -1647,4 +1687,4 @@ bool VerifyCertificateIsSelfSigned(const ParsedCertificate &cert,
   return true;
 }
 
-}  // namespace bssl
+BSSL_NAMESPACE_END

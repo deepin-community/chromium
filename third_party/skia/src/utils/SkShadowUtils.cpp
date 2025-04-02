@@ -22,6 +22,7 @@
 #include "include/core/SkRefCnt.h"
 #include "include/core/SkVertices.h"
 #include "include/private/SkIDChangeListener.h"
+#include "include/private/base/SkFloatingPoint.h"
 #include "include/private/base/SkTPin.h"
 #include "include/private/base/SkTemplates.h"
 #include "include/private/base/SkTo.h"
@@ -360,7 +361,7 @@ public:
     void writeKey(void* key) const {
         fShapeForKey.writeUnstyledKey(reinterpret_cast<uint32_t*>(key));
     }
-    bool isRRect(SkRRect* rrect) { return fShapeForKey.asRRect(rrect, nullptr, nullptr, nullptr); }
+    bool isRRect(SkRRect* rrect) { return fShapeForKey.asRRect(rrect, nullptr); }
 #else
     int keyBytes() const { return -1; }
     void writeKey(void* key) const { SK_ABORT("Should never be called"); }
@@ -414,12 +415,17 @@ bool draw_shadow(const FACTORY& factory,
     FindContext<FACTORY> context(&path.viewMatrix(), &factory);
 
     SkResourceCache::Key* key = nullptr;
-    AutoSTArray<32 * 4, uint8_t> keyStorage;
+    constexpr int kMinBytes = 128;
+    // We need to make this array be of the cache's Key so the memory we create the Key in
+    // is properly aligned.
+    AutoSTArray<kMinBytes / sizeof(SkResourceCache::Key), SkResourceCache::Key> keyStorage;
     int keyDataBytes = path.keyBytes();
     if (keyDataBytes >= 0) {
+        // Store the key...
         keyStorage.reset(keyDataBytes + sizeof(SkResourceCache::Key));
         key = new (keyStorage.begin()) SkResourceCache::Key();
-        path.writeKey((uint32_t*)(keyStorage.begin() + sizeof(*key)));
+        // ... followed by the bytes from path.
+        path.writeKey((uint32_t*)(((uint8_t*)keyStorage.begin()) + sizeof(SkResourceCache::Key)));
         key->init(&kNamespace, resource_cache_shared_id(), keyDataBytes);
         SkResourceCache::Find(*key, FindVisitor<FACTORY>, &context);
     }
@@ -586,7 +592,7 @@ bool SkShadowUtils::GetLocalBounds(const SkMatrix& ctm, const SkPath& path,
 
 static bool validate_rec(const SkDrawShadowRec& rec) {
     return rec.fLightPos.isFinite() && rec.fZPlaneParams.isFinite() &&
-           SkScalarIsFinite(rec.fLightRadius);
+           SkIsFinite(rec.fLightRadius);
 }
 
 void SkDevice::drawShadow(const SkPath& path, const SkDrawShadowRec& rec) {
@@ -719,7 +725,7 @@ void SkDevice::drawShadow(const SkPath& path, const SkDrawShadowRec& rec) {
             SkScalar sigma = SkBlurMask::ConvertRadiusToSigma(blurRadius);
             bool respectCTM = false;
             paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, sigma, respectCTM));
-            this->drawPath(devSpacePath, paint);
+            this->drawPath(devSpacePath, paint, true);
         }
     }
 
@@ -838,7 +844,7 @@ void SkDevice::drawShadow(const SkPath& path, const SkDrawShadowRec& rec) {
             SkScalar sigma = SkBlurMask::ConvertRadiusToSigma(radius);
             bool respectCTM = false;
             paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, sigma, respectCTM));
-            this->drawPath(path, paint);
+            this->drawPath(path, paint, false);
         }
     }
 }

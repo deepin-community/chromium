@@ -6,16 +6,15 @@ import abc
 import argparse
 import copy
 import csv
-import types
+import json
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Type
 from unittest import mock
 
-from crossbench.benchmarks.speedometer.speedometer import (SpeedometerBenchmark,
-                                                           SpeedometerProbe,
-                                                           SpeedometerStory)
-from crossbench.env import (HostEnvironment, HostEnvironmentConfig,
-                            ValidationMode)
+from crossbench.benchmarks.speedometer.speedometer import (
+    SpeedometerBenchmark, SpeedometerProbe, SpeedometerProbeContext,
+    SpeedometerStory)
+from crossbench.env import EnvironmentConfig, ValidationMode
 from crossbench.runner.runner import Runner
 from tests.crossbench.benchmarks import helper
 
@@ -40,6 +39,11 @@ class SpeedometerBaseTestCase(
 
   @property
   @abc.abstractmethod
+  def probe_context_cls(self) -> Type[SpeedometerProbeContext]:
+    pass
+
+  @property
+  @abc.abstractmethod
   def name(self) -> str:
     pass
 
@@ -50,19 +54,19 @@ class SpeedometerBaseTestCase(
 
   @dataclass
   class Namespace(argparse.Namespace):
-    stories = "all"
-    iterations = 10
+    stories = "default"
+    iterations: int = 10
     separate: bool = False
     custom_benchmark_url: Optional[str] = None
 
   def test_iterations_kwargs(self):
     args = self.Namespace()
     self.benchmark_cls.from_cli_args(args)
-    with self.assertRaises(TypeError):
-      args.iterations = "-10"
+    with self.assertRaises(argparse.ArgumentTypeError):
+      args.iterations = "-10"  # pytype: disable=annotation-type-mismatch
       self.benchmark_cls.from_cli_args(args)
-    with self.assertRaises(TypeError):
-      args.iterations = "1234"
+    with self.assertRaises(argparse.ArgumentTypeError):
+      args.iterations = "1234"  # pytype: disable=annotation-type-mismatch
       benchmark = self.benchmark_cls.from_cli_args(args)
     args.iterations = 1234
     benchmark = self.benchmark_cls.from_cli_args(args)
@@ -124,8 +128,7 @@ class SpeedometerBaseTestCase(
 
   def test_story_filtering_regexp_invalid(self):
     with self.assertRaises(ValueError):
-      _ = self.story_filter(  # pytype: disable=wrong-arg-types
-          ".*", separate=True).stories
+      _ = self.story_filter(".*", separate=True).stories
 
   def test_story_filtering_regexp(self):
     stories = self.story_cls.all(separate=True)
@@ -135,41 +138,14 @@ class SpeedometerBaseTestCase(
         [story.name for story in stories_b],
     )
 
-
-  EXAMPLE_STORY_DATA = types.MappingProxyType({
-      "tests": {
-          "Adding100Items": {
-              "tests": {
-                  "Sync": 74.6000000089407,
-                  "Async": 6.299999997019768
-              },
-              "total": 80.90000000596046
-          },
-          "CompletingAllItems": {
-              "tests": {
-                  "Sync": 22.600000008940697,
-                  "Async": 5.899999991059303
-              },
-              "total": 28.5
-          },
-          "DeletingItems": {
-              "tests": {
-                  "Sync": 11.800000011920929,
-                  "Async": 0.19999998807907104
-              },
-              "total": 12
-          }
-      },
-      "total": 121.40000000596046
-  })
-
   def _test_run(self,
                 story_names: Optional[Sequence[str]] = None,
                 separate: bool = False,
                 iterations: int = 2,
+                repetitions: int = 3,
+                warmup_repetitions: int = 0,
                 custom_url: Optional[str] = None,
                 throw: bool = True) -> Runner:
-    repetitions = 3
     if story_names is None:
       default_story_name = self.story_cls.SUBSTORIES[0]
       self.assertTrue(default_story_name)
@@ -178,30 +154,25 @@ class SpeedometerBaseTestCase(
         story_names, separate=separate, url=custom_url, iterations=iterations)
 
     # The order should match Runner.get_runs
-    for _ in range(repetitions):
+    for _ in range(warmup_repetitions + repetitions):
       for story in stories:
-        speedometer_probe_results = [{
-            "tests": {
-                substory_name: dict(self.EXAMPLE_STORY_DATA)
-                for substory_name in story.substories
-            },
-            "total": 1000,
-            "mean": 2000,
-            "geomean": 3000,
-            "score": 10
-        }] * iterations
-        js_side_effects = [
-            True,  # Page is ready
-            None,  # _setup_substories
-            None,  # _setup_benchmark_client
-            None,  # _run_stories
-            True,  # Wait until done
-            speedometer_probe_results,
-        ]
+        speedometer_probe_results = self._generate_test_probe_results(
+            iterations, story)
+
         for browser in self.browsers:
-          browser.js_side_effects += js_side_effects
+          # Page is ready
+          browser.expect_js(result=True)
+          # _setup_substories
+          browser.expect_js()
+          # _setup_benchmark_client
+          browser.expect_js()
+          # _run_stories
+          browser.expect_js()
+          # Wait until done
+          browser.expect_js(result=True)
+          browser.expect_js(result=json.dumps(speedometer_probe_results))
     for browser in self.browsers:
-      browser.js_side_effect = copy.deepcopy(browser.js_side_effects)
+      browser.expected_js = copy.deepcopy(browser.expected_js)
 
     benchmark = self.benchmark_cls(stories, custom_url=custom_url)  # pytype: disable=not-instantiable
     self.assertTrue(len(benchmark.describe()) > 0)
@@ -209,15 +180,20 @@ class SpeedometerBaseTestCase(
         self.out_dir,
         self.browsers,
         benchmark,
-        env_config=HostEnvironmentConfig(),
+        env_config=EnvironmentConfig(),
         env_validation_mode=ValidationMode.SKIP,
         platform=self.platform,
         repetitions=repetitions,
+        warmup_repetitions=warmup_repetitions,
         throw=throw)
     with mock.patch.object(self.benchmark_cls, "validate_url") as cm:
       runner.run()
     cm.assert_called_once()
     return runner
+
+  @abc.abstractmethod
+  def _generate_test_probe_results(self, iterations, story):
+    pass
 
   def _verify_results(
       self,
@@ -227,17 +203,17 @@ class SpeedometerBaseTestCase(
       urls = self.filter_splashscreen_urls(browser.url_list)
       if expected_num_urls is not None:
         self.assertEqual(len(urls), expected_num_urls)
-      self.assertIn(self.probe_cls.JS, browser.js_list)
-      self.assertListEqual(browser.js_side_effects, [])
+      self.assertTrue(browser.was_js_invoked(self.probe_context_cls.JS))
+      self.assertListEqual(browser.expected_js, [])
 
-    with self.assertLogs(level='INFO') as cm:
+    with self.assertLogs(level="INFO") as cm:
       for probe in runner.probes:
         for run in runner.runs:
           probe.log_run_result(run)
     output = "\n".join(cm.output)
     self.assertIn("Speedometer results", output)
 
-    with self.assertLogs(level='INFO') as cm:
+    with self.assertLogs(level="INFO") as cm:
       for probe in runner.probes:
         probe.log_browsers_result(runner.browser_group)
     output = "\n".join(cm.output)
@@ -252,12 +228,16 @@ class SpeedometerBaseTestCase(
     with csv_file.open(encoding="utf-8") as f:
       reader = csv.DictReader(f, delimiter="\t")
       rows = list(reader)
-    self.assertListEqual(list(rows[0].keys()), ["label", "dev", "stable"])
-    self.assertDictEqual(rows[1], {
-        "label": "version",
-        "dev": "102.22.33.44",
-        "stable": "100.22.33.44",
-    })
+    self.assertListEqual(list(rows[0].keys()), ["label", "", "dev", "stable"])
+    self.assertDictEqual(
+        rows[1],
+        {
+            "label": "version",
+            "dev": "102.22.33.44",
+            "stable": "100.22.33.44",
+            # Padding element after "label":
+            "": ""
+        })
     return rows
 
   def test_run_throw(self):
@@ -266,6 +246,14 @@ class SpeedometerBaseTestCase(
 
   def test_run_default(self):
     runner = self._test_run(iterations=10)
+    self._verify_results(runner)
+    for browser in self.browsers:
+      urls = self.filter_splashscreen_urls(browser.url_list)
+      self.assertIn(self.story_cls.URL, urls)
+      self.assertNotIn(self.story_cls.URL_LOCAL, urls)
+
+  def test_run_warmups(self):
+    runner = self._test_run(iterations=10, warmup_repetitions=1)
     self._verify_results(runner)
     for browser in self.browsers:
       urls = self.filter_splashscreen_urls(browser.url_list)
@@ -292,25 +280,97 @@ class SpeedometerBaseTestCase(
       self.assertNotIn(f"{self.story_cls.URL_LOCAL}?iterationCount=7", urls)
       self.assertNotIn(self.story_cls.URL_LOCAL, urls)
 
-  def _verify_results_stories(self, rows, story_names):
-    labels = [row['label'] for row in rows]
-    self.assertNotIn(f"{self.benchmark_cls.NAME}_{'_'.join(story_names)}",
-                     labels)
+  def _verify_results_stories(self, rows, story_names, label_suffix):
+    labels = [row["label"] for row in rows]
+    story_name_str = "_".join(story_names)
+    self.assertNotIn(f"{self.benchmark_cls.NAME}_{story_name_str}", labels)
     for story_name in story_names:
-      self.assertIn(story_name, labels)
+      self.assertIn(f"{story_name}{label_suffix}", labels)
 
-  def _run_combined(self, story_names: Sequence[str]):
+  def _run_combined(self, story_names: Sequence[str], label_suffix: str = ""):
     runner = self._test_run(story_names=story_names, separate=False)
     rows = self._verify_results(runner, expected_num_urls=3)
-    self._verify_results_stories(rows, story_names)
+    self._verify_results_stories(rows, story_names, label_suffix)
 
-  def _run_separate(self, story_names: Sequence[str]):
+  def _run_separate(self, story_names: Sequence[str], label_suffix: str = ""):
     runner = self._test_run(story_names=story_names, separate=True)
     rows = self._verify_results(runner, expected_num_urls=6)
-    self._verify_results_stories(rows, story_names)
+    self._verify_results_stories(rows, story_names, label_suffix)
 
   def test_run_combined(self):
     self._run_combined(["VanillaJS-TodoMVC", "Elm-TodoMVC"])
 
   def test_run_separate(self):
     self._run_separate(["VanillaJS-TodoMVC", "Elm-TodoMVC"])
+
+
+class Speedometer2BaseTestCase(SpeedometerBaseTestCase, metaclass=abc.ABCMeta):
+
+  EXAMPLE_STORY_DATA = {
+      "tests": {
+          "Adding100Items": {
+              "tests": {
+                  "Sync": 74.6000000089407,
+                  "Async": 6.299999997019768
+              },
+              "total": 80.90000000596046
+          },
+          "CompletingAllItems": {
+              "tests": {
+                  "Sync": 22.600000008940697,
+                  "Async": 5.899999991059303
+              },
+              "total": 28.5
+          },
+          "DeletingItems": {
+              "tests": {
+                  "Sync": 11.800000011920929,
+                  "Async": 0.19999998807907104
+              },
+              "total": 12
+          }
+      },
+      "total": 121.40000000596046
+  }
+
+  def _generate_test_probe_results(self, iterations, story):
+    return [{
+        "tests": {
+            substory_name: copy.deepcopy(self.EXAMPLE_STORY_DATA)
+            for substory_name in story.substories
+        },
+        "total": 1000,
+        "mean": 2000,
+        "geomean": 3000,
+        "score": 10
+    }
+            for _ in range(iterations)]
+
+  def test_s2_probe_results(self):
+    story_names = ("VanillaJS-TodoMVC", "React-TodoMVC")
+    self.browsers = [self.browsers[0]]
+    runner = self._test_run(
+        story_names=story_names, separate=False, repetitions=2)
+    run_1, run_2 = runner.runs
+    probe_file = f"{self.probe_cls.NAME}.json"
+    with (run_1.out_dir / probe_file).open() as f:
+      data_1 = json.load(f)
+    with (run_2.out_dir / probe_file).open() as f:
+      data_2 = json.load(f)
+    keys_1 = tuple(data_1.keys())
+    keys_2 = tuple(data_2.keys())
+    self.assertTupleEqual(keys_1, keys_2)
+    # Make sure the aggregate metrics are at the end
+    self.assertTupleEqual(keys_1[-2:], ("Geomean", "Score"))
+
+    with (runner.story_groups[0].path / probe_file).open() as f:
+      stories_data = json.load(f)
+    self.assertTupleEqual(tuple(stories_data.keys())[-2:], ("Geomean", "Score"))
+
+  def test_run_combined(self):
+    self._run_combined(["VanillaJS-TodoMVC", "Elm-TodoMVC"],
+                       label_suffix="/total")
+
+  def test_run_separate(self):
+    self._run_separate(["VanillaJS-TodoMVC", "Elm-TodoMVC"],
+                       label_suffix="/total")

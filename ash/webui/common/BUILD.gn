@@ -29,9 +29,11 @@ static_library("shortcut_input_key_strings") {
   ]
 
   deps = [
+    "//ash",
     "//chromeos/strings/",
     "//content/public/browser",
     "//ui/base",
+    "//ui/events/ash:ash",
   ]
 }
 

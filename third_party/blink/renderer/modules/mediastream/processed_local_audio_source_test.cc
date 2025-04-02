@@ -2,14 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "third_party/blink/renderer/modules/mediastream/processed_local_audio_source.h"
+
 #include <memory>
 #include <string>
 
 #include "base/functional/bind.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "media/base/audio_bus.h"
+#include "media/base/audio_glitch_info.h"
 #include "media/base/audio_parameters.h"
+#include "media/base/audio_timestamp_helper.h"
 #include "media/base/media_switches.h"
 #include "media/media_buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -19,13 +24,13 @@
 #include "third_party/blink/public/web/web_heap.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
 #include "third_party/blink/renderer/modules/mediastream/media_constraints.h"
-#include "third_party/blink/renderer/modules/mediastream/processed_local_audio_source.h"
 #include "third_party/blink/renderer/modules/mediastream/testing_platform_support_with_mock_audio_capture_source.h"
 #include "third_party/blink/renderer/modules/webrtc/webrtc_audio_device_impl.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_processor_options.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_track.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_component_impl.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_track_platform.h"
 
 using ::testing::_;
 using ::testing::AtLeast;
@@ -41,11 +46,7 @@ constexpr int kSampleRate = 48000;
 constexpr media::ChannelLayout kChannelLayout = media::CHANNEL_LAYOUT_STEREO;
 constexpr int kDeviceBufferSize = 512;
 
-enum class ProcessingLocation {
-  kProcessedLocalAudioSource,
-  kAudioService,
-  kAudioServiceAvoidResampling
-};
+enum class ProcessingLocation { kProcessedLocalAudioSource, kAudioService };
 
 std::tuple<int, int> ComputeExpectedSourceAndOutputBufferSizes(
     ProcessingLocation processing_location) {
@@ -67,10 +68,6 @@ std::tuple<int, int> ComputeExpectedSourceAndOutputBufferSizes(
       // processor.
       return {kExpectedUnprocessedBufferSize, kExpectedOutputBufferSize};
     case ProcessingLocation::kAudioService:
-      // With processing in the audio service, the stream is locked to a
-      // device- and processing-friendly format.
-      return {kExpectedUnprocessedBufferSize, kExpectedUnprocessedBufferSize};
-    case ProcessingLocation::kAudioServiceAvoidResampling:
       // To minimize resampling after processing in the audio service,
       // ProcessedLocalAudioSource requests audio in the post-processing format.
       return {kExpectedOutputBufferSize, kExpectedOutputBufferSize};
@@ -197,11 +194,8 @@ TEST_P(ProcessedLocalAudioSourceTest, VerifyAudioFlowWithoutAudioProcessing) {
   base::test::ScopedFeatureList scoped_feature_list;
 #if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
   if (GetParam() == ProcessingLocation::kAudioService) {
-    scoped_feature_list.InitAndEnableFeatureWithParameters(
-        media::kChromeWideEchoCancellation, {{"minimize_resampling", "false"}});
-  } else if (GetParam() == ProcessingLocation::kAudioServiceAvoidResampling) {
-    scoped_feature_list.InitAndEnableFeatureWithParameters(
-        media::kChromeWideEchoCancellation, {{"minimize_resampling", "true"}});
+    scoped_feature_list.InitAndEnableFeature(
+        media::kChromeWideEchoCancellation);
   } else {
     scoped_feature_list.InitAndDisableFeature(
         media::kChromeWideEchoCancellation);
@@ -239,16 +233,27 @@ TEST_P(ProcessedLocalAudioSourceTest, VerifyAudioFlowWithoutAudioProcessing) {
   // Feed audio data into the ProcessedLocalAudioSource and expect it to reach
   // the sink.
   int delay_ms = 65;
-  bool key_pressed = true;
   double volume = 0.9;
   const base::TimeTicks capture_time =
       base::TimeTicks::Now() + base::Milliseconds(delay_ms);
+  const media::AudioGlitchInfo glitch_info{.duration = base::Milliseconds(123),
+                                           .count = 1};
   std::unique_ptr<media::AudioBus> audio_bus =
       media::AudioBus::Create(2, expected_source_buffer_size_);
   audio_bus->Zero();
   EXPECT_CALL(*sink, OnDataCallback()).Times(AtLeast(1));
-  capture_source_callback()->Capture(audio_bus.get(), capture_time, volume,
-                                     key_pressed);
+  capture_source_callback()->Capture(audio_bus.get(), capture_time, glitch_info,
+                                     volume);
+
+  // Expect glitches to have been propagated.
+  MediaStreamTrackPlatform::AudioFrameStats audio_stats;
+  audio_track()->GetPlatformTrack()->TransferAudioFrameStatsTo(audio_stats);
+  EXPECT_EQ(audio_stats.TotalFrames() - audio_stats.DeliveredFrames(),
+            static_cast<unsigned int>(media::AudioTimestampHelper::TimeToFrames(
+                glitch_info.duration, kSampleRate)));
+  EXPECT_EQ(
+      audio_stats.TotalFramesDuration() - audio_stats.DeliveredFramesDuration(),
+      glitch_info.duration);
 
   // Expect the ProcessedLocalAudioSource to auto-stop the MockCapturerSource
   // when the track is stopped.
@@ -261,8 +266,7 @@ INSTANTIATE_TEST_SUITE_P(
     All,
     ProcessedLocalAudioSourceTest,
     testing::Values(ProcessingLocation::kProcessedLocalAudioSource,
-                    ProcessingLocation::kAudioService,
-                    ProcessingLocation::kAudioServiceAvoidResampling));
+                    ProcessingLocation::kAudioService));
 #else
 INSTANTIATE_TEST_SUITE_P(
     All,
@@ -296,14 +300,14 @@ class ProcessedLocalAudioSourceIgnoreUiGainsTest
   void SetUpAudioProcessingProperties(AudioProcessingProperties* properties) {
     switch (std::get<1>(GetParam())) {
       case AGC_DISABLED:
-        properties->goog_auto_gain_control = false;
+        properties->auto_gain_control = false;
         break;
       case BROWSER_AGC:
-        properties->goog_auto_gain_control = true;
+        properties->auto_gain_control = true;
         properties->system_gain_control_activated = false;
         break;
       case SYSTEM_AGC:
-        properties->goog_auto_gain_control = true;
+        properties->auto_gain_control = true;
         properties->system_gain_control_activated = true;
         break;
     }

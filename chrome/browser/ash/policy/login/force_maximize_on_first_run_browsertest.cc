@@ -26,7 +26,7 @@
 
 namespace policy {
 
-// TODO(crbug.com/1110548): Enable and modify for lacros.
+// TODO(crbug.com/40142202): Enable and modify for lacros.
 class ForceMaximizeOnFirstRunTest : public LoginPolicyTestBase {
  public:
   ForceMaximizeOnFirstRunTest(const ForceMaximizeOnFirstRunTest&) = delete;
@@ -34,7 +34,7 @@ class ForceMaximizeOnFirstRunTest : public LoginPolicyTestBase {
       delete;
 
  protected:
-  ForceMaximizeOnFirstRunTest() {}
+  ForceMaximizeOnFirstRunTest() = default;
 
   void GetPolicySettings(
       enterprise_management::CloudPolicySettings* policy) const override {

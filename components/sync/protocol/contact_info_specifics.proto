@@ -15,6 +15,15 @@ option optimize_for = LITE_RUNTIME;
 package sync_pb;
 
 message ContactInfoSpecifics {
+  // Used to distinguish whether the address is the dedicated Home or Work
+  // address of the user's account.
+  // This translates into `AutofillProfile::RecordType::kAccount*`.
+  enum AddressType {
+    REGULAR = 0;
+    HOME = 1;
+    WORK = 2;
+  }
+
   // Represents the validation status of a stored value.
   enum VerificationStatus {
     // No verification status assigned.
@@ -71,11 +80,17 @@ message ContactInfoSpecifics {
   optional string guid = 1;
   reserved 2;
   reserved "source";
+  optional AddressType address_type = 56 [default = REGULAR];
+
   // The number of time this profile has been used.
   optional int64 use_count = 3;
 
-  // The last time this profile was used.
+  // The last times this profile was used. use_date.. is the last use date of
+  // the profile, use_date2.. the second last use date, etc. If a profile hasn't
+  // been used at least that many times, the field is unset.
   optional int64 use_date_unix_epoch_seconds = 4;
+  optional int64 use_date2_unix_epoch_seconds = 54;
+  optional int64 use_date3_unix_epoch_seconds = 55;
 
   // The last time the profile was modified.
   optional int64 date_modified_unix_epoch_seconds = 37;
@@ -83,8 +98,8 @@ message ContactInfoSpecifics {
   // The BCP 47 language code used to format the address for display.
   optional string language_code = 38;
 
-  // A user chosen profile label that is used to identify the profile.
-  // The value of the label can be freely chosen by the user.
+  // A label intended to be chosen by the user. This was however never
+  // implemented and is currently unused.
   optional string profile_label = 5;
 
   // Tracks the application that initially created the profile. The integer
@@ -114,6 +129,11 @@ message ContactInfoSpecifics {
 
   reserved 14;
   reserved "name_full_with_honorific";
+
+  // Contact info alternative name fields (e.g. phonetic names in Japan).
+  optional StringToken alternative_full_name = 57;
+  optional StringToken alternative_given_name = 58;
+  optional StringToken alternative_family_name = 59;
 
   // Contact info additional fields.
   optional StringToken email_address = 15;
@@ -197,6 +217,10 @@ message ContactInfoSpecifics {
   // address_dependent_locality. Note that some address forms require the
   // combination of both in a single field as opposed to each one separately.
   optional StringToken address_street_location_and_locality = 52;
+  // Combination of types address_thoroughfare_number and address_apt. Note that
+  // some address forms require the combination of both in a single field as
+  // opposed to each one separately.
+  optional StringToken address_thoroughfare_number_and_apt = 53;
 
   // Phone.
   optional StringToken phone_home_whole_number = 33;

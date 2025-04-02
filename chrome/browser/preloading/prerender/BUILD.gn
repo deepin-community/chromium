@@ -16,12 +16,11 @@ source_set("browser_tests") {
 
   deps = [
     "//base/test:test_support",
+    "//chrome/browser/preloading:prefs",
+    "//chrome/browser/search_engines",
     "//chrome/test:test_support",
+    "//components/page_load_metrics/browser:browser",
   ]
-
-  if (is_android) {
-    deps += [ "//chrome/test:toolbar_manager_test_helper_android" ]
-  }
 
   data = [ "//chrome/test/data/" ]
 }

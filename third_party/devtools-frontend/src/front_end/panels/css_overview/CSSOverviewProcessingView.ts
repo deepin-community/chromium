@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import * as i18n from '../../core/i18n/i18n.js';
+import * as Buttons from '../../ui/components/buttons/buttons.js';
 import * as UI from '../../ui/legacy/legacy.js';
 
 import {Events, type OverviewController} from './CSSOverviewController.js';
@@ -22,6 +23,7 @@ export class CSSOverviewProcessingView extends UI.Widget.Widget {
   fragment?: UI.Fragment.Fragment;
   constructor(controller: OverviewController) {
     super();
+    this.registerRequiredCSS(cssOverviewProcessingViewStyles);
 
     this.#controller = controller;
     this.#render();
@@ -29,8 +31,8 @@ export class CSSOverviewProcessingView extends UI.Widget.Widget {
 
   #render(): void {
     const cancelButton = UI.UIUtils.createTextButton(
-        i18nString(UIStrings.cancel), () => this.#controller.dispatchEventToListeners(Events.RequestOverviewCancel),
-        {jslogContext: 'css-overview.cancel-processing', primary: true});
+        i18nString(UIStrings.cancel), () => this.#controller.dispatchEventToListeners(Events.REQUEST_OVERVIEW_CANCEL),
+        {jslogContext: 'css-overview.cancel-processing', variant: Buttons.Button.Variant.OUTLINED});
     this.setDefaultFocusedElement(cancelButton);
 
     this.fragment = UI.Fragment.Fragment.build`
@@ -42,10 +44,5 @@ export class CSSOverviewProcessingView extends UI.Widget.Widget {
 
     this.contentElement.appendChild(this.fragment.element());
     this.contentElement.style.overflow = 'auto';
-  }
-
-  override wasShown(): void {
-    super.wasShown();
-    this.registerCSSFiles([cssOverviewProcessingViewStyles]);
   }
 }

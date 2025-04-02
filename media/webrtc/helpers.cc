@@ -13,8 +13,10 @@
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
 #include "media/webrtc/webrtc_features.h"
+#include "third_party/webrtc/api/audio/audio_processing.h"
+#include "third_party/webrtc/api/audio/builtin_audio_processing_builder.h"
 #include "third_party/webrtc/modules/audio_processing/aec_dump/aec_dump_factory.h"
-#include "third_party/webrtc/modules/audio_processing/include/audio_processing.h"
+#include "third_party/webrtc_overrides/environment.h"
 
 namespace media {
 namespace {
@@ -50,25 +52,15 @@ void ConfigAutomaticGainControl(const AudioProcessingSettings& settings,
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
   // Use AGC2 digital and input volume controller.
-  // TODO(crbug.com/1375239): Remove `kWebRtcAllowInputVolumeAdjustment` safely.
-  if (kInputVolumeAdjustmentOverrideAllowed &&
-      !base::FeatureList::IsEnabled(
-          ::features::kWebRtcAllowInputVolumeAdjustment)) {
-    // Disable AGC2 input volume controller to disable input volume adjustment.
-    apm_config.gain_controller2.input_volume_controller.enabled = false;
-  } else {
-    // Enable AGC2 input volume controller.
-    apm_config.gain_controller2.input_volume_controller.enabled = true;
-  }
+  // TODO(crbug.com/40872787): Remove `kWebRtcAllowInputVolumeAdjustment` safely
+  // and set `input_volume_controller.enabled` true.
+  apm_config.gain_controller2.input_volume_controller.enabled =
+      !kInputVolumeAdjustmentOverrideAllowed ||
+      base::FeatureList::IsEnabled(
+          ::features::kWebRtcAllowInputVolumeAdjustment);
   // Enable AGC2 digital.
   apm_config.gain_controller2.enabled = true;
-  apm_config.gain_controller2.fixed_digital.gain_db = 0.0f;
   apm_config.gain_controller2.adaptive_digital.enabled = true;
-  apm_config.gain_controller2.adaptive_digital.max_gain_db = 50;
-  apm_config.gain_controller2.adaptive_digital.initial_gain_db = 15;
-  apm_config.gain_controller2.adaptive_digital.max_gain_change_db_per_second =
-      6;
-  apm_config.gain_controller2.adaptive_digital.headroom_db = 5;
   // Entirely disable AGC1.
   apm_config.gain_controller1.enabled = false;
   apm_config.gain_controller1.analog_gain_controller.enabled = false;
@@ -141,31 +133,18 @@ rtc::scoped_refptr<webrtc::AudioProcessing> CreateWebRtcAudioProcessingModule(
   if (!settings.NeedWebrtcAudioProcessing())
     return nullptr;
 
-  webrtc::AudioProcessingBuilder ap_builder;
-
   webrtc::AudioProcessing::Config apm_config;
   apm_config.pipeline.multi_channel_render = true;
   apm_config.pipeline.multi_channel_capture =
       settings.multi_channel_capture_processing;
   apm_config.pipeline.capture_downmix_method =
       kWebRtcApmDownmixMethodParam.Get();
-  apm_config.high_pass_filter.enabled = settings.high_pass_filter;
   apm_config.noise_suppression.enabled = settings.noise_suppression;
   apm_config.noise_suppression.level =
       webrtc::AudioProcessing::Config::NoiseSuppression::Level::kHigh;
   apm_config.echo_canceller.enabled = settings.echo_cancellation;
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-  apm_config.echo_canceller.mobile_mode = true;
-#else
-  apm_config.echo_canceller.mobile_mode = false;
-#endif
-#if !(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-      BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) ||               \
-      BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS))
-  apm_config.transient_suppression.enabled =
-      settings.transient_noise_suppression;
-#endif
   ConfigAutomaticGainControl(settings, apm_config);
-  return ap_builder.SetConfig(apm_config).Create();
+  return webrtc::BuiltinAudioProcessingBuilder(apm_config)
+      .Build(WebRtcEnvironment());
 }
 }  // namespace media

@@ -53,12 +53,12 @@ class LocalFileSyncService final : public RemoteChangeProcessor,
 
   class Observer {
    public:
-    Observer() {}
+    Observer() = default;
 
     Observer(const Observer&) = delete;
     Observer& operator=(const Observer&) = delete;
 
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
 
     // This is called when there're one or more local changes available.
     // |pending_changes_hint| indicates the pending queue length to help sync
@@ -156,7 +156,8 @@ class LocalFileSyncService final : public RemoteChangeProcessor,
   void SetOriginEnabled(const GURL& origin, bool enabled);
 
  private:
-  typedef std::map<GURL, storage::FileSystemContext*> OriginToContext;
+  typedef std::map<GURL, raw_ptr<storage::FileSystemContext, CtnExperimental>>
+      OriginToContext;
   friend class OriginChangeMapTest;
 
   class OriginChangeMap {
@@ -237,7 +238,7 @@ class LocalFileSyncService final : public RemoteChangeProcessor,
   raw_ptr<LocalChangeProcessor> local_change_processor_;
   GetLocalChangeProcessorCallback get_local_change_processor_;
 
-  base::ObserverList<Observer>::Unchecked change_observers_;
+  base::ObserverList<Observer>::UncheckedAndDanglingUntriaged change_observers_;
   base::WeakPtrFactory<LocalFileSyncService> weak_ptr_factory_{this};
 };
 

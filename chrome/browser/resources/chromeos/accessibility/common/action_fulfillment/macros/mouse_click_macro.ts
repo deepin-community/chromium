@@ -4,14 +4,15 @@
 
 import {EventGenerator} from '../../event_generator.js';
 
-import {Macro, RunMacroResult} from './macro.js';
+import type {CheckContextResult, RunMacroResult} from './macro.js';
+import {Macro, MacroError} from './macro.js';
 import {MacroName} from './macro_names.js';
 
 import ScreenPoint = chrome.accessibilityPrivate.ScreenPoint;
 import SyntheticMouseEventButton = chrome.accessibilityPrivate.SyntheticMouseEventButton;
 
 /**
- * Class that implements a macro to send a synthetic mouse click.
+ * Class that implements a macro to send a single synthetic mouse click.
  */
 export class MouseClickMacro extends Macro {
   private leftClick_: boolean;
@@ -26,14 +27,88 @@ export class MouseClickMacro extends Macro {
     this.location_ = location;
   }
 
+  /** Invalid context if location isn't set. */
+  override checkContext(): CheckContextResult {
+    if (!this.location_) {
+      return this.createFailureCheckContextResult_(MacroError.BAD_CONTEXT);
+    }
+
+    return this.createSuccessCheckContextResult_();
+  }
+
+  updateLocation(location?: ScreenPoint): void {
+    this.location_ = location;
+  }
+
   override run(): RunMacroResult {
     if (!this.location_) {
       return this.createRunMacroResult_(/*isSuccess=*/ false);
     }
     const mouseButton = this.leftClick_ ? SyntheticMouseEventButton.LEFT :
                                           SyntheticMouseEventButton.RIGHT;
-    EventGenerator.sendMouseClick(
-        this.location_.x, this.location_.y, {mouseButton});
+    EventGenerator.sendMouseClick(this.location_.x, this.location_.y, {
+      mouseButton,
+    });
+    return this.createRunMacroResult_(/*isSuccess=*/ true);
+  }
+}
+
+/** Class that implements a macro to send a double left click. */
+export class MouseClickLeftDoubleMacro extends Macro {
+  private location_: ScreenPoint|undefined;
+
+  constructor(location: ScreenPoint|undefined) {
+    super(MacroName.MOUSE_CLICK_LEFT_DOUBLE);
+    this.location_ = location;
+  }
+
+  override checkContext(): CheckContextResult {
+    if (!this.location_) {
+      return this.createFailureCheckContextResult_(MacroError.BAD_CONTEXT);
+    }
+
+    return this.createSuccessCheckContextResult_();
+  }
+
+  override run(): RunMacroResult {
+    if (!this.location_) {
+      return this.createRunMacroResult_(/*isSuccess=*/ false);
+    }
+
+    EventGenerator.sendMouseClick(this.location_.x, this.location_.y, {
+      clickArgs: {isDoubleClick: true},
+    });
+
+    return this.createRunMacroResult_(/*isSuccess=*/ true);
+  }
+}
+
+/** Class that implements a macro to send a triple left click. */
+export class MouseClickLeftTripleMacro extends Macro {
+  private location_: ScreenPoint|undefined;
+
+  constructor(location: ScreenPoint|undefined) {
+    super(MacroName.MOUSE_CLICK_LEFT_TRIPLE);
+    this.location_ = location;
+  }
+
+  override checkContext(): CheckContextResult {
+    if (!this.location_) {
+      return this.createFailureCheckContextResult_(MacroError.BAD_CONTEXT);
+    }
+
+    return this.createSuccessCheckContextResult_();
+  }
+
+  override run(): RunMacroResult {
+    if (!this.location_) {
+      return this.createRunMacroResult_(/*isSuccess=*/ false);
+    }
+
+    EventGenerator.sendMouseClick(this.location_.x, this.location_.y, {
+      clickArgs: {isTripleClick: true},
+    });
+
     return this.createRunMacroResult_(/*isSuccess=*/ true);
   }
 }

@@ -6,19 +6,20 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+#include <array>
 #include <functional>
 #include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "base/containers/to_vector.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "base/test/to_vector.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/test/test_bookmark_client.h"
 #include "components/history/core/browser/history_backend.h"
@@ -36,6 +37,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "third_party/metrics_proto/omnibox_focus_type.pb.h"
+#include "third_party/omnibox_proto/groups.pb.h"
 
 using base::ASCIIToUTF16;
 
@@ -52,8 +54,8 @@ class WaitForURLsDeletedObserver : public history::HistoryServiceObserver {
 
  private:
   // history::HistoryServiceObserver:
-  void OnURLsDeleted(history::HistoryService* service,
-                     const history::DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(history::HistoryService* service,
+                          const history::DeletionInfo& deletion_info) override;
 
   // Weak. Owned by our owner.
   raw_ptr<base::RunLoop> runner_;
@@ -64,7 +66,7 @@ WaitForURLsDeletedObserver::WaitForURLsDeletedObserver(base::RunLoop* runner)
 
 WaitForURLsDeletedObserver::~WaitForURLsDeletedObserver() = default;
 
-void WaitForURLsDeletedObserver::OnURLsDeleted(
+void WaitForURLsDeletedObserver::OnHistoryDeletions(
     history::HistoryService* service,
     const history::DeletionInfo& deletion_info) {
   runner_->Quit();
@@ -211,12 +213,9 @@ void HistoryQuickProviderTest::SetUp() {
   ASSERT_NO_FATAL_FAILURE(FillData());
 
   client_->set_bookmark_model(bookmarks::TestBookmarkClient::CreateModel());
-  client_->set_template_url_service(
-      std::make_unique<TemplateURLService>(nullptr, 0));
-
   client_->set_in_memory_url_index(std::make_unique<InMemoryURLIndex>(
-      client_->GetLocalOrSyncableBookmarkModel(), client_->GetHistoryService(),
-      nullptr, history_dir_.GetPath(), SchemeSet()));
+      client_->GetBookmarkModel(), client_->GetHistoryService(), nullptr,
+      history_dir_.GetPath(), SchemeSet()));
   client_->GetInMemoryURLIndex()->Init();
 
   // Block until History has processed InMemoryURLIndex initialization.
@@ -501,7 +500,7 @@ TEST_F(HistoryQuickProviderTest,
                     false, u"https://suffix.com/prefixsuffix1",
                     std::u16string());
   std::vector<int> unbroken_scores =
-      base::test::ToVector(ac_matches(), &AutocompleteMatch::relevance);
+      base::ToVector(ac_matches(), &AutocompleteMatch::relevance);
   EXPECT_EQ(unbroken_scores.size(), 3U);
 
   // Get scores for 'prefix suffix'
@@ -509,7 +508,7 @@ TEST_F(HistoryQuickProviderTest,
                     false, u"https://suffix.com/prefixsuffix1",
                     std::u16string());
   std::vector<int> broken_scores =
-      base::test::ToVector(ac_matches(), &AutocompleteMatch::relevance);
+      base::ToVector(ac_matches(), &AutocompleteMatch::relevance);
   EXPECT_EQ(broken_scores.size(), 3U);
   // Ensure the latter scores are higher than the former.
   for (size_t i = 0; i < 3; ++i)
@@ -590,8 +589,9 @@ TEST_F(HistoryQuickProviderTest, ContentsClass) {
   // Verify that contents_class divides the string in the right places.
   // [22, 24) is the "第二".  All the other pairs are the "e3".
   ACMatchClassifications contents_class(ac_matches()[0].contents_class);
-  size_t expected_offsets[] = {0,  22, 24, 31, 33, 40, 42, 49, 51, 58,
-                               60, 67, 69, 76, 78, 85, 86, 94, 95};
+  auto expected_offsets = std::to_array<size_t>({
+      0, 22, 24, 31, 33, 40, 42, 49, 51, 58, 60, 67, 69, 76, 78, 85, 86, 94, 95,
+  });
   // ScoredHistoryMatch may not highlight all the occurrences of these terms
   // because it only highlights terms at word breaks, and it only stores word
   // breaks up to some specified number of characters (50 at the time of this
@@ -1044,6 +1044,26 @@ TEST_F(HistoryQuickProviderTest, MaxMatches) {
   EXPECT_EQ(matches.size(), 8u);
 }
 
+TEST_F(HistoryQuickProviderTest, GroupForAndroidHub) {
+  // Keyword mode is off. We should only get provider_max_matches_ matches.
+  AutocompleteInput input(u"somedomain.com",
+                          metrics::OmniboxEventProto::ANDROID_HUB,
+                          TestSchemeClassifier());
+  provider().Start(input, false);
+  EXPECT_EQ(omnibox::GROUP_MOBILE_HISTORY,
+            provider().matches()[0].suggestion_group_id);
+}
+
+TEST_F(HistoryQuickProviderTest, BiggerMaxMatchesForAndroidHub) {
+  AutocompleteInput input(u"daysagoest",
+                          metrics::OmniboxEventProto::ANDROID_HUB,
+                          TestSchemeClassifier());
+  provider().Start(input, false);
+  EXPECT_EQ(3u, provider().provider_max_matches());
+  EXPECT_FALSE(provider().matches().empty());
+  EXPECT_EQ(provider().matches().size(), 5u);
+}
+
 class HQPDomainSuggestionsTest : public HistoryQuickProviderTest {
  protected:
   std::vector<TestURLInfo> GetTestData() override {
@@ -1106,9 +1126,8 @@ TEST_F(HQPDomainSuggestionsTest, DomainSuggestions) {
     provider().Start(input, false);
     auto matches = provider().matches();
     std::vector<std::u16string> match_titles;
-    base::ranges::transform(
-        matches, std::back_inserter(match_titles),
-        [](const auto& match) { return match.description; });
+    std::ranges::transform(matches, std::back_inserter(match_titles),
+                           [](const auto& match) { return match.description; });
     EXPECT_THAT(match_titles, testing::ElementsAreArray(expected_matches));
 
     EXPECT_EQ(client()

@@ -14,6 +14,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/platform_browser_test.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/browser/cloud/user_policy_signin_service_base.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
@@ -148,8 +149,8 @@ void RespondToRegisterWithSuccess(em::DeviceRegisterRequest::Type expected_type,
 // to intercept requests and produce canned responses.
 class CloudPolicyManagerTest : public PlatformBrowserTest {
  protected:
-  CloudPolicyManagerTest() {}
-  ~CloudPolicyManagerTest() override {}
+  CloudPolicyManagerTest() = default;
+  ~CloudPolicyManagerTest() override = default;
 
   void SetUpInProcessBrowserTestFixture() override {
     base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
@@ -175,7 +176,7 @@ class CloudPolicyManagerTest : public PlatformBrowserTest {
         g_browser_process->profile_manager()->user_data_dir();
     profile_ = Profile::CreateProfile(
         dest_path.Append(FILE_PATH_LITERAL("New Profile 1")), nullptr,
-        Profile::CreateMode::CREATE_MODE_SYNCHRONOUS);
+        Profile::CreateMode::kSynchronous);
 #endif
 
     BrowserPolicyConnector* connector =

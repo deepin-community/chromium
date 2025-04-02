@@ -32,6 +32,7 @@
 #import <Metal/Metal.h>
 #include <vector>
 
+#include "absl/container/inlined_vector.h"
 #include "dawn/common/CoreFoundationRef.h"
 #include "dawn/common/NSRef.h"
 #include "dawn/native/Error.h"
@@ -47,19 +48,22 @@ class SharedTextureMemory final : public SharedTextureMemoryBase {
   public:
     static ResultOrError<Ref<SharedTextureMemory>> Create(
         Device* device,
-        const char* label,
+        StringView label,
         const SharedTextureMemoryIOSurfaceDescriptor* descriptor);
 
     IOSurfaceRef GetIOSurface() const;
-    const StackVector<NSPRef<id<MTLTexture>>, kMaxPlanesPerFormat>& GetMtlPlaneTextures() const;
+    const absl::InlinedVector<NSPRef<id<MTLTexture>>, kMaxPlanesPerFormat>& GetMtlPlaneTextures()
+        const;
     MTLTextureUsage GetMtlTextureUsage() const;
     MTLPixelFormat GetMtlPixelFormat() const;
 
   private:
     SharedTextureMemory(Device* device,
-                        const char* label,
+                        StringView label,
                         const SharedTextureMemoryProperties& properties,
-                        IOSurfaceRef ioSurface);
+                        IOSurfaceRef ioSurface,
+                        MTLPixelFormat mtlFormat,
+                        MTLTextureUsage mtlUsage);
     // Performs initialization of the base class followed by Metal-specific
     // initialization.
     MaybeError Initialize();
@@ -71,13 +75,14 @@ class SharedTextureMemory final : public SharedTextureMemoryBase {
     MaybeError BeginAccessImpl(TextureBase* texture,
                                const UnpackedPtr<BeginAccessDescriptor>& descriptor) override;
     ResultOrError<FenceAndSignalValue> EndAccessImpl(TextureBase* texture,
+                                                     ExecutionSerial lastUsageSerial,
                                                      UnpackedPtr<EndAccessState>& state) override;
     MaybeError CreateMtlTextures();
 
-    StackVector<NSPRef<id<MTLTexture>>, kMaxPlanesPerFormat> mMtlPlaneTextures;
-    MTLPixelFormat mMtlFormat = MTLPixelFormatInvalid;
-    MTLTextureUsage mMtlUsage;
     CFRef<IOSurfaceRef> mIOSurface;
+    const MTLPixelFormat mMtlFormat;
+    const MTLTextureUsage mMtlUsage;
+    absl::InlinedVector<NSPRef<id<MTLTexture>>, kMaxPlanesPerFormat> mMtlPlaneTextures;
 };
 
 }  // namespace dawn::native::metal

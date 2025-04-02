@@ -4,11 +4,13 @@
 
 #include "extensions/renderer/extension_frame_helper.h"
 
+#include <algorithm>
 #include <set>
 
+#include "base/auto_reset.h"
+#include "base/containers/map_util.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/timer/elapsed_timer.h"
 #include "content/public/renderer/render_frame.h"
@@ -216,7 +218,7 @@ content::RenderFrame* ExtensionFrameHelper::GetBackgroundPageFrame(
                            extension_misc::kUnknownTabId, extension_id)) {
       blink::WebLocalFrame* web_frame = helper->render_frame()->GetWebFrame();
       // Check if this is the outermost main frame (do not return embedded
-      // main frames like portals or fenced frames).
+      // main frames like fenced frames).
       if (web_frame->IsOutermostMainFrame())
         return helper->render_frame();
     }
@@ -286,6 +288,7 @@ void ExtensionFrameHelper::DidCreateDocumentElement() {
 
 void ExtensionFrameHelper::DidCreateNewDocument() {
   did_create_current_document_element_ = false;
+  active_user_script_worlds_.clear();
 }
 
 void ExtensionFrameHelper::RunScriptsAtDocumentStart() {
@@ -317,6 +320,18 @@ void ExtensionFrameHelper::ScheduleAtDocumentEnd(base::OnceClosure callback) {
 
 void ExtensionFrameHelper::ScheduleAtDocumentIdle(base::OnceClosure callback) {
   document_idle_callbacks_.push_back(std::move(callback));
+}
+
+const std::set<std::optional<std::string>>*
+ExtensionFrameHelper::GetActiveUserScriptWorlds(
+      const ExtensionId& extension_id) {
+  return base::FindOrNull(active_user_script_worlds_, extension_id);
+}
+
+void ExtensionFrameHelper::AddActiveUserScriptWorld(
+    const ExtensionId& extension_id,
+    const std::optional<std::string>& world_id) {
+  active_user_script_worlds_[extension_id].insert(world_id);
 }
 
 mojom::LocalFrameHost* ExtensionFrameHelper::GetLocalFrameHost() {
@@ -392,19 +407,6 @@ void ExtensionFrameHelper::ReadyToCommitNavigation(
   // TODO(devlin): Add constants for main world id, no extension group.
 }
 
-void ExtensionFrameHelper::DidCommitProvisionalLoad(
-    ui::PageTransition transition) {
-  if (base::FeatureList::IsEnabled(
-          extensions_features::kAvoidEarlyExtensionScriptContextCreation)) {
-    return;
-  }
-  // Grant cross browsing instance frame lookup if we are an extension. This
-  // should match the conditions in FindFrame.
-  content::RenderFrame* frame = render_frame();
-  if (GetExtensionFromFrame(frame))
-    frame->SetAllowsCrossBrowsingInstanceFrameLookup();
-}
-
 void ExtensionFrameHelper::DidCreateScriptContext(
     v8::Local<v8::Context> context,
     int32_t world_id) {
@@ -474,10 +476,10 @@ void ExtensionFrameHelper::ExecuteCode(mojom::ExecuteCodeParamsPtr param,
 
     if (param->injection->get_css()->operation ==
             mojom::CSSInjection::Operation::kRemove &&
-        !base::ranges::all_of(param->injection->get_css()->sources,
-                              [](const mojom::CSSSourcePtr& source) {
-                                return source->key.has_value();
-                              })) {
+        !std::ranges::all_of(param->injection->get_css()->sources,
+                             [](const mojom::CSSSourcePtr& source) {
+                               return source->key.has_value();
+                             })) {
       local_frame_receiver_.ReportBadMessage(
           "An injection key must be specified for CSS removal.");
       return;
@@ -528,7 +530,7 @@ void ExtensionFrameHelper::ExecuteDeclarativeScript(
     const ExtensionId& extension_id,
     const std::string& script_id,
     const GURL& url) {
-  // TODO(https://crbug.com/1186220): URL-checking isn't the best approach to
+  // TODO(crbug.com/40753624): URL-checking isn't the best approach to
   // avoid user data leak. Consider what we can do to mitigate this case.
   // Begin script injection workflow only if the current URL is identical to the
   // one that matched declarative conditions in the browser.
@@ -568,23 +570,6 @@ void ExtensionFrameHelper::OnDestruct() {
   delete this;
 }
 
-void ExtensionFrameHelper::DraggableRegionsChanged() {
-  if (!render_frame()->GetWebFrame()->IsOutermostMainFrame())
-    return;
-
-  blink::WebVector<blink::WebDraggableRegion> webregions =
-      render_frame()->GetWebFrame()->GetDocument().DraggableRegions();
-  std::vector<mojom::DraggableRegionPtr> regions;
-  regions.reserve(webregions.size());
-  for (blink::WebDraggableRegion& webregion : webregions) {
-    render_frame()->ConvertViewportToWindow(&webregion.bounds);
-
-    regions.push_back(
-        mojom::DraggableRegion::New(webregion.draggable, webregion.bounds));
-  }
-  GetLocalFrameHost()->UpdateDraggableRegions(std::move(regions));
-}
-
 void ExtensionFrameHelper::DidClearWindowObject() {
   // DidClearWindowObject() is called right at the end of
   // DocumentLoader::CreateParserPostCommit(). This is late enough in the commit
@@ -594,13 +579,12 @@ void ExtensionFrameHelper::DidClearWindowObject() {
   // Calling this multiple times in a page load is safe because
   // SetAllowsCrossBrowsingInstanceFrameLookup() just sets a bool to true on the
   // SecurityOrigin.
-  if (base::FeatureList::IsEnabled(
-          extensions_features::kAvoidEarlyExtensionScriptContextCreation)) {
-    // Grant cross browsing instance frame lookup if we are an extension. This
-    // should match the conditions in FindFrame.
-    content::RenderFrame* frame = render_frame();
-    if (GetExtensionFromFrame(frame))
-      frame->SetAllowsCrossBrowsingInstanceFrameLookup();
+
+  // Grant cross browsing instance frame lookup if we are an extension. This
+  // should match the conditions in FindFrame.
+  content::RenderFrame* frame = render_frame();
+  if (GetExtensionFromFrame(frame)) {
+    frame->SetAllowsCrossBrowsingInstanceFrameLookup();
   }
 }
 

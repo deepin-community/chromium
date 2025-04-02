@@ -92,7 +92,7 @@ class CONTENT_EXPORT RenderWidgetHostView {
   // properly transformed; however, coordinates received from an out-of-process
   // iframe renderer process require transformation.
   virtual gfx::PointF TransformPointToRootCoordSpaceF(
-      const gfx::PointF& point) = 0;
+      const gfx::PointF& point) const = 0;
 
   // A int point variant of the above. Use float version to transform,
   // then rounded back to int point.
@@ -100,11 +100,6 @@ class CONTENT_EXPORT RenderWidgetHostView {
     return gfx::ToRoundedPoint(
         TransformPointToRootCoordSpaceF(gfx::PointF(point)));
   }
-
-  // Converts a point in the root view's coordinate space to the coordinate
-  // space of whichever view is used to call this method.
-  virtual gfx::PointF TransformRootPointToViewCoordSpace(
-      const gfx::PointF& point) = 0;
 
   // Retrieves the native view used to contain plugins and identify the
   // renderer in IPC messages.
@@ -200,6 +195,7 @@ class CONTENT_EXPORT RenderWidgetHostView {
   // than the view size if a portion of the view is obstructed (e.g. by a
   // virtual keyboard).
   virtual gfx::Size GetVisibleViewportSize() = 0;
+  virtual gfx::Size GetVisibleViewportSizeDevicePx() = 0;
 
   // Set insets for the visible region of the root window. Used to compute the
   // visible viewport.

@@ -133,6 +133,11 @@ void SSLManager::OnSSLCertificateError(
                           url, net_error, ssl_info, fatal));
 
   if (!web_contents || !frame_tree_node) {
+    // Check if the DevTools Browser target is set to ignore certificate errors.
+    if (devtools_instrumentation::ShouldBypassCertificateErrors()) {
+      handler->ContinueRequest();
+      return;
+    }
     // Requests can fail to dispatch because they don't have a WebContents. See
     // https://crbug.com/86537. In this case we have to make a decision in this
     // function. Also, if the navigation or document which have been responsible
@@ -259,10 +264,10 @@ void SSLManager::DidRunMixedContent(const GURL& security_origin) {
 
   if (ssl_host_state_delegate_) {
     ssl_host_state_delegate_->HostRanInsecureContent(
-        security_origin.host(), site_instance->GetProcess()->GetID(),
+        security_origin.host(), site_instance->GetProcess()->GetDeprecatedID(),
         SSLHostStateDelegate::MIXED_CONTENT);
   }
-  // TODO(crbug.com/1320302): Ensure proper notify_changes is passed to
+  // TODO(crbug.com/40223471): Ensure proper notify_changes is passed to
   // UpdateEntry.
   UpdateEntry(entry, 0, 0, /*notify_changes=*/true);
   NotifySSLInternalStateChanged(controller_->GetBrowserContext());
@@ -279,10 +284,10 @@ void SSLManager::DidRunContentWithCertErrors(const GURL& security_origin) {
 
   if (ssl_host_state_delegate_) {
     ssl_host_state_delegate_->HostRanInsecureContent(
-        security_origin.host(), site_instance->GetProcess()->GetID(),
+        security_origin.host(), site_instance->GetProcess()->GetDeprecatedID(),
         SSLHostStateDelegate::CERT_ERRORS_CONTENT);
   }
-  // TODO(crbug.com/1320302): Ensure proper notify_changes is passed to
+  // TODO(crbug.com/40223471): Ensure proper notify_changes is passed to
   // UpdateEntry.
   UpdateEntry(entry, 0, 0, /*notify_changes=*/true);
   NotifySSLInternalStateChanged(controller_->GetBrowserContext());
@@ -326,14 +331,14 @@ bool SSLManager::HasAllowExceptionForAnyHost() {
       controller_->frame_tree().GetMainFrame()->GetStoragePartition());
 }
 
-bool SSLManager::DidStartResourceResponse(
+void SSLManager::DidStartResourceResponse(
     const url::SchemeHostPort& final_response_url,
     bool has_certificate_errors) {
   const std::string& scheme = final_response_url.scheme();
   const std::string& host = final_response_url.host();
 
   if (!GURL::SchemeIsCryptographic(scheme) || has_certificate_errors) {
-    return false;
+    return;
   }
   // If the scheme is https: or wss and the cert did not have any errors, revoke
   // any previous decisions that have occurred.
@@ -341,7 +346,7 @@ bool SSLManager::DidStartResourceResponse(
       !ssl_host_state_delegate_->HasAllowException(
           host,
           controller_->frame_tree().GetMainFrame()->GetStoragePartition())) {
-    return false;
+    return;
   }
 
   // If there's no certificate error, a good certificate has been seen, so
@@ -349,7 +354,6 @@ bool SSLManager::DidStartResourceResponse(
   // certificates. This intentionally does not apply to cached resources
   // (see https://crbug.com/634553 for an explanation).
   ssl_host_state_delegate_->RevokeUserAllowExceptions(host);
-  return true;
 }
 
 void SSLManager::OnCertErrorInternal(std::unique_ptr<SSLErrorHandler> handler) {
@@ -404,7 +408,7 @@ bool SSLManager::UpdateEntry(NavigationEntryImpl* entry,
     // those cases.
     if (entry_origin.has_value()) {
       const std::string& host = entry_origin->host();
-      int process_id = site_instance->GetProcess()->GetID();
+      int process_id = site_instance->GetProcess()->GetDeprecatedID();
       if (ssl_host_state_delegate_->DidHostRunInsecureContent(
               host, process_id, SSLHostStateDelegate::MIXED_CONTENT)) {
         entry->GetSSL().content_status |= SSLStatus::RAN_INSECURE_CONTENT;
@@ -441,13 +445,13 @@ void SSLManager::UpdateLastCommittedEntry(int add_content_status_flags,
     // content, so the primary frame tree's NavigationController needs to
     // represent an aggregate view of the security state of its inner frame
     // trees.
-    RenderFrameHost* rfh =
+    RenderFrameHostImpl* rfh =
         controller_->frame_tree().root()->current_frame_host();
     DCHECK(rfh);
-    WebContentsImpl* contents = static_cast<WebContentsImpl*>(
-        WebContents::FromRenderFrameHost(rfh->GetOutermostMainFrame()));
-    // TODO(crbug.com/1232528): Ensure only fenced frames owned by active pages
-    // can modify this.
+    CHECK_NE(RenderFrameHostImpl::LifecycleStateImpl::kPrerendering,
+             rfh->GetOutermostMainFrame()->lifecycle_state());
+    WebContentsImpl* contents =
+        WebContentsImpl::FromRenderFrameHostImpl(rfh->GetOutermostMainFrame());
     entry = contents->GetController().GetLastCommittedEntry();
   } else {
     entry = controller_->GetLastCommittedEntry();
@@ -455,7 +459,7 @@ void SSLManager::UpdateLastCommittedEntry(int add_content_status_flags,
 
   if (!entry)
     return;
-  // TODO(crbug.com/1320302): Ensure proper notify_changes is passed to
+  // TODO(crbug.com/40223471): Ensure proper notify_changes is passed to
   // UpdateEntry.
   UpdateEntry(entry, add_content_status_flags, remove_content_status_flags,
               /*notify_changes=*/true);
@@ -474,7 +478,7 @@ void SSLManager::NotifySSLInternalStateChanged(BrowserContext* context) {
       static_cast<SSLManagerSet*>(context->GetUserData(kSSLManagerKeyName));
 
   for (SSLManager* manager : managers->get()) {
-    // TODO(crbug.com/1320302): Ensure proper notify_changes is passed to
+    // TODO(crbug.com/40223471): Ensure proper notify_changes is passed to
     // UpdateEntry.
     manager->UpdateEntry(manager->controller()->GetLastCommittedEntry(), 0, 0,
                          /*notify_changes=*/true);

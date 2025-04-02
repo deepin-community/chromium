@@ -22,7 +22,7 @@ FakeInstallableManager::FakeInstallableManager(
       manifest_(blink::mojom::Manifest::New()),
       web_page_metadata_(mojom::WebPageMetadata::New()) {}
 
-FakeInstallableManager::~FakeInstallableManager() {}
+FakeInstallableManager::~FakeInstallableManager() = default;
 
 void FakeInstallableManager::GetData(const InstallableParams& params,
                                      InstallableCallback callback) {
@@ -65,8 +65,9 @@ FakeInstallableManager::CreateForWebContentsWithManifest(
   // Not used:
   const std::unique_ptr<SkBitmap> icon;
 
-  if (installable_code != NO_ERROR_DETECTED)
+  if (installable_code != InstallableStatusCode::NO_ERROR_DETECTED) {
     errors.push_back(installable_code);
+  }
 
   auto installable_data = std::make_unique<InstallableData>(
       std::move(errors), installable_manager->manifest_url_,

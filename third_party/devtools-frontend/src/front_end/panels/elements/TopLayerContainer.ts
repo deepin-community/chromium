@@ -2,16 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 import * as Common from '../../core/common/common.js';
-import * as Host from '../../core/host/host.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import * as IconButton from '../../ui/components/icon_button/icon_button.js';
 import * as UI from '../../ui/legacy/legacy.js';
 
 import * as ElementsComponents from './components/components.js';
+import type {ElementsTreeElement} from './ElementsTreeElement.js';
 import * as ElementsTreeOutline from './ElementsTreeOutline.js';
-
-import {type ElementsTreeElement} from './ElementsTreeElement.js';
 
 const UIStrings = {
   /**
@@ -97,16 +95,14 @@ export class TopLayerContainer extends UI.TreeOutline.TreeElement {
         ElementsComponents.AdornerManager.RegisteredAdorners.TOP_LAYER);
     const adornerContent = document.createElement('span');
     adornerContent.classList.add('adorner-with-icon');
-    const linkIcon = new IconButton.Icon.Icon();
-    linkIcon.data = {iconName: 'select-element', color: 'var(--icon-default)', width: '14px', height: '14px'};
+    const linkIcon = IconButton.Icon.create('select-element');
     const adornerText = document.createElement('span');
-    adornerText.textContent = ` top-layer (${topLayerElementIndex}) `;
+    adornerText.textContent = `top-layer (${topLayerElementIndex})`;
     adornerContent.append(linkIcon);
     adornerContent.append(adornerText);
     const adorner = element?.adorn(config, adornerContent);
     if (adorner) {
       const onClick = ((() => {
-                         Host.userMetrics.badgeActivated(Host.UserMetrics.BadgeType.TOP_LAYER);
                          topLayerElementRepresentation.revealAndSelect();
                        }) as EventListener);
       adorner.addInteraction(onClick, {

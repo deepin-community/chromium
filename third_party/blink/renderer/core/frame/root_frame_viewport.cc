@@ -8,6 +8,7 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/task/single_thread_task_runner.h"
+#include "cc/input/scroll_snap_data.h"
 #include "cc/input/snap_selection_strategy.h"
 #include "third_party/blink/public/mojom/scroll/scroll_into_view_params.mojom-blink.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
@@ -18,9 +19,9 @@
 #include "third_party/blink/renderer/core/scroll/scroll_alignment.h"
 #include "third_party/blink/renderer/core/scroll/scroll_animator.h"
 #include "third_party/blink/renderer/core/scroll/scroll_animator_base.h"
+#include "third_party/blink/renderer/core/scroll/scroll_into_view_util.h"
 #include "third_party/blink/renderer/core/scroll/scrollable_area.h"
 #include "third_party/blink/renderer/core/scroll/smooth_scroll_sequencer.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
@@ -126,21 +127,21 @@ void RootFrameViewport::RestoreToAnchor(const ScrollOffset& target_offset) {
   // Clamp the scroll offset of each viewport now so that we force any invalid
   // offsets to become valid so we can compute the correct deltas.
   GetVisualViewport().SetScrollOffset(GetVisualViewport().GetScrollOffset(),
-                                      mojom::blink::ScrollType::kProgrammatic);
+                                      mojom::blink::ScrollType::kAnchoring);
   LayoutViewport().SetScrollOffset(LayoutViewport().GetScrollOffset(),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kAnchoring);
 
   ScrollOffset delta = target_offset - GetScrollOffset();
 
   GetVisualViewport().SetScrollOffset(
       GetVisualViewport().GetScrollOffset() + delta,
-      mojom::blink::ScrollType::kProgrammatic);
+      mojom::blink::ScrollType::kAnchoring);
 
   delta = target_offset - GetScrollOffset();
 
   if (RuntimeEnabledFeatures::FractionalScrollOffsetsEnabled()) {
     LayoutViewport().SetScrollOffset(LayoutViewport().GetScrollOffset() + delta,
-                                     mojom::blink::ScrollType::kProgrammatic);
+                                     mojom::blink::ScrollType::kAnchoring);
   } else {
     gfx::Vector2d layout_delta(
         delta.x() < 0 ? floor(delta.x()) : ceil(delta.x()),
@@ -148,13 +149,13 @@ void RootFrameViewport::RestoreToAnchor(const ScrollOffset& target_offset) {
 
     LayoutViewport().SetScrollOffset(
         ScrollOffset(LayoutViewport().ScrollOffsetInt() + layout_delta),
-        mojom::blink::ScrollType::kProgrammatic);
+        mojom::blink::ScrollType::kAnchoring);
   }
 
   delta = target_offset - GetScrollOffset();
   GetVisualViewport().SetScrollOffset(
       GetVisualViewport().GetScrollOffset() + delta,
-      mojom::blink::ScrollType::kProgrammatic);
+      mojom::blink::ScrollType::kAnchoring);
 }
 
 void RootFrameViewport::DidUpdateVisualViewport() {
@@ -313,7 +314,8 @@ bool RootFrameViewport::SetScrollOffset(
     const ScrollOffset& offset,
     mojom::blink::ScrollType scroll_type,
     mojom::blink::ScrollBehavior scroll_behavior,
-    ScrollCallback on_finish) {
+    ScrollCallback on_finish,
+    bool targeted_scroll) {
   UpdateScrollAnimator();
 
   if (scroll_behavior == mojom::blink::ScrollBehavior::kAuto)
@@ -359,19 +361,22 @@ ScrollOffset RootFrameViewport::ClampToUserScrollableOffset(
   return scroll_offset;
 }
 
+PhysicalOffset RootFrameViewport::LocalToScrollOriginOffset() const {
+  if (GetLayoutBox() &&
+      RuntimeEnabledFeatures::ScrollIntoViewRootFrameViewportBugFixEnabled()) {
+    return LayoutViewport().LocalToScrollOriginOffset();
+  }
+  return PhysicalOffset::FromVector2dFFloor(LayoutViewport().GetScrollOffset());
+}
+
 PhysicalRect RootFrameViewport::ScrollIntoView(
     const PhysicalRect& rect_in_absolute,
+    const PhysicalBoxStrut& scroll_margin,
     const mojom::blink::ScrollIntoViewParamsPtr& params) {
-  PhysicalRect scroll_snapport_rect = VisibleScrollSnapportRect();
-
-  PhysicalRect rect_in_document = rect_in_absolute;
-  rect_in_document.Move(
-      PhysicalOffset::FromVector2dFFloor(LayoutViewport().GetScrollOffset()));
-
   ScrollOffset new_scroll_offset =
-      ClampScrollOffset(ScrollAlignment::GetScrollOffsetToExpose(
-          scroll_snapport_rect, rect_in_document, *params->align_x.get(),
-          *params->align_y.get(), GetScrollOffset()));
+      ClampScrollOffset(scroll_into_view_util::GetScrollOffsetToExpose(
+          *this, rect_in_absolute, scroll_margin, *params->align_x.get(),
+          *params->align_y.get()));
   if (params->type == mojom::blink::ScrollType::kUser)
     new_scroll_offset = ClampToUserScrollableOffset(new_scroll_offset);
 
@@ -385,13 +390,18 @@ PhysicalRect RootFrameViewport::ScrollIntoView(
 
   if (new_scroll_offset != GetScrollOffset()) {
     if (params->is_for_scroll_sequence) {
-      CHECK(GetSmoothScrollSequencer());
-      DCHECK(params->type == mojom::blink::ScrollType::kProgrammatic ||
-             params->type == mojom::blink::ScrollType::kUser);
       mojom::blink::ScrollBehavior behavior = DetermineScrollBehavior(
           params->behavior, GetLayoutBox()->StyleRef().GetScrollBehavior());
-      GetSmoothScrollSequencer()->QueueAnimation(this, new_scroll_offset,
-                                                 behavior);
+      if (RuntimeEnabledFeatures::MultiSmoothScrollIntoViewEnabled()) {
+        ScrollableArea::SetScrollOffset(new_scroll_offset, params->type,
+                                        behavior);
+      } else {
+        CHECK(GetSmoothScrollSequencer());
+        DCHECK(params->type == mojom::blink::ScrollType::kProgrammatic ||
+               params->type == mojom::blink::ScrollType::kUser);
+        GetSmoothScrollSequencer()->QueueAnimation(this, new_scroll_offset,
+                                                   behavior);
+      }
     } else {
       ScrollableArea::SetScrollOffset(new_scroll_offset, params->type);
     }
@@ -404,9 +414,7 @@ PhysicalRect RootFrameViewport::ScrollIntoView(
   // version correctly computes what the rect will be when the sequence is
   // executed) and we can't just adjust by `new_scroll_offset` since, to get to
   // absolute coordinates, we must offset by only the layout viewport's scroll.
-  rect_in_document.Move(
-      -PhysicalOffset::FromVector2dFRound(LayoutViewport().GetScrollOffset()));
-  return rect_in_document;
+  return rect_in_absolute;
 }
 
 void RootFrameViewport::UpdateScrollOffset(
@@ -477,7 +485,7 @@ bool RootFrameViewport::DistributeScrollBetweenViewports(
 }
 
 gfx::Vector2d RootFrameViewport::ScrollOffsetInt() const {
-  return gfx::ToFlooredVector2d(GetScrollOffset());
+  return SnapScrollOffsetToPhysicalPixels(GetScrollOffset());
 }
 
 ScrollOffset RootFrameViewport::GetScrollOffset() const {
@@ -713,12 +721,22 @@ bool RootFrameViewport::SetTargetSnapAreaElementIds(
   return LayoutViewport().SetTargetSnapAreaElementIds(snap_target_ids);
 }
 
+void RootFrameViewport::DropCompositorScrollDeltaNextCommit() {
+  LayoutViewport().DropCompositorScrollDeltaNextCommit();
+  GetVisualViewport().DropCompositorScrollDeltaNextCommit();
+}
+
 bool RootFrameViewport::SnapContainerDataNeedsUpdate() const {
   return LayoutViewport().SnapContainerDataNeedsUpdate();
 }
 
 void RootFrameViewport::SetSnapContainerDataNeedsUpdate(bool needs_update) {
   LayoutViewport().SetSnapContainerDataNeedsUpdate(needs_update);
+}
+
+std::optional<cc::SnapPositionData> RootFrameViewport::GetSnapPosition(
+    const cc::SnapSelectionStrategy& strategy) const {
+  return LayoutViewport().GetSnapPosition(strategy);
 }
 
 std::optional<gfx::PointF> RootFrameViewport::GetSnapPositionAndSetTarget(
@@ -742,24 +760,30 @@ void RootFrameViewport::Trace(Visitor* visitor) const {
   ScrollableArea::Trace(visitor);
 }
 
-void RootFrameViewport::UpdateSnappedTargetsAndEnqueueSnapChanged() {
-  LayoutViewport().UpdateSnappedTargetsAndEnqueueSnapChanged();
+void RootFrameViewport::UpdateSnappedTargetsAndEnqueueScrollSnapChange() {
+  LayoutViewport().UpdateSnappedTargetsAndEnqueueScrollSnapChange();
 }
 
-const cc::SnappedTargetData* RootFrameViewport::GetSnapChangingTargetData()
-    const {
-  return LayoutViewport().GetSnapChangingTargetData();
+std::optional<cc::TargetSnapAreaElementIds>
+RootFrameViewport::GetScrollsnapchangingTargetIds() const {
+  return LayoutViewport().GetScrollsnapchangingTargetIds();
 }
 
-void RootFrameViewport::SetSnapChangingTargetData(
-    std::optional<cc::SnappedTargetData> data) {
-  LayoutViewport().SetSnapChangingTargetData(data);
+void RootFrameViewport::SetScrollsnapchangingTargetIds(
+    std::optional<cc::TargetSnapAreaElementIds> new_target_ids) {
+  LayoutViewport().SetScrollsnapchangingTargetIds(new_target_ids);
 }
 
-void RootFrameViewport::UpdateSnapChangingTargetsAndEnqueueSnapChanging(
-    const gfx::PointF& scroll_offset) {
-  LayoutViewport().UpdateSnapChangingTargetsAndEnqueueSnapChanging(
-      scroll_offset);
+void RootFrameViewport::SetScrollsnapchangeTargetIds(
+    std::optional<cc::TargetSnapAreaElementIds> new_target_ids) {
+  LayoutViewport().SetScrollsnapchangeTargetIds(new_target_ids);
+}
+
+void RootFrameViewport::
+    UpdateScrollSnapChangingTargetsAndEnqueueScrollSnapChanging(
+        const cc::TargetSnapAreaElementIds& new_target_ids) {
+  LayoutViewport().UpdateScrollSnapChangingTargetsAndEnqueueScrollSnapChanging(
+      new_target_ids);
 }
 
 const cc::SnapSelectionStrategy* RootFrameViewport::GetImplSnapStrategy()
@@ -772,8 +796,22 @@ void RootFrameViewport::SetImplSnapStrategy(
   LayoutViewport().SetImplSnapStrategy(std::move(strategy));
 }
 
-void RootFrameViewport::EnqueueSnapChangingEventFromImplIfNeeded() {
-  LayoutViewport().EnqueueSnapChangingEventFromImplIfNeeded();
+void RootFrameViewport::EnqueueScrollSnapChangingEventFromImplIfNeeded() {
+  LayoutViewport().EnqueueScrollSnapChangingEventFromImplIfNeeded();
+}
+
+std::optional<cc::ElementId> RootFrameViewport::GetTargetedSnapAreaId() {
+  return LayoutViewport().GetTargetedSnapAreaId();
+}
+
+void RootFrameViewport::SetTargetedSnapAreaId(
+    const std::optional<cc::ElementId>& id) {
+  LayoutViewport().SetTargetedSnapAreaId(id);
+}
+
+void RootFrameViewport::SetSnappedQueryTargetIds(
+    std::optional<cc::TargetSnapAreaElementIds> new_target_ids) {
+  LayoutViewport().SetSnappedQueryTargetIds(new_target_ids);
 }
 
 }  // namespace blink

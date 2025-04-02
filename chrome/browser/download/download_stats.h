@@ -9,9 +9,10 @@
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/download/download_commands.h"
 #include "chrome/browser/download/download_prompt_status.h"
-#include "chrome/browser/profiles/profile.h"
 #include "components/download/public/common/download_danger_type.h"
 #include "components/download/public/common/download_path_reservation_tracker.h"
+
+class Profile;
 
 // Used for counting UMA stats. Similar to content's
 // download_stats::DownloadInitiattionSources but from the chrome layer.
@@ -56,6 +57,9 @@ enum ChromeDownloadOpenMethod {
 
   // The download was opened using a rename handler.
   DOWNLOAD_OPEN_METHOD_RENAME_HANDLER,
+
+  // The download was opened with the Media App on ChromeOS.
+  DOWNLOAD_OPEN_METHOD_MEDIA_APP,
 
   DOWNLOAD_OPEN_METHOD_LAST_ENTRY
 };

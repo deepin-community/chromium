@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -29,6 +30,7 @@
 #include "base/task/thread_pool.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
+#include "base/time/time_override.h"
 #include "base/uuid.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -37,11 +39,12 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/autofill/core/browser/autofill_test_utils.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/data_model/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/credit_card.h"
-#include "components/autofill/core/browser/test_autofill_clock.h"
+#include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/test_autofill_clock.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/javascript_dialogs/app_modal_dialog_controller.h"
 #include "components/javascript_dialogs/app_modal_dialog_view.h"
@@ -101,8 +104,18 @@ const int kAutofillActionNumRetries = 5;
 const char kWebPageReplayCertSPKI[] =
     "PoNnQAwghMiLUPg1YNFtvTfGreNT8r9oeLEyzgNCJWc=";
 
-const char kClockNotSetMessage[] =
-    "No AutofillClock override set from wpr archive: ";
+const char kTimeClockOverrideNotSetMessage[] =
+    "No TimeClock override set from wpr archive: ";
+
+// A helper class to override the current time.
+struct TimeOverrideHelper {
+  static base::Time TimeNow() { return current_time; }
+
+  // Used as the current time in captured sites tests.
+  static base::Time current_time;
+};
+
+base::Time TimeOverrideHelper::current_time;
 
 // Check and return that the caller wants verbose WPR output (off by default).
 bool IsVerboseWprLoggingEnabled() {
@@ -129,12 +142,11 @@ and then write commands into it:
   $ echo failure >%1$s  # unpauses execution until failure
   $ echo help    >%1$s  # prints this text
 )";
-  LOG(INFO) << base::StringPrintf(msg,
-                                  command_file_path.AsUTF8Unsafe().c_str());
+  VLOG(1) << base::StringPrintf(msg, command_file_path.AsUTF8Unsafe().c_str());
 }
 
 std::optional<autofill::FieldType> StringToFieldType(std::string_view str) {
-  static auto map = []() {
+  static auto map = [] {
     std::map<std::string_view, autofill::FieldType> map;
     for (autofill::FieldType field_type : autofill::kAllFieldTypes) {
       map[autofill::AutofillType(field_type).ToStringView()] = field_type;
@@ -187,8 +199,9 @@ std::vector<ExecutionCommand> ReadExecutionCommands(
                                 base::SPLIT_WANT_NONEMPTY)) {
       auto GetParamOr = [command](int default_value) {
         size_t space = command.find(' ');
-        if (space == base::StringPiece::npos)
+        if (space == std::string_view::npos) {
           return default_value;
+        }
         int value;
         if (!base::StringToInt(command.substr(space + 1), &value))
           return default_value;
@@ -209,7 +222,7 @@ std::vector<ExecutionCommand> ReadExecutionCommands(
         commands.push_back({ExecutionCommandType::kWhereAmI});
       } else if (command.starts_with("failure")) {
         commands.push_back({ExecutionCommandType::kRunUntilFailure});
-        // also add an absolute max limit (like a" run" command).
+        // Same commands as for "run":
         commands.push_back({ExecutionCommandType::kAbsoluteLimit,
                             std::numeric_limits<int>::max()});
       } else if (command.starts_with("help")) {
@@ -264,19 +277,19 @@ ExecutionState ProcessCommands(ExecutionState execution_state,
           min_index = std::max(min_index, 0);
           max_index = std::min(max_index, execution_state.length);
           for (int i = min_index; i < max_index; ++i) {
-            LOG(INFO) << "Action " << (i - execution_state.index) << ": "
-                      << (*action_list)[i].DebugString();
+            VLOG(1) << "Action " << (i - execution_state.index) << ": "
+                    << (*action_list)[i].DebugString();
           }
           break;
         }
         case ExecutionCommandType::kWhereAmI: {
-          LOG(INFO) << "Next action is at position " << execution_state.index
-                    << ", limit (excl) is at " << execution_state.limit
-                    << ", last (excl) is at " << execution_state.length;
+          VLOG(1) << "Next action is at position " << execution_state.index
+                  << ", limit (excl) is at " << execution_state.limit
+                  << ", last (excl) is at " << execution_state.length;
           break;
         }
         case ExecutionCommandType::kRunUntilFailure: {
-          LOG(INFO) << "Will stop when a failure is found.";
+          VLOG(1) << "Will stop when a failure is found.";
           execution_state.pause_on_failure = true;
           break;
         }
@@ -292,13 +305,13 @@ struct AllowNull {
 
 std::optional<std::string> FindPopulateString(
     const base::Value::Dict& container,
-    base::StringPiece key_name,
-    absl::variant<base::StringPiece, AllowNull> key_descriptor) {
+    std::string_view key_name,
+    absl::variant<std::string_view, AllowNull> key_descriptor) {
   const std::string* value = container.FindString(key_name);
   if (!value) {
-    if (absl::holds_alternative<base::StringPiece>(key_descriptor)) {
+    if (absl::holds_alternative<std::string_view>(key_descriptor)) {
       ADD_FAILURE() << "Failed to extract '"
-                    << absl::get<base::StringPiece>(key_descriptor)
+                    << absl::get<std::string_view>(key_descriptor)
                     << "' string from container!";
     }
     return std::nullopt;
@@ -309,13 +322,13 @@ std::optional<std::string> FindPopulateString(
 
 std::optional<std::vector<std::string>> FindPopulateStringVector(
     const base::Value::Dict& container,
-    base::StringPiece key_name,
-    absl::variant<base::StringPiece, AllowNull> key_descriptor) {
+    std::string_view key_name,
+    absl::variant<std::string_view, AllowNull> key_descriptor) {
   const base::Value::List* list = container.FindList(key_name);
   if (!list) {
-    if (absl::holds_alternative<base::StringPiece>(key_descriptor)) {
+    if (absl::holds_alternative<std::string_view>(key_descriptor)) {
       ADD_FAILURE() << "Failed to extract '"
-                    << absl::get<base::StringPiece>(key_descriptor)
+                    << absl::get<std::string_view>(key_descriptor)
                     << "' strings from container!";
     }
     return std::nullopt;
@@ -324,9 +337,9 @@ std::optional<std::vector<std::string>> FindPopulateStringVector(
   std::vector<std::string> strings;
   for (const base::Value& item : *list) {
     if (!item.is_string()) {
-      if (absl::holds_alternative<base::StringPiece>(key_descriptor)) {
+      if (absl::holds_alternative<std::string_view>(key_descriptor)) {
         ADD_FAILURE() << "Failed to extract element of '"
-                      << absl::get<base::StringPiece>(key_descriptor)
+                      << absl::get<std::string_view>(key_descriptor)
                       << "' vector from container!";
       }
       return std::nullopt;
@@ -442,6 +455,26 @@ std::vector<CapturedSiteParams> GetCapturedSites(
   return sites;
 }
 
+std::optional<base::Value::Dict> ReadRecipeFile(
+    const base::FilePath& recipe_file_path) {
+  // Read the text of the recipe file.
+  base::ScopedAllowBlockingForTesting for_testing;
+  std::string json_text;
+  if (!base::ReadFileToString(recipe_file_path, &json_text)) {
+    ADD_FAILURE() << "Failed to read recipe file '" << recipe_file_path << "'!";
+    return std::nullopt;
+  }
+
+  // Convert the file text into a json object.
+  std::optional<base::Value> parsed_json = base::JSONReader::Read(json_text);
+  if (!parsed_json) {
+    ADD_FAILURE() << "Failed to deserialize json text!";
+    return std::nullopt;
+  }
+  DCHECK(parsed_json->is_dict());
+  return std::move(*parsed_json).TakeDict();
+}
+
 std::string FilePathToUTF8(const base::FilePath::StringType& str) {
 #if BUILDFLAG(IS_WIN)
   return base::WideToUTF8(str);
@@ -479,7 +512,7 @@ For interactive debugging, specify a command file:
 Commands to step through the test can be written into that file.
 Further instructions will be printed then.
 )";
-  LOG(INFO) << base::StringPrintf(msg, test_file_name, kCommandFileFlag);
+  VLOG(1) << base::StringPrintf(msg, test_file_name, kCommandFileFlag);
 }
 
 // FrameObserver --------------------------------------------------------------
@@ -488,7 +521,7 @@ IFrameWaiter::IFrameWaiter(content::WebContents* web_contents)
       query_type_(URL),
       target_frame_(nullptr) {}
 
-IFrameWaiter::~IFrameWaiter() {}
+IFrameWaiter::~IFrameWaiter() = default;
 
 content::RenderFrameHost* IFrameWaiter::WaitForFrameMatchingName(
     const std::string& name,
@@ -658,8 +691,8 @@ bool WebPageReplayServerWrapper::Start(
     return false;
 
   // Sleep 5 seconds to wait for the web page replay server to start.
-  // TODO(crbug.com/847910): create a process std stream reader class to use the
-  // process output to determine when the server is ready
+  // TODO(crbug.com/40578543): create a process std stream reader class to use
+  // the process output to determine when the server is ready
   base::RunLoop wpr_launch_waiter;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, wpr_launch_waiter.QuitClosure(), base::Seconds(5));
@@ -801,7 +834,7 @@ bool WebPageReplayServerWrapper::RunWebPageReplayCmd(
   for (const auto& arg : args)
     full_command.AppendArg(arg);
 
-  LOG(INFO) << full_command.GetArgumentsString();
+  VLOG(1) << full_command.GetArgumentsString();
 
   web_page_replay_server_ = base::LaunchProcess(full_command, options);
   return true;
@@ -830,6 +863,13 @@ bool ProfileDataController::AddAutofillProfileInfo(
     ADD_FAILURE() << "Unable to recognize autofill field type '" << field_type
                   << "'!";
     return false;
+  }
+
+  // PhoneNumber only allows PHONE_HOME_WHOLE_NUMBER to be set directly, so if
+  // any other phone type is set, convert it to PHONE_HOME_WHOLE_NUMBER.
+  if (GroupTypeOfFieldType(type.value()) == autofill::FieldTypeGroup::kPhone &&
+      type.value() != autofill::FieldType::PHONE_HOME_WHOLE_NUMBER) {
+    type = autofill::FieldType::PHONE_HOME_WHOLE_NUMBER;
   }
 
   if (base::StartsWith(field_type, "HTML_TYPE_CREDIT_CARD_",
@@ -874,8 +914,9 @@ bool TestRecipeReplayer::ReplayTest(
   logging::SetMinLogLevel(logging::LOGGING_WARNING);
   if (!web_page_replay_server_wrapper()->Start(capture_file_path))
     return false;
-  if (OverrideAutofillClock(capture_file_path))
-    VLOG(1) << "AutofillClock was set to:" << autofill::AutofillClock::Now();
+  if (OverrideTimeClock(capture_file_path)) {
+    VLOG(1) << "OverrideTimeClock was set to:" << base::Time::Now();
+  }
   return ReplayRecordedActions(recipe_file_path, command_file_path);
 }
 
@@ -885,38 +926,46 @@ TestRecipeReplayer::GetValidationFailures() const {
 }
 
 // Extracts the time of the wpr recording from the wpr archive file and
-// overrides the autofill::AutofillClock to match that time.
-bool TestRecipeReplayer::OverrideAutofillClock(
+// overrides the base::Time::Now() to match that time.
+bool TestRecipeReplayer::OverrideTimeClock(
     const base::FilePath capture_file_path) {
   std::string json_text;
   {
     base::ScopedAllowBlockingForTesting allow_blocking;
     if (!base::ReadFileToString(capture_file_path, &json_text)) {
-      VLOG(1) << kClockNotSetMessage << "Could not read file";
+      VLOG(1) << kTimeClockOverrideNotSetMessage << "Could not read file";
       return false;
     }
   }
   // Decompress the json text from gzip.
   std::string decompressed_json_text;
   if (!compression::GzipUncompress(json_text, &decompressed_json_text)) {
-    VLOG(1) << kClockNotSetMessage << "Could not gzip decompress file";
+    VLOG(1) << kTimeClockOverrideNotSetMessage
+            << "Could not gzip decompress file";
     return false;
   }
   // Convert the file text into a json object.
   std::optional<base::Value> parsed_json =
       base::JSONReader::Read(decompressed_json_text);
   if (!parsed_json) {
-    VLOG(1) << kClockNotSetMessage << "Failed to deserialize json";
+    VLOG(1) << kTimeClockOverrideNotSetMessage << "Failed to deserialize json";
     return false;
   }
 
   const std::optional<double> time_value =
       parsed_json->GetDict().FindDouble("DeterministicTimeSeedMs");
   if (!time_value) {
-    VLOG(1) << kClockNotSetMessage << "No DeterministicTimeSeedMs found";
+    VLOG(1) << kTimeClockOverrideNotSetMessage
+            << "No DeterministicTimeSeedMs found";
     return false;
   }
-  test_clock_.SetNow(base::Time::FromMillisecondsSinceUnixEpoch(*time_value));
+
+  TimeOverrideHelper::current_time =
+      base::Time::FromMillisecondsSinceUnixEpoch(*time_value);
+  time_override_ = std::make_unique<base::subtle::ScopedTimeClockOverrides>(
+      &TimeOverrideHelper::TimeNow,
+      /*time_ticks_override=*/nullptr,
+      /*thread_ticks_override=*/nullptr);
   return true;
 }
 
@@ -1058,28 +1107,16 @@ void TestRecipeReplayer::CleanupSiteData() {
 bool TestRecipeReplayer::ReplayRecordedActions(
     const base::FilePath& recipe_file_path,
     const std::optional<base::FilePath>& command_file_path) {
-  // Read the text of the recipe file.
-  base::ScopedAllowBlockingForTesting for_testing;
-  std::string json_text;
-  if (!base::ReadFileToString(recipe_file_path, &json_text)) {
-    ADD_FAILURE() << "Failed to read recipe file '" << recipe_file_path << "'!";
+  std::optional<base::Value::Dict> recipe = ReadRecipeFile(recipe_file_path);
+  if (!recipe) {
     return false;
   }
-
-  // Convert the file text into a json object.
-  std::optional<base::Value> parsed_json = base::JSONReader::Read(json_text);
-  if (!parsed_json) {
-    ADD_FAILURE() << "Failed to deserialize json text!";
+  if (!InitializeBrowserToExecuteRecipe(recipe.value())) {
     return false;
   }
-
-  DCHECK(parsed_json->is_dict());
-  base::Value::Dict recipe = std::move(*parsed_json).TakeDict();
-  if (!InitializeBrowserToExecuteRecipe(recipe))
-    return false;
 
   // Iterate through and execute each action in the recipe.
-  base::Value::List* action_list = recipe.FindList("actions");
+  base::Value::List* action_list = recipe.value().FindList("actions");
   if (!action_list) {
     ADD_FAILURE() << "Failed to extract action list from the recipe!";
     return false;
@@ -1215,12 +1252,6 @@ bool TestRecipeReplayer::ReplayRecordedActions(
     }
 
     ++execution_state.index;
-  }
-
-  // Dismiss the beforeUnloadDialog if the last page of the test has a
-  // beforeUnload function.
-  if (recipe.contains("dismissBeforeUnload")) {
-    NavigateAwayAndDismissBeforeUnloadDialog();
   }
 
   return true;
@@ -2074,13 +2105,13 @@ bool TestRecipeReplayer::ExpectElementPropertyEqualsAnyOf(
   }
 
   auto is_expected = [ignore_case,
-                      &actual_value](base::StringPiece expected_value) {
+                      &actual_value](std::string_view expected_value) {
     return ignore_case
                ? base::EqualsCaseInsensitiveASCII(expected_value, actual_value)
                : expected_value == actual_value;
   };
 
-  if (base::ranges::none_of(expected_values, is_expected)) {
+  if (std::ranges::none_of(expected_values, is_expected)) {
     std::string error_message = base::StrCat(
         {"Field xpath: `", element_xpath, "` ", validation_field, ", ",
          "Expected: '", base::JoinString(expected_values, " or "),
@@ -2111,7 +2142,7 @@ bool TestRecipeReplayer::ScrollElementIntoView(
 
 bool TestRecipeReplayer::PlaceFocusOnElement(
     const std::string& element_xpath,
-    const std::vector<std::string> iframe_path,
+    const std::vector<std::string>& iframe_path,
     content::RenderFrameHost* frame) {
   if (!ScrollElementIntoView(element_xpath, frame))
     return false;
@@ -2174,7 +2205,7 @@ bool TestRecipeReplayer::GetBoundingRectOfTargetElement(
   }
 
   // Parse the bounding rect string to extract the element coordinates.
-  std::vector<base::StringPiece> rect_components = base::SplitStringPiece(
+  std::vector<std::string_view> rect_components = base::SplitStringPiece(
       rect_str, ",", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
   if (rect_components.size() != 4) {
     ADD_FAILURE() << "Wrong number of components in `" << rect_str << "`!";
@@ -2216,7 +2247,7 @@ bool TestRecipeReplayer::GetBoundingRectOfTargetElement(
 
 bool TestRecipeReplayer::GetBoundingRectOfTargetElement(
     const std::string& target_element_xpath,
-    const std::vector<std::string> iframe_path,
+    const std::vector<std::string>& iframe_path,
     content::RenderFrameHost* frame,
     gfx::Rect* output_rect) {
   gfx::Vector2d offset;
@@ -2280,16 +2311,6 @@ void TestRecipeReplayer::SimulateKeyPressWrapper(
   ui::DomCode code = ui::UsLayoutKeyboardCodeToDomCode(key_code);
   SimulateKeyPress(web_contents, key, code, key_code, false, false, false,
                    false);
-}
-
-void TestRecipeReplayer::NavigateAwayAndDismissBeforeUnloadDialog() {
-  content::PrepContentsForBeforeUnloadTest(GetWebContents());
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(url::kAboutBlankURL), WindowOpenDisposition::CURRENT_TAB,
-      ui_test_utils::BROWSER_TEST_NO_WAIT);
-  javascript_dialogs::AppModalDialogController* alert =
-      ui_test_utils::WaitForAppModalDialog();
-  alert->view()->AcceptAppModalDialog();
 }
 
 bool TestRecipeReplayer::HasChromeStoredCredential(
@@ -2374,9 +2395,9 @@ bool TestRecipeReplayer::SetupSavedPasswords(
 
 // TestRecipeReplayChromeFeatureActionExecutor --------------------------------
 TestRecipeReplayChromeFeatureActionExecutor::
-    TestRecipeReplayChromeFeatureActionExecutor() {}
+    TestRecipeReplayChromeFeatureActionExecutor() = default;
 TestRecipeReplayChromeFeatureActionExecutor::
-    ~TestRecipeReplayChromeFeatureActionExecutor() {}
+    ~TestRecipeReplayChromeFeatureActionExecutor() = default;
 
 bool TestRecipeReplayChromeFeatureActionExecutor::AutofillForm(
     const std::string& focus_element_css_selector,

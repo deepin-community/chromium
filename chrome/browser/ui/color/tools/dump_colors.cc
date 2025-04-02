@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 // This command-line program dumps the computed values of all color IDs to
 // stdout.
 
@@ -25,6 +30,7 @@
 // clang-format off
 const char* enum_names[] = {
   COLOR_IDS
+  COMPONENTS_COLOR_IDS
   CHROME_COLOR_IDS
 };
 // clang-format on
@@ -39,8 +45,9 @@ constexpr size_t kColorColumnWidth = 19 + 1;
 std::string SkColorToString(SkColor color) {
   std::string color_string = ui::SkColorName(color);
   // Don't use the rgba() representation here. Just fall back to simple hex.
-  if (color_string.find_first_of("rgb") == 0)
+  if (color_string.find_first_of("rgb") == 0) {
     color_string = base::StringPrintf("#%.8x", color);
+  }
   // Now format it into the necessary space.
   return base::StringPrintf("%-*s", int{kColorColumnWidth},
                             color_string.c_str());
@@ -55,7 +62,6 @@ int main(int argc, const char* argv[]) {
     ui::AddColorMixers(provider, key);
     color::AddComponentsColorMixers(provider, key);
     AddChromeColorMixers(provider, key);
-    provider->GenerateColorMap();
   };
   ui::ColorProvider light_provider, dark_provider, light_high_contrast_provider,
       dark_high_contrast_provider;
@@ -71,8 +77,9 @@ int main(int argc, const char* argv[]) {
              ui::ColorProviderKey::ContrastMode::kHigh);
 
   size_t longest_name = 0;
-  for (const char* name : enum_names)
+  for (const char* name : enum_names) {
     longest_name = std::max(longest_name, strlen(name));
+  }
   ++longest_name;  // For trailing space.
 
   std::cout << std::setfill(' ') << std::left;

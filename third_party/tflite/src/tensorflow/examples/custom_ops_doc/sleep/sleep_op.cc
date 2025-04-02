@@ -26,9 +26,9 @@ limitations under the License.
 
 using ::tensorflow::shape_inference::InferenceContext;
 
-::tensorflow::Status ScalarOutput(InferenceContext* c) {
+absl::Status ScalarOutput(InferenceContext* c) {
   c->set_output(0, c->Scalar());
-  return ::tensorflow::OkStatus();
+  return absl::OkStatus();
 }
 
 REGISTER_OP("Examples>AsyncSleep")

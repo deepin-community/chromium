@@ -14,6 +14,7 @@
 namespace exo {
 
 class DataSource;
+class SecurityDelegate;
 
 // Handles events on data devices in context-specific ways.
 class DataSourceDelegate {
@@ -45,8 +46,11 @@ class DataSourceDelegate {
   // E.g. the surface is owned by the same client as the data source.
   virtual bool CanAcceptDataEventsForSurface(Surface* surface) const = 0;
 
+  // Returns the server's SecurityDelegate.
+  virtual SecurityDelegate* GetSecurityDelegate() const = 0;
+
  protected:
-  virtual ~DataSourceDelegate() {}
+  virtual ~DataSourceDelegate() = default;
 };
 
 }  // namespace exo

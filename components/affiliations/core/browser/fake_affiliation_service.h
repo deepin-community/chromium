@@ -14,20 +14,17 @@ class FakeAffiliationService : public AffiliationService {
   FakeAffiliationService();
   ~FakeAffiliationService() override;
 
-  void PrefetchChangePasswordURLs(const std::vector<GURL>& urls,
-                                  base::OnceClosure callback) override;
-  void Clear() override;
+  void PrefetchChangePasswordURL(const GURL& url,
+                                 base::OnceClosure callback) override;
   GURL GetChangePasswordURL(const GURL& url) const override;
   void GetAffiliationsAndBranding(
       const FacetURI& facet_uri,
-      AffiliationService::StrategyOnCacheMiss cache_miss_strategy,
       ResultCallback result_callback) override;
   void Prefetch(const FacetURI& facet_uri,
                 const base::Time& keep_fresh_until) override;
   void CancelPrefetch(const FacetURI& facet_uri,
                       const base::Time& keep_fresh_until) override;
   void KeepPrefetchForFacets(std::vector<FacetURI> facet_uris) override;
-  void TrimCacheForFacetURI(const FacetURI& facet_uri) override;
   void TrimUnusedCache(std::vector<FacetURI> facet_uris) override;
   void GetGroupingInfo(std::vector<FacetURI> facet_uris,
                        GroupsCallback callback) override;
@@ -35,6 +32,7 @@ class FakeAffiliationService : public AffiliationService {
                             callback) const override;
   void UpdateAffiliationsAndBranding(const std::vector<FacetURI>& facets,
                                      base::OnceClosure callback) override;
+  void RegisterSource(std::unique_ptr<AffiliationSource> source) override;
 };
 
 }  // namespace affiliations

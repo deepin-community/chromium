@@ -31,6 +31,7 @@
 #include "media/base/media_util.h"
 #include "media/base/overlay_info.h"
 #include "media/base/platform_features.h"
+#include "media/base/supported_types.h"
 #include "media/base/video_decoder.h"
 #include "media/base/video_types.h"
 #include "media/video/gpu_video_accelerator_factories.h"
@@ -105,7 +106,14 @@ void RecordReinitializationLatency(base::TimeDelta latency) {
 }
 
 bool HasSoftwareFallback(media::VideoCodec video_codec) {
-#if BUILDFLAG(IS_ANDROID) && !BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
+  if (video_codec == media::VideoCodec::kHEVC) {
+    return false;
+  }
+// TODO(crbug.com/355256378): OpenH264 for encoding and FFmpeg for H264 decoding
+// should be detangled such that software decoding can be enabled without
+// software encoding.
+#if BUILDFLAG(IS_ANDROID) && \
+    (!BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS) || !BUILDFLAG(ENABLE_OPENH264))
   return video_codec != media::VideoCodec::kH264;
 #else
   return true;
@@ -117,10 +125,21 @@ struct EncodedImageExternalMemory
  public:
   explicit EncodedImageExternalMemory(
       rtc::scoped_refptr<webrtc::EncodedImageBufferInterface> buffer_interface)
-      : ExternalMemory(base::make_span(buffer_interface->data(),
-                                       buffer_interface->size())),
-        buffer_interface_(std::move(buffer_interface)) {}
-  ~EncodedImageExternalMemory() override = default;
+      : buffer_interface_(std::move(buffer_interface)) {
+    DCHECK(buffer_interface_);
+  }
+
+  const base::span<const uint8_t> Span() const override {
+    // This cast forces span's implicit constructor to treat the provided type
+    // as reference-to-const instead of reference-to-non-const, which is
+    // necessary for `std::contiguous_range<>` to be true, since this type
+    // exposes both const and non-const `data()` methods and only the former
+    // will match the span element type.
+    // TODO(bugs.webrtc.org/9378): When the non-const `data()` method is
+    // eliminated, this cast can be removed.
+    return static_cast<const webrtc::EncodedImageBufferInterface&>(
+        *buffer_interface_);
+  }
 
  private:
   rtc::scoped_refptr<webrtc::EncodedImageBufferInterface> buffer_interface_;
@@ -168,7 +187,7 @@ std::optional<RTCVideoDecoderFallbackReason> NeedSoftwareFallback(
   // Fall back to software decoding if there's no support for VP9 spatial
   // layers. See https://crbug.com/webrtc/9304.
   const bool is_spatial_layer_buffer =
-      buffer.has_side_data() && !buffer.side_data()->spatial_layers.empty();
+      buffer.side_data() && !buffer.side_data()->spatial_layers.empty();
   if (codec == media::VideoCodec::kVP9 && is_spatial_layer_buffer &&
       !media::IsVp9kSVCHWDecodingEnabled()) {
     return RTCVideoDecoderFallbackReason::kSpatialLayers;
@@ -191,6 +210,9 @@ class RTCVideoDecoderAdapter::Impl {
        WTF::CrossThreadRepeatingFunction<void(Status)> change_status_callback,
        base::WeakPtr<Impl>& weak_this_for_client)
       : gpu_factories_(gpu_factories),
+        frame_adapter_shared_resources_(
+            base::MakeRefCounted<WebRtcVideoFrameAdapter::SharedResources>(
+                gpu_factories_)),
         change_status_callback_(std::move(change_status_callback)) {
     // This is called on webrtc decoder sequence.
     DETACH_FROM_SEQUENCE(media_sequence_checker_);
@@ -225,8 +247,9 @@ class RTCVideoDecoderAdapter::Impl {
   void OnDecodeDone(media::DecoderStatus status);
   void OnOutput(scoped_refptr<media::VideoFrame> frame);
 
-  const raw_ptr<media::GpuVideoAcceleratorFactories, ExperimentalRenderer>
-      gpu_factories_;
+  const raw_ptr<media::GpuVideoAcceleratorFactories> gpu_factories_;
+  const scoped_refptr<WebRtcVideoFrameAdapter::SharedResources>
+      frame_adapter_shared_resources_;
 
   // Set on Initialize().
   std::unique_ptr<media::MediaLog> media_log_;
@@ -235,8 +258,7 @@ class RTCVideoDecoderAdapter::Impl {
 
   int32_t outstanding_decode_requests_ = 0;
   std::optional<base::TimeTicks> start_time_;
-  raw_ptr<webrtc::DecodedImageCallback, ExperimentalRenderer>
-      decode_complete_callback_ = nullptr;
+  raw_ptr<webrtc::DecodedImageCallback> decode_complete_callback_ = nullptr;
   int32_t consecutive_error_count_ = 0;
   // Requests that have not been submitted to the decoder yet.
   WTF::Deque<scoped_refptr<media::DecoderBuffer>> pending_buffers_;
@@ -465,8 +487,8 @@ void RTCVideoDecoderAdapter::Impl::OnOutput(
       webrtc::VideoFrame::Builder()
           .set_video_frame_buffer(rtc::scoped_refptr<WebRtcVideoFrameAdapter>(
               new rtc::RefCountedObject<WebRtcVideoFrameAdapter>(
-                  std::move(frame))))
-          .set_timestamp_rtp(static_cast<uint32_t>(timestamp.InMicroseconds()))
+                  std::move(frame), frame_adapter_shared_resources_)))
+          .set_rtp_timestamp(static_cast<uint32_t>(timestamp.InMicroseconds()))
           .set_timestamp_us(0)
           .set_rotation(webrtc::kVideoRotation_0)
           .build();
@@ -515,9 +537,9 @@ std::unique_ptr<RTCVideoDecoderAdapter> RTCVideoDecoderAdapter::Create(
       media::kNoTransformation, kDefaultSize, gfx::Rect(kDefaultSize),
       kDefaultSize, media::EmptyExtraData(),
       media::EncryptionScheme::kUnencrypted);
-  config.set_is_rtc(true);
 
-  if (!resolution_monitor) {
+  // HEVC does not have SW fallback, so resolution monitor is not needed.
+  if (!resolution_monitor && HasSoftwareFallback(config.codec())) {
     resolution_monitor = ResolutionMonitor::Create(config.codec());
     if (!resolution_monitor) {
       DLOG(ERROR) << "Failed to create ResolutionMonitor for codec: "
@@ -554,8 +576,10 @@ RTCVideoDecoderAdapter::RTCVideoDecoderAdapter(
       resolution_monitor_(std::move(resolution_monitor)) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(decoding_sequence_checker_);
   DVLOG(1) << __func__;
-  CHECK(resolution_monitor_);
-  CHECK_EQ(resolution_monitor_->codec(), config_.codec());
+  if (HasSoftwareFallback(config.codec())) {
+    CHECK(resolution_monitor_);
+    CHECK_EQ(resolution_monitor_->codec(), config_.codec());
+  }
 
   decoder_info_.implementation_name = "ExternalDecoder (Unknown)";
   decoder_info_.is_hardware_accelerated = true;
@@ -629,8 +653,10 @@ bool RTCVideoDecoderAdapter::Configure(const Settings& settings) {
 
   if (WebRtcToMediaVideoCodec(settings.codec_type()) != config_.codec())
     return false;
-  CHECK_EQ(resolution_monitor_->codec(),
-           WebRtcToMediaVideoCodec(settings.codec_type()));
+  if (HasSoftwareFallback(config_.codec())) {
+    CHECK_EQ(resolution_monitor_->codec(),
+             WebRtcToMediaVideoCodec(settings.codec_type()));
+  }
 
   const bool init_success = status_ != Status::kError;
   base::UmaHistogramBoolean("Media.RTCVideoDecoderInitDecodeSuccess",

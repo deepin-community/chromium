@@ -2,12 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ui/gtk/gtk_util.h"
 
 #include <locale.h>
 #include <stddef.h>
 
 #include <memory>
+#include <string_view>
 
 #include "base/compiler_specific.h"
 #include "base/environment.h"
@@ -221,9 +227,13 @@ aura::Window* GetAuraTransientParent(GtkWidget* dialog) {
 }
 
 void ClearAuraTransientParent(GtkWidget* dialog, aura::Window* parent) {
+  if (!parent || !parent->GetHost()) {
+    return;
+  }
+
   g_object_set_data(G_OBJECT(dialog), kAuraTransientParent, nullptr);
-  GtkUi::GetPlatform()->ClearTransientFor(
-      parent->GetHost()->GetAcceleratedWidget());
+  gfx::AcceleratedWidget parent_id = parent->GetHost()->GetAcceleratedWidget();
+  GtkUi::GetPlatform()->ClearTransientFor(parent_id);
 }
 
 base::OnceClosure DisableHostInputHandling(GtkWidget* dialog,
@@ -259,7 +269,7 @@ void ParseButtonLayout(const std::string& button_string,
         left_side = false;
       }
     } else {
-      base::StringPiece token = tokenizer.token_piece();
+      std::string_view token = tokenizer.token_piece();
       if (token == "minimize") {
         (left_side ? leading_buttons : trailing_buttons)
             ->push_back(views::FrameButton::kMinimize);
@@ -387,7 +397,6 @@ GtkStateFlags StateToStateFlags(ui::NativeTheme::State state) {
                                         GTK_STATE_FLAG_ACTIVE);
     default:
       NOTREACHED();
-      return GTK_STATE_FLAG_NORMAL;
   }
 }
 
@@ -683,8 +692,9 @@ GdkModifierType GetGdkKeyEventState(const ui::KeyEvent& key_event) {
 
 GdkEvent* GdkEventFromKeyEvent(const ui::KeyEvent& key_event) {
   DCHECK(!GtkCheckVersion(4));
-  GdkEventType event_type =
-      key_event.type() == ui::ET_KEY_PRESSED ? GdkKeyPress() : GdkKeyRelease();
+  GdkEventType event_type = key_event.type() == ui::EventType::kKeyPressed
+                                ? GdkKeyPress()
+                                : GdkKeyRelease();
   auto event_time = key_event.time_stamp() - base::TimeTicks();
   int hw_code = GetKeyEventProperty(key_event, ui::kPropertyKeyboardHwKeyCode);
   int group = GetKeyEventProperty(key_event, ui::kPropertyKeyboardGroup);

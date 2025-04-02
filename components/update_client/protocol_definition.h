@@ -34,7 +34,7 @@ inline constexpr int kEventUninstall = 4;
 inline constexpr int kEventDownload = 14;
 
 // App Command Events.
-inline constexpr int kEventAppCommandBegin = 40;
+inline constexpr int kEventAppCommandComplete = 41;
 
 inline constexpr int kEventAction = 42;
 
@@ -136,6 +136,7 @@ struct App {
   std::string lang;
   std::string brand_code;
   int install_date = kDateUnknown;
+  std::string install_id;
   std::string install_source;
   std::string install_location;
   std::string fingerprint;

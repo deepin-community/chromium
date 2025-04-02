@@ -32,7 +32,7 @@ Here’s an overview picture of the intended architecture:
 - Content Proxies are a convenience feature to allow easy and safe access from nodes in the graph
   to the corresponding content entity for any task that needs to run on the main thread.
 
-The graph lives on the Performance Manager Sequence, as do all graph observers and mutators.
+The graph lives on the main thread, as do all graph observers and mutators.
 The graph structure can be viewed in the graph tab of the `chrome://discards WebUI.`
 
 In addition to the above, the Performance Manager also provides support for
@@ -137,8 +137,9 @@ criteria for flushing is met, the policy invokes the mechanism by rendezvousing
 to a process-associated mojo interface and invoking on it.
 
 If the mojo interface is accessible through a content entity (e.g.
-content::WebContents), the mechanism invocation is posted to the main thread
-where the relevant content proxy (e.g. performance_manager::WebContentsProxy)
-makes it easy and safe to retrieve the content entity on the main thread.
-Should the corresponding content entity have been deleted after the task was
-posted, the content proxy will simply return nullptr.
+`content::WebContents` or `content::RenderFrameHost`), the mechanism invocation
+is posted to the main thread where the relevant content proxy (e.g.
+`WeakPtr<WebContents>` or `performance_manager::RenderFrameHostProxy`) makes it
+easy and safe to retrieve the content entity on the main thread. Should the
+corresponding content entity have been deleted after the task was posted, the
+content proxy will simply return nullptr.

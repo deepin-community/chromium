@@ -21,9 +21,9 @@ import {
   waitForFunction,
   withControlOrMetaKey,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {CONSOLE_TAB_SELECTOR, focusConsolePrompt, getCurrentConsoleMessages} from '../helpers/console-helpers.js';
 import {openSoftContextMenuAndClickOnItem} from '../helpers/context-menu-helpers.js';
+import {reloadDevTools} from '../helpers/cross-tool-helper.js';
 import {
   clickNthChildOfSelectedElementNode,
   focusElementsTree,
@@ -42,7 +42,6 @@ import {
   openSourceCodeEditorForFile,
   openSourcesPanel,
   PAUSE_INDICATOR_SELECTOR,
-  refreshDevToolsAndRemoveBackendState,
   reloadPageAndWaitForSourceFile,
   removeBreakpointForLine,
   RESUME_BUTTON,
@@ -60,10 +59,10 @@ async function waitForTextContent(selector: string) {
   return await element.evaluate(({textContent}) => textContent);
 }
 
-const DEVTOOLS_LINK = '.toolbar-item .devtools-link';
+const DEVTOOLS_LINK = 'devtools-toolbar .devtools-link';
 const INFOBAR_TEXT = '.infobar-info-text';
 
-describe('The Sources Tab', async function() {
+describe('The Sources Tab', function() {
   // Some of these tests that use instrumentation breakpoints
   // can be slower on mac and windows. Increase the timeout for them.
   if (this.timeout() !== 0) {
@@ -236,11 +235,6 @@ describe('The Sources Tab', async function() {
     });
 
     await step('Check that expression evaluation understands unminified name', async () => {
-      await frontend.evaluate(`(async () => {
-        const Root = await import('./core/root/root.js');
-        Root.Runtime.experiments.setEnabled('evaluateExpressionsWithSourceMaps', true);
-      })()`);
-
       await click(CONSOLE_TAB_SELECTOR);
       await focusConsolePrompt();
       await pasteText('`Hello${text}!`');
@@ -358,39 +352,40 @@ describe('The Sources Tab', async function() {
     });
   });
 
-  // TODO(crbug.com/1346228) Flaky - timeouts.
-  it.skip('[crbug.com/1346228] automatically ignore-lists third party code from source maps', async function() {
-    const {target} = getBrowserAndPages();
-    await openSourceCodeEditorForFile('webpack-main.js', 'webpack-index.html');
+  // Flaky test
+  it.skipOnPlatforms(
+      ['win32'], '[crbug.com/327580855] automatically ignore-lists third party code from source maps', async () => {
+        const {target} = getBrowserAndPages();
+        await openSourceCodeEditorForFile('webpack-main.js', 'webpack-index.html');
 
-    let scriptEvaluation: Promise<unknown>;
-    const breakLocationOuterRegExp = /index\.js:12$/;
+        let scriptEvaluation: Promise<unknown>;
+        const breakLocationOuterRegExp = /index\.js:12$/;
 
-    await step('Run to breakpoint', async () => {
-      scriptEvaluation = target.evaluate('window.foo()');
+        await step('Run to breakpoint', async () => {
+          scriptEvaluation = target.evaluate('window.foo()');
 
-      const scriptLocation = await waitForStackTopMatch(breakLocationOuterRegExp);
-      assert.match(scriptLocation, breakLocationOuterRegExp);
-      assert.deepEqual(await getCallFrameNames(), ['baz', 'bar', 'foo', '(anonymous)']);
-    });
+          const scriptLocation = await waitForStackTopMatch(breakLocationOuterRegExp);
+          assert.match(scriptLocation, breakLocationOuterRegExp);
+          assert.deepEqual(await getCallFrameNames(), ['baz', 'bar', 'foo', '(anonymous)']);
+        });
 
-    await step('Toggle to show ignore-listed frames', async () => {
-      await click('.ignore-listed-message-label');
-      await waitFor('.ignore-listed-call-frame:not(.hidden)');
-      assert.deepEqual(await getCallFrameNames(), ['baz', 'vendor', 'bar', 'foo', '(anonymous)']);
-    });
+        await step('Toggle to show ignore-listed frames', async () => {
+          await click('.ignore-listed-message-label');
+          await waitFor('.ignore-listed-call-frame:not(.hidden)');
+          assert.deepEqual(await getCallFrameNames(), ['baz', 'vendor', 'bar', 'foo', '(anonymous)']);
+        });
 
-    await step('Toggle back off', async () => {
-      await click('.ignore-listed-message-label');
-      await waitFor('.ignore-listed-call-frame.hidden');
-      assert.deepEqual(await getCallFrameNames(), ['baz', 'bar', 'foo', '(anonymous)']);
-    });
+        await step('Toggle back off', async () => {
+          await click('.ignore-listed-message-label');
+          await waitFor('.ignore-listed-call-frame.hidden');
+          assert.deepEqual(await getCallFrameNames(), ['baz', 'bar', 'foo', '(anonymous)']);
+        });
 
-    await step('Resume execution', async () => {
-      await click(RESUME_BUTTON);
-      await scriptEvaluation;
-    });
-  });
+        await step('Resume execution', async () => {
+          await click(RESUME_BUTTON);
+          await scriptEvaluation;
+        });
+      });
 
   it('updates decorators for removed breakpoints in case of code-splitting (crbug.com/1251675)', async () => {
     const {frontend} = getBrowserAndPages();
@@ -403,8 +398,8 @@ describe('The Sources Tab', async function() {
   });
 
   it('reliably hits breakpoints on worker with source map', async () => {
-    await enableExperiment('instrumentationBreakpoints');
-    const {target, frontend} = getBrowserAndPages();
+    await enableExperiment('instrumentation-breakpoints');
+    const {frontend} = getBrowserAndPages();
     await openSourceCodeEditorForFile('sourcemap-stepping-source.js', 'sourcemap-breakpoint.html');
 
     await step('Add a breakpoint at first line of function multiline', async () => {
@@ -412,7 +407,7 @@ describe('The Sources Tab', async function() {
     });
 
     await step('Navigate to a different site to refresh devtools and remove back-end state', async () => {
-      await refreshDevToolsAndRemoveBackendState(target);
+      await reloadDevTools({removeBackendState: true, selectedPanel: {name: 'sources'}});
     });
 
     await step('Navigate back to test page', () => {
@@ -695,7 +690,7 @@ describe('The Sources Tab', async function() {
   });
 });
 
-describe('The Elements Tab', async () => {
+describe('The Elements Tab', () => {
   async function clickStyleValueWithModifiers(selector: string, name: string, value: string, location: string) {
     const element = await waitForCSSPropertyValue(selector, name, value, location);
     // Click with offset to skip swatches.

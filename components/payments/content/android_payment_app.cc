@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "base/check.h"
-#include "build/chromeos_buildflags.h"
 #include "components/payments/core/method_strings.h"
 #include "components/payments/core/native_error_strings.h"
 #include "components/payments/core/payer_data.h"
@@ -89,15 +88,10 @@ bool AndroidPaymentApp::CanPreselect() const {
 
 std::u16string AndroidPaymentApp::GetMissingInfoLabel() const {
   NOTREACHED();
-  return std::u16string();
 }
 
 bool AndroidPaymentApp::HasEnrolledInstrument() const {
   return true;
-}
-
-void AndroidPaymentApp::RecordUse() {
-  NOTIMPLEMENTED();
 }
 
 bool AndroidPaymentApp::NeedsInstallation() const {
@@ -152,7 +146,7 @@ bool AndroidPaymentApp::IsWaitingForPaymentDetailsUpdate() const {
 
 void AndroidPaymentApp::UpdateWith(
     mojom::PaymentRequestDetailsUpdatePtr details_update) {
-  // TODO(crbug.com/1022512): Support payment method, shipping address, and
+  // TODO(crbug.com/40106647): Support payment method, shipping address, and
   // shipping option change events.
 }
 
@@ -176,12 +170,13 @@ bool AndroidPaymentApp::IsPreferred() const {
   // available is the trusted web application (TWA) that launched this instance
   // of Chrome with a TWA specific payment method, so this app should be
   // preferred.
-#if !BUILDFLAG(IS_CHROMEOS)
-  NOTREACHED();
-#endif  // BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
   DCHECK_EQ(1U, GetAppMethodNames().size());
   DCHECK_EQ(methods::kGooglePlayBilling, *GetAppMethodNames().begin());
   return true;
+#else
+  NOTREACHED();
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 void AndroidPaymentApp::OnPaymentAppResponse(

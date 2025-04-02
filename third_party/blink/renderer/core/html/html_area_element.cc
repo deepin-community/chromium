@@ -21,6 +21,7 @@
 
 #include "third_party/blink/renderer/core/html/html_area_element.h"
 
+#include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/html/html_map_element.h"
@@ -43,7 +44,7 @@ float ClampCoordinate(double value) {
 }
 
 HTMLAreaElement::HTMLAreaElement(Document& document)
-    : HTMLAnchorElement(html_names::kAreaTag, document), shape_(kRect) {}
+    : HTMLAnchorElementBase(html_names::kAreaTag, document), shape_(kRect) {}
 
 // An explicit empty destructor should be in html_area_element.cc, because
 // if an implicit destructor is used or an empty destructor is defined in
@@ -77,7 +78,7 @@ void HTMLAreaElement::ParseAttribute(
              params.name == html_names::kAccesskeyAttr) {
     // Do nothing.
   } else {
-    HTMLAnchorElement::ParseAttribute(params);
+    HTMLAnchorElementBase::ParseAttribute(params);
   }
 }
 
@@ -160,7 +161,6 @@ Path HTMLAreaElement::GetPath(const LayoutObject* container_object) const {
         break;
       default:
         NOTREACHED();
-        break;
     }
 
     // Cache the original path, not depending on containerObject.
@@ -184,27 +184,32 @@ HTMLImageElement* HTMLAreaElement::ImageElement() const {
   return nullptr;
 }
 
-bool HTMLAreaElement::IsKeyboardFocusable(
+bool HTMLAreaElement::IsKeyboardFocusableSlow(
     UpdateBehavior update_behavior) const {
-  // Explicitly skip over the HTMLAnchorElement's keyboard focus behavior.
-  return Element::IsKeyboardFocusable(update_behavior);
+  // Explicitly skip over the HTMLAnchorElementBase's keyboard focus behavior.
+  return Element::IsKeyboardFocusableSlow(update_behavior);
 }
 
-bool HTMLAreaElement::IsFocusable(UpdateBehavior update_behavior) const {
-  // Explicitly skip over the HTMLAnchorElement's mouse focus behavior.
-  return HTMLElement::IsFocusable(update_behavior);
+FocusableState HTMLAreaElement::IsFocusableState(
+    UpdateBehavior update_behavior) const {
+  // Explicitly skip over the HTMLAnchorElementBase's mouse focus behavior.
+  return HTMLElement::IsFocusableState(update_behavior);
 }
 
 bool HTMLAreaElement::IsFocusableStyle(UpdateBehavior update_behavior) const {
-  if (HTMLImageElement* image = ImageElement()) {
-    // TODO(crbug.com/1444450): Why is this not just image->IsFocusableStyle()?
-    if (LayoutObject* layout_object = image->GetLayoutObject()) {
-      const ComputedStyle& style = layout_object->StyleRef();
-      return !style.IsInert() && style.Visibility() == EVisibility::kVisible &&
-             SupportsFocus(update_behavior) && Element::tabIndex() >= 0;
-    }
+  HTMLImageElement* image = ImageElement();
+  if (!image) {
+    return false;
   }
-  return false;
+  LayoutObject* layout_object = image->GetLayoutObject();
+  if (!layout_object) {
+    return false;
+  }
+  const ComputedStyle& style = layout_object->StyleRef();
+  // TODO(crbug.com/40911863): Why is this not just image->IsFocusableStyle()?
+  return !style.IsInert() && style.Visibility() == EVisibility::kVisible &&
+         Element::tabIndex() >= 0 &&
+         SupportsFocus(update_behavior) != FocusableState::kNotFocusable;
 }
 
 void HTMLAreaElement::SetFocused(bool should_be_focused,
@@ -212,7 +217,7 @@ void HTMLAreaElement::SetFocused(bool should_be_focused,
   if (IsFocused() == should_be_focused)
     return;
 
-  HTMLAnchorElement::SetFocused(should_be_focused, focus_type);
+  HTMLAnchorElementBase::SetFocused(should_be_focused, focus_type);
 
   HTMLImageElement* image_element = ImageElement();
   if (!image_element)

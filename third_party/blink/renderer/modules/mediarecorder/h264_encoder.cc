@@ -2,8 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/modules/mediarecorder/h264_encoder.h"
 
+#include <array>
 #include <optional>
 #include <utility>
 
@@ -40,7 +46,7 @@ std::optional<EProfileIdc> ToOpenH264Profile(media::VideoCodecProfile profile) {
           {media::H264PROFILE_HIGH, PRO_HIGH},
       });
 
-  const auto* it = kProfileToEProfileIdc.find(profile);
+  const auto it = kProfileToEProfileIdc.find(profile);
   if (it != kProfileToEProfileIdc.end()) {
     return it->second;
   }
@@ -69,7 +75,7 @@ std::optional<ELevelIdc> ToOpenH264Level(uint8_t level) {
           {52, LEVEL_5_2},
       });
 
-  const auto* it = kLevelToELevelIdc.find(level);
+  const auto it = kLevelToELevelIdc.find(level);
   if (it != kLevelToELevelIdc.end())
     return it->second;
   return std::nullopt;
@@ -124,7 +130,8 @@ void H264Encoder::EncodeFrame(scoped_refptr<media::VideoFrame> frame,
   const gfx::Size frame_size = frame->visible_rect().size();
   if (!openh264_encoder_ || configured_size_ != frame_size) {
     if (!ConfigureEncoder(frame_size)) {
-      on_error_cb_.Run();
+      on_error_cb_.Run(
+          media::EncoderStatus::Codes::kEncoderInitializationError);
       return;
     }
     first_frame_timestamp_ = capture_timestamp;
@@ -136,15 +143,15 @@ void H264Encoder::EncodeFrame(scoped_refptr<media::VideoFrame> frame,
   picture.iColorFormat = EVideoFormatType::videoFormatI420;
   picture.uiTimeStamp =
       (capture_timestamp - first_frame_timestamp_).InMilliseconds();
-  picture.iStride[0] = frame->stride(VideoFrame::kYPlane);
-  picture.iStride[1] = frame->stride(VideoFrame::kUPlane);
-  picture.iStride[2] = frame->stride(VideoFrame::kVPlane);
+  picture.iStride[0] = frame->stride(VideoFrame::Plane::kY);
+  picture.iStride[1] = frame->stride(VideoFrame::Plane::kU);
+  picture.iStride[2] = frame->stride(VideoFrame::Plane::kV);
   picture.pData[0] =
-      const_cast<uint8_t*>(frame->visible_data(VideoFrame::kYPlane));
+      const_cast<uint8_t*>(frame->visible_data(VideoFrame::Plane::kY));
   picture.pData[1] =
-      const_cast<uint8_t*>(frame->visible_data(VideoFrame::kUPlane));
+      const_cast<uint8_t*>(frame->visible_data(VideoFrame::Plane::kU));
   picture.pData[2] =
-      const_cast<uint8_t*>(frame->visible_data(VideoFrame::kVPlane));
+      const_cast<uint8_t*>(frame->visible_data(VideoFrame::Plane::kV));
 
   SFrameBSInfo info = {};
 
@@ -159,14 +166,16 @@ void H264Encoder::EncodeFrame(scoped_refptr<media::VideoFrame> frame,
         {media::EncoderStatus::Codes::kEncoderFailedEncode,
          base::StrCat(
              {"OpenH264 failed to encode: ", base::NumberToString(ret)})});
-    on_error_cb_.Run();
+    on_error_cb_.Run(media::EncoderStatus::Codes::kEncoderFailedEncode);
     return;
   }
   const media::Muxer::VideoParameters video_params(*frame);
   frame = nullptr;
 
   std::string data;
-  const uint8_t kNALStartCode[4] = {0, 0, 0, 1};
+  scoped_refptr<media::DecoderBuffer> buffer;
+
+  const std::array<uint8_t, 4> kNALStartCode = {0, 0, 0, 1};
   for (int layer = 0; layer < info.iLayerNum; ++layer) {
     const SLayerBSInfo& layerInfo = info.sLayerInfo[layer];
     // Iterate NAL units making up this layer, noting fragments.
@@ -184,11 +193,12 @@ void H264Encoder::EncodeFrame(scoped_refptr<media::VideoFrame> frame,
     // Copy the entire layer's data (including NAL start codes).
     data.append(reinterpret_cast<char*>(layerInfo.pBsBuf), layer_len);
   }
+  buffer = media::DecoderBuffer::CopyFrom(base::as_byte_span(data));
 
   metrics_provider_->IncrementEncodedFrameCount();
-  const bool is_key_frame = info.eFrameType == videoFrameTypeIDR;
-  on_encoded_video_cb_.Run(video_params, std::move(data), std::string(),
-                           std::nullopt, capture_timestamp, is_key_frame);
+  buffer->set_is_key_frame(info.eFrameType == videoFrameTypeIDR);
+  on_encoded_video_cb_.Run(video_params, std::move(buffer), std::nullopt,
+                           capture_timestamp);
 }
 
 bool H264Encoder::ConfigureEncoder(const gfx::Size& size) {
@@ -196,7 +206,6 @@ bool H264Encoder::ConfigureEncoder(const gfx::Size& size) {
   ISVCEncoder* temp_encoder = nullptr;
   if (WelsCreateSVCEncoder(&temp_encoder) != 0) {
     NOTREACHED() << "Failed to create OpenH264 encoder";
-    return false;
   }
   openh264_encoder_.reset(temp_encoder);
   configured_size_ = size;
@@ -262,6 +271,14 @@ bool H264Encoder::ConfigureEncoder(const gfx::Size& size) {
   init_params.sSpatialLayers[0].sSliceArgument.uiSliceNum = 0;
   init_params.sSpatialLayers[0].sSliceArgument.uiSliceMode =
       SM_FIXEDSLCNUM_SLICE;
+
+  // Reuse SPS/PPS id if possible that will make the fragmented box in the
+  // MP4 blob to reference the `avcC` box, which contains the SPS/PPS of the
+  // first key frame.
+  // TODO: We might have to use CONSTANT_ID (or at least SPS_PPS_LISTING), but
+  // it isn't clear yet how it affects Encoder only operation
+  // (OpenH264VideoEncoder also uses SPS_LISTING).
+  init_params.eSpsPpsIdStrategy = SPS_LISTING;
 
   metrics_provider_->Initialize(
       codec_profile_.profile.value_or(media::H264PROFILE_BASELINE),

@@ -17,7 +17,7 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
-#include "chrome/browser/ui/web_applications/web_app_controller_browsertest.h"
+#include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/test/web_app_test_observers.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
@@ -37,7 +37,7 @@
 
 namespace web_app {
 
-class WebAppUninstallBrowserTest : public WebAppControllerBrowserTest {
+class WebAppUninstallBrowserTest : public WebAppBrowserTestBase {
  public:
   GURL GetSecureAppURL() {
     return https_server()->GetURL("app.com", "/ssl/google.html");
@@ -50,7 +50,7 @@ class WebAppUninstallBrowserTest : public WebAppControllerBrowserTest {
     DCHECK(provider->registrar_unsafe().CanUserUninstallWebApp(app_id));
     provider->scheduler().RemoveUserUninstallableManagements(
         app_id, webapps::WebappUninstallSource::kAppMenu, future.GetCallback());
-    EXPECT_EQ(future.Get(), webapps::UninstallResultCode::kSuccess);
+    EXPECT_EQ(future.Get(), webapps::UninstallResultCode::kAppRemoved);
 
     base::RunLoop().RunUntilIdle();
   }
@@ -155,13 +155,15 @@ IN_PROC_BROWSER_TEST_F(WebAppUninstallBrowserTest, TwoUninstallCalls) {
 
   // Trigger app uninstall without waiting for result.
   WebAppProvider* const provider = WebAppProvider::GetForTest(profile());
-  EXPECT_TRUE(provider->registrar_unsafe().IsInstalled(app_id));
+  EXPECT_EQ(proto::InstallState::INSTALLED_WITH_OS_INTEGRATION,
+            provider->registrar_unsafe().GetInstallState(app_id));
   DCHECK(provider->registrar_unsafe().CanUserUninstallWebApp(app_id));
   provider->scheduler().RemoveUserUninstallableManagements(
       app_id, webapps::WebappUninstallSource::kAppMenu,
       base::BindLambdaForTesting([&](webapps::UninstallResultCode code) {
-        if (quit_run_loop)
+        if (quit_run_loop) {
           run_loop.Quit();
+        }
         quit_run_loop = true;
       }));
 
@@ -171,8 +173,9 @@ IN_PROC_BROWSER_TEST_F(WebAppUninstallBrowserTest, TwoUninstallCalls) {
   provider->scheduler().RemoveUserUninstallableManagements(
       app_id, webapps::WebappUninstallSource::kAppMenu,
       base::BindLambdaForTesting([&](webapps::UninstallResultCode code) {
-        if (quit_run_loop)
+        if (quit_run_loop) {
           run_loop.Quit();
+        }
         quit_run_loop = true;
       }));
 
@@ -193,7 +196,7 @@ IN_PROC_BROWSER_TEST_F(WebAppUninstallBrowserTest, TwoUninstallCalls) {
       }));
 
   run_loop.Run();
-  EXPECT_FALSE(provider->registrar_unsafe().IsInstalled(app_id));
+  EXPECT_FALSE(provider->registrar_unsafe().IsInRegistrar(app_id));
 }
 
 }  // namespace web_app

@@ -7,6 +7,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
+#include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -15,18 +18,18 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "base/version.h"
+#include "base/version_info/version_info.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/encrypted_messages/encrypted_message.pb.h"
 #include "components/encrypted_messages/message_encrypter.h"
 #include "components/metrics/metrics_state_manager.h"
@@ -64,7 +67,7 @@ namespace {
 // seed over http.
 const char kEncryptedMessageLabel[] = "chrome variations";
 
-// TODO(crbug.com/792239): Change this key to a unique VariationsService one,
+// TODO(crbug.com/41359527): Change this key to a unique VariationsService one,
 // once the matching private key is changed server side.
 // Key is used to encrypt headers in seed retrieval requests that happen over
 // HTTP connections (when retrying after an unsuccessful HTTPS retrieval
@@ -91,10 +94,8 @@ std::string GetPlatformString() {
   return "ios";
 #elif BUILDFLAG(IS_MAC)
   return "mac";
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
+#elif BUILDFLAG(IS_CHROMEOS)
   return "chromeos";
-#elif BUILDFLAG(IS_CHROMEOS_LACROS)
-  return "chromeos_lacros";
 #elif BUILDFLAG(IS_ANDROID)
   return "android";
 #elif BUILDFLAG(IS_FUCHSIA)
@@ -160,28 +161,25 @@ ResourceRequestsAllowedState ResourceRequestStateToHistogramValue(
       return RESOURCE_REQUESTS_ALLOWED;
   }
   NOTREACHED();
-  return RESOURCE_REQUESTS_NOT_ALLOWED;
 }
 
-// Returns the header value for |name| from |headers| or an empty string if not
-// set.
-std::string GetHeaderValue(const net::HttpResponseHeaders* headers,
-                           const base::StringPiece& name) {
-  std::string value;
-  headers->EnumerateHeader(nullptr, name, &value);
-  return value;
+// Returns the header value for |name| from |headers| or an empty string_view if
+// not set.
+std::string_view GetHeaderValue(const net::HttpResponseHeaders* headers,
+                                std::string_view name) {
+  return headers->EnumerateHeader(nullptr, name).value_or(std::string_view());
 }
 
 // Returns the list of values for |name| from |headers|. If the header in not
 // set, return an empty list.
 std::vector<std::string> GetHeaderValuesList(
     const net::HttpResponseHeaders* headers,
-    const base::StringPiece& name) {
+    std::string_view name) {
   std::vector<std::string> values;
   size_t iter = 0;
-  std::string value;
-  while (headers->EnumerateHeader(&iter, name, &value)) {
-    values.push_back(value);
+  while (std::optional<std::string_view> value =
+             headers->EnumerateHeader(&iter, name)) {
+    values.emplace_back(*value);
   }
   return values;
 }
@@ -194,8 +192,8 @@ bool GetInstanceManipulations(const net::HttpResponseHeaders* headers,
                               bool* is_delta_compressed,
                               bool* is_gzip_compressed) {
   std::vector<std::string> ims = GetHeaderValuesList(headers, "IM");
-  const auto delta_im = base::ranges::find(ims, "x-bm");
-  const auto gzip_im = base::ranges::find(ims, "gzip");
+  const auto delta_im = std::ranges::find(ims, "x-bm");
+  const auto gzip_im = std::ranges::find(ims, "gzip");
   *is_delta_compressed = delta_im != ims.end();
   *is_gzip_compressed = gzip_im != ims.end();
 
@@ -254,11 +252,11 @@ std::unique_ptr<SeedResponse> MaybeImportFirstRunSeed(
 
 }  // namespace
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // This is a utility which syncs the policy-managed value of
 // |prefs::kDeviceVariationsRestrictionsByPolicy| into
 // |prefs::kVariationsRestrictionsByPolicy|.
-// TODO(crbug.com/1060224): Remove this workaround and implement a better long
+// TODO(crbug.com/40121933): Remove this workaround and implement a better long
 // term solution.
 class DeviceVariationsRestrictionByPolicyApplicator {
  public:
@@ -308,7 +306,7 @@ class DeviceVariationsRestrictionByPolicyApplicator {
   // and saves and retrieve its local state value, then sets
   // prefs::kVariationsRestrictParameter with that new value. That's to
   // reflect the changes of chromeos policy into the user policy.
-  // TODO(crbug.com/1060224): Remove that workaround, and make a better long
+  // TODO(crbug.com/40121933): Remove that workaround, and make a better long
   // term solution.
   void OnDevicePolicyChange() {
     const std::string& device_policy =
@@ -331,7 +329,7 @@ class DeviceVariationsRestrictionByPolicyApplicator {
   base::WeakPtrFactory<DeviceVariationsRestrictionByPolicyApplicator>
       weak_ptr_factory_{this};
 };
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 VariationsService::VariationsService(
     std::unique_ptr<VariationsServiceClient> client,
@@ -344,23 +342,37 @@ VariationsService::VariationsService(
       local_state_(local_state),
       synthetic_trial_registry_(synthetic_trial_registry),
       state_manager_(state_manager),
-      limited_entropy_synthetic_trial_(local_state),
+      limited_entropy_synthetic_trial_(
+          local_state,
+          client_.get()->GetChannelForVariations()),
       policy_pref_service_(local_state),
       resource_request_allowed_notifier_(std::move(notifier)),
       safe_seed_manager_(local_state),
+      entropy_providers_(state_manager_->CreateEntropyProviders(
+          VariationsFieldTrialCreatorBase::
+              IsLimitedEntropyRandomizationSourceEnabled(
+                  client_->GetChannelForVariations(),
+                  &limited_entropy_synthetic_trial_))),
       field_trial_creator_(
           client_.get(),
           std::make_unique<VariationsSeedStore>(
               local_state,
               MaybeImportFirstRunSeed(client_.get(), local_state),
               /*signature_verification_enabled=*/true,
-              std::make_unique<VariationsSafeSeedStoreLocalState>(local_state)),
+              std::make_unique<VariationsSafeSeedStoreLocalState>(
+                  local_state,
+                  client_.get()->GetVariationsSeedFileDir(),
+                  client_.get()->GetChannelForVariations(),
+                  entropy_providers_.get()),
+              client_.get()->GetChannelForVariations(),
+              client_.get()->GetVariationsSeedFileDir(),
+              entropy_providers_.get()),
           ui_string_overrider,
           &limited_entropy_synthetic_trial_) {
   DCHECK(client_);
   DCHECK(resource_request_allowed_notifier_);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   device_variations_restrictions_by_policy_applicator_ =
       std::make_unique<DeviceVariationsRestrictionByPolicyApplicator>(
           policy_pref_service_);
@@ -385,13 +397,6 @@ void VariationsService::PerformPreMainMessageLoopStartup() {
 
   StartRepeatedVariationsSeedFetch();
 #endif  // !BUILDFLAG(IS_ANDROID)
-}
-
-std::string VariationsService::LoadPermanentConsistencyCountry(
-    const base::Version& version,
-    const std::string& latest_country) {
-  return field_trial_creator_.LoadPermanentConsistencyCountry(version,
-                                                              latest_country);
 }
 
 bool VariationsService::EncryptString(const std::string& plaintext,
@@ -447,6 +452,17 @@ bool VariationsService::IsLikelyDogfoodClient() const {
   return !restrict_mode.empty();
 }
 
+void VariationsService::SetIsLikelyDogfoodClientForTesting(
+    bool is_dogfood_client) {
+  // Any non-empty value for the `restrict_mode_` is treated as a dogfood client
+  // (see above).
+  if (is_dogfood_client) {
+    restrict_mode_ = "nonempty";
+  } else {
+    restrict_mode_ = std::string();
+  }
+}
+
 GURL VariationsService::GetVariationsServerURL(HttpOptions http_options) {
   const bool secure = http_options == USE_HTTPS;
   const std::string restrict_mode = GetRestrictParameterValue(
@@ -493,7 +509,7 @@ GURL VariationsService::GetVariationsServerURL(HttpOptions http_options) {
 }
 
 void VariationsService::EnsureLocaleEquals(const std::string& locale) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Chrome OS may switch language on the fly.
   return;
 #else
@@ -509,7 +525,7 @@ void VariationsService::EnsureLocaleEquals(const std::string& locale) {
   // problems in this area may only appear in the wild due to official builds
   // and end user machines.
   if (locale != field_trial_creator_.application_locale()) {
-    // TODO(crbug.com/912320): Report the two values in crash keys.
+    // TODO(crbug.com/41430274): Report the two values in crash keys.
     static auto* lhs_key = base::debug::AllocateCrashKeyString(
         "mismatched_locale_lhs", base::debug::CrashKeySize::Size256);
     static auto* rhs_key = base::debug::AllocateCrashKeyString(
@@ -577,15 +593,13 @@ std::unique_ptr<VariationsService> VariationsService::Create(
     web_resource::ResourceRequestAllowedNotifier::NetworkConnectionTrackerGetter
         network_connection_tracker_getter,
     SyntheticTrialRegistry* synthetic_trial_registry) {
-  std::unique_ptr<VariationsService> result;
-  result.reset(new VariationsService(
+  return base::WrapUnique(new VariationsService(
       std::move(client),
       std::make_unique<web_resource::ResourceRequestAllowedNotifier>(
           local_state, disable_network_switch,
           std::move(network_connection_tracker_getter)),
       local_state, state_manager, ui_string_overrider,
       synthetic_trial_registry));
-  return result;
 }
 
 // static
@@ -837,14 +851,16 @@ void VariationsService::OnSimpleLoaderComplete(
   DCHECK(headers);
   DCHECK(response_body);
 
-  base::Time response_date;
-  if (headers->GetDateValue(&response_date)) {
-    DCHECK(!response_date.is_null());
+  std::optional<base::Time> response_date = headers->GetDateValue();
+  // If the seed was fetched securely, opportunistically update the network time
+  // tracker with the headers time.
+  if (response_date && !last_request_was_http_retry_) {
+    DCHECK(!response_date->is_null());
 
     const base::TimeDelta latency = now - last_request_started_time_;
     client_->GetNetworkTimeTracker()->UpdateNetworkTime(
-        response_date, base::Seconds(kServerTimeResolutionInSeconds), latency,
-        now);
+        response_date.value(), base::Seconds(kServerTimeResolutionInSeconds),
+        latency, now);
   }
 
   if (response_code == net::HTTP_NOT_MODIFIED) {
@@ -856,7 +872,7 @@ void VariationsService::OnSimpleLoaderComplete(
     // seed, even when running in safe mode, so it's appropriate to always
     // modify the latest seed's date.
     field_trial_creator_.seed_store()->UpdateSeedDateAndLogDayChange(
-        response_date);
+        response_date.value_or(base::Time()));
     return;
   }
 
@@ -873,11 +889,12 @@ void VariationsService::OnSimpleLoaderComplete(
     return;
   }
 
-  std::string signature = GetHeaderValue(headers.get(), "X-Seed-Signature");
-  std::string country_code = GetHeaderValue(headers.get(), "X-Country");
-  StoreSeed(std::move(*response_body), std::move(signature),
-            std::move(country_code), response_date, is_delta_compressed,
-            is_gzip_compressed);
+  std::string_view signature =
+      GetHeaderValue(headers.get(), "X-Seed-Signature");
+  std::string_view country_code = GetHeaderValue(headers.get(), "X-Country");
+  StoreSeed(std::move(*response_body), std::string(signature),
+            std::string(country_code), response_date.value_or(base::Time()),
+            is_delta_compressed, is_gzip_compressed);
 }
 
 bool VariationsService::MaybeRetryOverHTTP() {
@@ -918,15 +935,9 @@ void VariationsService::PerformSimulationWithVersion(
   if (!version.IsValid())
     return;
 
-  auto entropy_providers = state_manager_->CreateEntropyProviders(
-      VariationsFieldTrialCreatorBase::
-          IsLimitedEntropyRandomizationSourceEnabled(
-              client()->GetChannelForVariations(),
-              &limited_entropy_synthetic_trial_));
-
   std::unique_ptr<ClientFilterableState> client_state =
       field_trial_creator_.GetClientFilterableStateForVersion(version);
-  auto result = SimulateSeedStudies(seed, *client_state, *entropy_providers);
+  auto result = SimulateSeedStudies(seed, *client_state, *entropy_providers_);
 
   NotifyObservers(result);
 }
@@ -964,7 +975,7 @@ bool VariationsService::SetUpFieldTrials(
       variation_ids, command_line_variation_ids, extra_overrides,
       std::move(feature_list), state_manager_, synthetic_trial_registry_,
       platform_field_trials, &safe_seed_manager_,
-      /*add_entropy_source_to_variations_ids=*/true);
+      /*add_entropy_source_to_variations_ids=*/true, *entropy_providers_);
 }
 
 std::vector<StudyGroupNames> VariationsService::GetStudiesAvailableToForce() {
@@ -976,7 +987,7 @@ std::vector<StudyGroupNames> VariationsService::GetStudiesAvailableToForce() {
     return {};
   }
 
-  // TODO(crbug.com/1519232): chrome://field-trial-internals will not support
+  // TODO(crbug.com/41492213): chrome://field-trial-internals will not support
   // studies that are constrained to a layer with LIMITED entropy mode before
   // limited entropy randomization fully lands.
   auto entropy_providers = state_manager_->CreateEntropyProviders(
@@ -1015,20 +1026,7 @@ std::string VariationsService::GetOverriddenPermanentCountry() const {
 }
 
 std::string VariationsService::GetStoredPermanentCountry() const {
-  const std::string variations_overridden_country =
-      GetOverriddenPermanentCountry();
-  if (!variations_overridden_country.empty())
-    return variations_overridden_country;
-
-  const auto& list_value =
-      local_state_->GetList(prefs::kVariationsPermanentConsistencyCountry);
-  std::string stored_country;
-
-  if (list_value.size() == 2 && list_value[1].is_string()) {
-    stored_country = list_value[1].GetString();
-  }
-
-  return stored_country;
+  return field_trial_creator_.GetPermanentConsistencyCountry();
 }
 
 bool VariationsService::OverrideStoredPermanentCountry(

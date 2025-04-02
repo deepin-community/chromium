@@ -26,7 +26,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/first_run/first_run.h"
-#include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/metrics/chrome_metrics_services_manager_client.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/prefs/chrome_pref_service_factory.h"
@@ -36,6 +35,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/installer/util/google_update_settings.h"
 #include "components/content_settings/core/common/features.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/flags_ui/flags_ui_pref_names.h"
 #include "components/flags_ui/pref_service_flags_storage.h"
 #include "components/language/core/browser/pref_names.h"
@@ -89,25 +89,12 @@ GetSwitchDependentFeatureOverrides(const base::CommandLine& command_line) {
   } chrome_layer_override_info[] = {
       // Overrides for --enable-download-warning-improvements.
       {switches::kEnableDownloadWarningImprovements,
-       std::cref(safe_browsing::kDeepScanningEncryptedArchives),
-       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
-      {switches::kEnableDownloadWarningImprovements,
        std::cref(safe_browsing::kDownloadTailoredWarnings),
-       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
-      {switches::kEnableDownloadWarningImprovements,
-       std::cref(safe_browsing::kImprovedDownloadPageWarnings),
-       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
-      {switches::kEnableDownloadWarningImprovements,
-       std::cref(safe_browsing::kEncryptedArchivesMetadata),
        base::FeatureList::OVERRIDE_ENABLE_FEATURE},
 
       // Override for --privacy-sandbox-ads-apis.
       {switches::kEnablePrivacySandboxAdsApis,
        std::cref(privacy_sandbox::kOverridePrivacySandboxSettingsLocalTesting),
-       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
-      // Enable FedCM to test behavior for third-party cookie phaseout.
-      {network::switches::kTestThirdPartyCookiePhaseout,
-       std::cref(features::kFedCmWithoutThirdPartyCookies),
        base::FeatureList::OVERRIDE_ENABLE_FEATURE},
       // Enable 3PCD tracking protection UI.
       {network::switches::kTestThirdPartyCookiePhaseout,

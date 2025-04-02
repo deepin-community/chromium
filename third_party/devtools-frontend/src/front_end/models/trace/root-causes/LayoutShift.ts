@@ -4,17 +4,17 @@
 
 import * as Platform from '../../../core/platform/platform.js';
 import type * as Protocol from '../../../generated/protocol.js';
-import {type TraceParseData} from '../handlers/types.js';
+import type {ParsedTrace} from '../handlers/types.js';
 import * as Helpers from '../helpers/helpers.js';
 import * as Types from '../types/types.js';
 
-import {type RootCauseProtocolInterface} from './RootCauses.js';
+import type {RootCauseProtocolInterface} from './RootCauses.js';
 
-export type CSSDimensions = {
-  width?: string,
-  height?: string,
-  aspectRatio?: string,
-};
+export interface CSSDimensions {
+  width?: string;
+  height?: string;
+  aspectRatio?: string;
+}
 
 export interface UnsizedMedia {
   node: Protocol.DOM.Node;
@@ -27,7 +27,7 @@ export interface InjectedIframe {
 }
 
 export interface RootCauseRequest {
-  request: Types.TraceEvents.SyntheticNetworkRequest;
+  request: Types.Events.SyntheticNetworkRequest;
   initiator?: Protocol.Network.Initiator;
 }
 
@@ -42,15 +42,15 @@ export interface LayoutShiftRootCausesData {
   iframes: InjectedIframe[];
   fontChanges: FontChange[];
   renderBlockingRequests: RenderBlockingRequest[];
-  scriptStackTrace: Types.TraceEvents.TraceEventCallFrame[];
+  scriptStackTrace: Types.Events.CallFrame[];
 }
 
-const fontRequestsByPrePaint = new Map<Types.TraceEvents.TraceEventPrePaint, FontChange[]|null>();
-const renderBlocksByPrePaint = new Map<Types.TraceEvents.TraceEventPrePaint, RenderBlockingRequest[]|null>();
+const fontRequestsByPrePaint = new Map<Types.Events.PrePaint, FontChange[]|null>();
+const renderBlocksByPrePaint = new Map<Types.Events.PrePaint, RenderBlockingRequest[]|null>();
 
 function setDefaultValue(
-    map: Map<Types.TraceEvents.TraceEventLayoutShift, LayoutShiftRootCausesData>,
-    shift: Types.TraceEvents.TraceEventLayoutShift): void {
+    map: Map<Types.Events.SyntheticLayoutShift, LayoutShiftRootCausesData>,
+    shift: Types.Events.SyntheticLayoutShift): void {
   Platform.MapUtilities.getWithDefault(map, shift, () => {
     return {
       unsizedMedia: [],
@@ -62,34 +62,24 @@ function setDefaultValue(
   });
 }
 
-// Important: we purposefully treat `potentially_blocking` as
-// non-render-blocking here because:
-// 1. An async script can run on the main thread at any point, including before
-//    the page is loaded
-// 2. An async script will never block the parsing and rendering process of the
-//    browser.
-// 3. Therefore, from a developer's point of view, there is nothing more they
-//    can do if they've put `async` on, and within the context of Insights, we
-//    shouldn't report an async script as render blocking.
-// In the future we may want to consider suggesting the use of `defer` over
-// `async`, as it doesn't have this concern, but for now we'll allow `async`
-// and not report it as an issue.
-const NON_RENDER_BLOCKING_VALUES = new Set<Types.TraceEvents.RenderBlocking>([
-  'non_blocking',
-  'potentially_blocking',
-]);
-function networkRequestIsRenderBlockingInFrame(
-    event: Types.TraceEvents.SyntheticNetworkRequest, frameId: string): boolean {
-  const isRenderBlocking = !NON_RENDER_BLOCKING_VALUES.has(event.args.data.renderBlocking);
-  return isRenderBlocking && event.args.data.frame === frameId;
+function networkRequestIsRenderBlockingInFrame(event: Types.Events.SyntheticNetworkRequest, frameId: string): boolean {
+  return event.args.data.frame === frameId && Helpers.Network.isSyntheticNetworkRequestEventRenderBlocking(event);
+}
+
+interface Options {
+  /** Checking iframe root causes can be an expensive operation, so it is disabled by default. */
+  enableIframeRootCauses?: boolean;
 }
 
 export class LayoutShiftRootCauses {
   #protocolInterface: RootCauseProtocolInterface;
-  #rootCauseCacheMap = new Map<Types.TraceEvents.TraceEventLayoutShift, LayoutShiftRootCausesData>();
+  #rootCauseCacheMap = new Map<Types.Events.SyntheticLayoutShift, LayoutShiftRootCausesData>();
+  #nodeDetailsCache = new Map<Protocol.DOM.NodeId, Protocol.DOM.Node|null>();
+  #iframeRootCausesEnabled: boolean;
 
-  constructor(protocolInterface: RootCauseProtocolInterface) {
+  constructor(protocolInterface: RootCauseProtocolInterface, options?: Options) {
     this.#protocolInterface = protocolInterface;
+    this.#iframeRootCausesEnabled = options?.enableIframeRootCauses ?? false;
   }
 
   /**
@@ -100,7 +90,7 @@ export class LayoutShiftRootCauses {
    * events the first time that it's called. That then populates the cache for
    * each shift, so any subsequent calls are just a constant lookup.
    */
-  async rootCausesForEvent(modelData: TraceParseData, event: Types.TraceEvents.TraceEventLayoutShift):
+  async rootCausesForEvent(modelData: ParsedTrace, event: Types.Events.SyntheticLayoutShift):
       Promise<Readonly<LayoutShiftRootCausesData>|null> {
     const cachedResult = this.#rootCauseCacheMap.get(event);
     if (cachedResult) {
@@ -131,8 +121,8 @@ export class LayoutShiftRootCauses {
    * Determines potential root causes for shifts
    */
   async blameShifts(
-      layoutShifts: Types.TraceEvents.TraceEventLayoutShift[],
-      modelData: TraceParseData,
+      layoutShifts: Types.Events.SyntheticLayoutShift[],
+      modelData: ParsedTrace,
       ): Promise<void> {
     await this.linkShiftsToLayoutInvalidations(layoutShifts, modelData);
     this.linkShiftsToLayoutEvents(layoutShifts, modelData);
@@ -144,8 +134,8 @@ export class LayoutShiftRootCauses {
    * rendering pipeline. This function utilizes this event to flag potential root causes
    * to layout shifts.
    */
-  async linkShiftsToLayoutInvalidations(
-      layoutShifts: Types.TraceEvents.TraceEventLayoutShift[], modelData: TraceParseData): Promise<void> {
+  async linkShiftsToLayoutInvalidations(layoutShifts: Types.Events.SyntheticLayoutShift[], modelData: ParsedTrace):
+      Promise<void> {
     const {prePaintEvents, layoutInvalidationEvents, scheduleStyleInvalidationEvents, backendNodeIds} =
         modelData.LayoutShifts;
 
@@ -153,9 +143,9 @@ export class LayoutShiftRootCauses {
     // consider scheduleStyleInvalidationTracking and
     // LayoutInvalidationTracking events as events that could have been the
     // cause of the layout shift.
-    const eventsForLayoutInvalidation: Array<Types.TraceEvents.TraceEventLayoutInvalidationTracking|
-                                             Types.TraceEvents.TraceEventScheduleStyleInvalidationTracking> =
-        [...layoutInvalidationEvents, ...scheduleStyleInvalidationEvents];
+    const eventsForLayoutInvalidation:
+        Array<Types.Events.LayoutInvalidationTracking|Types.Events.ScheduleStyleInvalidationTracking> =
+            [...layoutInvalidationEvents, ...scheduleStyleInvalidationEvents];
 
     const nodes = await this.#protocolInterface.pushNodesByBackendIdsToFrontend(backendNodeIds);
     const nodeIdsByBackendIdMap = new Map<Protocol.DOM.BackendNodeId, Protocol.DOM.NodeId>();
@@ -182,15 +172,11 @@ export class LayoutShiftRootCauses {
       const fontChangeRootCause = this.getFontChangeRootCause(layoutInvalidation, nextPrePaint, modelData);
       const renderBlockRootCause = this.getRenderBlockRootCause(layoutInvalidation, nextPrePaint, modelData);
       const layoutInvalidationNodeId = nodeIdsByBackendIdMap.get(layoutInvalidation.args.data.nodeId);
-      const layoutInvalidationNode = layoutInvalidationNodeId !== undefined ?
-          await this.#protocolInterface.getNode(layoutInvalidationNodeId) :
-          null;
       let unsizedMediaRootCause: UnsizedMedia|null = null;
       let iframeRootCause: InjectedIframe|null = null;
-      if (layoutInvalidationNode && layoutInvalidation.args.data.reason) {
-        unsizedMediaRootCause =
-            await this.getUnsizedMediaRootCause(layoutInvalidation.args.data.reason, layoutInvalidationNode);
-        iframeRootCause = this.getIframeRootCause(layoutInvalidation.args.data.reason, layoutInvalidationNode);
+      if (layoutInvalidationNodeId !== undefined && Types.Events.isLayoutInvalidationTracking(layoutInvalidation)) {
+        unsizedMediaRootCause = await this.getUnsizedMediaRootCause(layoutInvalidation, layoutInvalidationNodeId);
+        iframeRootCause = await this.getIframeRootCause(layoutInvalidation, layoutInvalidationNodeId);
       }
 
       if (!unsizedMediaRootCause && !iframeRootCause && !fontChangeRootCause && !renderBlockRootCause) {
@@ -239,14 +225,14 @@ export class LayoutShiftRootCauses {
    * Note that a Layout cannot always be linked to a script, in that case, we cannot add a
    * "script causing reflow" as a potential root cause to the corresponding shift.
    */
-  linkShiftsToLayoutEvents(layoutShifts: Types.TraceEvents.TraceEventLayoutShift[], modelData: TraceParseData): void {
+  linkShiftsToLayoutEvents(layoutShifts: Types.Events.SyntheticLayoutShift[], modelData: ParsedTrace): void {
     const {prePaintEvents} = modelData.LayoutShifts;
     // Maps from PrePaint events to LayoutShifts that occured in each one.
     const shiftsByPrePaint = getShiftsByPrePaintEvents(layoutShifts, prePaintEvents);
 
     const eventTriggersLayout = ({name}: {name: string}): boolean => {
-      const knownName = name as Types.TraceEvents.KnownEventName;
-      return knownName === Types.TraceEvents.KnownEventName.Layout;
+      const knownName = name as Types.Events.Name;
+      return knownName === Types.Events.Name.LAYOUT;
     };
     const layoutEvents = modelData.Renderer.allTraceEntries.filter(eventTriggersLayout);
     for (const layout of layoutEvents) {
@@ -292,12 +278,18 @@ export class LayoutShiftRootCauses {
    * because a media element without dimensions was resized.
    */
   async getUnsizedMediaRootCause(
-      reason: Types.TraceEvents.LayoutInvalidationReason,
-      layoutInvalidationNode: Protocol.DOM.Node): Promise<UnsizedMedia|null> {
+      layoutInvalidation: Types.Events.LayoutInvalidationTracking,
+      layoutInvalidationNodeId: Protocol.DOM.NodeId): Promise<UnsizedMedia|null> {
     // Filter events to resizes only.
-    if (reason !== Types.TraceEvents.LayoutInvalidationReason.SIZE_CHANGED) {
+    if (layoutInvalidation.args.data.reason !== Types.Events.LayoutInvalidationReason.SIZE_CHANGED) {
       return null;
     }
+
+    const layoutInvalidationNode = await this.getNodeDetails(layoutInvalidationNodeId);
+    if (!layoutInvalidationNode) {
+      return null;
+    }
+
     const computedStylesList = await this.#protocolInterface.getComputedStyleForNode(layoutInvalidationNode.nodeId);
     const computedStyles = new Map(computedStylesList.map(item => [item.name, item.value]));
     if (computedStyles && !(await nodeIsUnfixedMedia(layoutInvalidationNode, computedStyles))) {
@@ -316,18 +308,41 @@ export class LayoutShiftRootCauses {
    * Given a LayoutInvalidation trace event, determines if it was dispatched
    * because a node, which is an ancestor to an iframe, was injected.
    */
-  getIframeRootCause(reason: Types.TraceEvents.LayoutInvalidationReason, layoutInvalidationDOMNode: Protocol.DOM.Node):
-      InjectedIframe|null {
-    if (layoutInvalidationDOMNode.nodeName !== 'IFRAME' &&
-        reason !== Types.TraceEvents.LayoutInvalidationReason.STYLE_CHANGED &&
-        reason !== Types.TraceEvents.LayoutInvalidationReason.ADDED_TO_LAYOUT) {
+  async getIframeRootCause(
+      layoutInvalidation: Types.Events.LayoutInvalidationTracking,
+      layoutInvalidationNodeId: Protocol.DOM.NodeId): Promise<InjectedIframe|null> {
+    if (!this.#iframeRootCausesEnabled) {
       return null;
     }
-    const iframe = firstIframeInDOMTree(layoutInvalidationDOMNode);
+
+    if (!layoutInvalidation.args.data.nodeName?.startsWith('IFRAME') &&
+        layoutInvalidation.args.data.reason !== Types.Events.LayoutInvalidationReason.STYLE_CHANGED &&
+        layoutInvalidation.args.data.reason !== Types.Events.LayoutInvalidationReason.ADDED_TO_LAYOUT) {
+      return null;
+    }
+
+    const layoutInvalidationNode = await this.getNodeDetails(layoutInvalidationNodeId);
+    if (!layoutInvalidationNode) {
+      return null;
+    }
+
+    const iframe = firstIframeInDOMTree(layoutInvalidationNode);
     if (!iframe) {
       return null;
     }
     return {iframe};
+  }
+
+  async getNodeDetails(nodeId: Protocol.DOM.NodeId): Promise<Protocol.DOM.Node|null> {
+    let nodeDetails = this.#nodeDetailsCache.get(nodeId);
+    if (nodeDetails !== undefined) {
+      return nodeDetails;
+    }
+
+    nodeDetails = await this.#protocolInterface.getNode(nodeId);
+    this.#nodeDetailsCache.set(nodeId, nodeDetails);
+
+    return nodeDetails;
   }
 
   /**
@@ -335,9 +350,8 @@ export class LayoutShiftRootCauses {
    * 500ms window before the layout invalidation.
    */
   requestsInInvalidationWindow(
-      layoutInvalidation: Types.TraceEvents.TraceEventLayoutInvalidationTracking|
-      Types.TraceEvents.TraceEventScheduleStyleInvalidationTracking,
-      modelData: TraceParseData): RootCauseRequest[] {
+      layoutInvalidation: Types.Events.LayoutInvalidationTracking|Types.Events.ScheduleStyleInvalidationTracking,
+      modelData: ParsedTrace): RootCauseRequest[] {
     const requestsSortedByEndTime = modelData.NetworkRequests.byTime.sort((req1, req2) => {
       const req1EndTime = req1.ts + req1.dur;
       const req2EndTime = req2.ts + req2.dur;
@@ -350,7 +364,7 @@ export class LayoutShiftRootCauses {
       return [];
     }
 
-    const MAX_DELTA_FOR_FONT_REQUEST = Helpers.Timing.secondsToMicroseconds(Types.Timing.Seconds(0.5));
+    const MAX_DELTA_FOR_FONT_REQUEST = Helpers.Timing.secondsToMicro(Types.Timing.Seconds(0.5));
 
     const requestsInInvalidationWindow: RootCauseRequest[] = [];
 
@@ -383,10 +397,9 @@ export class LayoutShiftRootCauses {
    * returned instead.
    */
   getFontChangeRootCause(
-      layoutInvalidation: Types.TraceEvents.TraceEventLayoutInvalidationTracking|
-      Types.TraceEvents.TraceEventScheduleStyleInvalidationTracking,
-      nextPrePaint: Types.TraceEvents.TraceEventPrePaint, modelData: TraceParseData): FontChange[]|null {
-    if (layoutInvalidation.args.data.reason !== Types.TraceEvents.LayoutInvalidationReason.FONTS_CHANGED) {
+      layoutInvalidation: Types.Events.LayoutInvalidationTracking|Types.Events.ScheduleStyleInvalidationTracking,
+      nextPrePaint: Types.Events.PrePaint, modelData: ParsedTrace): FontChange[]|null {
+    if (layoutInvalidation.args.data.reason !== Types.Events.LayoutInvalidationReason.FONTS_CHANGED) {
       return null;
     }
     // Prevent computing the result of this function multiple times per PrePaint event.
@@ -436,9 +449,8 @@ export class LayoutShiftRootCauses {
    *  returned instead.
    */
   getRenderBlockRootCause(
-      layoutInvalidation: Types.TraceEvents.TraceEventLayoutInvalidationTracking|
-      Types.TraceEvents.TraceEventScheduleStyleInvalidationTracking,
-      nextPrePaint: Types.TraceEvents.TraceEventPrePaint, modelData: TraceParseData): RenderBlockingRequest[]|null {
+      layoutInvalidation: Types.Events.LayoutInvalidationTracking|Types.Events.ScheduleStyleInvalidationTracking,
+      nextPrePaint: Types.Events.PrePaint, modelData: ParsedTrace): RenderBlockingRequest[]|null {
     // Prevent computing the result of this function multiple times per PrePaint event.
     const renderBlocksInPrepaint = renderBlocksByPrePaint.get(nextPrePaint);
     if (renderBlocksInPrepaint !== undefined) {
@@ -623,11 +635,11 @@ function dimensionsAreExplicit(dimensions: CSSDimensions): boolean {
  * PrePaint events to layout shifts dispatched within it.
  */
 function getShiftsByPrePaintEvents(
-    layoutShifts: Types.TraceEvents.TraceEventLayoutShift[],
-    prePaintEvents: Types.TraceEvents.TraceEventPrePaint[],
-    ): Map<Types.TraceEvents.TraceEventPrePaint, Types.TraceEvents.TraceEventLayoutShift[]> {
+    layoutShifts: Types.Events.SyntheticLayoutShift[],
+    prePaintEvents: Types.Events.PrePaint[],
+    ): Map<Types.Events.PrePaint, Types.Events.SyntheticLayoutShift[]> {
   // Maps from PrePaint events to LayoutShifts that occured in each one.
-  const shiftsByPrePaint = new Map<Types.TraceEvents.TraceEventPrePaint, Types.TraceEvents.TraceEventLayoutShift[]>();
+  const shiftsByPrePaint = new Map<Types.Events.PrePaint, Types.Events.SyntheticLayoutShift[]>();
 
   // Associate all shifts to their corresponding PrePaint.
   for (const prePaintEvent of prePaintEvents) {

@@ -14,6 +14,8 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/tabs/public/tab_interface.h"
+#include "chrome/browser/ui/webui/top_chrome/webui_url_utils.h"
 #include "chrome/common/url_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/spellcheck/browser/pref_names.h"
@@ -55,7 +57,7 @@
     (content::RenderWidgetHost*)renderWidgetHost {
   self = [super init];
   if (self) {
-    _widgetProcessId = renderWidgetHost->GetProcess()->GetID();
+    _widgetProcessId = renderWidgetHost->GetProcess()->GetDeprecatedID();
     _widgetRoutingId = renderWidgetHost->GetRoutingID();
     _historySwiper = [[HistorySwiper alloc] initWithDelegate:self];
   }
@@ -407,6 +409,31 @@
   if (view.window.firstResponder == view) {
     [self makeAnyDialogKey];
   }
+}
+
+- (AcceptMouseEventsOption)acceptsMouseEventsOption {
+  content::WebContents* webContents = self.webContents;
+  if (!webContents) {
+    return kAcceptMouseEventsInActiveWindow;
+  }
+
+  // If this web contents is in a tab, and the tab wants to accept mouse events
+  // while the window is inactive.
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(self.webContents);
+  if (tab && tab->ShouldAcceptMouseEventsWhileWindowInactive()) {
+    return kAcceptMouseEventsInActiveApp;
+  }
+
+  // For Top Chrome WebUIs, allows inactive windows to accept
+  // mouse events as long as the application is active. This
+  // mimics the behavior of views UI.
+  if (IsTopChromeWebUIURL(webContents->GetVisibleURL()) ||
+      IsTopChromeUntrustedWebUIURL(webContents->GetVisibleURL())) {
+    return kAcceptMouseEventsInActiveApp;
+  }
+
+  return kAcceptMouseEventsInActiveWindow;
 }
 
 @end

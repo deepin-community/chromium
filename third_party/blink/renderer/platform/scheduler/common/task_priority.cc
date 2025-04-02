@@ -89,7 +89,6 @@ const char* TaskPriorityToString(TaskPriority priority) {
       return "best_effort";
     case TaskPriority::kPriorityCount:
       NOTREACHED();
-      return nullptr;
   }
 }
 

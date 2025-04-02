@@ -2,9 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/win/atl.h"
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
 
-#include <atlcomcli.h>
+#include "chrome/credential_provider/gaiacp/gaia_credential_provider.h"
+
 #include <credentialprovider.h>
 #include <wrl/client.h>
 
@@ -13,10 +17,10 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/win/atl.h"
 #include "base/win/win_util.h"
 #include "chrome/credential_provider/common/gcp_strings.h"
 #include "chrome/credential_provider/gaiacp/auth_utils.h"
-#include "chrome/credential_provider/gaiacp/gaia_credential_provider.h"
 #include "chrome/credential_provider/gaiacp/gaia_credential_provider_i.h"
 #include "chrome/credential_provider/gaiacp/gcpw_strings.h"
 #include "chrome/credential_provider/gaiacp/mdm_utils.h"
@@ -25,6 +29,7 @@
 #include "chrome/credential_provider/test/gcp_fakes.h"
 #include "chrome/credential_provider/test/gls_runner_test_base.h"
 #include "chrome/credential_provider/test/test_credential.h"
+#include "google_apis/gaia/gaia_id.h"
 
 namespace credential_provider {
 
@@ -74,8 +79,8 @@ TEST_F(GcpCredentialProviderTest, Basic) {
 TEST_F(GcpCredentialProviderTest, SetUserArray_NoGaiaUsers) {
   CComBSTR sid;
   ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
-                      L"username", L"password", L"full name", L"comment", L"",
-                      L"", &sid));
+                      L"username", L"password", L"full name", L"comment",
+                      GaiaId(), L"", &sid));
 
   Microsoft::WRL::ComPtr<ICredentialProvider> provider;
   DWORD count = 0;
@@ -98,8 +103,8 @@ TEST_F(GcpCredentialProviderTest, SetUserArray_NoGaiaUsers) {
 TEST_F(GcpCredentialProviderTest, CpusLogon) {
   CComBSTR sid;
   ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
-                      L"username", L"password", L"full name", L"comment", L"",
-                      L"", &sid));
+                      L"username", L"password", L"full name", L"comment",
+                      GaiaId(), L"", &sid));
 
   Microsoft::WRL::ComPtr<ICredentialProvider> provider;
   DWORD count = 0;
@@ -122,8 +127,8 @@ TEST_F(GcpCredentialProviderTest, CpusLogon) {
 TEST_F(GcpCredentialProviderTest, CpusUnlock) {
   CComBSTR sid;
   ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
-                      L"username", L"password", L"full name", L"comment", L"",
-                      L"", &sid));
+                      L"username", L"password", L"full name", L"comment",
+                      GaiaId(), L"", &sid));
 
   Microsoft::WRL::ComPtr<ICredentialProvider> provider;
   DWORD count = 0;
@@ -139,8 +144,8 @@ TEST_F(GcpCredentialProviderTest, AutoLogonAfterUserRefresh) {
   USES_CONVERSION;
   CComBSTR sid;
   ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
-                      L"username", L"password", L"full name", L"comment", L"",
-                      L"", &sid));
+                      L"username", L"password", L"full name", L"comment",
+                      GaiaId(), L"", &sid));
 
   Microsoft::WRL::ComPtr<ICredentialProviderCredential> cred;
   ASSERT_EQ(S_OK, InitializeProviderAndGetCredential(0, &cred));
@@ -234,8 +239,8 @@ TEST_F(GcpCredentialProviderTest, AutoLogonBeforeUserRefresh) {
   USES_CONVERSION;
   CComBSTR sid;
   ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
-                      L"username", L"password", L"full name", L"comment", L"",
-                      L"", &sid));
+                      L"username", L"password", L"full name", L"comment",
+                      GaiaId(), L"", &sid));
 
   Microsoft::WRL::ComPtr<ICredentialProviderCredential> cred;
   ASSERT_EQ(S_OK, InitializeProviderAndGetCredential(0, &cred));
@@ -321,7 +326,7 @@ TEST_F(GcpCredentialProviderTest, AddPersonAfterUserRemove) {
   CComBSTR sid;
   ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
                       kDummyUsername, kDummyPassword, L"full name", L"comment",
-                      L"gaia-id", L"foo@gmail.com", &sid));
+                      GaiaId("gaia-id"), L"foo@gmail.com", &sid));
 
   CreateDefaultCloudPoliciesForUser((BSTR)sid);
 
@@ -414,14 +419,14 @@ TEST_P(GcpCredentialProviderSetSerializationTest, CheckAutoLogon) {
   constexpr wchar_t first_username[] = L"username";
   ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
                       first_username, L"password", L"full name", L"comment",
-                      L"gaia-id", L"foo@gmail.com", &first_sid));
+                      GaiaId("gaia-id"), L"foo@gmail.com", &first_sid));
   CreateDefaultCloudPoliciesForUser((BSTR)first_sid);
 
   CComBSTR second_sid;
   constexpr wchar_t second_username[] = L"username2";
   ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
                       second_username, L"password", L"Full Name", L"Comment",
-                      L"gaia-id2", L"foo2@gmail.com", &second_sid));
+                      GaiaId("gaia-id2"), L"foo2@gmail.com", &second_sid));
   CreateDefaultCloudPoliciesForUser((BSTR)second_sid);
 
   // Build a dummy authentication buffer that can be passed to SetSerialization.
@@ -521,13 +526,13 @@ TEST_P(GcpCredentialProviderWithGaiaUsersTest, ReauthCredentialTest) {
     // enable_cloud_association is set to false.
     ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
                         L"username", L"password", L"full name", L"comment",
-                        L"gaia-id", L"foo@gmail.com", L"domain", &sid));
+                        GaiaId("gaia-id"), L"foo@gmail.com", L"domain", &sid));
 
   } else {
     // Add a local user.
     ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
                         L"username", L"password", L"full name", L"comment",
-                        L"gaia-id", L"foo@gmail.com", &sid));
+                        GaiaId("gaia-id"), L"foo@gmail.com", &sid));
   }
 
   if (user_property_status & 1) {
@@ -763,14 +768,14 @@ TEST_P(GcpCredentialProviderAvailableCredentialsTest, AvailableCredentials) {
   constexpr wchar_t first_username[] = L"username";
   ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
                       first_username, L"password", L"full name", L"comment",
-                      L"gaia-id", L"foo@gmail.com", &first_sid));
+                      GaiaId("gaia-id"), L"foo@gmail.com", &first_sid));
   CreateDefaultCloudPoliciesForUser((BSTR)first_sid);
 
   CComBSTR second_sid;
   constexpr wchar_t second_username[] = L"username2";
   ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
                       second_username, L"password", L"Full Name", L"Comment",
-                      L"gaia-id2", L"foo2@gmail.com", &second_sid));
+                      GaiaId("gaia-id2"), L"foo2@gmail.com", &second_sid));
   CreateDefaultCloudPoliciesForUser((BSTR)second_sid);
 
   // Set the user locking the system.
@@ -911,7 +916,7 @@ TEST_P(GcpGaiaCredentialBaseMultiUserCloudPolicyTest, CanCreateNewUsers) {
   CComBSTR sid;
   ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
                       L"foo_registered", L"password", L"name", L"comment",
-                      L"gaia-id-registered", std::wstring(), &sid));
+                      GaiaId("gaia-id-registered"), std::wstring(), &sid));
 
   // Set multi user mode in registry.
   ASSERT_EQ(S_OK, SetGlobalFlagForTesting(kRegMdmSupportsMultiUser,

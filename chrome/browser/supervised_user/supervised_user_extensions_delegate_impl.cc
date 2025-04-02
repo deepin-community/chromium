@@ -16,8 +16,9 @@
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/ui/extensions/extensions_dialogs.h"
 #include "chrome/browser/ui/supervised_user/parent_permission_dialog.h"
-#include "components/supervised_user/core/browser/supervised_user_preferences.h"
+#include "components/prefs/pref_service.h"
 #include "components/supervised_user/core/common/features.h"
+#include "components/supervised_user/core/common/pref_names.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_dialog_auto_confirm.h"
 #include "ui/gfx/image/image_skia.h"
@@ -67,8 +68,7 @@ void SupervisedUserExtensionsDelegateImpl::
 
 bool SupervisedUserExtensionsDelegateImpl::IsChild() const {
   auto* profile = Profile::FromBrowserContext(context_);
-  return profile &&
-         supervised_user::AreExtensionsPermissionsEnabled(*profile->GetPrefs());
+  return profile && supervised_user::AreExtensionsPermissionsEnabled(profile);
 }
 
 bool SupervisedUserExtensionsDelegateImpl::IsExtensionAllowedByParent(
@@ -80,17 +80,21 @@ void SupervisedUserExtensionsDelegateImpl::RequestToAddExtensionOrShowError(
     const Extension& extension,
     content::WebContents* web_contents,
     const gfx::ImageSkia& icon,
+    SupervisedUserExtensionParentApprovalEntryPoint
+        extension_approval_entry_point,
     ExtensionApprovalDoneCallback extension_approval_callback) {
-  DCHECK(IsChild());
-  DCHECK(!IsExtensionAllowedByParent(extension));
+  CHECK(IsChild());
 
   done_callback_ = std::move(extension_approval_callback);
-  RequestExtensionApproval(extension, web_contents->GetWeakPtr(), icon);
+  RequestExtensionApproval(extension, web_contents->GetWeakPtr(),
+                           extension_approval_entry_point, icon);
 }
 
 void SupervisedUserExtensionsDelegateImpl::RequestToEnableExtensionOrShowError(
     const Extension& extension,
     content::WebContents* web_contents,
+    SupervisedUserExtensionParentApprovalEntryPoint
+        extension_approval_entry_point,
     ExtensionApprovalDoneCallback extension_approval_callback) {
   CHECK(IsChild());
   CHECK(!IsExtensionAllowedByParent(extension));
@@ -102,7 +106,8 @@ void SupervisedUserExtensionsDelegateImpl::RequestToEnableExtensionOrShowError(
       &SupervisedUserExtensionsDelegateImpl::RequestExtensionApproval,
       base::Unretained(this), std::cref(extension),
       web_contents ? std::make_optional(web_contents->GetWeakPtr())
-                   : std::nullopt);
+                   : std::nullopt,
+      extension_approval_entry_point);
   icon_loader_ = std::make_unique<ExtensionIconLoader>();
   icon_loader_->Load(extension, context_, std::move(icon_callback));
 }
@@ -116,6 +121,11 @@ void SupervisedUserExtensionsDelegateImpl::AddExtensionApproval(
   extensions_manager_.AddExtensionApproval(extension);
 }
 
+void SupervisedUserExtensionsDelegateImpl::MaybeRecordPermissionsIncreaseMetrics(
+    const extensions::Extension& extension) {
+  extensions_manager_.MaybeRecordPermissionsIncreaseMetrics(extension);
+}
+
 void SupervisedUserExtensionsDelegateImpl::RemoveExtensionApproval(
     const extensions::Extension& extension) {
   extensions_manager_.RemoveExtensionApproval(extension);
@@ -127,9 +137,12 @@ void SupervisedUserExtensionsDelegateImpl::RecordExtensionEnablementUmaMetrics(
 }
 
 void SupervisedUserExtensionsDelegateImpl::
-    ShowParentPermissionDialogForExtension(const Extension& extension,
-                                           content::WebContents* contents,
-                                           const gfx::ImageSkia& icon) {
+    ShowParentPermissionDialogForExtension(
+        const Extension& extension,
+        content::WebContents* contents,
+        const gfx::ImageSkia& icon,
+        SupervisedUserExtensionParentApprovalEntryPoint
+            extension_approval_entry_point) {
   ParentPermissionDialog::DoneCallback inner_done_callback = base::BindOnce(
       &::OnParentPermissionDialogComplete, std::move(done_callback_));
 
@@ -138,7 +151,8 @@ void SupervisedUserExtensionsDelegateImpl::
   parent_permission_dialog_ =
       ParentPermissionDialog::CreateParentPermissionDialogForExtension(
           Profile::FromBrowserContext(context_), parent_window, icon,
-          &extension, std::move(inner_done_callback));
+          &extension, extension_approval_entry_point,
+          std::move(inner_done_callback));
   parent_permission_dialog_->ShowDialog();
 }
 
@@ -167,11 +181,12 @@ void SupervisedUserExtensionsDelegateImpl::
 void SupervisedUserExtensionsDelegateImpl::RequestExtensionApproval(
     const Extension& extension,
     std::optional<base::WeakPtr<content::WebContents>> contents,
+    SupervisedUserExtensionParentApprovalEntryPoint
+        extension_approval_entry_point,
     const gfx::ImageSkia& icon) {
   // Treat the request as canceled if web contents that the request originated
   // in was destroyed (the web contents was originally passed, but weak ptr is
   // not valid anymore).
-  content::WebContents* web_contents = nullptr;
   if (contents) {
     base::WeakPtr<content::WebContents> contents_weak_ptr = contents.value();
     if (!contents_weak_ptr) {
@@ -180,34 +195,43 @@ void SupervisedUserExtensionsDelegateImpl::RequestExtensionApproval(
                    ExtensionApprovalResult::kCanceled);
       return;
     }
-    web_contents = contents_weak_ptr.get();
   }
-
-#if BUILDFLAG(IS_CHROMEOS)
-  if (ParentAccessExtensionApprovalsManager::ShouldShowExtensionApprovalsV2()) {
-    // Parent Access Dialog handles blocked use case in V2.
-    extension_approvals_manager_ =
-        std::make_unique<ParentAccessExtensionApprovalsManager>();
-    extension_approvals_manager_->ShowParentAccessDialog(
-        extension, context_, icon,
-        CanInstallExtensions()
-            ? ParentAccessExtensionApprovalsManager::ExtensionInstallMode::
-                  kInstallationPermitted
-            : ParentAccessExtensionApprovalsManager::ExtensionInstallMode::
-                  kInstallationDenied,
-        std::move(done_callback_));
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  CHECK(contents.value());
+  content::WebContents* web_contents = contents.value().get();
+  if (supervised_user::
+          IsSupervisedUserSkipParentApprovalToInstallExtensionsEnabled()) {
+    // On the new mode always invoke the parent permission dialog.
+    ShowParentPermissionDialogForExtension(extension, web_contents, icon,
+                                           extension_approval_entry_point);
     return;
   }
+  // On the old mode (to be deprecated) invoke the "Blocked extensions" screen
+  // if the parent had picked this settings.
+  // Let parent approval dialog handle the case of not being able to install
+  // extensions.
+  auto* profile = Profile::FromBrowserContext(context_);
+  if (!profile->GetPrefs()->GetBoolean(
+          prefs::kSupervisedUserExtensionsMayRequestPermissions)) {
+    ShowInstallBlockedByParentDialogForExtension(
+        extension, web_contents,
+        ExtensionInstalledBlockedByParentDialogAction::kEnable);
+    return;
+  }
+  ShowParentPermissionDialogForExtension(extension, web_contents, icon,
+                                         extension_approval_entry_point);
+#elif BUILDFLAG(IS_CHROMEOS)
+  // ParentAccessDialog handles the blocked use case for ChromeOS.
+  extension_approvals_manager_ =
+      std::make_unique<ParentAccessExtensionApprovalsManager>();
+  extension_approvals_manager_->ShowParentAccessDialog(
+      extension, context_, icon,
+      CanInstallExtensions() ? ParentAccessExtensionApprovalsManager::
+                                   ExtensionInstallMode::kInstallationPermitted
+                             : ParentAccessExtensionApprovalsManager::
+                                   ExtensionInstallMode::kInstallationDenied,
+      std::move(done_callback_));
 #endif
-
-  if (CanInstallExtensions()) {
-    ShowParentPermissionDialogForExtension(extension, web_contents, icon);
-    return;
-  }
-
-  ShowInstallBlockedByParentDialogForExtension(
-      extension, web_contents,
-      ExtensionInstalledBlockedByParentDialogAction::kEnable);
 }
 
 }  // namespace extensions

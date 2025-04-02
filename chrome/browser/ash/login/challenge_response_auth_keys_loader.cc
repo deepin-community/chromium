@@ -24,6 +24,7 @@
 #include "chrome/browser/certificate_provider/certificate_provider_service.h"
 #include "chrome/browser/certificate_provider/certificate_provider_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/login/auth/challenge_response/cert_utils.h"
 #include "chromeos/ash/components/login/auth/challenge_response/known_user_pref_utils.h"
 #include "components/account_id/account_id.h"
@@ -47,7 +48,7 @@ constexpr base::TimeDelta kDefaultMaximumExtensionLoadWaitingTime =
     base::Seconds(5);
 
 base::flat_set<std::string> GetLoginScreenPolicyExtensionIds() {
-  DCHECK(ProfileHelper::IsSigninProfileInitialized());
+  DCHECK(BrowserContextHelper::Get()->GetSigninBrowserContext());
 
   const PrefService* const prefs =
       ProfileHelper::GetSigninProfile()->GetPrefs();
@@ -303,7 +304,6 @@ class ExtensionLoadObserver final
     if (!extension_host) {
       // Generally this should not happen, but better safe than sorry.
       NOTREACHED();
-      return;
     }
 
     if (extension_host->has_loaded_once()) {
@@ -320,7 +320,6 @@ class ExtensionLoadObserver final
   void StopWaitingOnExtension(const std::string& extension_id) {
     if (!extensions_waited_for_.contains(extension_id)) {
       NOTREACHED();
-      return;
     }
 
     extensions_waited_for_.erase(extension_id);

@@ -16,7 +16,6 @@ import {
   waitForAria,
   waitForNone,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {waitForDomNodeToBeVisible} from '../helpers/elements-helpers.js';
 import {
   clickZoomDropDown,
@@ -29,8 +28,7 @@ import {
 
 const ADD_DEVICE_BUTTON_SELECTOR = '#custom-device-add-button';
 const FOCUSED_DEVICE_NAME_FIELD_SELECTOR = '#custom-device-name-field:focus';
-const EDITOR_ADD_BUTTON_SELECTOR = '.editor-buttons > button:first-child';
-const FOCUSED_SELECTOR = '*:focus';
+const EDITOR_ADD_BUTTON_SELECTOR = '.editor-buttons > devtools-button:nth-of-type(2)';
 
 async function elementTextContent(element: puppeteer.ElementHandle): Promise<string> {
   return await element.evaluate(node => node.textContent || '');
@@ -45,7 +43,7 @@ async function targetTextContent(selector: string): Promise<string> {
   return elementTextContent(handle);
 }
 
-describe('Custom devices', async () => {
+describe('Custom devices', () => {
   beforeEach(async function() {
     await reloadDockableFrontEnd();
     await goToResource('emulation/custom-ua-ch.html');
@@ -112,12 +110,16 @@ describe('Custom devices', async () => {
     await tabForward();  // Focus device model.
     await typeText('C-1-Gardener');
 
+    await tabForward();  // Focus cancel button.
     await tabForward();  // Focus add button.
 
-    const finishAdd = await waitFor(FOCUSED_SELECTOR);
-    const finishAddText = await elementTextContent(finishAdd);
+    const addDevToolsButton = await waitFor('.editor-buttons devtools-button:nth-of-type(2)');
+    const addButton = await addDevToolsButton.waitForSelector('>>> button:focus');
+    assert.isNotNull(addButton);  // Check that the devtools-buttons is focus
+
+    const finishAddText = await elementTextContent(addDevToolsButton);
     assert.strictEqual(finishAddText, 'Add');
-    await clickElement(finishAdd);
+    await clickElement(addDevToolsButton);
 
     // Select the device in the menu.
     await selectTestDevice();
@@ -145,7 +147,7 @@ describe('Custom devices', async () => {
     const firstDevice = await waitFor('.devices-list-item');
     await firstDevice.focus();
 
-    const editButton = await waitFor('.toolbar-button[aria-label="Edit"]');
+    const editButton = await waitForAria('Edit');
     await editButton.click();
 
     // Make sure the device name field is what's focused.
@@ -221,5 +223,23 @@ describe('Custom devices', async () => {
     await clickElement(zoomTo100Button);
     assert.strictEqual(await elementTextContent(fitButton), 'Fit to window (51%)');
     assert.strictEqual(await elementTextContent(zoomButton), '100%');
+  });
+
+  it('shows an error if the pixel ratio is not a number', async () => {
+    await selectEdit();
+    await click(ADD_DEVICE_BUTTON_SELECTOR);
+    await waitFor(FOCUSED_DEVICE_NAME_FIELD_SELECTOR);
+    await typeText('Prime numbers');
+
+    await tabForward();  // Focus width.
+    await typeText('700');
+    await tabForward();  // Focus height.
+    await typeText('400');
+    await tabForward();  // Focus DPR.
+    await typeText('zzz.213213');
+
+    const error = await waitFor('.list-widget-input-validation-error');
+    const errorText = await error.evaluate(element => element.textContent);
+    assert.strictEqual(errorText, 'Device pixel ratio must be a number or blank.');
   });
 });

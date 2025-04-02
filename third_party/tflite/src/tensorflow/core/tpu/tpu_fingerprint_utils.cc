@@ -28,8 +28,8 @@ limitations under the License.
 
 namespace tensorflow {
 
-Status FingerprintFunctionLibrary(const FunctionLibraryDefinition& library,
-                                  uint64_t& fingerprint) {
+absl::Status FingerprintFunctionLibrary(
+    const FunctionLibraryDefinition& library, uint64_t& fingerprint) {
   // TODO(phawkins): rather than fingerprinting the entire function library,
   // consider fingerprinting just the transitive dependencies of a
   // computation.
@@ -41,7 +41,7 @@ Status FingerprintFunctionLibrary(const FunctionLibraryDefinition& library,
   }
   TF_RET_CHECK(SerializeToStringDeterministic(library_proto, &serialized));
   fingerprint = TpuCompileInterface::Get()->FingerprintString(serialized);
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace tensorflow

@@ -13,22 +13,25 @@ import '../settings_shared.css.js';
 import './os_japanese_clear_ime_data_dialog.js';
 import './os_japanese_manage_user_dictionary_page.js';
 
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {afterNextRender, DomRepeatEvent, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {DomRepeatEvent} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {afterNextRender, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {assertExhaustive} from '../assert_extras.js';
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
 import {OsSettingsSubpageElement} from '../os_settings_page/os_settings_subpage.js';
-import {Route, Router, routes} from '../router.js';
+import type {Route} from '../router.js';
+import {Router, routes} from '../router.js';
 
 import {getTemplate} from './input_method_options_page.html.js';
-import {AUTOCORRECT_OPTION_MAP_OVERRIDE, generateOptions, getDefaultValue, getFirstPartyInputMethodEngineId, getOptionLabelName, getOptionMenuItems, getOptionSubtitleName, getOptionUiType, getOptionUrl, getSubmenuButtonType, getUntranslatedOptionLabelName, isOptionLabelTranslated, OPTION_DEFAULT, OptionType, PHYSICAL_KEYBOARD_AUTOCORRECT_ENABLED_BY_DEFAULT, SettingsHeaders, shouldStoreAsNumber, SubmenuButton, UiType} from './input_method_util.js';
-import {LanguageHelper} from './languages_types.js';
+import type {OPTION_DEFAULT} from './input_method_util.js';
+import {AUTOCORRECT_OPTION_MAP_OVERRIDE, generateOptions, getDefaultValue, getFirstPartyInputMethodEngineId, getOptionLabelName, getOptionMenuItems, getOptionSubtitleName, getOptionUiType, getOptionUrl, getSubmenuButtonType, getUntranslatedOptionLabelName, isOptionLabelTranslated, OptionType, PHYSICAL_KEYBOARD_AUTOCORRECT_ENABLED_BY_DEFAULT, SettingsHeaders, shouldStoreAsNumber, SubmenuButton, UiType} from './input_method_util.js';
+import type {LanguageHelper} from './languages_types.js';
 
 /**
  * The root path of input method options in Prefs.
@@ -288,8 +291,7 @@ export class SettingsInputMethodOptionsPageElement extends
             name as keyof typeof OPTION_DEFAULT, defaultOverrides);
         needsPrefUpdate = true;
       }
-      if (loadTimeData.getBoolean('allowAutocorrectToggle') &&
-          name in AUTOCORRECT_OPTION_MAP_OVERRIDE) {
+      if (name in AUTOCORRECT_OPTION_MAP_OVERRIDE) {
         // Safety: We checked that `name` is a key above.
         value = AUTOCORRECT_OPTION_MAP_OVERRIDE[name as AutocorrectOptionMapKey]
                     // Safety: All autocorrect prefs have values that are
@@ -299,8 +301,7 @@ export class SettingsInputMethodOptionsPageElement extends
       }
       if (needsPrefUpdate) {
         // This function call is unsafe if this option is
-        // `JAPANESE_NUMBER_OF_SUGGESTIONS`, or `allowAutocorrectToggle` is off
-        // and this option is an autocorrect option.
+        // `JAPANESE_NUMBER_OF_SUGGESTIONS`.
         // In this case, `this.updatePref_` expects the value to be a string, as
         // the `shouldStoreAsNumber` branch is hit - but `getDefaultValue`
         // returns a number, not a string, in this case.
@@ -431,8 +432,7 @@ export class SettingsInputMethodOptionsPageElement extends
     if (updatedSettings[engineId] === undefined) {
       updatedSettings[engineId] = {};
     }
-    if (loadTimeData.getBoolean('allowAutocorrectToggle') &&
-        optionName in AUTOCORRECT_OPTION_MAP_OVERRIDE) {
+    if (optionName in AUTOCORRECT_OPTION_MAP_OVERRIDE) {
       // newValue is passed in as the value for display, so map it back to a
       // number.
       newValue =
@@ -443,15 +443,11 @@ export class SettingsInputMethodOptionsPageElement extends
               // a boolean here.
               .mapValueForWrite(newValue as boolean);
     } else if (shouldStoreAsNumber(optionName)) {
-      // Safety: The above if statements ensure that `optionName` is one of:
-      // - `PHYSICAL_KEYBOARD_AUTO_CORRECTION_LEVEL, if `allowAutocorrectToggle`
-      //   is not set
-      // - `VIRTUAL_KEYBOARD_AUTO_CORRECTION_LEVEL, if `allowAutocorrectToggle`
-      //   is not set
-      // - `JAPANESE_NUMBER_OF_SUGGESTIONS`
-      // All of the above returns `UiType.DROPDOWN` in `getOptionUiType`, so
-      // they are incorrectly passed as a string from Polymer's two-way native
-      // binding, and all of the above return numbers from `getOptionMenuItems`.
+      // Safety: The above if statements ensure that `optionName` is
+      // `JAPANESE_NUMBER_OF_SUGGESTIONS`.
+      // The above returns `UiType.DROPDOWN` in `getOptionUiType`, so
+      // it is incorrectly passed as a string from Polymer's two-way native
+      // binding, and it returns numbers from `getOptionMenuItems`.
       // TODO(b/265557721): Remove this when we remove Polymer's two-way native
       // binding of value changes.
       newValue = parseInt(newValue as string, 10);

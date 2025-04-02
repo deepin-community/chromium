@@ -4,19 +4,22 @@
 
 #include "chrome/test/interaction/interactive_browser_test.h"
 
-#include <ostream>
-#include <sstream>
 #include <string>
 #include <utility>
+#include <variant>
 
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/functional/overloaded.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -24,9 +27,11 @@
 #include "chrome/test/interaction/interactive_browser_test_internal.h"
 #include "chrome/test/interaction/tracked_element_webcontents.h"
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
+#include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/visibility.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/update_user_activation_state_interceptor.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 #include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom-shared.h"
 #include "third_party/blink/public/mojom/frame/user_activation_update_types.mojom-shared.h"
 #include "ui/base/interaction/element_identifier.h"
@@ -34,6 +39,9 @@
 #include "ui/base/interaction/interaction_sequence.h"
 #include "ui/base/interaction/interaction_test_util.h"
 #include "ui/base/interaction/interactive_test_internal.h"
+#include "ui/base/test/ui_controls.h"
+#include "ui/views/controls/webview/webview.h"
+#include "ui/views/interaction/interaction_test_util_views.h"
 #include "ui/views/interaction/interactive_views_test.h"
 #include "ui/views/views_delegate.h"
 
@@ -88,25 +96,53 @@ void InteractiveBrowserTestApi::EnableWebUICodeCoverage() {
   test_impl().MaybeStartWebUICodeCoverage();
 }
 
-ui::InteractionSequence::StepBuilder InteractiveBrowserTestApi::Screenshot(
+InteractiveBrowserTestApi::MultiStep InteractiveBrowserTestApi::Screenshot(
     ElementSpecifier element,
     const std::string& screenshot_name,
-    const std::string& baseline) {
+    const std::string& baseline_cl) {
   StepBuilder builder;
-  builder.SetDescription(base::StringPrintf("Screenshot( \"%s\", \"%s\" )",
-                                            screenshot_name.c_str(),
-                                            baseline.c_str()));
+  builder.SetDescription("Compare Screenshot");
   ui::test::internal::SpecifyElement(builder, element);
   builder.SetStartCallback(base::BindOnce(
       [](InteractiveBrowserTestApi* test, std::string screenshot_name,
-         std::string baseline, ui::InteractionSequence* seq,
+         std::string baseline_cl, ui::InteractionSequence* seq,
          ui::TrackedElement* el) {
         const auto result = InteractionTestUtilBrowser::CompareScreenshot(
-            el, screenshot_name, baseline);
+            el, screenshot_name, baseline_cl);
         test->test_impl().HandleActionResult(seq, el, "Screenshot", result);
       },
-      base::Unretained(this), screenshot_name, baseline));
-  return builder;
+      base::Unretained(this), screenshot_name, baseline_cl));
+
+  auto steps = Steps(MaybeWaitForPaint(element), std::move(builder));
+  AddDescriptionPrefix(steps, base::StrCat({"Screenshot( \"", screenshot_name,
+                                            "\", \"", baseline_cl, "\" )"}));
+  return steps;
+}
+
+InteractiveBrowserTestApi::MultiStep
+InteractiveBrowserTestApi::ScreenshotSurface(
+    ElementSpecifier element_in_surface,
+    const std::string& screenshot_name,
+    const std::string& baseline_cl) {
+  StepBuilder builder;
+  builder.SetDescription("Compare Surface Screenshot");
+  ui::test::internal::SpecifyElement(builder, element_in_surface);
+  builder.SetStartCallback(base::BindOnce(
+      [](InteractiveBrowserTestApi* test, std::string screenshot_name,
+         std::string baseline_cl, ui::InteractionSequence* seq,
+         ui::TrackedElement* el) {
+        const auto result =
+            InteractionTestUtilBrowser::CompareSurfaceScreenshot(
+                el, screenshot_name, baseline_cl);
+        test->test_impl().HandleActionResult(seq, el, "Screenshot", result);
+      },
+      base::Unretained(this), screenshot_name, baseline_cl));
+
+  auto steps = Steps(MaybeWaitForPaint(element_in_surface), std::move(builder));
+  AddDescriptionPrefix(
+      steps, base::StrCat({"ScreenshotSurface( \"", screenshot_name, "\", \"",
+                           baseline_cl, "\" )"}));
+  return steps;
 }
 
 InteractiveBrowserTestApi::MultiStep InteractiveBrowserTestApi::InstrumentTab(
@@ -114,26 +150,23 @@ InteractiveBrowserTestApi::MultiStep InteractiveBrowserTestApi::InstrumentTab(
     std::optional<int> tab_index,
     BrowserSpecifier in_browser,
     bool wait_for_ready) {
-  const auto desc =
-      base::StringPrintf("InstrumentTab( %s, %d, %d )", id.GetName().c_str(),
-                         tab_index.value_or(-1), wait_for_ready);
-  auto steps = Steps(std::move(
-      WithElement(ui::test::internal::kInteractiveTestPivotElementId,
-                  base::BindLambdaForTesting([this, id, tab_index, in_browser](
-                                                 ui::TrackedElement* el) {
-                    Browser* const browser =
-                        GetBrowserFor(el->context(), in_browser);
-                    CHECK(browser)
-                        << "InstrumentTab(): a specific browser is required.";
-                    test_impl().AddInstrumentedWebContents(
-                        WebContentsInteractionTestUtil::ForExistingTabInBrowser(
-                            browser, id, tab_index));
-                  }))
-          .SetDescription(base::StrCat({desc, ": Instrument"}))));
+  auto steps = Steps(WithElement(
+      ui::test::internal::kInteractiveTestPivotElementId,
+      base::BindLambdaForTesting([this, id, tab_index,
+                                  in_browser](ui::TrackedElement* el) {
+        Browser* const browser = GetBrowserFor(el->context(), in_browser);
+        CHECK(browser) << "InstrumentTab(): a specific browser is required.";
+        test_impl().AddInstrumentedWebContents(
+            WebContentsInteractionTestUtil::ForExistingTabInBrowser(browser, id,
+                                                                    tab_index));
+      })));
   if (wait_for_ready) {
-    steps.emplace_back(std::move(WaitForWebContentsReady(id).FormatDescription(
-        base::StrCat({desc, ": %s"}))));
+    steps.push_back(WaitForWebContentsReady(id));
   }
+  AddDescriptionPrefix(
+      steps,
+      base::StringPrintf("InstrumentTab( %s, %d, %d )", id.GetName().c_str(),
+                         tab_index.value_or(-1), wait_for_ready));
   return steps;
 }
 
@@ -143,8 +176,7 @@ InteractiveBrowserTestApi::InstrumentNextTab(ui::ElementIdentifier id,
   return std::move(
       WithElement(
           ui::test::internal::kInteractiveTestPivotElementId,
-          base::BindLambdaForTesting([this, id,
-                                      in_browser](ui::TrackedElement* el) {
+          [this, id, in_browser](ui::TrackedElement* el) {
             Browser* const browser = GetBrowserFor(el->context(), in_browser);
             test_impl().AddInstrumentedWebContents(
                 browser
@@ -152,9 +184,9 @@ InteractiveBrowserTestApi::InstrumentNextTab(ui::ElementIdentifier id,
                           browser, id)
                     : WebContentsInteractionTestUtil::ForNextTabInAnyBrowser(
                           id));
-          }))
-          .SetDescription(
-              base::StringPrintf("InstrumentTab( %s )", id.GetName().c_str())));
+          })
+          .AddDescriptionPrefix(
+              base::StrCat({"InstrumentTab( ", id.GetName(), " )"})));
 }
 
 InteractiveBrowserTestApi::MultiStep
@@ -162,52 +194,45 @@ InteractiveBrowserTestApi::AddInstrumentedTab(ui::ElementIdentifier id,
                                               GURL url,
                                               std::optional<int> at_index,
                                               BrowserSpecifier in_browser) {
-  const auto desc = base::StringPrintf("AddInstrumentedTab( %s, %s, %d, )",
-                                       id.GetName().c_str(), url.spec().c_str(),
-                                       at_index.value_or(-1));
-  return Steps(
-      std::move(
-          InstrumentNextTab(id, in_browser)
-              .SetDescription(base::StrCat({desc, ": Instrument Next Tab"}))),
-      std::move(
-          WithElement(
-              ui::test::internal::kInteractiveTestPivotElementId,
-              base::BindLambdaForTesting([this, url, at_index,
-                                          in_browser](ui::TrackedElement* el) {
-                Browser* const browser =
-                    GetBrowserFor(el->context(), in_browser);
-                CHECK(browser)
-                    << "AddInstrumentedTab(): a browser is required.";
-                NavigateParams navigate_params(
-                    browser, url, ui::PageTransition::PAGE_TRANSITION_TYPED);
-                navigate_params.tabstrip_index = at_index.value_or(-1);
-                navigate_params.disposition =
-                    WindowOpenDisposition::NEW_FOREGROUND_TAB;
-                CHECK(Navigate(&navigate_params));
-              }))
-              .SetDescription(base::StrCat({desc, ": Navigate"}))),
-      std::move(WaitForWebContentsReady(id).FormatDescription(
-          base::StrCat({desc, ": %s"}))));
+  auto steps = Steps(
+      InstrumentNextTab(id, in_browser),
+      WithElement(
+          ui::test::internal::kInteractiveTestPivotElementId,
+          base::BindLambdaForTesting([this, url, at_index,
+                                      in_browser](ui::TrackedElement* el) {
+            Browser* const browser = GetBrowserFor(el->context(), in_browser);
+            CHECK(browser) << "AddInstrumentedTab(): a browser is required.";
+            NavigateParams navigate_params(
+                browser, url, ui::PageTransition::PAGE_TRANSITION_TYPED);
+            navigate_params.tabstrip_index = at_index.value_or(-1);
+            navigate_params.disposition =
+                WindowOpenDisposition::NEW_FOREGROUND_TAB;
+            CHECK(Navigate(&navigate_params));
+          })),
+      WaitForWebContentsReady(id));
+  AddDescriptionPrefix(
+      steps, base::StringPrintf("AddInstrumentedTab( %s, %s, %d, )",
+                                id.GetName().c_str(), url.spec().c_str(),
+                                at_index.value_or(-1)));
+  return steps;
 }
 
 InteractiveBrowserTestApi::MultiStep
 InteractiveBrowserTestApi::InstrumentNonTabWebView(ui::ElementIdentifier id,
                                                    ElementSpecifier web_view,
                                                    bool wait_for_ready) {
-  const auto desc = base::StringPrintf("InstrumentNonTabWebView( %s, %d, )",
-                                       id.GetName().c_str(), wait_for_ready);
-  auto steps = Steps(std::move(
-      AfterShow(web_view,
-                base::BindLambdaForTesting([this, id](ui::TrackedElement* el) {
-                  test_impl().AddInstrumentedWebContents(
-                      WebContentsInteractionTestUtil::ForNonTabWebView(
-                          AsView<views::WebView>(el), id));
-                }))
-          .SetDescription(base::StrCat({desc, ": Instrument WebView"}))));
+  auto steps = Steps(AfterShow(
+      web_view, base::BindLambdaForTesting([this, id](ui::TrackedElement* el) {
+        test_impl().AddInstrumentedWebContents(
+            WebContentsInteractionTestUtil::ForNonTabWebView(
+                AsView<views::WebView>(el), id));
+      })));
   if (wait_for_ready) {
-    steps.emplace_back(std::move(WaitForWebContentsReady(id).FormatDescription(
-        base::StrCat({desc, ": %s"}))));
+    steps.push_back(WaitForWebContentsReady(id));
   }
+  AddDescriptionPrefix(
+      steps, base::StringPrintf("InstrumentNonTabWebView( %s, %d, )",
+                                id.GetName().c_str(), wait_for_ready));
   return steps;
 }
 
@@ -216,12 +241,49 @@ InteractiveBrowserTestApi::InstrumentNonTabWebView(
     ui::ElementIdentifier id,
     AbsoluteViewSpecifier web_view,
     bool wait_for_ready) {
-  constexpr char kTemporaryElementName[] =
+  static constexpr char kTemporaryElementName[] =
       "__InstrumentNonTabWebViewTemporaryElementName__";
-  return Steps(
-      std::move(NameView(kTemporaryElementName, std::move(web_view))
-                    .FormatDescription("InstrumentNonTabWebView(): %s")),
-      InstrumentNonTabWebView(id, kTemporaryElementName, wait_for_ready));
+  auto steps =
+      Steps(NameView(kTemporaryElementName, std::move(web_view)),
+            InstrumentNonTabWebView(id, kTemporaryElementName, wait_for_ready));
+  AddDescriptionPrefix(steps, "InstrumentNonTabWebView()");
+  return steps;
+}
+
+InteractiveBrowserTestApi::MultiStep
+InteractiveBrowserTestApi::InstrumentInnerWebContents(
+    ui::ElementIdentifier inner_id,
+    ui::ElementIdentifier outer_id,
+    size_t inner_contents_index,
+    bool wait_for_ready) {
+  MultiStep steps;
+  steps.emplace_back(Do([this, inner_id, outer_id, inner_contents_index]() {
+    test_impl().AddInstrumentedWebContents(
+        WebContentsInteractionTestUtil::ForInnerWebContents(
+            outer_id, inner_contents_index, inner_id));
+  }));
+  if (wait_for_ready) {
+    steps.push_back(WaitForWebContentsReady(inner_id));
+  }
+  AddDescriptionPrefix(
+      steps, base::StringPrintf("InstrumentInnerWebContents( %s, %s, %u, %d )",
+                                inner_id.GetName(), outer_id.GetName(),
+                                inner_contents_index, wait_for_ready));
+  return steps;
+}
+
+InteractiveBrowserTestApi::StepBuilder
+InteractiveBrowserTestApi::UninstrumentWebContents(
+    ui::ElementIdentifier id,
+    bool fail_if_not_instrumented) {
+  return std::move(
+      (fail_if_not_instrumented
+           ? Check([this, id]() {
+               return test_impl().UninstrumentWebContents(id);
+             })
+           : Do([this, id]() { test_impl().UninstrumentWebContents(id); }))
+          .SetDescription(
+              base::StringPrintf("UninstrumentWebContents(%s)", id.GetName())));
 }
 
 // static
@@ -235,6 +297,9 @@ InteractiveBrowserTestApi::WaitForWebContentsReady(
                          expected_url.value_or(GURL()).spec().c_str()));
   builder.SetElementID(webcontents_id);
   builder.SetContext(kDefaultWebContentsContextMode);
+  // Because we're checking the current specific state of the contents, this
+  // avoids further navigations breaking the test.
+  builder.SetStepStartMode(ui::InteractionSequence::StepStartMode::kImmediate);
   if (expected_url.has_value()) {
     builder.SetStartCallback(base::BindOnce(
         [](GURL expected_url, ui::InteractionSequence* seq,
@@ -281,16 +346,146 @@ InteractiveBrowserTestApi::WaitForWebContentsNavigation(
   return builder;
 }
 
+// There is a bug that causes WebContents::CompletedFirstVisuallyNonEmptyPaint()
+// to occasionally fail to ever become true. This mostly manifests when running
+// Lacros tests on Linux, and sometimes on Mac builders. In order to prevent
+// tests from hanging when trying to ensure a non-empty paint, then, a
+// workaround is required.
+//
+// See b/332895669 and b/334747109 for more information.
+
+namespace {
+
+// Warning message so people aren't surprised when something else in their test
+// flakes after this step due to the bug.
+constexpr char kPaintWorkaroundWarning[] =
+    "\n\nIMPORTANT NOTE FOR TESTERS AND CHROMIUM GARDENERS:\n\n"
+    "There is a known issue (crbug.com/332895669, crbug.com/334747109) on both "
+    "Mac and Lacros-on-Linux where sometimes "
+    "WebContents::CompletedFirstVisuallyNonEmptyPaint() can return  false even "
+    "for a WebContents that is visible and painted, especially in secondary UI."
+    "\n\n"
+    "Unfortunately, this has happened. In order to prevent this test from "
+    "timing out, we will be ensuring that the page is visible and renders at "
+    "least one frame and then continuing the test.\n\n"
+    "In most cases, this will only result in a slight delay. However, in a "
+    "handful of cases the test may hang or fail because some other code relies "
+    "on the page reporting as painted, which we have no direct control over. "
+    "If this happens, you may need to disable the test for linux-lacros bots "
+    "until the lower-level bug is fixed.\n";
+
+// CheckJsResult() can handle promises, so queue a promise that only succeeds
+// after the contents have been rendered.
+constexpr char kPaintWorkaroundFunction[] =
+    "() => new Promise(resolve => requestAnimationFrame(() => resolve(true)))";
+
+// Event sent on a delay to bypass the "was this WebContents painted?" check on
+// platforms where the check is flaky; see comments above.
+DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kPaintWorkaroundEvent);
+
+void MaybePostPaintWorkaroundEvent(ui::TrackedElement* el) {
+  // Only secondary web contents are affected.
+  if (chrome::FindBrowserWithTab(
+          el->AsA<TrackedElementWebContents>()->owner()->web_contents())) {
+    return;
+  }
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](ui::ElementIdentifier id) {
+            if (auto* const el = ui::ElementTracker::GetElementTracker()
+                                     ->GetElementInAnyContext(id)) {
+              ui::ElementTracker::GetFrameworkDelegate()->NotifyCustomEvent(
+                  el, kPaintWorkaroundEvent);
+            }
+          },
+          el->identifier()),
+      base::Seconds(1));
+}
+
+}  // namespace
+
+// static
+ui::InteractionSequence::StepBuilder
+InteractiveBrowserTestApi::WaitForWebContentsPainted(
+    ui::ElementIdentifier webcontents_id) {
+  auto wait_step = WaitForEvent(webcontents_id,
+                                TrackedElementWebContents::kFirstNonEmptyPaint);
+  wait_step.SetMustBeVisibleAtStart(false);
+  wait_step.AddDescriptionPrefix("WaitForWebContentsPainted()");
+
+#if BUILDFLAG(IS_MAC)
+  const bool requires_workaround = true;
+#elif BUILDFLAG(IS_CHROMEOS_LACROS)
+  const bool requires_workaround =
+      views::test::InteractionTestUtilSimulatorViews::IsWayland();
+#else
+  const bool requires_workaround = false;
+#endif
+
+  if (requires_workaround) {
+    // Workaround for b/332895669 and b/334747109:
+    //
+    // In parallel with waiting for the WebContents to report as painted, post a
+    // delayed event, verify the contents are visible, and ensure at least one
+    // frame has rendered. This doesn't fix the problem of the WebContents not
+    // reporting as painted, but it does prevent tests that want to ensure that
+    // the contents *are* painted from hanging.
+    wait_step = AnyOf(
+        // Ideally this finishes pretty quickly and we can move on.
+        std::move(wait_step),
+        // Otherwise, create a timeout after the WebContents is shown.
+        Steps(
+            // Ensure that the contents are loaded, then wait a short time.
+            AfterShow(webcontents_id, &MaybePostPaintWorkaroundEvent),
+            // After the timeout, first post a verbose warning describing the
+            // known issue so that test maintainers are not surprised if
+            // something later in the test breaks because paint status is still
+            // being reported incorrectly.
+            AfterEvent(webcontents_id, kPaintWorkaroundEvent,
+                       []() { LOG(WARNING) << kPaintWorkaroundWarning; }),
+            // Ensure that the WebContents actually believes it's visible.
+            CheckElement(
+                webcontents_id,
+                [](ui::TrackedElement* el) {
+                  return AsInstrumentedWebContents(el)
+                      ->web_contents()
+                      ->GetVisibility();
+                },
+                content::Visibility::VISIBLE),
+            // Force a frame to render before proceeding.
+            // After this is done, we at least known that the contents have been
+            // painted - even if the WebContents object itself doesn't!
+            CheckJsResult(webcontents_id, kPaintWorkaroundFunction)));
+  }
+
+  // If the element is already painted, there is no reason to actually wait (and
+  // in fact that will cause a timeout). So only execute the wait step if the
+  // WebContents is not ready or not painted.
+  //
+  // Note: this could also be done with a custom `StateObserver` and
+  // `WaitForState()` but this approach requires the fewest steps.
+  return std::move(IfElement(
+                       webcontents_id,
+                       [](const ui::TrackedElement* el) {
+                         // If the page is not ready (i.e. no element) or not
+                         // painted, execute the wait step; otherwise skip it.
+                         return !el || !el->AsA<TrackedElementWebContents>()
+                                            ->owner()
+                                            ->HasPageBeenPainted();
+                       },
+                       std::move(wait_step))
+                       .AddDescriptionPrefix("WaitForWebContentsPainted()"));
+}
+
 // static
 InteractiveBrowserTestApi::MultiStep
 InteractiveBrowserTestApi::NavigateWebContents(
     ui::ElementIdentifier webcontents_id,
     GURL target_url) {
-  const auto desc = base::StringPrintf("NavigateWebContents( %s )",
-                                       target_url.spec().c_str());
-  return Steps(
+  auto steps = Steps(
       std::move(StepBuilder()
-                    .SetDescription(base::StrCat({desc, ": Navigate"}))
+                    .SetDescription("Navigate")
                     .SetElementID(webcontents_id)
                     .SetContext(kDefaultWebContentsContextMode)
                     .SetStartCallback(base::BindOnce(
@@ -308,13 +503,16 @@ InteractiveBrowserTestApi::NavigateWebContents(
                           owner->LoadPage(url);
                         },
                         target_url))),
-      std::move(WaitForWebContentsNavigation(webcontents_id, target_url)
-                    .FormatDescription(base::StrCat({desc, ": %s"}))));
+      WaitForWebContentsNavigation(webcontents_id, target_url));
+  AddDescriptionPrefix(
+      steps, base::StrCat({"NavigateWebContents( ", target_url.spec(), " )"}));
+  return steps;
 }
 
 InteractiveBrowserTestApi::StepBuilder
 InteractiveBrowserTestApi::FocusWebContents(
     ui::ElementIdentifier webcontents_id) {
+  RequireInteractiveTest();
   StepBuilder builder;
   builder.SetElementID(webcontents_id);
   builder.SetDescription("FocusWebContents()");
@@ -326,14 +524,32 @@ InteractiveBrowserTestApi::FocusWebContents(
           seq->FailForTesting();
           return;
         }
+
+        // If the surface is in a window it needs to be brought to the front.
         const auto result = test_util().ActivateSurface(el);
         test_impl().HandleActionResult(seq, el, "ActivateSurface", result);
         if (result != ui::test::ActionResult::kSucceeded) {
           return;
         }
+
         auto* const contents = tracked_el->web_contents();
-        if (!contents || !contents->GetPrimaryMainFrame()) {
-          LOG(ERROR) << "WebContents not present or no main frame.";
+        if (!contents) {
+          LOG(ERROR) << "WebContents not present.";
+          seq->FailForTesting();
+          return;
+        }
+
+        // Focus the renderer.
+        if (!contents->GetRenderWidgetHostView()) {
+          LOG(ERROR) << "No render widget host.";
+          seq->FailForTesting();
+          return;
+        }
+        contents->GetRenderWidgetHostView()->Focus();
+
+        // Prepare the renderer for input.
+        if (!contents->GetPrimaryMainFrame()) {
+          LOG(ERROR) << "No main frame.";
           seq->FailForTesting();
           return;
         }
@@ -355,32 +571,39 @@ InteractiveBrowserTestApi::WaitForStateChange(
   ui::CustomElementEventType event_type =
       expect_timeout ? state_change.timeout_event : state_change.event;
   CHECK(event_type);
-  std::ostringstream desc;
-  desc << "WaitForStateChange( " << state_change << ", "
-       << (expect_timeout ? "true" : "false") << " )";
   const bool fail_on_close = !state_change.continue_across_navigation;
-  return Steps(
+  StepBuilder step1;
+  step1.SetDescription("Queue Event")
+      .SetElementID(webcontents_id)
+      .SetContext(kDefaultWebContentsContextMode)
+      .SetMustRemainVisible(fail_on_close)
+      .SetStartCallback(base::BindOnce(
+          [](StateChange state_change, ui::TrackedElement* el) {
+            el->AsA<TrackedElementWebContents>()
+                ->owner()
+                ->SendEventOnStateChange(state_change);
+          },
+          state_change));
+  if (state_change.continue_across_navigation) {
+    // This is required to prevent failing if the element would otherwise be
+    // hidden due to a navigation between trigger and step start.
+    step1.SetStepStartMode(ui::InteractionSequence::StepStartMode::kImmediate);
+  }
+
+  auto steps = Steps(
+      std::move(step1),
       std::move(StepBuilder()
-                    .SetDescription(base::StrCat({desc.str(), ": Queue Event"}))
+                    .SetDescription("Wait For Event")
                     .SetElementID(webcontents_id)
-                    .SetContext(kDefaultWebContentsContextMode)
-                    .SetMustRemainVisible(fail_on_close)
-                    .SetStartCallback(base::BindOnce(
-                        [](StateChange state_change, ui::TrackedElement* el) {
-                          el->AsA<TrackedElementWebContents>()
-                              ->owner()
-                              ->SendEventOnStateChange(state_change);
-                        },
-                        state_change))),
-      std::move(
-          StepBuilder()
-              .SetDescription(base::StrCat({desc.str(), ": Wait For Event"}))
-              .SetElementID(webcontents_id)
-              .SetContext(
-                  ui::InteractionSequence::ContextMode::kFromPreviousStep)
-              .SetType(ui::InteractionSequence::StepType::kCustomEvent,
-                       event_type)
-              .SetMustBeVisibleAtStart(fail_on_close)));
+                    .SetContext(
+                        ui::InteractionSequence::ContextMode::kFromPreviousStep)
+                    .SetType(ui::InteractionSequence::StepType::kCustomEvent,
+                             event_type)
+                    .SetMustBeVisibleAtStart(fail_on_close)));
+  AddDescriptionPrefix(
+      steps, base::StrCat({"WaitForStateChange( ", base::ToString(state_change),
+                           ", ", base::ToString(expect_timeout), " )"}));
+  return steps;
 }
 
 // static
@@ -536,26 +759,126 @@ ui::InteractionSequence::StepBuilder InteractiveBrowserTestApi::CheckJsResultAt(
                          testing::Matcher<base::Value>(IsTruthyMatcher()));
 }
 
-InteractiveBrowserTestApi::StepBuilder InteractiveBrowserTestApi::MoveMouseTo(
-    ElementSpecifier web_contents,
+InteractiveBrowserTestApi::MultiStep InteractiveBrowserTestApi::MoveMouseTo(
+    ui::ElementIdentifier web_contents,
     const DeepQuery& where) {
-  return MoveMouseTo(web_contents, DeepQueryToRelativePosition(where));
+  auto steps =
+      Steps(WaitForWebContentsPainted(web_contents),
+            MoveMouseTo(web_contents, DeepQueryToRelativePosition(where)));
+  AddDescriptionPrefix(steps, "MoveMouseTo()");
+  return steps;
 }
 
-InteractiveBrowserTestApi::StepBuilder InteractiveBrowserTestApi::DragMouseTo(
-    ElementSpecifier web_contents,
+InteractiveBrowserTestApi::MultiStep InteractiveBrowserTestApi::DragMouseTo(
+    ui::ElementIdentifier web_contents,
     const DeepQuery& where,
     bool release) {
-  return DragMouseTo(web_contents, DeepQueryToRelativePosition(where), release);
+  auto steps = Steps(
+      WaitForWebContentsPainted(web_contents),
+      DragMouseTo(web_contents, DeepQueryToRelativePosition(where), release));
+  AddDescriptionPrefix(steps, "DragMouseTo()");
+  return steps;
 }
 
-InteractiveBrowserTestApi::StepBuilder
-InteractiveBrowserTestApi::ScrollIntoView(ui::ElementIdentifier web_contents,
-                                          const DeepQuery& where) {
+ui::InteractionSequence::StepBuilder InteractiveBrowserTestApi::ScrollIntoView(
+    ui::ElementIdentifier web_contents,
+    const DeepQuery& where) {
   return std::move(
       ExecuteJsAt(web_contents, where,
                   "(el) => { el.scrollIntoView({ behavior: 'instant' }); }")
           .SetDescription("ScrollIntoView()"));
+}
+
+InteractiveBrowserTestApi::MultiStep
+InteractiveBrowserTestApi::WaitForElementVisible(
+    ui::ElementIdentifier web_contents,
+    const DeepQuery& where) {
+  DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kWaitforElementVisibleCompleteEvent);
+  const std::string function =
+      R"(
+        function(el) {
+          const rect = el.getBoundingClientRect();
+          const left = Math.max(0, rect.x);
+          const top = Math.max(0, rect.y);
+          const right = Math.min(rect.x + rect.width, window.innerWidth);
+          const bottom = Math.min(rect.y + rect.height, window.innerHeight);
+          return right > left && bottom > top;
+        }
+      )";
+
+  StateChange change;
+  change.event = kWaitforElementVisibleCompleteEvent;
+  change.test_function = function;
+  change.type = StateChange::Type::kExistsAndConditionTrue;
+  change.where = where;
+
+  auto steps = WaitForStateChange(web_contents, change);
+  AddDescriptionPrefix(steps, "WaitForElementVisible()");
+  return steps;
+}
+
+ui::InteractionSequence::StepBuilder InteractiveBrowserTestApi::ClickElement(
+    ui::ElementIdentifier web_contents,
+    const DeepQuery& where,
+    ui_controls::MouseButton button,
+    ui_controls::AcceleratorState modifiers) {
+  int js_button;
+  switch (button) {
+    case ui_controls::LEFT:
+      js_button = 0;
+      break;
+    case ui_controls::MIDDLE:
+      js_button = 1;
+      break;
+    case ui_controls::RIGHT:
+      js_button = 2;
+      break;
+  }
+
+  const bool shift = modifiers & ui_controls::kShift;
+  const bool alt = modifiers & ui_controls::kAlt;
+  const bool ctrl = modifiers & ui_controls::kControl;
+  const bool meta = modifiers & ui_controls::kCommand;
+
+  auto b2s = [](bool b) { return base::ToString(b); };
+
+  const std::string command = base::StringPrintf(
+      R"(
+      function(el) {
+        const rect = el.getBoundingClientRect();
+        const left = Math.max(0, rect.x);
+        const top = Math.max(0, rect.y);
+        const right = Math.min(rect.x + rect.width, window.innerWidth);
+        const bottom = Math.min(rect.y + rect.height, window.innerHeight);
+        if (right <= left || bottom <= top) {
+          throw new Error(
+              'Target element is zero size or ' +
+              'has empty intersection with the viewport.');
+        }
+        const x = (left + right) / 2;
+        const y = (top + bottom) / 2;
+
+        const event = new MouseEvent(
+            'click',
+            {
+              bubbles: true,
+              cancelable: true,
+              clientX: x,
+              clientY: y,
+              button: %d,
+              shiftKey: %s,
+              altKey: %s,
+              ctrlKey: %s,
+              metaKey: %s
+            }
+        );
+        el.dispatchEvent(event);
+      }
+    )",
+      js_button, b2s(shift), b2s(alt), b2s(ctrl), b2s(meta));
+
+  return std::move(ExecuteJsAt(web_contents, where, command)
+                       .SetDescription("ClickElement()"));
 }
 
 // static
@@ -585,10 +908,33 @@ InteractiveBrowserTestApi::DeepQueryToRelativePosition(const DeepQuery& query) {
       query);
 }
 
+// static
+InteractiveBrowserTestApi::MultiStep
+InteractiveBrowserTestApi::MaybeWaitForPaint(ElementSpecifier element) {
+  // Only wait if `element` is actually a `WebContents`.
+  //
+  // WebContents are typically only referred to via their assigned IDs.
+  // TODO(dfried): possibly handle (rare) cases where a name has been assigned.
+  if (!std::holds_alternative<ui::ElementIdentifier>(element)) {
+    return MultiStep();
+  }
+  const auto element_id = std::get<ui::ElementIdentifier>(element);
+
+  // Do a `WaitForWebContentsPainted()`, but only if the ID has been assigned to
+  // an instrumented `WebContents`.
+  //
+  // TODO(dfried): Maybe handle `WebView` elements as well.
+  return Steps(If(
+      [this, element_id]() {
+        return test_impl().IsInstrumentedWebContents(element_id);
+      },
+      WaitForWebContentsPainted(element_id)));
+}
+
 Browser* InteractiveBrowserTestApi::GetBrowserFor(
     ui::ElementContext current_context,
     BrowserSpecifier spec) {
-  return absl::visit(
+  return std::visit(
       base::Overloaded{[](AnyBrowser) -> Browser* { return nullptr; },
                        [current_context](CurrentBrowser) {
                          Browser* const browser =

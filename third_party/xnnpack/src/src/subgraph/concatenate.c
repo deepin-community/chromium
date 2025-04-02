@@ -4,27 +4,35 @@
 // LICENSE file in the root directory of this source tree.
 
 #include <assert.h>
+#include <inttypes.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
-#include <xnnpack.h>
-#include <xnnpack/log.h>
-#include <xnnpack/operator.h>
-#include <xnnpack/params.h>
-#include <xnnpack/subgraph.h>
-#include <xnnpack/subgraph-validation.h>
+#include "xnnpack.h"
+#include "xnnpack/common.h"
+#include "xnnpack/datatype.h"
+#include "xnnpack/log.h"
+#include "xnnpack/node-type.h"
+#include "xnnpack/operator-type.h"
+#include "xnnpack/operator.h"
+#include "xnnpack/subgraph-validation.h"
+#include "xnnpack/subgraph.h"
+#include "pthreadpool.h"
 
 static enum xnn_status create_concatenate_operator_helper(
   const struct xnn_node *node,
   struct xnn_operator_data *opdata,
+  const enum xnn_datatype datatype,
   size_t index)
 {
-  switch (node->compute_type) {
-    case xnn_compute_type_fp16:
+  switch (datatype) {
+    case xnn_datatype_fp16:
       return xnn_create_copy_nc_x16(node->flags, &opdata->operator_objects[index]);
-    case xnn_compute_type_fp32:
+    case xnn_datatype_fp32:
       return xnn_create_copy_nc_x32(node->flags, &opdata->operator_objects[index]);
-    case xnn_compute_type_qs8:
-    case xnn_compute_type_qu8:
+    case xnn_datatype_qint8:
+    case xnn_datatype_quint8:
       return xnn_create_copy_nc_x8(node->flags, &opdata->operator_objects[index]);
     default:
       XNN_UNREACHABLE;
@@ -41,10 +49,13 @@ static enum xnn_status create_concatenate_n_operator(
   xnn_weights_cache_t weights_cache)
 {
   enum xnn_status status;
-  const size_t axis = node->params.concatenate.axis;
+  const int32_t axis = node->params.concatenate.axis;
   opdata->axis = axis;
+  const uint32_t input1_id = opdata->inputs[0];
+  assert(input1_id < num_values);
+  const struct xnn_value *input1_value = &values[input1_id];
   for (size_t i = 0; i < num_inputs; ++i) {
-    status = create_concatenate_operator_helper(node, opdata, i);
+    status = create_concatenate_operator_helper(node, opdata, input1_value->datatype, i);
     if (status != xnn_status_success) {
       return status;
     }
@@ -151,7 +162,10 @@ static enum xnn_status reshape_concatenate_n_operator(
     input_channels[i] = 1;
   }
 
-  const size_t axis = opdata->axis;
+  int32_t axis = opdata->axis;
+  if (axis < 0) {
+    axis += values[input_id[0]].shape.num_dims;
+  }
   size_t output_stride = 0;
   for (size_t i = 0; i < num_inputs; ++i) {
     for (size_t j = axis; j < values[input_id[0]].shape.num_dims; j++) {
@@ -167,8 +181,23 @@ static enum xnn_status reshape_concatenate_n_operator(
 
   const struct xnn_value* input0_value = values + input_id[0];
   struct xnn_value* output_value = values + output_id;
-  opdata->batch_size = xnn_shape_multiply_leading_dims(&output_value->shape, opdata->axis);
 
+  output_value->shape.num_dims = input0_value->shape.num_dims;
+  if (axis >= output_value->shape.num_dims) {
+    xnn_log_error(
+      "failed to reshape reshape operator operator with the output ID #%" PRIu32
+      ": axis (%d) exceeds the number of dimensions (%zu)",
+      output_id, axis, input0_value->shape.num_dims);
+    return xnn_status_invalid_parameter;
+  }
+
+  memcpy(output_value->shape.dim, input0_value->shape.dim, input0_value->shape.num_dims * sizeof(size_t));
+  size_t concatenated_elements = 0;
+  for (size_t i = 0; i < num_inputs; ++i) {
+    concatenated_elements += values[input_id[i]].shape.dim[axis];
+  }
+  output_value->shape.dim[axis] = concatenated_elements;
+  opdata->batch_size = xnn_shape_multiply_leading_dims(&output_value->shape, axis);
   const size_t old_workspace_size = opdata->workspace_size;
   for (size_t i = 0; i < num_inputs; ++i) {
     status = reshape_concatenate_operator_helper(opdata, i, input_channels[i], input_channels[i], output_stride, threadpool);
@@ -176,12 +205,6 @@ static enum xnn_status reshape_concatenate_n_operator(
       return status;
     }
   }
-  memcpy(output_value->shape.dim, input0_value->shape.dim, input0_value->shape.num_dims * sizeof(size_t));
-  size_t concatenated_elements = 0;
-  for (size_t i = 0; i < num_inputs; ++i) {
-    concatenated_elements += values[input_id[i]].shape.dim[axis];
-  }
-  output_value->shape.dim[axis] = concatenated_elements;
   const size_t new_size = xnn_tensor_get_size(output_value);
   if (new_size > output_value->size || opdata->workspace_size > old_workspace_size) {
     output_value->size = new_size;
@@ -236,6 +259,9 @@ static enum xnn_status setup_concatenate_operator_helper(
   // The output pointer of this operator is the sum of all channels of the earlier operators.
   size_t channels = 0;
   for (size_t i = 0; i < index; i++) {
+    if (opdata->operator_objects[i]->state == xnn_run_state_skip) {
+      continue;
+    }
     channels += opdata->operator_objects[i]->channels;
   }
 
@@ -338,7 +364,7 @@ static enum xnn_status setup_concatenate5_operator(
 
 enum xnn_status check_input_value(
   xnn_subgraph_t subgraph,
-  size_t axis,
+  int32_t axis,
   uint32_t input_id,
   uint32_t output_id,
   size_t nth,
@@ -357,25 +383,6 @@ enum xnn_status check_input_value(
   }
 
   const struct xnn_value* output_value = &subgraph->values[output_id];
-  if (input_value->shape.num_dims != output_value->shape.num_dims) {
-    xnn_log_error(
-      "failed to define %s operator with input %zu ID #%" PRIu32
-      ": mismatch number of dimensions, input %zu has %zu, output has %zu",
-      xnn_node_type_to_string(node_type), nth, input_id, nth, input_value->shape.num_dims,
-      output_value->shape.num_dims);
-    return xnn_status_invalid_parameter;
-  }
-
-  for (size_t i = 0; i < input_value->shape.num_dims; i++) {
-    if (i != axis && input_value->shape.dim[i] != output_value->shape.dim[i]) {
-      xnn_log_error(
-        "failed to define %s operator with input ID #%" PRIu32
-        ": mismatch dimension %zu, input %zu has %zu, output has %zu",
-        xnn_node_type_to_string(node_type), input_id, i, nth, input_value->shape.dim[i], output_value->shape.dim[i]);
-      return xnn_status_invalid_parameter;
-    }
-  }
-
   status = xnn_subgraph_check_datatype_matches(node_type, input_id, input_value, output_id, output_value);
   if (status != xnn_status_success) {
     return status;
@@ -384,7 +391,7 @@ enum xnn_status check_input_value(
   return xnn_status_success;
 }
 
-enum xnn_status check_input_compute_type(
+static enum xnn_status check_datatype_copyable(
   xnn_subgraph_t subgraph,
   uint32_t input_id,
   uint32_t output_id,
@@ -393,29 +400,18 @@ enum xnn_status check_input_compute_type(
 {
   const struct xnn_value* input_value = &subgraph->values[input_id];
   const struct xnn_value* output_value = &subgraph->values[output_id];
-  if (input_value->quantization.zero_point != output_value->quantization.zero_point) {
-    xnn_log_error(
-        "failed to define %s operator with input ID #%" PRIu32 " and output ID #%" PRIu32
-        ": mismatching quantization zero point across the %s input (%" PRId32 ") and the output (%" PRId32 ")",
-        xnn_node_type_to_string(node_type), input_id, output_id,
-        nth, input_value->quantization.zero_point, output_value->quantization.zero_point);
-    return xnn_status_invalid_parameter;
+
+  enum xnn_status status = xnn_subgraph_check_datatype_matches(node_type, input_id, input_value, output_id, output_value);
+  if (status != xnn_status_success) {
+    return status;
   }
-  if (input_value->quantization.scale != output_value->quantization.scale) {
-    xnn_log_error(
-        "failed to define %s operator with input ID #%" PRIu32 " and output ID #%" PRIu32
-        ": mismatching quantization scale across the %s input (%.7g) and the output (%.7g)",
-        xnn_node_type_to_string(node_type), input_id, output_id,
-        nth, input_value->quantization.scale, output_value->quantization.scale);
-    return xnn_status_invalid_parameter;
-  }
-  return xnn_status_success;
+  return xnn_subgraph_check_quantization_parameter_matches(node_type, input_id, input_value, output_id, output_value);
 }
 
 enum xnn_status xnn_define_concatenate_n(
   enum xnn_node_type node_type,
   xnn_subgraph_t subgraph,
-  size_t axis,
+  int32_t axis,
   size_t num_inputs,
   uint32_t* input_ids,
   uint32_t output_id,
@@ -441,14 +437,6 @@ enum xnn_status xnn_define_concatenate_n(
     return status;
   }
 
-  if (axis >= output_value->shape.num_dims) {
-    xnn_log_error(
-      "failed to define %s operator with the output ID #%" PRIu32
-      ": axis (%zu) exceeds the number of dimensions (%zu)",
-      xnn_node_type_to_string(node_type), output_id, axis, output_value->shape.num_dims);
-    return xnn_status_invalid_parameter;
-  }
-
   for (size_t i = 0; i < num_inputs; i++) {
     status = check_input_value(subgraph, axis, input_ids[i], output_id, i+1, node_type);
     if (status != xnn_status_success) {
@@ -456,66 +444,28 @@ enum xnn_status xnn_define_concatenate_n(
     }
   }
 
-  size_t input_axis_dimensions_sum = 0;
-  for (size_t i = 0; i < num_inputs; i++) {
-    const struct xnn_value* input_value = &subgraph->values[input_ids[i]];
-    input_axis_dimensions_sum += input_value->shape.dim[axis];
+  status = check_datatype_copyable(subgraph, input_ids[0], output_id, "first", node_type);
+  if (status != xnn_status_success) {
+    return status;
   }
-
-  if (output_value->shape.dim[axis] != input_axis_dimensions_sum) {
-    xnn_log_error(
-      "failed to define %s operator with output ID #%" PRIu32
-      ": mismatch axis dimension %zu, output has %zu, sum of input dimensions is %zu",
-      xnn_node_type_to_string(node_type), output_id, axis, output_value->shape.dim[axis], input_axis_dimensions_sum);
-    return xnn_status_invalid_parameter;
-  }
-
-  enum xnn_compute_type compute_type = xnn_compute_type_invalid;
-  switch (output_value->datatype) {
-    case xnn_datatype_fp16:
-      compute_type = xnn_compute_type_fp16;
-      break;
-    case xnn_datatype_fp32:
-      compute_type = xnn_compute_type_fp32;
-      break;
-    case xnn_datatype_qint8:
-      compute_type = xnn_compute_type_qs8;
-      break;
-    case xnn_datatype_quint8:
-      compute_type = xnn_compute_type_qu8;
-      break;
-    default:
-      xnn_log_error(
-        "failed to define %s operator with output ID #%" PRIu32 ": unsupported Value datatype %s (%d)",
-        xnn_node_type_to_string(node_type), output_id,
-        xnn_datatype_to_string(output_value->datatype), output_value->datatype);
-      return xnn_status_invalid_parameter;
-  }
-
-  if (compute_type == xnn_compute_type_qs8 || compute_type == xnn_compute_type_qu8) {
-    status = check_input_compute_type(subgraph, input_ids[0], output_id, "first", node_type);
-    if (status != xnn_status_success) {
-      return status;
-    }
-    status = check_input_compute_type(subgraph, input_ids[1], output_id, "second", node_type);
-    if (status != xnn_status_success) {
-      return status;
-    }
+  status = check_datatype_copyable(subgraph, input_ids[1], output_id, "second", node_type);
+  if (status != xnn_status_success) {
+    return status;
   }
   if (num_inputs > 2) {
-    status = check_input_compute_type(subgraph, input_ids[2], output_id, "third", node_type);
+    status = check_datatype_copyable(subgraph, input_ids[2], output_id, "third", node_type);
     if (status != xnn_status_success) {
       return status;
     }
   }
   if (num_inputs > 3) {
-    status = check_input_compute_type(subgraph, input_ids[3], output_id, "fourth", node_type);
+    status = check_datatype_copyable(subgraph, input_ids[3], output_id, "fourth", node_type);
     if (status !=  xnn_status_success) {
       return status;
     }
   }
   if (num_inputs > 4) {
-    status = check_input_compute_type(subgraph, input_ids[4], output_id, "fifth", node_type);
+    status = check_datatype_copyable(subgraph, input_ids[4], output_id, "fifth", node_type);
     if (status !=  xnn_status_success) {
       return status;
     }
@@ -528,7 +478,6 @@ enum xnn_status xnn_define_concatenate_n(
 
   node->params.concatenate.axis = axis;
   node->type = node_type;
-  node->compute_type = compute_type;
   node->num_inputs = num_inputs;
   node->num_outputs = 1;
   node->outputs[0] = output_id;
@@ -568,7 +517,7 @@ enum xnn_status xnn_define_concatenate_n(
 
 enum xnn_status xnn_define_concatenate2(
   xnn_subgraph_t subgraph,
-  size_t axis,
+  int32_t axis,
   uint32_t input1_id,
   uint32_t input2_id,
   uint32_t output_id,
@@ -581,7 +530,7 @@ enum xnn_status xnn_define_concatenate2(
 
 enum xnn_status xnn_define_concatenate3(
   xnn_subgraph_t subgraph,
-  size_t axis,
+  int32_t axis,
   uint32_t input1_id,
   uint32_t input2_id,
   uint32_t input3_id,
@@ -595,7 +544,7 @@ enum xnn_status xnn_define_concatenate3(
 
 enum xnn_status xnn_define_concatenate4(
   xnn_subgraph_t subgraph,
-  size_t axis,
+  int32_t axis,
   uint32_t input1_id,
   uint32_t input2_id,
   uint32_t input3_id,
@@ -610,7 +559,7 @@ enum xnn_status xnn_define_concatenate4(
 
 enum xnn_status xnn_define_concatenate5(
   xnn_subgraph_t subgraph,
-  size_t axis,
+  int32_t axis,
   uint32_t input1_id,
   uint32_t input2_id,
   uint32_t input3_id,

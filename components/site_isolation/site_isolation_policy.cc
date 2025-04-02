@@ -106,6 +106,34 @@ bool CachedDisableSiteIsolation(
   return decisions.should_disable_partial;
 }
 
+bool ShouldDisableOriginIsolationDueToMemorySlow() {
+#if BUILDFLAG(IS_ANDROID)
+  // We won't enable OI on Android by default, but users should be able to turn
+  // it on themselves if they wish. No need for us to enforce memory
+  // restrictions in that case.
+  return false;
+#else
+  // TODO(crbug.com/40259221): This value currently matches the default
+  // threshold for site isolation, but once more trial data is available it
+  // should be adjusted.
+  int default_memory_threshold_mb = 1077;
+  if (base::FeatureList::IsEnabled(features::kOriginIsolationMemoryThreshold)) {
+    int memory_threshold_mb = base::GetFieldTrialParamByFeatureAsInt(
+        features::kOriginIsolationMemoryThreshold,
+        features::kOriginIsolationMemoryThresholdParamName,
+        default_memory_threshold_mb);
+    return base::SysInfo::AmountOfPhysicalMemoryMB() <= memory_threshold_mb;
+  }
+  return false;
+#endif
+}
+
+bool CachedDisableOriginIsolation() {
+  static const bool should_disable_origin_isolation =
+      ShouldDisableOriginIsolationDueToMemorySlow();
+  return should_disable_origin_isolation;
+}
+
 }  // namespace
 
 // static
@@ -183,6 +211,14 @@ bool SiteIsolationPolicy::ShouldDisableSiteIsolationDueToMemoryThreshold(
     return CachedDisableSiteIsolation(site_isolation_mode);
   }
   return ShouldDisableSiteIsolationDueToMemorySlow(site_isolation_mode);
+}
+
+// static
+bool SiteIsolationPolicy::ShouldDisableOriginIsolationDueToMemoryThreshold() {
+  if (!g_disallow_memory_threshold_caching_for_testing) {
+    return CachedDisableOriginIsolation();
+  }
+  return ShouldDisableOriginIsolationDueToMemorySlow();
 }
 
 // static
@@ -370,7 +406,7 @@ void SiteIsolationPolicy::IsolateNewOAuthURL(
 // static
 bool SiteIsolationPolicy::ShouldPdfCompositorBeEnabledForOopifs() {
 #if BUILDFLAG(IS_ANDROID)
-  // TODO(crbug.com/1022917): Always enable on Android, at which point, this
+  // TODO(crbug.com/40657857): Always enable on Android, at which point, this
   // method should go away.
   //
   // Only use the PDF compositor when one of the site isolation modes that

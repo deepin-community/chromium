@@ -164,22 +164,24 @@ AXOptionalNSObject AXCallStatementInvoker::InvokeFor(
         "Cannot call '" + property_node.ToFlatString() + "' on null value");
   }
 
-  if (AXElementWrapper::IsValidElement(target))
+  if (AXElementWrapper::IsValidElement(target)) {
     return InvokeForAXElement(AXElementWrapper{target}, property_node);
+  }
 
   if (IsAXTextMarkerRange(target)) {
     return InvokeForAXTextMarkerRange(target, property_node);
   }
 
-  if ([target isKindOfClass:[NSArray class]])
+  if ([target isKindOfClass:[NSArray class]]) {
     return InvokeForArray(target, property_node);
+  }
 
-  if ([target isKindOfClass:[NSDictionary class]])
+  if ([target isKindOfClass:[NSDictionary class]]) {
     return InvokeForDictionary(target, property_node);
+  }
 
-  if (@available(macOS 11.0, *)) {
-    if ([target isKindOfClass:[AXCustomContent class]])
-      return InvokeForAXCustomContent(target, property_node);
+  if ([target isKindOfClass:[AXCustomContent class]]) {
+    return InvokeForAXCustomContent(target, property_node);
   }
 
   LOG(ERROR) << "Unexpected target type for " << property_node.ToFlatString();
@@ -189,19 +191,18 @@ AXOptionalNSObject AXCallStatementInvoker::InvokeFor(
 AXOptionalNSObject AXCallStatementInvoker::InvokeForAXCustomContent(
     const id target,
     const AXPropertyNode& property_node) const {
-  if (@available(macOS 11.0, *)) {
-    AXCustomContent* content = target;
+  AXCustomContent* content = target;
 
-    if (property_node.name_or_value == "label")
-      return AXOptionalNSObject(content.label);
-    if (property_node.name_or_value == "value")
-      return AXOptionalNSObject(content.value);
-
-    return AXOptionalNSObject::Error(
-        "Unrecognized '" + property_node.name_or_value +
-        "' attribute called on AXCustomContent object.");
+  if (property_node.name_or_value == "label") {
+    return AXOptionalNSObject(content.label);
   }
-  return AXOptionalNSObject::Error();
+  if (property_node.name_or_value == "value") {
+    return AXOptionalNSObject(content.value);
+  }
+
+  return AXOptionalNSObject::Error(
+      "Unrecognized '" + property_node.name_or_value +
+      "' attribute called on AXCustomContent object.");
 }
 
 AXOptionalNSObject AXCallStatementInvoker::InvokeForAXElement(
@@ -261,14 +262,14 @@ AXOptionalNSObject AXCallStatementInvoker::InvokeForAXElement(
   // Methods whose names start with "isAccessibility" returns a BOOL, so we
   // need to handle the returned value differently than methods whose return
   // types are id.
-  if (base::StartsWith(property_node.name_or_value, "isAccessibility")) {
+  if (property_node.name_or_value.starts_with("isAccessibility")) {
     std::optional<SEL> optional_arg_selector;
     std::string selector_string = property_node.name_or_value;
     // In some cases, we might want to pass a SEL as argument instead of an id.
     // When an argument is prefixed with "@SEL:", transform the string into a
     // valid SEL to pass to the main selector.
     if (property_node.arguments.size() == 1 &&
-        base::StartsWith(property_node.arguments[0].name_or_value, "@SEL:")) {
+        property_node.arguments[0].name_or_value.starts_with("@SEL:")) {
       optional_arg_selector = NSSelectorFromString(base::SysUTF8ToNSString(
           property_node.arguments[0].name_or_value.substr(5)));
       selector_string += ":";
@@ -309,7 +310,7 @@ AXOptionalNSObject AXCallStatementInvoker::InvokeForAXElement(
     return AXOptionalNSObject::Error();
   }
 
-  if (base::StartsWith(property_node.name_or_value, "accessibility")) {
+  if (property_node.name_or_value.starts_with("accessibility")) {
     if (property_node.arguments.size() == 1) {
       std::optional<id> optional_id =
           ax_element.PerformSelector(property_node.name_or_value,

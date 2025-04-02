@@ -4,6 +4,7 @@
 
 #include "ash/accelerators/ash_accelerator_configuration.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 
@@ -17,10 +18,10 @@
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
 #include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/types/optional_ref.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/events/event_constants.h"
@@ -28,8 +29,6 @@
 #include "ui/events/keycodes/dom/dom_codes_array.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
-
-#include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
 
@@ -160,8 +159,6 @@ class AshAcceleratorConfigurationTest : public AshTestBase {
   ~AshAcceleratorConfigurationTest() override = default;
 
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        ::features::kShortcutCustomization);
     AshTestBase::SetUp();
     config_ = std::make_unique<AshAcceleratorConfiguration>();
     config_->AddObserver(&observer_);
@@ -198,6 +195,10 @@ TEST_F(AshAcceleratorConfigurationTest, VerifyAcceleratorMappingPopulated) {
       {/*trigger_on_press=*/true, ui::VKEY_TAB,
        ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN,
        AcceleratorAction::kCycleBackwardMru},
+      {true, ui::VKEY_SPACE, ui::EF_SHIFT_DOWN | ui::EF_COMMAND_DOWN,
+       AcceleratorAction::kShowEmojiPicker, true},
+      {true, ui::VKEY_EMOJI_PICKER, ui::EF_NONE,
+       AcceleratorAction::kShowEmojiPicker, true},
   };
 
   config_->Initialize(test_data);
@@ -205,6 +206,9 @@ TEST_F(AshAcceleratorConfigurationTest, VerifyAcceleratorMappingPopulated) {
       config_->GetAllAccelerators();
 
   ExpectAllAcceleratorsEqual(test_data, accelerators);
+
+  ui::Accelerator accelerator(ui::VKEY_EMOJI_PICKER, ui::EF_NONE);
+  EXPECT_TRUE(config_->IsAcceleratorLocked(accelerator));
 }
 
 TEST_F(AshAcceleratorConfigurationTest, DeprecatedAccelerators) {
@@ -551,8 +555,13 @@ TEST_F(AshAcceleratorConfigurationTest, VerifyObserversAreNotified) {
 
 TEST_F(AshAcceleratorConfigurationTest, RemoveAccelerator) {
   EXPECT_EQ(0, observer_.num_times_accelerator_updated_called());
+  // Adding an additional kSwitchToLastUsedIme with trigger_on_press = false
+  // here to verify it will be also removed together when removing
+  // kSwitchToLastUsedIme with trigger_on_press = true.
   const AcceleratorData test_data[] = {
       {/*trigger_on_press=*/true, ui::VKEY_SPACE, ui::EF_CONTROL_DOWN,
+       AcceleratorAction::kSwitchToLastUsedIme},
+      {/*trigger_on_press=*/false, ui::VKEY_SPACE, ui::EF_CONTROL_DOWN,
        AcceleratorAction::kSwitchToLastUsedIme},
       {/*trigger_on_press=*/true, ui::VKEY_SPACE,
        ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN,
@@ -2583,8 +2592,7 @@ TEST_F(AshAcceleratorConfigurationTest, SwitchUserPrefsAreSeparate) {
 TEST_F(AshAcceleratorConfigurationTest, PrefsResetWithFlag) {
   scoped_feature_list_.Reset();
   scoped_feature_list_.InitWithFeatures(
-      /*enabled_features=*/{::features::kShortcutCustomization,
-                            features::kResetShortcutCustomizations},
+      /*enabled_features=*/{features::kResetShortcutCustomizations},
       /*disabled_features=*/{});
   SimulateNewUserFirstLogin(kFakeUserEmail);
   const AcceleratorData test_data[] = {

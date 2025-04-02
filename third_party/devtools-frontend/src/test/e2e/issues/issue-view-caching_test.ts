@@ -12,7 +12,6 @@ import {
   waitFor,
   waitForFunction,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   ensureResourceSectionIsExpanded,
   expandIssue,
@@ -22,7 +21,7 @@ import {
   waitForTableFromResourceSectionContents,
 } from '../helpers/issues-helpers.js';
 
-describe('IssueView cache', async () => {
+describe('IssueView cache', () => {
   it('should correctly update the issue', async () => {
     await goToResource('empty.html');
     const {target} = getBrowserAndPages();
@@ -38,11 +37,11 @@ describe('IssueView cache', async () => {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({geeting: 'hello'}),
           });
-        } catch (e) {
+        } catch {
         }
         try {
           await fetch(url, {credentials: 'include'});
-        } catch (e) {
+        } catch {
         }
       });
     }

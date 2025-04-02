@@ -74,7 +74,6 @@ inline int WebRtcSevToChromeSev(LoggingSeverity sev) {
       return ::logging::LOGGING_VERBOSE;
     default:
       NOTREACHED();
-      return ::logging::LOGGING_FATAL;
   }
 }
 
@@ -91,7 +90,6 @@ inline int WebRtcVerbosityLevel(LoggingSeverity sev) {
       return 2;
     default:
       NOTREACHED();
-      return 0;
   }
 }
 

@@ -8,7 +8,6 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "ui/aura/native_window_occlusion_tracker.h"
 #include "ui/aura/test/aura_test_base.h"
 #include "ui/aura/test/aura_test_utils.h"
@@ -133,7 +132,7 @@ TEST_F(WindowTreeHostTest,
   EXPECT_EQ(gfx::Rect(300, 400), host()->window()->bounds());
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(WindowTreeHostTest, HoldPointerMovesOnChildResizing) {
   aura::WindowEventDispatcher* dispatcher = host()->dispatcher();
 
@@ -157,7 +156,7 @@ TEST_F(WindowTreeHostTest, HoldPointerMovesOnChildResizing) {
 }
 #endif
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 // Tests if scale factor changes take effect. Previously a scale factor change
 // wouldn't take effect without a bounds change. For context see
 // https://crbug.com/1087626
@@ -331,30 +330,24 @@ TEST_F(WindowTreeHostTest, LostCaptureDuringTearDown) {
   TestWindowTreeHost host;
 }
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_WIN)
 class WindowTreeHostWithReleaseTest : public test::AuraTestBase {
  public:
   // AuraTestBase:
   void SetUp() override {
-    // Disable the headless check as the bots run with CHROME_HEADLESS set.
-    NativeWindowOcclusionTracker::SetHeadlessCheckEnabled(false);
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        {
-#if BUILDFLAG(IS_WIN)
-            {features::kCalculateNativeWinOcclusion, {}},
-#endif
-            {features::kApplyNativeOcclusionToCompositor,
-             {{features::kApplyNativeOcclusionToCompositorType.name,
-               features::kApplyNativeOcclusionToCompositorTypeRelease}}},
-        },
+        {{features::kCalculateNativeWinOcclusion, {}},
+         {features::kApplyNativeOcclusionToCompositor,
+          {{features::kApplyNativeOcclusionToCompositorType.name,
+            features::kApplyNativeOcclusionToCompositorTypeRelease}}},
+         // Disable the headless check as the bots run with CHROME_HEADLESS
+         // set.
+         {features::kAlwaysTrackNativeWindowOcclusionForTest, {}}},
         {});
     AuraTestBase::SetUp();
   }
 
-  void TearDown() override {
-    test::AuraTestBase::TearDown();
-    NativeWindowOcclusionTracker::SetHeadlessCheckEnabled(true);
-  }
+  void TearDown() override { test::AuraTestBase::TearDown(); }
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -408,29 +401,96 @@ TEST_F(WindowTreeHostWithReleaseTest, VideoCaptureLockForcesVisible) {
   EXPECT_TRUE(host()->compositor()->IsVisible());
 }
 
+TEST_F(WindowTreeHostWithReleaseTest, VideoCaptureLockAffectsOcclusionState) {
+  ASSERT_TRUE(NativeWindowOcclusionTracker::
+                  IsNativeWindowOcclusionTrackingAlwaysEnabled(host()));
+  // This test needs to drive native occlusion. If native occlusion is
+  // used, it'll conflict with this test.
+  NativeWindowOcclusionTracker::DisableNativeWindowOcclusionTracking(host());
+  host()->Show();
+  host()->SetNativeWindowOcclusionState(Window::OcclusionState::OCCLUDED, {});
+  EXPECT_EQ(Window::OcclusionState::OCCLUDED,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_FALSE(host()->compositor()->IsVisible());
+
+  std::unique_ptr<WindowTreeHost::VideoCaptureLock> lock =
+      host()->CreateVideoCaptureLock();
+  // VideoCaptureLock should force this to visible.
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_TRUE(host()->compositor()->IsVisible());
+  lock.reset();
+
+  // It should return to occluded after.
+  EXPECT_EQ(Window::OcclusionState::OCCLUDED,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_FALSE(host()->compositor()->IsVisible());
+
+  lock = host()->CreateVideoCaptureLock();
+  host()->SetNativeWindowOcclusionState(Window::OcclusionState::VISIBLE, {});
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_TRUE(host()->compositor()->IsVisible());
+  lock.reset();
+
+  // We set the native occlusion state to visible, this should persist after
+  // destroying the capture lock.
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_TRUE(host()->compositor()->IsVisible());
+
+  // Now try the same thing for the hidden occlusion state:
+  host()->SetNativeWindowOcclusionState(Window::OcclusionState::HIDDEN, {});
+  EXPECT_EQ(Window::OcclusionState::HIDDEN,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_FALSE(host()->compositor()->IsVisible());
+
+  lock = host()->CreateVideoCaptureLock();
+  // VideoCaptureLock should force this to visible.
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_TRUE(host()->compositor()->IsVisible());
+  lock.reset();
+
+  // It should return to hidden after.
+  EXPECT_EQ(Window::OcclusionState::HIDDEN,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_FALSE(host()->compositor()->IsVisible());
+
+  lock = host()->CreateVideoCaptureLock();
+  host()->SetNativeWindowOcclusionState(Window::OcclusionState::VISIBLE, {});
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_TRUE(host()->compositor()->IsVisible());
+  lock.reset();
+
+  // We set the native occlusion state to visible, this should persist after
+  // destroying the capture lock.
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_TRUE(host()->compositor()->IsVisible());
+}
+
 class WindowTreeHostWithThrottleTest : public test::AuraTestBase {
  public:
   // AuraTestBase:
   void SetUp() override {
     // Disable the headless check as the bots run with CHROME_HEADLESS set.
-    NativeWindowOcclusionTracker::SetHeadlessCheckEnabled(false);
     scoped_feature_list_.InitWithFeaturesAndParameters(
         {
-#if BUILDFLAG(IS_WIN)
             {features::kCalculateNativeWinOcclusion, {}},
-#endif
             {features::kApplyNativeOcclusionToCompositor,
              {{features::kApplyNativeOcclusionToCompositorType.name,
                features::kApplyNativeOcclusionToCompositorTypeThrottle}}},
+            // Disable the headless check as the bots run with CHROME_HEADLESS
+            // set.
+            {features::kAlwaysTrackNativeWindowOcclusionForTest, {}},
         },
         {});
     AuraTestBase::SetUp();
   }
 
-  void TearDown() override {
-    test::AuraTestBase::TearDown();
-    NativeWindowOcclusionTracker::SetHeadlessCheckEnabled(true);
-  }
+  void TearDown() override { test::AuraTestBase::TearDown(); }
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -470,30 +530,86 @@ TEST_F(WindowTreeHostWithThrottleTest, CallHideDirectly) {
   EXPECT_FALSE(host()->compositor()->IsVisible());
 }
 
+TEST_F(WindowTreeHostWithThrottleTest, VideoCaptureLockAffectsOcclusionState) {
+  ASSERT_TRUE(NativeWindowOcclusionTracker::
+                  IsNativeWindowOcclusionTrackingAlwaysEnabled(host()));
+  // This test needs to drive native occlusion. If native occlusion is
+  // used, it'll conflict with this test.
+  NativeWindowOcclusionTracker::DisableNativeWindowOcclusionTracking(host());
+  host()->Show();
+  host()->SetNativeWindowOcclusionState(Window::OcclusionState::OCCLUDED, {});
+  EXPECT_EQ(Window::OcclusionState::OCCLUDED,
+            host()->GetNativeWindowOcclusionState());
+
+  std::unique_ptr<WindowTreeHost::VideoCaptureLock> lock =
+      host()->CreateVideoCaptureLock();
+  // VideoCaptureLock should force this to visible.
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  lock.reset();
+
+  // It should return to occluded after.
+  EXPECT_EQ(Window::OcclusionState::OCCLUDED,
+            host()->GetNativeWindowOcclusionState());
+
+  lock = host()->CreateVideoCaptureLock();
+  host()->SetNativeWindowOcclusionState(Window::OcclusionState::VISIBLE, {});
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  lock.reset();
+
+  // We set the native occlusion state to visible, this should persist after
+  // destroying the capture lock.
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+
+  // Now try the same thing for the hidden occlusion state:
+  host()->SetNativeWindowOcclusionState(Window::OcclusionState::HIDDEN, {});
+  EXPECT_EQ(Window::OcclusionState::HIDDEN,
+            host()->GetNativeWindowOcclusionState());
+
+  lock = host()->CreateVideoCaptureLock();
+  // VideoCaptureLock should force this to visible.
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  lock.reset();
+
+  // It should return to hidden after.
+  EXPECT_EQ(Window::OcclusionState::HIDDEN,
+            host()->GetNativeWindowOcclusionState());
+
+  lock = host()->CreateVideoCaptureLock();
+  host()->SetNativeWindowOcclusionState(Window::OcclusionState::VISIBLE, {});
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  lock.reset();
+
+  // We set the native occlusion state to visible, this should persist after
+  // destroying the capture lock.
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+}
+
 class WindowTreeHostWithThrottleAndReleaseTest : public test::AuraTestBase {
  public:
   // AuraTestBase:
   void SetUp() override {
-    // Disable the headless check as the bots run with CHROME_HEADLESS set.
-    NativeWindowOcclusionTracker::SetHeadlessCheckEnabled(false);
     scoped_feature_list_.InitWithFeaturesAndParameters(
         {
-#if BUILDFLAG(IS_WIN)
             {features::kCalculateNativeWinOcclusion, {}},
-#endif
             {features::kApplyNativeOcclusionToCompositor,
              {{features::kApplyNativeOcclusionToCompositorType.name,
                features::
                    kApplyNativeOcclusionToCompositorTypeThrottleAndRelease}}},
+            // Disable the headless check as the bots run with CHROME_HEADLESS
+            // set.
+            {features::kAlwaysTrackNativeWindowOcclusionForTest, {}},
         },
         {});
     AuraTestBase::SetUp();
   }
 
-  void TearDown() override {
-    test::AuraTestBase::TearDown();
-    NativeWindowOcclusionTracker::SetHeadlessCheckEnabled(true);
-  }
+  void TearDown() override { test::AuraTestBase::TearDown(); }
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -575,6 +691,77 @@ TEST_F(WindowTreeHostWithThrottleAndReleaseTest,
   EXPECT_TRUE(test::GetThrottledHosts().empty());
 }
 
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS_LACROS)
+TEST_F(WindowTreeHostWithThrottleAndReleaseTest,
+       VideoCaptureLockAffectsOcclusionState) {
+  ASSERT_TRUE(NativeWindowOcclusionTracker::
+                  IsNativeWindowOcclusionTrackingAlwaysEnabled(host()));
+  // This test needs to drive native occlusion. If native occlusion is
+  // used, it'll conflict with this test.
+  NativeWindowOcclusionTracker::DisableNativeWindowOcclusionTracking(host());
+  host()->Show();
+  host()->SetNativeWindowOcclusionState(Window::OcclusionState::OCCLUDED, {});
+  EXPECT_EQ(Window::OcclusionState::OCCLUDED,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_FALSE(host()->compositor()->IsVisible());
+
+  std::unique_ptr<WindowTreeHost::VideoCaptureLock> lock =
+      host()->CreateVideoCaptureLock();
+  // VideoCaptureLock should force this to visible.
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_TRUE(host()->compositor()->IsVisible());
+  lock.reset();
+
+  // It should return to occluded after.
+  EXPECT_EQ(Window::OcclusionState::OCCLUDED,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_FALSE(host()->compositor()->IsVisible());
+
+  lock = host()->CreateVideoCaptureLock();
+  host()->SetNativeWindowOcclusionState(Window::OcclusionState::VISIBLE, {});
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_TRUE(host()->compositor()->IsVisible());
+  lock.reset();
+
+  // We set the native occlusion state to visible, this should persist after
+  // destroying the capture lock.
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_TRUE(host()->compositor()->IsVisible());
+
+  // Now try the same thing for the hidden occlusion state:
+  host()->SetNativeWindowOcclusionState(Window::OcclusionState::HIDDEN, {});
+  EXPECT_EQ(Window::OcclusionState::HIDDEN,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_FALSE(host()->compositor()->IsVisible());
+
+  lock = host()->CreateVideoCaptureLock();
+  // VideoCaptureLock should force this to visible.
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_TRUE(host()->compositor()->IsVisible());
+  lock.reset();
+
+  // It should return to hidden after.
+  EXPECT_EQ(Window::OcclusionState::HIDDEN,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_FALSE(host()->compositor()->IsVisible());
+
+  lock = host()->CreateVideoCaptureLock();
+  host()->SetNativeWindowOcclusionState(Window::OcclusionState::VISIBLE, {});
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_TRUE(host()->compositor()->IsVisible());
+  lock.reset();
+
+  // We set the native occlusion state to visible, this should persist after
+  // destroying the capture lock.
+  EXPECT_EQ(Window::OcclusionState::VISIBLE,
+            host()->GetNativeWindowOcclusionState());
+  EXPECT_TRUE(host()->compositor()->IsVisible());
+}
+
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace aura

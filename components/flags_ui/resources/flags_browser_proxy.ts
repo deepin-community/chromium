@@ -24,6 +24,7 @@ export interface Feature {
     description: string,
     selected: boolean,
   }>;
+  links?: string[];
 }
 
 export interface ExperimentalFeaturesData {
@@ -34,16 +35,15 @@ export interface ExperimentalFeaturesData {
   needsRestart: boolean;
   showBetaChannelPromotion: boolean;
   showDevChannelPromotion: boolean;
+  // <if expr="is_chromeos">
   showOwnerWarning: boolean;
-  showSystemFlagsLink: boolean;
+  // </if>
 }
 
 export interface FlagsBrowserProxy {
   // <if expr="not is_ios">
   restartBrowser(): void;
-  // </if>
-  // <if expr="is_chromeos">
-  crosUrlFlagsRedirect(): void;
+  requestDeprecatedFeatures(): Promise<ExperimentalFeaturesData>;
   // </if>
   resetAllFlags(): void;
   requestExperimentalFeatures(): Promise<ExperimentalFeaturesData>;
@@ -58,11 +58,9 @@ export class FlagsBrowserProxyImpl implements FlagsBrowserProxy {
   restartBrowser() {
     chrome.send('restartBrowser');
   }
-  // </if>
 
-  // <if expr="is_chromeos">
-  crosUrlFlagsRedirect() {
-    chrome.send('crosUrlFlagsRedirect');
+  requestDeprecatedFeatures() {
+    return sendWithPromise('requestDeprecatedFeatures');
   }
   // </if>
 

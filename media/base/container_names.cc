@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/base/container_names.h"
 
 #include <stddef.h>
@@ -347,7 +352,7 @@ static bool CheckDV(const uint8_t* buffer, int buffer_size) {
 
   int offset = 0;
   int current_sequence_number = -1;
-  int last_block_number[6] = {0};
+  int last_block_number[6] = {};
   while (offset + 11 < buffer_size) {
     BitReader reader(buffer + offset, 11);
 

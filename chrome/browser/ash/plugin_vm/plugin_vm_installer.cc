@@ -95,7 +95,6 @@ PluginVmSetupResult BucketForCancelledInstall(
   switch (installing_state) {
     case PluginVmInstaller::InstallingState::kInactive:
       NOTREACHED();
-      [[fallthrough]];
     case PluginVmInstaller::InstallingState::kCheckingLicense:
       return PluginVmSetupResult::kUserCancelledValidatingLicense;
     case PluginVmInstaller::InstallingState::kCheckingDiskSpace:
@@ -729,7 +728,7 @@ void PluginVmInstaller::OnImportDiskImage(std::optional<ReplyType> reply) {
       VLOG(1) << "Disk image creation/import is now in progress";
       current_import_command_uuid_ = response.command_uuid();
       // Image in progress. Waiting for progress signals...
-      // TODO(https://crbug.com/966398): think about adding a timeout here,
+      // TODO(crbug.com/41460680): think about adding a timeout here,
       //   i.e. what happens if concierge dies and does not report any signal
       //   back, not even an error signal. Right now, the user would see
       //   the "Configuring Plugin VM" screen forever. Maybe that's OK
@@ -907,7 +906,7 @@ void PluginVmInstaller::CancelImport() {
 }
 
 void PluginVmInstaller::OnImportDiskImageCancelled(
-    std::optional<vm_tools::concierge::CancelDiskImageResponse> reply) {
+    std::optional<vm_tools::concierge::SuccessFailureResponse> reply) {
   DCHECK_EQ(state_, State::kCancelling);
   DCHECK_EQ(installing_state_, InstallingState::kImporting);
 
@@ -920,7 +919,7 @@ void PluginVmInstaller::OnImportDiskImageCancelled(
     return;
   }
 
-  vm_tools::concierge::CancelDiskImageResponse response = reply.value();
+  vm_tools::concierge::SuccessFailureResponse response = reply.value();
   if (response.success()) {
     VLOG(1) << "Import disk image request has been cancelled successfully";
   } else {

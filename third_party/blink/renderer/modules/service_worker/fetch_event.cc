@@ -31,6 +31,26 @@
 
 namespace blink {
 
+class FetchRespondWithFulfill final
+    : public ThenCallable<Response, FetchRespondWithFulfill> {
+ public:
+  explicit FetchRespondWithFulfill(FetchRespondWithObserver* observer)
+      : observer_(observer) {}
+
+  void Trace(Visitor* visitor) const override {
+    visitor->Trace(observer_);
+    ThenCallable<Response, FetchRespondWithFulfill>::Trace(visitor);
+  }
+
+  void React(ScriptState* script_state, Response* response) {
+    DCHECK(observer_);
+    observer_->OnResponseFulfilled(script_state, response);
+  }
+
+ private:
+  Member<FetchRespondWithObserver> observer_;
+};
+
 FetchEvent* FetchEvent::Create(ScriptState* script_state,
                                const AtomicString& type,
                                const FetchEventInit* initializer) {
@@ -56,20 +76,22 @@ bool FetchEvent::isReload() const {
 }
 
 void FetchEvent::respondWith(ScriptState* script_state,
-                             ScriptPromise script_promise,
+                             ScriptPromise<Response> script_promise,
                              ExceptionState& exception_state) {
   stopImmediatePropagation();
-  if (observer_)
-    observer_->RespondWith(script_state, script_promise, exception_state);
+  if (observer_) {
+    observer_->RespondWith(
+        script_state, script_promise,
+        MakeGarbageCollected<FetchRespondWithFulfill>(observer_),
+        exception_state);
+  }
 }
 
-ScriptPromiseTyped<IDLAny> FetchEvent::preloadResponse(
-    ScriptState* script_state) {
+ScriptPromise<IDLAny> FetchEvent::preloadResponse(ScriptState* script_state) {
   return preload_response_property_->Promise(script_state->World());
 }
 
-ScriptPromiseTyped<IDLUndefined> FetchEvent::handled(
-    ScriptState* script_state) {
+ScriptPromise<IDLUndefined> FetchEvent::handled(ScriptState* script_state) {
   return handled_property_->Promise(script_state->World());
 }
 

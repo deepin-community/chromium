@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "cc/paint/skottie_transfer_cache_entry.h"
 
 #include <utility>
@@ -42,7 +47,7 @@ bool ServiceSkottieTransferCacheEntry::Deserialize(
     GrDirectContext* context,
     skgpu::graphite::Recorder* graphite_recorder,
     base::span<const uint8_t> data) {
-  skottie_ = SkottieWrapper::CreateNonSerializable(data);
+  skottie_ = SkottieWrapper::UnsafeCreateNonSerializable(data);
   cached_size_ = data.size();
   return skottie_->is_valid();
 }

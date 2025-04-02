@@ -76,7 +76,6 @@ bool ExtensionPrefValueMap::CanExtensionControlPref(
                  << " is not registered but accesses pref " << pref_key
                  << " (incognito: " << incognito << ")."
                  << " http://crbug.com/454513";
-    return false;
   }
 
   if (incognito && !ext->second->incognito_enabled)
@@ -192,7 +191,6 @@ PrefValueMap* ExtensionPrefValueMap::GetExtensionPrefValueMap(
       break;
   }
   NOTREACHED();
-  return nullptr;
 }
 
 const PrefValueMap* ExtensionPrefValueMap::GetExtensionPrefValueMap(
@@ -213,7 +211,6 @@ const PrefValueMap* ExtensionPrefValueMap::GetExtensionPrefValueMap(
       break;
   }
   NOTREACHED();
-  return nullptr;
 }
 
 void ExtensionPrefValueMap::GetExtensionControlledKeys(

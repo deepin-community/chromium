@@ -11,12 +11,7 @@
 namespace content {
 
 CONTENT_EXPORT BASE_DECLARE_FEATURE(
-    kAttributionStorageUseBuiltInRecoveryIfSupported);
-
-CONTENT_EXPORT BASE_DECLARE_FEATURE(kAttributionVerboseDebugReporting);
-
-CONTENT_EXPORT BASE_DECLARE_FEATURE(
-    kAttributionReportingDeactivateAfterFilterMatch);
+    kAttributionReportDeliveryThirdRetryAttempt);
 
 }  // namespace content
 

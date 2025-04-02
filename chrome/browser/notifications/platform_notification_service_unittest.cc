@@ -13,8 +13,10 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -26,10 +28,15 @@
 #include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/notifications/platform_notification_service_factory.h"
 #include "chrome/browser/notifications/platform_notification_service_impl.h"
+#include "chrome/browser/safe_browsing/mock_notification_content_detection_service.h"
+#include "chrome/browser/safe_browsing/notification_content_detection_service_factory.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/test/test_history_database.h"
+#include "components/safe_browsing/content/browser/notification_content_detection/test_model_observer_tracker.h"
+#include "components/safe_browsing/core/common/features.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/buildflags/buildflags.h"
@@ -54,20 +61,28 @@
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 #if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
+#include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_icon_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
-#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_icon_generator.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
+#include "chrome/browser/web_applications/web_app_install_info.h"
+#include "chrome/browser/web_applications/web_app_install_params.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
+#include "components/webapps/browser/install_result_code.h"
+#include "components/webapps/browser/installable/installable_metrics.h"
 #endif
 
 using blink::NotificationResources;
 using blink::PlatformNotificationData;
 using content::NotificationDatabaseData;
 using message_center::Notification;
+using ::testing::_;
 
 namespace {
 
@@ -94,6 +109,8 @@ const char kTimeUntilLastClickMillis[] = "TimeUntilLastClick";
 class PlatformNotificationServiceTest : public testing::Test {
  public:
   void SetUp() override {
+    scoped_feature_list_.InitAndDisableFeature(
+        safe_browsing::kOnDeviceNotificationContentDetectionModel);
     TestingProfile::Builder profile_builder;
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
     profile_builder.SetIsMainProfile(true);
@@ -201,9 +218,8 @@ TEST_F(PlatformNotificationServiceTest, DisplayPersistentThenClose) {
 }
 
 TEST_F(PlatformNotificationServiceTest, DisplayNonPersistentPropertiesMatch) {
-  std::vector<int> vibration_pattern(
-      kNotificationVibrationPattern,
-      kNotificationVibrationPattern + std::size(kNotificationVibrationPattern));
+  std::vector<int> vibration_pattern(std::begin(kNotificationVibrationPattern),
+                                     std::end(kNotificationVibrationPattern));
 
   PlatformNotificationData data;
   data.title = u"My notification's title";
@@ -233,9 +249,8 @@ TEST_F(PlatformNotificationServiceTest, DisplayNonPersistentPropertiesMatch) {
 }
 
 TEST_F(PlatformNotificationServiceTest, DisplayPersistentPropertiesMatch) {
-  std::vector<int> vibration_pattern(
-      kNotificationVibrationPattern,
-      kNotificationVibrationPattern + std::size(kNotificationVibrationPattern));
+  std::vector<int> vibration_pattern(std::begin(kNotificationVibrationPattern),
+                                     std::end(kNotificationVibrationPattern));
   PlatformNotificationData data;
   data.title = u"My notification's title";
   data.body = u"Hello, world!";
@@ -354,66 +369,50 @@ TEST_F(PlatformNotificationServiceTest, NextPersistentNotificationId) {
 
 #if !BUILDFLAG(IS_ANDROID)
 
-TEST_F(PlatformNotificationServiceTest, IncomingCallWebApp) {
-  // If there is no WebAppProvider, IsActivelyInstalledWebAppScope should return
-  // false.
-  const GURL web_app_url{"https://example.org/"};
-  EXPECT_FALSE(service()->IsActivelyInstalledWebAppScope(web_app_url));
-
-  // If there is no web app installed for the provided url,
-  // IsActivelyInstalledWebAppScope should return false.
-  web_app::FakeWebAppProvider* provider =
-      web_app::FakeWebAppProvider::Get(profile_.get());
-  provider->Start();
-  EXPECT_FALSE(service()->IsActivelyInstalledWebAppScope(web_app_url));
-
-  // IsActivelyInstalledWebAppScope should return true only if there is an
-  // installed web app for the provided URL.
-  std::unique_ptr<web_app::WebApp> web_app = web_app::test::CreateWebApp();
-  const GURL installed_web_app_url = web_app->start_url();
-  const webapps::AppId app_id = web_app->app_id();
-  web_app->SetName("Web App Title");
-
-  provider->GetRegistrarMutable().registry().emplace(app_id,
-                                                     std::move(web_app));
-
-  EXPECT_TRUE(service()->IsActivelyInstalledWebAppScope(installed_web_app_url));
-
-  // If the app is not installed anymore, IsActivelyInstalledWebAppScope should
-  // return false.
-  raw_ptr<web_app::WebApp> installed_web_app =
-      provider->GetRegistrarMutable().GetAppByIdMutable(app_id);
-  installed_web_app->SetIsUninstalling(true);
-  EXPECT_FALSE(
-      service()->IsActivelyInstalledWebAppScope(installed_web_app_url));
-}
-
 class PlatformNotificationServiceTest_WebApps
     : public PlatformNotificationServiceTest {
  public:
   void SetUp() override {
     PlatformNotificationServiceTest::SetUp();
 
-    web_app::FakeWebAppProvider* provider =
-        web_app::FakeWebAppProvider::Get(profile_.get());
+    web_app::test::AwaitStartWebAppProviderAndSubsystems(profile_.get());
 
-    std::unique_ptr<web_app::WebApp> web_app =
-        web_app::test::CreateWebApp(kWebAppStartUrl);
-    installed_app_id = web_app->app_id();
-    provider->GetRegistrarMutable().registry().emplace(installed_app_id,
-                                                       std::move(web_app));
+    web_app::WebAppProvider* provider =
+        web_app::WebAppProvider::GetForTest(profile_.get());
 
-    web_app = web_app::test::CreateWebApp(kInstalledNestedWebAppStartUrl);
-    nested_installed_app_id = web_app->app_id();
-    provider->GetRegistrarMutable().registry().emplace(nested_installed_app_id,
-                                                       std::move(web_app));
+    std::unique_ptr<web_app::WebAppInstallInfo> web_app =
+        web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(
+            kWebAppStartUrl);
+    web_app->title = u"Test app 1";
+    installed_app_id =
+        web_app::test::InstallWebApp(profile_.get(), std::move(web_app));
 
-    web_app = web_app::test::CreateWebApp(kNotInstalledNestedWebAppStartUrl);
-    web_app->SetIsLocallyInstalled(false);
-    not_installed_app_id = web_app->app_id();
-    provider->GetRegistrarMutable().registry().emplace(not_installed_app_id,
-                                                       std::move(web_app));
-    provider->Start();
+    web_app = web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(
+        kInstalledNestedWebAppStartUrl);
+    web_app->title = u"Test app 2";
+    nested_installed_app_id =
+        web_app::test::InstallWebApp(profile_.get(), std::move(web_app));
+
+    web_app = web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(
+        kNotInstalledNestedWebAppStartUrl);
+    web_app->title = u"Test app 3";
+    web_app::WebAppInstallParams params;
+    params.install_state =
+        web_app::proto::InstallState::SUGGESTED_FROM_ANOTHER_DEVICE;
+    // OS Hooks must be disabled for non-locally installed app.
+    params.add_to_applications_menu = false;
+    params.add_to_desktop = false;
+    params.add_to_quick_launch_bar = false;
+
+    base::test::TestFuture<const webapps::AppId&, webapps::InstallResultCode>
+        future;
+    provider->scheduler().InstallFromInfoWithParams(
+        std::move(web_app), /*overwrite_existing_manifest_fields=*/false,
+        webapps::WebappInstallSource::OMNIBOX_INSTALL_ICON,
+        future.GetCallback(), params);
+    ASSERT_TRUE(future.Wait());
+    EXPECT_EQ(future.Get<webapps::InstallResultCode>(),
+              webapps::InstallResultCode::kSuccessNewInstall);
   }
 
  protected:
@@ -437,8 +436,36 @@ class PlatformNotificationServiceTest_WebApps
 
   webapps::AppId installed_app_id;
   webapps::AppId nested_installed_app_id;
-  webapps::AppId not_installed_app_id;
+
+ private:
+  web_app::OsIntegrationTestOverrideBlockingRegistration fake_os_integration_;
 };
+
+TEST_F(PlatformNotificationServiceTest_WebApps, IncomingCallWebApp) {
+  EXPECT_TRUE(service()->IsActivelyInstalledWebAppScope(kWebAppStartUrl));
+
+  web_app::test::UninstallAllWebApps(profile_.get());
+  EXPECT_FALSE(service()->IsActivelyInstalledWebAppScope(kWebAppStartUrl));
+}
+
+TEST_F(PlatformNotificationServiceTest_WebApps, CreateNotificationFromData) {
+  PlatformNotificationData notification_data;
+  notification_data.title = u"My Notification";
+  notification_data.body = u"Hello, world!";
+
+  GURL origin = url::Origin::Create(kWebAppStartUrl).GetURL();
+
+  Notification notification = service()->CreateNotificationFromData(
+      origin, "id", notification_data, NotificationResources(),
+      /*web_app_hint_url=*/kWebAppStartUrl);
+  EXPECT_EQ(notification.notifier_id().web_app_id, installed_app_id);
+
+  Notification nested_notification = service()->CreateNotificationFromData(
+      origin, "id", notification_data, NotificationResources(),
+      /*web_app_hint_url=*/kInstalledNestedWebAppStartUrl);
+  EXPECT_EQ(nested_notification.notifier_id().web_app_id,
+            nested_installed_app_id);
+}
 
 TEST_F(PlatformNotificationServiceTest_WebApps, PopulateWebAppId_MatchesScope) {
   service()->DisplayNotification(kNotificationId, kWebAppOrigin,
@@ -612,3 +639,86 @@ TEST_F(PlatformNotificationServiceTest_WebAppNotificationIconAndTitle,
       icon_and_title->icon.GetRepresentation(1.0f).GetBitmap().getColor(0, 0));
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+class PlatformNotificationServiceTest_NotificationContentDetection
+    : public PlatformNotificationServiceTest,
+      public testing::WithParamInterface<std::tuple<bool, bool>> {
+ public:
+  void SetUp() override {
+    TestingProfile::Builder profile_builder;
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+    profile_builder.SetIsMainProfile(true);
+#endif
+    profile_builder.AddTestingFactory(
+        HistoryServiceFactory::GetInstance(),
+        HistoryServiceFactory::GetDefaultFactory());
+    profile_ = profile_builder.Build();
+    if (IsNotificationContentDetectionEnabled()) {
+      scoped_feature_list_.InitAndEnableFeature(
+          safe_browsing::kOnDeviceNotificationContentDetectionModel);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(
+          safe_browsing::kOnDeviceNotificationContentDetectionModel);
+    }
+    if (IsSafeBrowsingEnabled()) {
+      profile_->GetTestingPrefService()->SetManagedPref(
+          prefs::kSafeBrowsingEnabled, std::make_unique<base::Value>(true));
+    } else {
+      profile_->GetTestingPrefService()->SetManagedPref(
+          prefs::kSafeBrowsingEnabled, std::make_unique<base::Value>(false));
+    }
+    mock_notification_content_detection_service_ = static_cast<
+        safe_browsing::MockNotificationContentDetectionService*>(
+        safe_browsing::NotificationContentDetectionServiceFactory::GetInstance()
+            ->SetTestingFactoryAndUse(
+                profile_.get(),
+                base::BindRepeating(
+                    &safe_browsing::MockNotificationContentDetectionService::
+                        FactoryForTests,
+                    &model_observer_tracker_,
+                    base::ThreadPool::CreateSequencedTaskRunner(
+                        {base::MayBlock()}))));
+  }
+
+  bool IsSafeBrowsingEnabled() { return std::get<0>(GetParam()); }
+
+  bool IsNotificationContentDetectionEnabled() {
+    return std::get<1>(GetParam());
+  }
+
+ protected:
+  raw_ptr<safe_browsing::MockNotificationContentDetectionService>
+      mock_notification_content_detection_service_ = nullptr;
+  safe_browsing::TestModelObserverTracker model_observer_tracker_;
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    PlatformNotificationServiceTest_NotificationContentDetection,
+    testing::Combine(testing::Bool(), testing::Bool()));
+
+// TODO(crbug.com/378566914): Test fails on Linux MSAN
+#if BUILDFLAG(IS_LINUX) && defined(MEMORY_SANITIZER)
+#define MAYBE_PerformNotificationContentDetectionWhenEnabled \
+  DISABLED_PerformNotificationContentDetectionWhenEnabled
+#else
+#define MAYBE_PerformNotificationContentDetectionWhenEnabled \
+  PerformNotificationContentDetectionWhenEnabled
+#endif
+TEST_P(PlatformNotificationServiceTest_NotificationContentDetection,
+       MAYBE_PerformNotificationContentDetectionWhenEnabled) {
+  PlatformNotificationData data;
+  data.title = u"My notification's title";
+  data.body = u"Hello, world!";
+
+  int expected_number_of_calls = 0;
+  if (IsSafeBrowsingEnabled() && IsNotificationContentDetectionEnabled()) {
+    expected_number_of_calls = 1;
+  }
+  EXPECT_CALL(*mock_notification_content_detection_service_,
+              MaybeCheckNotificationContentDetectionModel(_, _, _, _))
+      .Times(expected_number_of_calls);
+  service()->DisplayPersistentNotification(
+      kNotificationId, GURL() /* service_worker_scope */,
+      GURL("https://chrome.com/"), data, NotificationResources());
+}

@@ -37,7 +37,6 @@ proto::PrintSettings_DuplexMode DuplexModeToProto(
     default:
       NOTREACHED();
   }
-  return proto::PrintSettings_DuplexMode_ONE_SIDED;
 }
 
 proto::MediaSize RequestedMediaToProto(
@@ -65,7 +64,6 @@ proto::PrintJobInfo_PrintJobSource PrintJobSourceToProto(
     default:
       NOTREACHED();
   }
-  return proto::PrintJobInfo_PrintJobSource_PRINT_PREVIEW;
 }
 
 proto::PrintJobInfo_PrintJobStatus PrintJobStateToProto(
@@ -82,7 +80,6 @@ proto::PrintJobInfo_PrintJobStatus PrintJobStateToProto(
     default:
       NOTREACHED();
   }
-  return proto::PrintJobInfo_PrintJobStatus_CANCELED;
 }
 
 proto::Printer_PrinterSource PrinterSourceToProto(
@@ -95,7 +92,6 @@ proto::Printer_PrinterSource PrinterSourceToProto(
     default:
       NOTREACHED();
   }
-  return proto::Printer_PrinterSource_USER;
 }
 
 proto::PrintJobInfo_PrinterErrorCode PrinterErrorCodeToProto(
@@ -132,7 +128,6 @@ proto::PrintJobInfo_PrinterErrorCode PrinterErrorCodeToProto(
       // error is introduced.
       NOTREACHED();
   }
-  return proto::PrintJobInfo_PrinterErrorCode_UNKNOWN_ERROR;
 }
 
 // Helper method to convert base::Time to the number of milliseconds past the

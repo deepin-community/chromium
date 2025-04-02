@@ -46,11 +46,11 @@ class DeviceBase;
 // Base class for shared functionality between programmable encoders.
 class ProgrammableEncoder : public ApiObjectBase {
   public:
-    ProgrammableEncoder(DeviceBase* device, const char* label, EncodingContext* encodingContext);
+    ProgrammableEncoder(DeviceBase* device, StringView label, EncodingContext* encodingContext);
 
-    void APIInsertDebugMarker(const char* groupLabel);
+    void APIInsertDebugMarker(StringView groupLabel);
     void APIPopDebugGroup();
-    void APIPushDebugGroup(const char* groupLabel);
+    void APIPushDebugGroup(StringView groupLabel);
 
   protected:
     bool IsValidationEnabled() const;
@@ -72,10 +72,9 @@ class ProgrammableEncoder : public ApiObjectBase {
     ProgrammableEncoder(DeviceBase* device,
                         EncodingContext* encodingContext,
                         ErrorTag errorTag,
-                        const char* label);
+                        StringView label);
 
-    // TODO(https://crbug.com/dawn/2349): Investigate DanglingUntriaged in dawn/native.
-    raw_ptr<EncodingContext, DanglingUntriaged> mEncodingContext = nullptr;
+    raw_ptr<EncodingContext> mEncodingContext = nullptr;
 
     uint64_t mDebugGroupStackSize = 0;
 

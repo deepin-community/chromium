@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import '../strings.m.js';
+import '/strings.m.js';
 
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -101,7 +101,7 @@ class DragSession {
   }
 
   finish() {
-    // TODO(crbug/1444154): Ensure it is possible to drag bookmarks into an
+    // TODO(crbug.com/40267573): Ensure it is possible to drag bookmarks into an
     // empty active folder.
     if (!this.lastDropTargetBookmark_) {
       return;

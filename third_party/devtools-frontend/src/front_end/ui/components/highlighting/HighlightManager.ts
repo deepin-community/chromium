@@ -4,7 +4,11 @@
 
 import type * as TextUtils from '../../../models/text_utils/text_utils.js';
 
-import highlightingStyles from './highlighting.css.js';
+import highlightingStylesRaw from './highlighting.css.js';
+
+// TODO(crbug.com/391381439): Fully migrate off of constructed style sheets.
+const highlightingStyles = new CSSStyleSheet();
+highlightingStyles.replaceSync(highlightingStylesRaw.cssContent);
 
 export class RangeWalker {
   #offset = 0;
@@ -65,12 +69,10 @@ export const HIGHLIGHT_REGISTRY = 'search-highlight';
 
 let highlightManagerInstance: HighlightManager;
 export class HighlightManager {
-  // @ts-expect-error
   #highlights = new Highlight();
 
   constructor() {
     document.adoptedStyleSheets.push(highlightingStyles);
-    // @ts-expect-error
     CSS.highlights.set(HIGHLIGHT_REGISTRY, this.#highlights);
   }
 

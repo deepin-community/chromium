@@ -239,8 +239,9 @@ struct MediaTrackConstraintSetPlatform {
   LongConstraint sample_rate;
   LongConstraint sample_size;
   BooleanConstraint echo_cancellation;
+  BooleanConstraint auto_gain_control;
+  BooleanConstraint noise_suppression;
   BooleanConstraint voice_isolation;
-  StringConstraint echo_cancellation_type;
   DoubleConstraint latency;
   LongConstraint channel_count;
   StringConstraint device_id;
@@ -250,6 +251,15 @@ struct MediaTrackConstraintSetPlatform {
   StringConstraint display_surface;
 
   // W3C Image Capture
+  DoubleConstraint exposure_compensation;
+  DoubleConstraint exposure_time;
+  DoubleConstraint color_temperature;
+  DoubleConstraint iso;
+  DoubleConstraint brightness;
+  DoubleConstraint contrast;
+  DoubleConstraint saturation;
+  DoubleConstraint sharpness;
+  DoubleConstraint focus_distance;
   DoubleConstraint pan;
   DoubleConstraint tilt;
   DoubleConstraint zoom;
@@ -257,6 +267,7 @@ struct MediaTrackConstraintSetPlatform {
 
   // W3C Media Capture Extensions
   BooleanConstraint background_blur;
+  BooleanConstraint background_segmentation_mask;
   BooleanConstraint eye_gaze_correction;
   BooleanConstraint face_framing;
 
@@ -264,14 +275,6 @@ struct MediaTrackConstraintSetPlatform {
   // the legacy name interface.
   StringConstraint media_stream_source;  // tab, screen, desktop, system
   BooleanConstraint render_to_associated_sink;
-  BooleanConstraint goog_echo_cancellation;
-  BooleanConstraint goog_experimental_echo_cancellation;
-  BooleanConstraint goog_auto_gain_control;
-  BooleanConstraint goog_noise_suppression;
-  BooleanConstraint goog_highpass_filter;
-  BooleanConstraint goog_experimental_noise_suppression;
-  BooleanConstraint goog_audio_mirroring;
-  BooleanConstraint goog_da_echo_cancellation;
   BooleanConstraint goog_noise_reduction;
 
   MODULES_EXPORT bool IsUnconstrained() const;
@@ -321,4 +324,4 @@ class MediaConstraints {
 
 }  // namespace blink
 
-#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_MEDIASTREAM_MEDIA_CONSTRAINTS_H_
+#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_MEDIASTREAM_MEDIA_CONSTRAINTS_H_

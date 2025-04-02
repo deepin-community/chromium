@@ -77,6 +77,7 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input/context_menu_allowed_scope.h"
 #include "third_party/blink/renderer/core/input/event_handler.h"
+#include "third_party/blink/renderer/core/layout/geometry/box_strut.h"
 #include "third_party/blink/renderer/core/layout/hit_test_request.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
@@ -122,12 +123,12 @@ const EffectPaintPropertyNode& FrameSelection::CaretEffectNode() const {
 }
 
 bool FrameSelection::IsAvailable() const {
-  return SynchronousMutationObserver::GetDocument();
+  return document_.Get();
 }
 
 Document& FrameSelection::GetDocument() const {
   DCHECK(IsAvailable());
-  return *SynchronousMutationObserver::GetDocument();
+  return *document_.Get();
 }
 
 VisibleSelection FrameSelection::ComputeVisibleSelectionInDOMTree() const {
@@ -144,8 +145,12 @@ const SelectionInDOMTree& FrameSelection::GetSelectionInDOMTree() const {
 }
 
 Element* FrameSelection::RootEditableElementOrDocumentElement() const {
+  // TODO(editing-dev): The use of UpdateStyleAndLayout
+  // needs to be audited.  See http://crbug.com/590369 for more details.
+  GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kSelection);
+
   Element* selection_root =
-      ComputeVisibleSelectionInDOMTreeDeprecated().RootEditableElement();
+      ComputeVisibleSelectionInDOMTree().RootEditableElement();
   // Note that RootEditableElementOrDocumentElement can return null if the
   // documentElement is null.
   return selection_root ? selection_root : GetDocument().documentElement();
@@ -357,11 +362,27 @@ void FrameSelection::DidSetSelectionDeprecated(
   NotifyAccessibilityForSelectionChange();
   NotifyCompositorForSelectionChange();
   NotifyEventHandlerForSelectionChange();
-  // The task source should be kDOMManipulation, but the spec doesn't say
-  // anything about this.
-  frame_->DomWindow()->EnqueueDocumentEvent(
-      *Event::Create(event_type_names::kSelectionchange),
-      TaskType::kMiscPlatformAPI);
+
+  // Dispatch selectionchange events per element based on the new spec:
+  // https://w3c.github.io/selection-api/#selectionchange-event
+  if (RuntimeEnabledFeatures::DispatchSelectionchangeEventPerElementEnabled()) {
+    TextControlElement* text_control =
+        EnclosingTextControl(GetSelectionInDOMTree().Anchor());
+    if (text_control && !text_control->IsInShadowTree()) {
+      text_control->ScheduleSelectionchangeEvent();
+    } else {
+      GetDocument().ScheduleSelectionchangeEvent();
+    }
+  }
+  // When DispatchSelectionchangeEventPerElement is disabled, fall back to old
+  // path.
+  else {
+    // The task source should be kDOMManipulation, but the spec doesn't say
+    // anything about this.
+    frame_->DomWindow()->EnqueueDocumentEvent(
+        *Event::Create(event_type_names::kSelectionchange),
+        TaskType::kMiscPlatformAPI);
+  }
 }
 
 void FrameSelection::SetSelectionForAccessibility(
@@ -375,23 +396,73 @@ void FrameSelection::SetSelectionForAccessibility(
     DidSetSelectionDeprecated(selection, options);
 }
 
+void FrameSelection::DidChangeChildren(
+    const ContainerNode::ChildrenChange& change) {
+  if (!document_) {
+    return;  // ContextDestroyed() was already called
+  }
+
+  selection_editor_->DidChangeChildren(change);
+}
+
+void FrameSelection::DidMergeTextNodes(
+    const Text& merged_node,
+    const NodeWithIndex& node_to_be_removed_with_index,
+    unsigned old_length) {
+  if (!document_) {
+    return;  // ContextDestroyed() was already called
+  }
+  selection_editor_->DidMergeTextNodes(
+      merged_node, node_to_be_removed_with_index, old_length);
+}
+
+void FrameSelection::DidSplitTextNode(const Text& text) {
+  if (!document_) {
+    return;  // ContextDestroyed() was already called
+  }
+  selection_editor_->DidSplitTextNode(text);
+}
+
+void FrameSelection::DidUpdateCharacterData(CharacterData* data,
+                                            unsigned offset,
+                                            unsigned old_length,
+                                            unsigned new_length) {
+  if (!document_) {
+    return;  // ContextDestroyed() was already called
+  }
+  selection_editor_->DidUpdateCharacterData(data, offset, old_length,
+                                            new_length);
+}
+
 void FrameSelection::NodeChildrenWillBeRemoved(ContainerNode& container) {
-  if (!container.InActiveDocument())
-    return;
-  // TODO(yosin): We should move to call |TypingCommand::CloseTypingIfNeeded()|
-  // to |Editor| class.
-  TypingCommand::CloseTypingIfNeeded(frame_);
+  if (!document_) {
+    return;  // ContextDestroyed() was already called
+  }
+
+  selection_editor_->NodeChildrenWillBeRemoved(container);
+
+  if (container.InActiveDocument()) {
+    // TODO(yosin): We should move to call
+    // |TypingCommand::CloseTypingIfNeeded()| to |Editor| class.
+    TypingCommand::CloseTypingIfNeeded(frame_);
+  }
 }
 
 void FrameSelection::NodeWillBeRemoved(Node& node) {
+  if (!document_) {
+    return;  // ContextDestroyed() was already called
+  }
+
+  selection_editor_->NodeWillBeRemoved(node);
+
   // There can't be a selection inside a fragment, so if a fragment's node is
   // being removed, the selection in the document that created the fragment
   // needs no adjustment.
-  if (!node.InActiveDocument())
-    return;
-  // TODO(yosin): We should move to call |TypingCommand::CloseTypingIfNeeded()|
-  // to |Editor| class.
-  TypingCommand::CloseTypingIfNeeded(frame_);
+  if (node.InActiveDocument()) {
+    // TODO(yosin): We should move to call
+    // |TypingCommand::CloseTypingIfNeeded()| to |Editor| class.
+    TypingCommand::CloseTypingIfNeeded(frame_);
+  }
 }
 
 void FrameSelection::DidChangeFocus() {
@@ -430,6 +501,12 @@ bool FrameSelection::Modify(SelectionModifyAlteration alter,
           DispatchEventResult::kNotCanceled) {
     return false;
   }
+
+  // |DispatchSelectStart()| can change document hosted by |frame_|.
+  if (!IsAvailable()) {
+    return false;
+  }
+
   if (!modified) {
     if (set_selection_by == SetSelectionBy::kSystem)
       return false;
@@ -510,11 +587,23 @@ bool FrameSelection::SelectionHasFocus() const {
   Element* const focused_element = GetDocument().FocusedElement()
                                        ? GetDocument().FocusedElement()
                                        : GetDocument().documentElement();
-  if (!focused_element)
+  if (!focused_element || focused_element->IsScrollControlPseudoElement() ||
+      focused_element->IsScrollMarkerGroupPseudoElement()) {
     return false;
-
-  if (focused_element->IsTextControl())
-    return focused_element->ContainsIncludingHostElements(*current);
+  }
+  if (RuntimeEnabledFeatures::SelectionOnShadowDOMWithDelegatesFocusEnabled()) {
+    // If focus is on the delegated target of a shadow host with delegatesFocus,
+    // selection could be on focus even if focused element does not contain
+    // current selection start.
+    if (focused_element->IsTextControl() &&
+        focused_element->ContainsIncludingHostElements(*current)) {
+      return true;
+    }
+  } else {
+    if (focused_element->IsTextControl()) {
+      return focused_element->ContainsIncludingHostElements(*current);
+    }
+  }
 
   // Selection has focus if it contains the focused element.
   const PositionInFlatTree& focused_position =
@@ -524,16 +613,48 @@ bool FrameSelection::SelectionHasFocus() const {
     return true;
 
   bool is_editable = IsEditable(*current);
+  const TreeScope* tree_scope = &current->GetTreeScope();
   do {
     // If the selection is within an editable sub tree and that sub tree
     // doesn't have focus, the selection doesn't have focus either.
-    if (is_editable && !IsEditable(*current))
-      return false;
+    if (is_editable && !IsEditable(*current)) {
+      // An element can be not editable because -webkit-user-modify is inherited
+      // on the DOM tree instead of the flat tree. This is done in
+      // ComputedStyleBuilder::ComputedStyleBuilder and
+      // StyleResolver::InitStyle. We should check editability only if we are in
+      // the same tree scope.
+      if (!RuntimeEnabledFeatures::MouseFocusFlatTreeParentEnabled() ||
+          tree_scope == &current->GetTreeScope()) {
+        return false;
+      }
+    }
 
     // Selection has focus if its sub tree has focus.
     if (current == focused_element)
       return true;
-    current = current->ParentOrShadowHostNode();
+    if (RuntimeEnabledFeatures::
+            SelectionOnShadowDOMWithDelegatesFocusEnabled()) {
+      // If current is a shadow host with delegatesFocus, then it cannot be the
+      // focused element and we should compare with its focusable area instead.
+      if (const Element* el = DynamicTo<Element>(current);
+          el && el->IsShadowHostWithDelegatesFocus() &&
+          el->GetFocusableArea() == focused_element) {
+        return true;
+      }
+    }
+    if (RuntimeEnabledFeatures::MouseFocusFlatTreeParentEnabled()) {
+      // If we are stepping out of a shadow tree, the tree scope should be
+      // updated to the tree we step into.
+      bool stepping_out_of_shadow_tree =
+          tree_scope == &current->GetTreeScope() &&
+          DynamicTo<ShadowRoot>(current->parentNode());
+      current = FlatTreeTraversal::Parent(*current);
+      if (stepping_out_of_shadow_tree && current) {
+        tree_scope = &current->GetTreeScope();
+      }
+    } else {
+      current = current->ParentOrShadowHostNode();
+    }
   } while (current);
 
   return false;
@@ -562,15 +683,18 @@ bool FrameSelection::IsHidden() const {
 void FrameSelection::DidAttachDocument(Document* document) {
   DCHECK(document);
   selection_editor_->DidAttachDocument(document);
-  SetDocument(document);
+  document_ = document;
 }
 
 void FrameSelection::ContextDestroyed() {
   granularity_ = TextGranularity::kCharacter;
 
   layout_selection_->ContextDestroyed();
+  selection_editor_->ContextDestroyed();
 
   frame_->GetEditor().ClearTypingStyle();
+
+  document_ = nullptr;
 }
 
 void FrameSelection::LayoutBlockWillBeDestroyed(const LayoutBlock& block) {
@@ -740,11 +864,12 @@ void FrameSelection::SelectFrameElementInParentIfFullySelected() {
   if (!owner_element->isConnected() ||
       owner_element->GetDocument() != parent_local_frame->GetDocument())
     return;
-  parent_local_frame->Selection().SetSelectionAndEndTyping(
+  parent_local_frame->Selection().SetSelection(
       SelectionInDOMTree::Builder()
           .SetBaseAndExtent(Position::BeforeNode(*owner_element),
                             Position::AfterNode(*owner_element))
-          .Build());
+          .Build(),
+      SetSelectionOptions());
 }
 
 // Returns a shadow tree node for legacy shadow trees, a child of the
@@ -755,7 +880,8 @@ static Node* NonBoundaryShadowTreeRootNode(const Position& position) {
              : nullptr;
 }
 
-void FrameSelection::SelectAll(SetSelectionBy set_selection_by) {
+void FrameSelection::SelectAll(SetSelectionBy set_selection_by,
+                               bool canonicalize_selection) {
   if (auto* select_element =
           DynamicTo<HTMLSelectElement>(GetDocument().FocusedElement())) {
     if (select_element->CanSelectAll()) {
@@ -807,13 +933,20 @@ void FrameSelection::SelectAll(SetSelectionBy set_selection_by) {
       return;
   }
 
-  // TODO(editing-dev): Should we pass in set_selection_by?
-  SetSelection(SelectionInDOMTree::Builder().SelectAllChildren(*root).Build(),
+  const SelectionInDOMTree& dom_selection =
+      SelectionInDOMTree::Builder().SelectAllChildren(*root).Build();
+  if (canonicalize_selection) {
+    GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
+  }
+  SetSelection(canonicalize_selection
+                   ? CreateVisibleSelection(dom_selection).AsSelection()
+                   : dom_selection,
                SetSelectionOptions::Builder()
                    .SetShouldCloseTyping(true)
                    .SetShouldClearTypingStyle(true)
                    .SetShouldShowHandle(IsHandleVisible())
                    .Build());
+
   SelectFrameElementInParentIfFullySelected();
   // TODO(editing-dev): Should we pass in set_selection_by?
   NotifyTextControlOfSelectionChange(SetSelectionBy::kUser);
@@ -825,7 +958,7 @@ void FrameSelection::SelectAll(SetSelectionBy set_selection_by) {
 }
 
 void FrameSelection::SelectAll() {
-  SelectAll(SetSelectionBy::kSystem);
+  SelectAll(SetSelectionBy::kSystem, false);
 }
 
 // Implementation of |SVGTextControlElement::selectSubString()|
@@ -979,13 +1112,16 @@ static bool IsFrameElement(const Node* n) {
 }
 
 void FrameSelection::SetFocusedNodeIfNeeded() {
-  if (ComputeVisibleSelectionInDOMTreeDeprecated().IsNone() ||
-      !FrameIsFocused()) {
+  // TODO(editing-dev): The use of UpdateStyleAndLayout
+  // needs to be audited.  See http://crbug.com/590369 for more details.
+  GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kSelection);
+
+  if (ComputeVisibleSelectionInDOMTree().IsNone() || !FrameIsFocused()) {
     return;
   }
 
   if (Element* target =
-          ComputeVisibleSelectionInDOMTreeDeprecated().RootEditableElement()) {
+          ComputeVisibleSelectionInDOMTree().RootEditableElement()) {
     // Walk up the DOM tree to search for a node to focus.
     GetDocument().UpdateStyleAndLayoutTree();
     while (target) {
@@ -998,7 +1134,11 @@ void FrameSelection::SetFocusedNodeIfNeeded() {
                                                                   frame_);
         return;
       }
-      target = target->ParentOrShadowHostElement();
+      if (RuntimeEnabledFeatures::MouseFocusFlatTreeParentEnabled()) {
+        target = FlatTreeTraversal::ParentElement(*target);
+      } else {
+        target = target->ParentOrShadowHostElement();
+      }
     }
     GetDocument().ClearFocusedElement();
   }
@@ -1041,6 +1181,7 @@ String FrameSelection::SelectedHTMLForClipboard() const {
                       CreateMarkupOptions::Builder()
                           .SetShouldAnnotateForInterchange(true)
                           .SetShouldResolveURLs(kResolveNonLocalURLs)
+                          .SetIgnoresCSSTextTransformsForRenderedText(true)
                           .Build());
 }
 
@@ -1061,6 +1202,7 @@ String FrameSelection::SelectedTextForClipboard() const {
                      frame_->GetSettings()->GetSelectionIncludesAltImageText())
                  .SetSkipsUnselectableContent(true)
                  .SetEntersTextControls(true)
+                 .SetIgnoresCSSTextTransforms(true)
                  .Build());
 }
 
@@ -1124,7 +1266,7 @@ void FrameSelection::RevealSelection(
 
   scroll_into_view_util::ScrollRectToVisible(
       *start.AnchorNode()->GetLayoutObject(), selection_rect,
-      ScrollAlignment::CreateScrollIntoViewParams(alignment, alignment));
+      scroll_into_view_util::CreateScrollIntoViewParams(alignment, alignment));
   UpdateAppearance();
 }
 
@@ -1132,36 +1274,46 @@ void FrameSelection::SetSelectionFromNone() {
   // Put a caret inside the body if the entire frame is editable (either the
   // entire WebView is editable or designMode is on for this document).
 
+  // TODO(editing-dev): The use of UpdateStyleAndLayout
+  // needs to be audited.  See http://crbug.com/590369 for more details.
+  GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kSelection);
+
   Document* document = frame_->GetDocument();
-  if (!ComputeVisibleSelectionInDOMTreeDeprecated().IsNone() ||
-      !(blink::IsEditable(*document)))
+  if (!ComputeVisibleSelectionInDOMTree().IsNone() ||
+      !(blink::IsEditable(*document))) {
     return;
+  }
 
   Element* document_element = document->documentElement();
   if (!document_element)
     return;
   if (HTMLBodyElement* body =
           Traversal<HTMLBodyElement>::FirstChild(*document_element)) {
-    SetSelectionAndEndTyping(SelectionInDOMTree::Builder()
-                                 .Collapse(FirstPositionInOrBeforeNode(*body))
-                                 .Build());
+    SetSelection(SelectionInDOMTree::Builder()
+                     .Collapse(FirstPositionInOrBeforeNode(*body))
+                     .Build(),
+                 SetSelectionOptions());
   }
 }
 
 #if DCHECK_IS_ON()
 
 void FrameSelection::ShowTreeForThis() const {
-  ComputeVisibleSelectionInDOMTreeDeprecated().ShowTreeForThis();
+  // TODO(editing-dev): The use of UpdateStyleAndLayout
+  // needs to be audited.  See http://crbug.com/590369 for more details.
+  GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kSelection);
+
+  ComputeVisibleSelectionInDOMTree().ShowTreeForThis();
 }
 
 #endif
 
 void FrameSelection::Trace(Visitor* visitor) const {
   visitor->Trace(frame_);
+  visitor->Trace(document_);
   visitor->Trace(layout_selection_);
   visitor->Trace(selection_editor_);
   visitor->Trace(frame_caret_);
-  SynchronousMutationObserver::Trace(visitor);
 }
 
 void FrameSelection::ScheduleVisualUpdate() const {

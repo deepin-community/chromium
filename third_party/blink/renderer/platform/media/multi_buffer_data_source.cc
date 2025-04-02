@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/platform/media/multi_buffer_data_source.h"
 
 #include <algorithm>
+#include <memory>
 #include <utility>
 
 #include "base/containers/adapters.h"
@@ -18,7 +19,7 @@
 #include "net/base/net_errors.h"
 #include "third_party/blink/renderer/platform/media/buffered_data_source_host_impl.h"
 #include "third_party/blink/renderer/platform/media/multi_buffer_reader.h"
-#include "url/gurl.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 
 namespace blink {
 namespace {
@@ -86,7 +87,7 @@ class MultiBufferDataSource::ReadOperation {
  private:
   const int64_t position_;
   const int size_;
-  raw_ptr<uint8_t, ExperimentalRenderer> data_;
+  raw_ptr<uint8_t, DanglingUntriaged> data_;
   media::DataSource::ReadCB callback_;
 };
 
@@ -155,20 +156,21 @@ bool MultiBufferDataSource::media_has_played() const {
 
 bool MultiBufferDataSource::AssumeFullyBuffered() const {
   DCHECK(url_data_);
-  return !url_data_->url().SchemeIsHTTPOrHTTPS();
+  return !url_data_->url().ProtocolIsInHTTPFamily();
 }
 
-void MultiBufferDataSource::SetReader(MultiBufferReader* reader) {
+void MultiBufferDataSource::SetReader(
+    std::unique_ptr<MultiBufferReader> reader) {
   DCHECK(render_task_runner_->BelongsToCurrentThread());
   base::AutoLock auto_lock(lock_);
-  reader_.reset(reader);
+  reader_ = std::move(reader);
 }
 
 void MultiBufferDataSource::CreateResourceLoader(int64_t first_byte_position,
                                                  int64_t last_byte_position) {
   DCHECK(render_task_runner_->BelongsToCurrentThread());
 
-  SetReader(new MultiBufferReader(
+  SetReader(std::make_unique<MultiBufferReader>(
       url_data_->multibuffer(), first_byte_position, last_byte_position,
       is_client_audio_element_,
       base::BindRepeating(&MultiBufferDataSource::ProgressCallback, weak_ptr_),
@@ -234,8 +236,8 @@ void MultiBufferDataSource::OnRedirected(
     StopLoader();
     return;
   }
-  if (url_data_->url().DeprecatedGetOriginAsURL() !=
-      new_destination->url().DeprecatedGetOriginAsURL()) {
+  if (!SecurityOrigin::AreSameOrigin(url_data_->url(),
+                                     new_destination->url())) {
     single_origin_ = false;
   }
   SetReader(nullptr);
@@ -265,6 +267,11 @@ void MultiBufferDataSource::OnRedirected(
           1, base::BindOnce(&MultiBufferDataSource::ReadTask, weak_ptr_));
     }
   }
+
+  // The "redirect" may just be `reader_` being merged into an existing UrlData,
+  // in this case we need to ensure we report the buffered byte ranges from the
+  // existing UrlData instance.
+  UpdateProgress();
 
   if (redirect_cb_)
     redirect_cb_.Run();
@@ -403,7 +410,7 @@ int64_t MultiBufferDataSource::GetMemoryUsage() {
 }
 
 GURL MultiBufferDataSource::GetUrlAfterRedirects() const {
-  return url_data_->url();
+  return GURL(url_data_->url());
 }
 
 void MultiBufferDataSource::Read(int64_t position,

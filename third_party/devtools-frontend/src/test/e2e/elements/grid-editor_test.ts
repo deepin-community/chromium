@@ -5,7 +5,6 @@
 import {assert} from 'chai';
 
 import {goToResource, waitFor} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   clickNthChildOfSelectedElementNode,
   focusElementsTree,
@@ -15,7 +14,7 @@ import {
 } from '../helpers/elements-helpers.js';
 import {clickPropertyButton, clickStylePropertyEditorButton} from '../helpers/style-property-editor-helpers.js';
 
-describe('Grid Editor', async function() {
+describe('Grid Editor', function() {
   beforeEach(async function() {
     await goToResource('elements/grid-editor.html');
     await waitForContentOfSelectedElementsNode('<body>\u200B');

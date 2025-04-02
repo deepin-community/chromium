@@ -24,7 +24,7 @@ class ThemeTrackingNonAccessibleImageView
       const ui::ImageModel& light_image_model,
       const ui::ImageModel& dark_image_model,
       const base::RepeatingCallback<SkColor()>& get_background_color_callback);
-  // TODO(crbug.com/1366871): Remove this constructor and migrate existing
+  // TODO(crbug.com/40239900): Remove this constructor and migrate existing
   // callers to `ImageModel`.
   ThemeTrackingNonAccessibleImageView(
       const gfx::ImageSkia& light_image,
@@ -35,10 +35,6 @@ class ThemeTrackingNonAccessibleImageView
   ThemeTrackingNonAccessibleImageView& operator=(
       const ThemeTrackingNonAccessibleImageView&) = delete;
   ~ThemeTrackingNonAccessibleImageView() override;
-
- private:
-  // Overridden from views::ImageView.
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_ACCESSIBILITY_THEME_TRACKING_NON_ACCESSIBLE_IMAGE_VIEW_H_

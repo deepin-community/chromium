@@ -4,19 +4,20 @@
 
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
 
+#include <string_view>
+
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/values_test_util.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/content_settings/page_specific_content_settings_delegate.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/privacy_sandbox/mock_privacy_sandbox_service.h"
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_service_factory.h"
-#include "chrome/browser/ssl/security_state_tab_helper.h"
+#include "chrome/browser/ssl/chrome_security_state_tab_helper.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/hats/mock_trust_safety_sentiment_service.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service_factory.h"
@@ -26,6 +27,7 @@
 #include "chrome/browser/ui/views/controls/rich_hover_button.h"
 #include "chrome/browser/ui/views/page_info/chosen_object_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_main_view.h"
+#include "chrome/browser/ui/views/page_info/page_info_permission_content_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_security_content_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
 #include "chrome/browser/ui/views/page_info/permission_toggle_row_view.h"
@@ -37,7 +39,6 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chrome/test/views/chrome_test_views_delegate.h"
-#include "components/browsing_data/core/features.h"
 #include "components/content_settings/core/browser/content_settings_uma_util.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/cookie_blocking_3pcd_status.h"
@@ -56,6 +57,7 @@
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_web_contents_factory.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/ssl/ssl_connection_status_flags.h"
@@ -86,11 +88,11 @@
 #include "chrome/browser/plugins/chrome_plugin_service_filter.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/scoped_user_manager.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 const char* kUrl = "http://www.example.com/index.html";
 const char* kSecureUrl = "https://www.example.com/index.html";
@@ -123,7 +125,8 @@ class PageInfoBubbleViewTestApi {
             anchor_view, gfx::Rect(), parent_, web_contents_, GURL(kUrl),
             base::DoNothing(),
             base::BindOnce(&PageInfoBubbleViewTestApi::OnPageInfoBubbleClosed,
-                           base::Unretained(this), run_loop_.QuitClosure())));
+                           base::Unretained(this), run_loop_.QuitClosure()),
+            /*allow_extended_site_info=*/true));
     presenter_ = bubble->presenter_for_testing();
     navigation_handler_ = bubble;
     bubble_delegate_ = bubble;
@@ -173,9 +176,9 @@ class PageInfoBubbleViewTestApi {
             VIEW_ID_PAGE_INFO_BLOCK_THIRD_PARTY_COOKIES_SUBTITLE);
   }
 
-  views::View* fps_button() {
+  views::View* rws_button() {
     return bubble_delegate_->GetViewByID(
-        PageInfoViewFactory::VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_FPS_SETTINGS);
+        PageInfoViewFactory::VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_RWS_SETTINGS);
   }
 
   RichHoverButton* certificate_button() const {
@@ -217,7 +220,7 @@ class PageInfoBubbleViewTestApi {
     return GetPermissionToggleRowAt(index)->state_label_;
   }
 
-  std::u16string GetTrackingProtectionSubpageTitle() {
+  std::u16string GetCookiesSubpageTitle() {
     navigation_handler()->OpenCookiesPage();
     auto* title_label = bubble_delegate_->GetViewByID(
         PageInfoViewFactory::VIEW_ID_PAGE_INFO_SUBPAGE_TITLE);
@@ -229,8 +232,8 @@ class PageInfoBubbleViewTestApi {
     EXPECT_TRUE(view);
     ui::AXNodeData data;
     view->GetAccessibleNodeData(&data);
-    std::string name;
-    data.GetStringAttribute(ax::mojom::StringAttribute::kName, &name);
+    const std::string& name =
+        data.GetStringAttribute(ax::mojom::StringAttribute::kName);
     return base::ASCIIToUTF16(name);
   }
 
@@ -240,18 +243,16 @@ class PageInfoBubbleViewTestApi {
     EXPECT_TRUE(cookie_button());
     ui::AXNodeData data;
     cookie_button()->GetAccessibleNodeData(&data);
-    std::string name;
-    data.GetStringAttribute(ax::mojom::StringAttribute::kName, &name);
+    const std::string& name =
+        data.GetStringAttribute(ax::mojom::StringAttribute::kName);
     return base::ASCIIToUTF16(name);
   }
 
-  std::u16string GetSecurityInformationButtonText() {
+  std::u16string_view GetSecurityInformationButtonText() {
     auto* button = bubble_delegate_->GetViewByID(
         PageInfoViewFactory::
             VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_SECURITY_INFORMATION);
-    return static_cast<RichHoverButton*>(button)
-        ->GetTitleViewForTesting()
-        ->GetText();
+    return static_cast<RichHoverButton*>(button)->GetTitleText();
   }
 
   std::u16string GetSecuritySummaryText() {
@@ -260,20 +261,10 @@ class PageInfoBubbleViewTestApi {
         ->GetText();
   }
 
-  std::u16string GetTrackingProtectionButtonTitleText() {
+  std::u16string_view GetCookiesButtonTitleText() {
     auto* button = bubble_delegate_->GetViewByID(
         PageInfoViewFactory::VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_COOKIES_SUBPAGE);
-    return static_cast<RichHoverButton*>(button)
-        ->GetTitleViewForTesting()
-        ->GetText();
-  }
-
-  std::u16string GetTrackingProtectionButtonSubTitleText() {
-    auto* button = bubble_delegate_->GetViewByID(
-        PageInfoViewFactory::VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_COOKIES_SUBPAGE);
-    return static_cast<RichHoverButton*>(button)
-        ->GetSubTitleViewForTesting()
-        ->GetText();
+    return static_cast<RichHoverButton*>(button)->GetTitleText();
   }
 
   std::u16string GetPermissionLabelTextAt(int index) {
@@ -296,13 +287,14 @@ class PageInfoBubbleViewTestApi {
 
     // Non-empty permission section has a reset all button
     // after all permission rows.
-    if (actual_count)
+    if (actual_count) {
       --actual_count;
+    }
 
     return actual_count;
   }
 
-  // Simulates updating the number of blocked and allowed sites and fps info.
+  // Simulates updating the number of blocked and allowed sites and rws info.
   void SetCookieInfo(const PageInfoUI::CookiesNewInfo& cookie_info) {
     presenter_->ui_for_testing()->SetCookieInfo(cookie_info);
   }
@@ -320,10 +312,9 @@ class PageInfoBubbleViewTestApi {
     CreateView();
   }
 
-  std::u16string GetCertificateButtonSubtitleText() const {
+  std::u16string_view GetCertificateButtonSubtitleText() const {
     EXPECT_TRUE(certificate_button());
-    EXPECT_TRUE(certificate_button()->GetSubTitleViewForTesting());
-    return certificate_button()->GetSubTitleViewForTesting()->GetText();
+    return certificate_button()->GetSubtitleText();
   }
 
   const views::View::Views& GetChosenObjectChildren() {
@@ -380,28 +371,30 @@ class ScopedWebContentsTestHelper {
  public:
   explicit ScopedWebContentsTestHelper(bool off_the_record)
       : testing_profile_manager_(TestingBrowserProcess::GetGlobal()) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     auto fake_user_manager = std::make_unique<ash::FakeChromeUserManager>();
     auto* fake_user_manager_ptr = fake_user_manager.get();
     scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
         std::move(fake_user_manager));
 
-    constexpr char kTestUserGaiaId[] = "1111111111";
+    const GaiaId kTestUserGaiaId("1111111111");
     auto account_id =
         AccountId::FromUserEmailGaiaId(kTestUserEmail, kTestUserGaiaId);
     fake_user_manager_ptr->AddUserWithAffiliation(account_id,
                                                   /*is_affiliated=*/true);
     fake_user_manager_ptr->LoginUser(account_id);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
     EXPECT_TRUE(testing_profile_manager_.SetUp());
     profile_ = testing_profile_manager_.CreateTestingProfile(
-        kTestUserEmail, {{HistoryServiceFactory::GetInstance(),
-                          HistoryServiceFactory::GetDefaultFactory()}});
+        kTestUserEmail, {TestingProfile::TestingFactory{
+                            HistoryServiceFactory::GetInstance(),
+                            HistoryServiceFactory::GetDefaultFactory()}});
     EXPECT_TRUE(profile_);
 
-    if (off_the_record)
+    if (off_the_record) {
       profile_ = profile_->GetPrimaryOTRProfile(/*create_if_needed=*/true);
+    }
     web_contents_ = factory_.CreateWebContents(profile_);
   }
 
@@ -418,7 +411,7 @@ class ScopedWebContentsTestHelper {
  private:
   content::BrowserTaskEnvironment task_environment_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
 #endif
 
@@ -437,13 +430,16 @@ class PageInfoBubbleViewTest : public testing::Test {
 
   // testing::Test:
   void SetUp() override {
+    TestingBrowserProcess::GetGlobal()->CreateGlobalFeaturesForTesting();
+
     if (!web_contents_helper_) {
       web_contents_helper_ =
           std::make_unique<ScopedWebContentsTestHelper>(false);
     }
     views_helper_ = std::make_unique<views::ScopedViewsTestHelper>(
         std::make_unique<ChromeTestViewsDelegate<>>());
-    views::Widget::InitParams parent_params;
+    views::Widget::InitParams parent_params(
+        views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
     parent_params.context = views_helper_->GetContext();
     parent_window_ = new views::Widget();
     parent_window_->Init(std::move(parent_params));
@@ -457,8 +453,7 @@ class PageInfoBubbleViewTest : public testing::Test {
     content::WebContents* web_contents = web_contents_helper_->web_contents();
     content_settings::PageSpecificContentSettings::CreateForWebContents(
         web_contents,
-        std::make_unique<chrome::PageSpecificContentSettingsDelegate>(
-            web_contents));
+        std::make_unique<PageSpecificContentSettingsDelegate>(web_contents));
     api_ = std::make_unique<test::PageInfoBubbleViewTestApi>(
         parent_window_->GetNativeWindow(), web_contents);
 
@@ -466,9 +461,7 @@ class PageInfoBubbleViewTest : public testing::Test {
         web_contents);
   }
 
-  void TearDown() override {
-    parent_window_->CloseNow();
-  }
+  void TearDown() override { parent_window_->CloseNow(); }
 
  protected:
   std::unique_ptr<ScopedWebContentsTestHelper> web_contents_helper_;
@@ -562,8 +555,8 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfo) {
   EXPECT_EQ(num_expected_children, api_->GetPermissionsCount());
   EXPECT_TRUE(api_->GetPermissionToggleIsOnAt(0));
 
-  const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             ui::EventTimeForNow(), 0, 0);
+  const ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
   views::test::ButtonTestApi(api_->reset_permissions_button())
       .NotifyClick(event);
   // After resetting permissions, button doesn't disappear but is disabled.
@@ -577,11 +570,38 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfo) {
   // However, since the setting is now default, recreating the dialog with
   // those settings should omit the permission from the UI.
   //
-  // TODO(https://crbug.com/829576): Reconcile the comment above with the fact
+  // TODO(crbug.com/40570388): Reconcile the comment above with the fact
   // that |num_expected_children| is not, at this point, 0 and therefore the
   // permission is not being omitted from the UI.
   api_->SetPermissionInfo(list);
   EXPECT_EQ(num_expected_children, api_->GetPermissionsCount());
+}
+
+TEST_F(PageInfoBubbleViewTest, CheckToggleSettingForCapturedSurfaceControl) {
+  PermissionInfoList list(1);
+  list.back().type = ContentSettingsType::CAPTURED_SURFACE_CONTROL;
+  api_->SetPermissionInfo(list);
+
+  EXPECT_EQ(l10n_util::GetStringUTF16(
+                IDS_SITE_SETTINGS_TYPE_CAPTURED_SURFACE_CONTROL_SHARED_TABS),
+            api_->GetPermissionLabelTextAt(0));
+  // Verifies that there is no toggle in the main page info.
+  EXPECT_EQ(api_->GetToggleViewAt(0), nullptr);
+
+  // Opens the submenu for Captured Surface Control permission.
+  api_->navigation_handler()->OpenPermissionPage(
+      ContentSettingsType::CAPTURED_SURFACE_CONTROL);
+  ASSERT_GE(api_->current_view()->children().size(), 2u);
+  auto* page_view = static_cast<PageInfoPermissionContentView*>(
+      api_->current_view()->children()[1]);
+  ASSERT_TRUE(page_view);
+#if !BUILDFLAG(IS_CHROMEOS)
+  EXPECT_EQ(l10n_util::GetStringUTF16(
+                IDS_SITE_SETTINGS_TYPE_CAPTURED_SURFACE_CONTROL_SUB_MENU),
+            page_view->GetTitleForTesting()->GetText());
+#endif
+  // Verifies that there is a toggle in the permission page view.
+  EXPECT_NE(page_view->GetToggleButtonForTesting(), nullptr);
 }
 
 class PageInfoBubbleViewOffTheRecordTest : public PageInfoBubbleViewTest {
@@ -643,8 +663,8 @@ TEST_F(PageInfoBubbleViewOffTheRecordTest, ResetBlockedInIncognitoPermission) {
   EXPECT_TRUE(api_->GetToggleViewAt(1));
   EXPECT_TRUE(api_->GetPermissionToggleIsOnAt(1));
 
-  const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             ui::EventTimeForNow(), 0, 0);
+  const ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
   views::test::ButtonTestApi(api_->reset_permissions_button())
       .NotifyClick(event);
   // After resetting permissions, button doesn't disappear but is disabled.
@@ -693,8 +713,8 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoWithUsbDevice) {
   EXPECT_EQ(u"Gizmo", label->GetText());
 
   views::Button* button = GetChosenObjectButton(chosen_object_children);
-  const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             ui::EventTimeForNow(), 0, 0);
+  const ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
   views::test::ButtonTestApi(button).NotifyClick(event);
   api_->SetPermissionInfo(list);
   EXPECT_EQ(kExpectedChildren, api_->GetPermissionsCount());
@@ -736,8 +756,8 @@ TEST_F(PageInfoBubbleViewTest, ResetPermissionInfoWithUsbDevice) {
   views::Label* label = GetChosenObjectTitle(chosen_object_children);
   EXPECT_EQ(u"Gizmo", label->GetText());
 
-  const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             ui::EventTimeForNow(), 0, 0);
+  const ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
   views::test::ButtonTestApi(api_->reset_permissions_button())
       .NotifyClick(event);
   api_->SetPermissionInfo(list);
@@ -792,8 +812,8 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoWithPolicyUsbDevices) {
   EXPECT_EQ(u"USB device allowed by your administrator", desc_label->GetText());
 
   // Policy granted USB permissions should not be able to be deleted.
-  const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             ui::EventTimeForNow(), 0, 0);
+  const ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
   views::test::ButtonTestApi(button).NotifyClick(event);
   api_->SetPermissionInfo(list);
   EXPECT_EQ(kExpectedChildren + 1, api_->GetPermissionsCount());
@@ -832,8 +852,8 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoWithUserAndPolicyUsbDevices) {
   api_->SetPermissionInfo(list);
   EXPECT_EQ(kExpectedChildren + 2, api_->GetPermissionsCount());
 
-  const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             ui::EventTimeForNow(), 0, 0);
+  const ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
 
   // The first object is the user granted permission for the "Gizmo" device.
   {
@@ -903,7 +923,7 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoForUsbGuard) {
   // However, since the setting is now default, recreating the dialog with
   // those settings should omit the permission from the UI.
   //
-  // TODO(https://crbug.com/829576): Reconcile the comment above with the fact
+  // TODO(crbug.com/40570388): Reconcile the comment above with the fact
   // that |num_expected_children| is not, at this point, 0 and therefore the
   // permission is not being omitted from the UI.
   api_->SetPermissionInfo(list);
@@ -943,8 +963,8 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoWithPolicySerialPorts) {
             desc_label->GetText());
 
   // Policy granted serial port permissions should not be able to be deleted.
-  const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             ui::EventTimeForNow(), 0, 0);
+  const ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
   views::test::ButtonTestApi(button).NotifyClick(event);
   api_->SetPermissionInfo(list);
   EXPECT_EQ(kExpectedChildren + 1, api_->GetPermissionsCount());
@@ -981,7 +1001,7 @@ TEST_F(PageInfoBubbleViewTest, UpdatingSiteDataRetainsLayout) {
 // Tests opening the bubble between navigation start and finish. The bubble
 // should be updated to reflect the secure state after the navigation commits.
 TEST_F(PageInfoBubbleViewTest, OpenPageInfoBubbleAfterNavigationStart) {
-  SecurityStateTabHelper::CreateForWebContents(
+  ChromeSecurityStateTabHelper::CreateForWebContents(
       web_contents_helper_->web_contents());
   std::unique_ptr<content::NavigationSimulator> navigation =
       content::NavigationSimulator::CreateRendererInitiated(
@@ -1033,8 +1053,8 @@ TEST_F(PageInfoBubbleViewTest, EnsureCloseCallback) {
 TEST_F(PageInfoBubbleViewTest, CheckHeaderInteractions) {
   // Confirm that interactions with the header tips are reported to the
   // sentiment service correctly.
-  const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                             ui::EventTimeForNow(), 0, 0);
+  const ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
   // Navigating to the security page constitutes an interaction.
   EXPECT_CALL(*mock_sentiment_service_, InteractedWithPageInfo).Times(3);
   api_->navigation_handler()->OpenSecurityPage();
@@ -1045,7 +1065,7 @@ TEST_F(PageInfoBubbleViewTest, CheckHeaderInteractions) {
 }
 
 TEST_F(PageInfoBubbleViewTest, CertificateButtonShowsEvCertDetails) {
-  SecurityStateTabHelper::CreateForWebContents(
+  ChromeSecurityStateTabHelper::CreateForWebContents(
       web_contents_helper_->web_contents());
   std::unique_ptr<content::NavigationSimulator> navigation =
       content::NavigationSimulator::CreateRendererInitiated(
@@ -1095,7 +1115,7 @@ TEST_F(PageInfoBubbleViewTest, CertificateButtonShowsEvCertDetails) {
 // Regression test for crbug.com/1069113. Test cert includes country and state
 // but not locality.
 TEST_F(PageInfoBubbleViewTest, EvDetailsShowForCertWithStateButNoLocality) {
-  SecurityStateTabHelper::CreateForWebContents(
+  ChromeSecurityStateTabHelper::CreateForWebContents(
       web_contents_helper_->web_contents());
   std::unique_ptr<content::NavigationSimulator> navigation =
       content::NavigationSimulator::CreateRendererInitiated(
@@ -1148,8 +1168,8 @@ class PageInfoBubbleViewCookies3pcdButtonTest
       public testing::WithParamInterface<bool> {
  public:
   PageInfoBubbleViewCookies3pcdButtonTest() {
-    feature_list_.InitAndEnableFeature(
-        content_settings::features::kTrackingProtection3pcd);
+    feature_list_.InitWithFeatures(
+        {content_settings::features::kTrackingProtection3pcd}, {});
     web_contents_helper_ =
         std::make_unique<ScopedWebContentsTestHelper>(GetParam());
   }
@@ -1178,67 +1198,38 @@ class PageInfoBubbleViewCookies3pcdButtonTest
   base::test::ScopedFeatureList feature_list_;
 };
 
-TEST_P(PageInfoBubbleViewCookies3pcdButtonTest,
-       DisplaysTrackingProtectionButtonLabelsWhen3pcLimited) {
-  EXPECT_EQ(api_->GetTrackingProtectionButtonTitleText(),
-            l10n_util::GetStringUTF16(
-                IDS_PAGE_INFO_TRACKING_PROTECTION_SITE_INFO_BUTTON_NAME));
-  // 3PC are blocked in incognito even if limited in regular profile
-  EXPECT_EQ(
-      api_->GetTrackingProtectionButtonSubTitleText(),
-      l10n_util::GetStringUTF16(
-          GetParam()
-              ? IDS_PAGE_INFO_TRACKING_PROTECTION_SITE_INFO_BUTTON_LABEL_BLOCKED
-              : IDS_PAGE_INFO_TRACKING_PROTECTION_SITE_INFO_BUTTON_LABEL_LIMITED));
-}
-
-TEST_P(PageInfoBubbleViewCookies3pcdButtonTest,
-       DisplaysTrackingProtectionButtonLabelsWhen3pcBlocked) {
+TEST_P(PageInfoBubbleViewCookies3pcdButtonTest, DisplaysCookiesButtonLabel) {
   // Block all 3PC
   web_contents_helper_->profile()->GetPrefs()->SetBoolean(
       prefs::kBlockAll3pcToggleEnabled, true);
   // Rerender with the new pref set
   api_->CreateView();
 
-  EXPECT_EQ(api_->GetTrackingProtectionButtonTitleText(),
-            l10n_util::GetStringUTF16(
-                IDS_PAGE_INFO_TRACKING_PROTECTION_SITE_INFO_BUTTON_NAME));
-  EXPECT_EQ(
-      api_->GetTrackingProtectionButtonSubTitleText(),
-      l10n_util::GetStringUTF16(
-          IDS_PAGE_INFO_TRACKING_PROTECTION_SITE_INFO_BUTTON_LABEL_BLOCKED));
-}
+  EXPECT_EQ(api_->GetCookiesButtonTitleText(),
+            l10n_util::GetStringUTF16(IDS_PAGE_INFO_COOKIES_HEADER));
 
-TEST_P(
-    PageInfoBubbleViewCookies3pcdButtonTest,
-    DisplaysTrackingProtectionButtonLabelsWhenCookiesAllowedViaSiteException) {
-  // Add a new cookies site exception for kUrl.
-  CreateCookieExceptionForSite(std::string("[*.]example.com"));
-  // Navigate to a page with the new site exception and rerender.
-  NavigateToPage(web_contents_helper_->web_contents(), kUrl);
+  // Turn off toggle
+  web_contents_helper_->profile()->GetPrefs()->SetBoolean(
+      prefs::kBlockAll3pcToggleEnabled, false);
+  // Rerender with the new pref set
   api_->CreateView();
 
-  EXPECT_EQ(api_->GetTrackingProtectionButtonTitleText(),
-            l10n_util::GetStringUTF16(
-                IDS_PAGE_INFO_TRACKING_PROTECTION_SITE_INFO_BUTTON_NAME));
-  EXPECT_EQ(
-      api_->GetTrackingProtectionButtonSubTitleText(),
-      l10n_util::GetStringUTF16(
-          IDS_PAGE_INFO_TRACKING_PROTECTION_SITE_INFO_BUTTON_LABEL_ALLOWED));
+  EXPECT_EQ(api_->GetCookiesButtonTitleText(),
+            l10n_util::GetStringUTF16(IDS_PAGE_INFO_COOKIES_HEADER));
 }
 
 INSTANTIATE_TEST_SUITE_P(All,
                          PageInfoBubbleViewCookies3pcdButtonTest,
                          /*is_otr*/ testing::Bool());
 
-class PageInfoBubbleViewTrackingProtectionSubpageTitleTest
+class PageInfoBubbleViewCookiesSubpageTitleTest
     : public PageInfoBubbleViewTest,
       public testing::WithParamInterface<
           testing::tuple</*protections_on*/ bool,
                          CookieBlocking3pcdStatus,
                          /*is_otr*/ bool>> {
  public:
-  PageInfoBubbleViewTrackingProtectionSubpageTitleTest() {
+  PageInfoBubbleViewCookiesSubpageTitleTest() {
     feature_list_.InitWithFeatures(
         {content_settings::features::kTrackingProtection3pcd}, {});
     web_contents_helper_ = std::make_unique<ScopedWebContentsTestHelper>(
@@ -1249,20 +1240,19 @@ class PageInfoBubbleViewTrackingProtectionSubpageTitleTest
   base::test::ScopedFeatureList feature_list_;
 };
 
-TEST_P(PageInfoBubbleViewTrackingProtectionSubpageTitleTest,
-       DisplaysTrackingProtectionTitle) {
+TEST_P(PageInfoBubbleViewCookiesSubpageTitleTest,
+       DisplaysCookiesAndSiteDataTitle) {
   PageInfoUI::CookiesNewInfo cookie_info;
   cookie_info.protections_on = testing::get<0>(GetParam());
   cookie_info.blocking_status = testing::get<1>(GetParam());
   api_->SetCookieInfo(cookie_info);
-  EXPECT_EQ(api_->GetTrackingProtectionSubpageTitle(),
-            l10n_util::GetStringUTF16(
-                IDS_PAGE_INFO_SUB_PAGE_VIEW_TRACKING_PROTECTION_HEADER));
+  EXPECT_EQ(api_->GetCookiesSubpageTitle(),
+            l10n_util::GetStringUTF16(IDS_PAGE_INFO_COOKIES_HEADER));
 }
 
 INSTANTIATE_TEST_SUITE_P(
     All,
-    PageInfoBubbleViewTrackingProtectionSubpageTitleTest,
+    PageInfoBubbleViewCookiesSubpageTitleTest,
     testing::Combine(/*protections_on*/ testing::Bool(),
                      testing::Values(CookieBlocking3pcdStatus::kNotIn3pcd,
                                      CookieBlocking3pcdStatus::kAll),

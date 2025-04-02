@@ -2,8 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {getBrowserAndPages, goToResource, timeout, waitFor, waitForNone} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
+import {getBrowserAndPages, goToResource, pressKey, timeout, waitFor, waitForNone} from '../../shared/helper.js';
 import {
   assertSearchResultMatchesText,
   SEARCH_BOX_SELECTOR,
@@ -12,7 +11,7 @@ import {
 } from '../helpers/elements-helpers.js';
 import {togglePreferenceInSettingsTab} from '../helpers/settings-helpers.js';
 
-describe('The Elements tab', async function() {
+describe('The Elements tab', function() {
   it('search is performed as the user types when the "searchAsYouType" setting is enabled', async () => {
     await togglePreferenceInSettingsTab('Search as you type', true);
     await summonAndWaitForSearchBox();
@@ -21,6 +20,7 @@ describe('The Elements tab', async function() {
     await frontend.keyboard.type('html');
 
     await assertSearchResultMatchesText('1 of 1');
+    await pressKey('Escape');
   });
 
   it('search is closed on reload', async () => {
@@ -35,6 +35,7 @@ describe('The Elements tab', async function() {
     await waitForNone(`${SEARCH_BOX_SELECTOR}.hidden`);
     await target.reload();
     await waitFor(`${SEARCH_BOX_SELECTOR}.hidden`);
+    await pressKey('Escape');
   });
 
   describe('when searchAsYouType setting is disabled', () => {

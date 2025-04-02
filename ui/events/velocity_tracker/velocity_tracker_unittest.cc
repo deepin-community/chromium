@@ -39,7 +39,6 @@ const char* GetStrategyName(VelocityTracker::Strategy strategy) {
     case VelocityTracker::INT2: return "INT2";
   }
   NOTREACHED() << "Invalid strategy";
-  return "";
 }
 
 }  // namespace

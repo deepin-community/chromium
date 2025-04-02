@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -13,7 +14,6 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/test_simple_task_runner.h"
@@ -47,9 +47,12 @@
 #include "ui/message_center/public/cpp/notifier_id.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/login/users/chrome_user_manager_impl.h"
+#include "chrome/browser/ash/login/users/user_manager_delegate_impl.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
+#include "chrome/browser/browser_process.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/user_manager_impl.h"
 #endif
 
 using extensions::mojom::ManifestLocation;
@@ -146,16 +149,16 @@ class AdvancedTestBackgroundModeManager : public TestBackgroundModeManager {
 
   // TestBackgroundModeManager:
   bool HasPersistentBackgroundClient() const override {
-    return base::ranges::any_of(
+    return std::ranges::any_of(
         profile_app_counts_, [](const auto& profile_count_pair) {
           return profile_count_pair.second.persistent > 0;
         });
   }
   bool HasAnyBackgroundClient() const override {
-    return base::ranges::any_of(profile_app_counts_,
-                                [](const auto& profile_count_pair) {
-                                  return profile_count_pair.second.any > 0;
-                                });
+    return std::ranges::any_of(profile_app_counts_,
+                               [](const auto& profile_count_pair) {
+                                 return profile_count_pair.second.any > 0;
+                               });
   }
   bool HasPersistentBackgroundClientForProfile(
       const Profile* profile) const override {
@@ -256,7 +259,6 @@ class BackgroundModeManagerWithExtensionsTest : public testing::Test {
   void TearDown() override {
     // Clean up the status icon. If this is not done before profile deletes,
     // the context menu updates will DCHECK with the now deleted profiles.
-    delete manager_->status_icon_;
     manager_->status_icon_ = nullptr;
 
     // We're getting ready to shutdown the message loop. Clear everything out!
@@ -311,7 +313,10 @@ class BackgroundModeManagerWithExtensionsTest : public testing::Test {
   // ChromeOS needs extra services to run in the following order.
   ash::ScopedCrosSettingsTestHelper cros_settings_test_helper_;
   user_manager::ScopedUserManager user_manager_{
-      ChromeUserManagerImpl::CreateChromeUserManager()};
+      std::make_unique<user_manager::UserManagerImpl>(
+          std::make_unique<UserManagerDelegateImpl>(),
+          g_browser_process->local_state(),
+          CrosSettings::Get())};
 #endif
 };
 
@@ -643,26 +648,26 @@ TEST_F(BackgroundModeManagerWithExtensionsTest, BackgroundMenuGeneration) {
   scoped_refptr<const extensions::Extension> component_extension =
       extensions::ExtensionBuilder("Component Extension")
           .SetLocation(ManifestLocation::kComponent)
-          .AddPermission("background")
+          .AddAPIPermission("background")
           .Build();
 
   scoped_refptr<const extensions::Extension> component_extension_with_options =
       extensions::ExtensionBuilder("Component Extension with Options")
           .SetLocation(ManifestLocation::kComponent)
-          .AddPermission("background")
+          .AddAPIPermission("background")
           .SetManifestKey("options_page", "test.html")
           .Build();
 
   scoped_refptr<const extensions::Extension> regular_extension =
       extensions::ExtensionBuilder("Regular Extension")
           .SetLocation(ManifestLocation::kCommandLine)
-          .AddPermission("background")
+          .AddAPIPermission("background")
           .Build();
 
   scoped_refptr<const extensions::Extension> regular_extension_with_options =
       extensions::ExtensionBuilder("Regular Extension with Options")
           .SetLocation(ManifestLocation::kCommandLine)
-          .AddPermission("background")
+          .AddAPIPermission("background")
           .SetManifestKey("options_page", "test.html")
           .Build();
 
@@ -707,26 +712,26 @@ TEST_F(BackgroundModeManagerWithExtensionsTest,
   auto build_component_extension = []() {
     return extensions::ExtensionBuilder("Component Extension")
         .SetLocation(ManifestLocation::kComponent)
-        .AddPermission("background")
+        .AddAPIPermission("background")
         .Build();
   };
   auto build_component_extension_with_options = []() {
     return extensions::ExtensionBuilder("Component Extension with Options")
         .SetLocation(ManifestLocation::kComponent)
-        .AddPermission("background")
+        .AddAPIPermission("background")
         .SetManifestKey("options_page", "test.html")
         .Build();
   };
   auto build_regular_extension = []() {
     return extensions::ExtensionBuilder("Regular Extension")
         .SetLocation(ManifestLocation::kCommandLine)
-        .AddPermission("background")
+        .AddAPIPermission("background")
         .Build();
   };
   auto build_regular_extension_with_options = []() {
     return extensions::ExtensionBuilder("Regular Extension with Options")
         .SetLocation(ManifestLocation::kCommandLine)
-        .AddPermission("background")
+        .AddAPIPermission("background")
         .SetManifestKey("options_page", "test.html")
         .Build();
   };
@@ -764,7 +769,9 @@ TEST_F(BackgroundModeManagerWithExtensionsTest,
   service2->AddExtension(build_regular_extension().get());
   service2->AddExtension(build_regular_extension_with_options().get());
 
-  manager_->status_icon_ = new TestStatusIcon();
+  std::unique_ptr<StatusIcon> test_status_icon =
+      std::make_unique<TestStatusIcon>();
+  manager_->status_icon_ = test_status_icon.get();
   manager_->UpdateStatusTrayIconContextMenu();
   StatusIconMenuModel* context_menu = manager_->context_menu_;
   EXPECT_TRUE(context_menu);
@@ -840,6 +847,9 @@ TEST_F(BackgroundModeManagerWithExtensionsTest,
   EXPECT_TRUE(IsCommandEnabled(context_menu, 6));   // P2 - RE
   EXPECT_TRUE(IsCommandEnabled(context_menu, 7));   // P2 - REO
   EXPECT_TRUE(IsCommandEnabled(context_menu, 8));   // P2
+
+  manager_->context_menu_ = nullptr;
+  manager_->status_icon_ = nullptr;
 }
 
 TEST_F(BackgroundModeManagerWithExtensionsTest, BalloonDisplay) {
@@ -847,14 +857,14 @@ TEST_F(BackgroundModeManagerWithExtensionsTest, BalloonDisplay) {
       extensions::ExtensionBuilder("Background Extension")
           .SetVersion("1.0")
           .SetLocation(ManifestLocation::kCommandLine)
-          .AddPermission("background")
+          .AddAPIPermission("background")
           .Build();
 
   scoped_refptr<const extensions::Extension> upgraded_bg_ext =
       extensions::ExtensionBuilder("Background Extension")
           .SetVersion("2.0")
           .SetLocation(ManifestLocation::kCommandLine)
-          .AddPermission("background")
+          .AddAPIPermission("background")
           .Build();
 
   scoped_refptr<const extensions::Extension> no_bg_ext =
@@ -867,7 +877,7 @@ TEST_F(BackgroundModeManagerWithExtensionsTest, BalloonDisplay) {
       extensions::ExtensionBuilder("Regular Extension")
           .SetVersion("1.0")
           .SetLocation(ManifestLocation::kCommandLine)
-          .AddPermission("background")
+          .AddAPIPermission("background")
           .Build();
 
   static_cast<extensions::TestExtensionSystem*>(
@@ -885,7 +895,9 @@ TEST_F(BackgroundModeManagerWithExtensionsTest, BalloonDisplay) {
   run_loop.Run();
 
   ASSERT_TRUE(system->is_ready());
-  manager_->status_icon_ = new TestStatusIcon();
+  std::unique_ptr<StatusIcon> test_status_icon =
+      std::make_unique<TestStatusIcon>();
+  manager_->status_icon_ = test_status_icon.get();
   manager_->UpdateStatusTrayIconContextMenu();
 
   // Adding a background extension should show the balloon.
@@ -902,7 +914,7 @@ TEST_F(BackgroundModeManagerWithExtensionsTest, BalloonDisplay) {
 
   // Upgrading an extension that has background should not reshow the balloon.
   {
-    // TODO(crbug.com/438376): Fix crbug.com/438376 and remove these checks.
+    // TODO(crbug.com/41145854): Fix crbug.com/438376 and remove these checks.
     InSequence expected_call_sequence;
     EXPECT_CALL(*manager_, EnableLaunchOnStartup(false)).Times(Exactly(1));
     EXPECT_CALL(*manager_, EnableLaunchOnStartup(true)).Times(Exactly(1));
@@ -915,6 +927,9 @@ TEST_F(BackgroundModeManagerWithExtensionsTest, BalloonDisplay) {
   // show the balloon.
   service->AddExtension(upgraded_no_bg_ext_has_bg.get());
   EXPECT_TRUE(manager_->HasShownBalloon());
+
+  manager_->context_menu_ = nullptr;
+  manager_->status_icon_ = nullptr;
 }
 
 TEST_F(BackgroundModeManagerTest, TransientBackgroundApp) {

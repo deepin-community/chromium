@@ -75,7 +75,7 @@ void RecordCheckingForUpdateTime(const base::TimeDelta duration) {
 
 }  // anonymous namespace
 
-VersionUpdater::UpdateInfo::UpdateInfo() {}
+VersionUpdater::UpdateInfo::UpdateInfo() = default;
 
 VersionUpdater::VersionUpdater(VersionUpdater::Delegate* delegate)
     : delegate_(delegate),
@@ -113,7 +113,7 @@ void VersionUpdater::StartNetworkCheck() {
       handler->AddObserver(this);
     const NetworkState* default_network = handler->DefaultNetwork();
     PortalStateChanged(default_network,
-                       default_network ? default_network->GetPortalState()
+                       default_network ? default_network->portal_state()
                                        : NetworkState::PortalState::kUnknown);
   }
 }
@@ -416,12 +416,8 @@ void VersionUpdater::UpdateErrorMessage(const NetworkState* network,
       error_state = NetworkError::ERROR_STATE_PORTAL;
       network_name = network->name();
       break;
-    case NetworkState::PortalState::kProxyAuthRequired:
-      error_state = NetworkError::ERROR_STATE_PROXY;
-      break;
     case NetworkState::PortalState::kOnline:
       NOTREACHED();
-      return;
   }
   delegate_->UpdateErrorMessage(state, error_state, network_name);
 }

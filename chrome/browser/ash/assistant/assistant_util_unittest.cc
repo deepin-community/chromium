@@ -9,11 +9,13 @@
 
 #include "base/command_line.h"
 #include "base/memory/raw_ptr.h"
+#include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
+#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -31,6 +33,7 @@
 #include "components/user_manager/user_type.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_task_environment.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/icu/source/common/unicode/locid.h"
 #include "ui/events/devices/device_data_manager.h"
@@ -40,7 +43,7 @@ namespace {
 
 constexpr char kTestProfileName[] = "user@gmail.com";
 constexpr char16_t kTestProfileName16[] = u"user@gmail.com";
-constexpr char kTestGaiaId[] = "1234567890";
+constexpr GaiaId::Literal kTestGaiaId("1234567890");
 
 class ScopedSpoofGoogleBrandedDevice {
  public:
@@ -105,8 +108,8 @@ class ScopedLogIn {
         return;
       case user_manager::UserType::kPublicAccount:
       case user_manager::UserType::kKioskApp:
-      case user_manager::UserType::kArcKioskApp:
       case user_manager::UserType::kWebKioskApp:
+      case user_manager::UserType::kKioskIWA:
         EXPECT_FALSE(IsGaiaAccount());
         return;
       case user_manager::UserType::kGuest:
@@ -127,11 +130,11 @@ class ScopedLogIn {
       case user_manager::UserType::kKioskApp:
         fake_user_manager_->AddKioskAppUser(account_id_);
         return;
-      case user_manager::UserType::kArcKioskApp:
-        fake_user_manager_->AddArcKioskAppUser(account_id_);
-        return;
       case user_manager::UserType::kWebKioskApp:
         fake_user_manager_->AddWebKioskAppUser(account_id_);
+        return;
+      case user_manager::UserType::kKioskIWA:
+        fake_user_manager_->AddKioskIwaUser(account_id_);
         return;
       case user_manager::UserType::kChild:
         fake_user_manager_->AddChildUser(account_id_);
@@ -167,7 +170,7 @@ class ChromeAssistantUtilTest : public testing::Test {
 
     ASSERT_TRUE(data_dir_.CreateUniqueTempDir());
     profile_manager_ = std::make_unique<TestingProfileManager>(
-        TestingBrowserProcess::GetGlobal());
+        TestingBrowserProcess::GetGlobal(), &local_state_);
     ASSERT_TRUE(profile_manager_->SetUp());
 
     profile_ = profile_manager_->CreateTestingProfile(
@@ -215,7 +218,7 @@ class ChromeAssistantUtilTest : public testing::Test {
   }
 
   AccountId GetGaiaUserAccountId(const std::string& user_name,
-                                 const std::string& gaia_id) {
+                                 const GaiaId& gaia_id) {
     return AccountId::FromUserEmailGaiaId(user_name, gaia_id);
   }
 
@@ -223,6 +226,7 @@ class ChromeAssistantUtilTest : public testing::Test {
   base::test::ScopedFeatureList feature_list_;
 
  private:
+  ScopedTestingLocalState local_state_{TestingBrowserProcess::GetGlobal()};
   content::BrowserTaskEnvironment task_environment_;
   base::ScopedTempDir data_dir_;
   std::unique_ptr<IdentityTestEnvironmentProfileAdaptor>
@@ -245,7 +249,7 @@ TEST_F(ChromeAssistantUtilTest, IsAssistantAllowedForProfile_PrimaryUser) {
 TEST_F(ChromeAssistantUtilTest, IsAssistantAllowedForProfile_SecondaryUser) {
   ScopedLogIn secondary_user_login(
       GetFakeUserManager(), identity_test_env(),
-      GetGaiaUserAccountId("user2@gmail.com", "0123456789"));
+      GetGaiaUserAccountId("user2@gmail.com", GaiaId("0123456789")));
   ScopedLogIn primary_user_login(GetFakeUserManager(), identity_test_env(),
                                  GetGaiaUserAccountId(profile()));
 
@@ -312,15 +316,16 @@ TEST_F(ChromeAssistantUtilTest, IsAssistantAllowedForProfile_PublicSession) {
 TEST_F(ChromeAssistantUtilTest, IsAssistantAllowedForProfile_NonGmail) {
   ScopedLogIn login(
       GetFakeUserManager(), identity_test_env(),
-      GetGaiaUserAccountId("user2@someotherdomain.com", "0123456789"));
+      GetGaiaUserAccountId("user2@someotherdomain.com", GaiaId("0123456789")));
 
   EXPECT_EQ(ash::assistant::AssistantAllowedState::DISALLOWED_BY_ACCOUNT_TYPE,
             IsAssistantAllowedForProfile(profile()));
 }
 
 TEST_F(ChromeAssistantUtilTest, IsAssistantAllowedForProfile_GoogleMail) {
-  ScopedLogIn login(GetFakeUserManager(), identity_test_env(),
-                    GetGaiaUserAccountId("user2@googlemail.com", "0123456789"));
+  ScopedLogIn login(
+      GetFakeUserManager(), identity_test_env(),
+      GetGaiaUserAccountId("user2@googlemail.com", GaiaId("0123456789")));
 
   EXPECT_EQ(ash::assistant::AssistantAllowedState::ALLOWED,
             IsAssistantAllowedForProfile(profile()));
@@ -330,7 +335,7 @@ TEST_F(ChromeAssistantUtilTest,
        IsAssistantAllowed_AllowsNonGmailOnGoogleBrandedDevices) {
   ScopedLogIn login(
       GetFakeUserManager(), identity_test_env(),
-      GetGaiaUserAccountId("user2@someotherdomain.com", "0123456789"));
+      GetGaiaUserAccountId("user2@someotherdomain.com", GaiaId("0123456789")));
 
   ScopedSpoofGoogleBrandedDevice make_google_branded_device;
   EXPECT_EQ(ash::assistant::AssistantAllowedState::ALLOWED,
@@ -341,15 +346,6 @@ TEST_F(ChromeAssistantUtilTest, IsAssistantAllowedForKiosk_KioskApp) {
   ScopedLogIn login(GetFakeUserManager(), identity_test_env(),
                     GetNonGaiaUserAccountId(profile()),
                     user_manager::UserType::kKioskApp);
-
-  EXPECT_EQ(ash::assistant::AssistantAllowedState::DISALLOWED_BY_KIOSK_MODE,
-            IsAssistantAllowedForProfile(profile()));
-}
-
-TEST_F(ChromeAssistantUtilTest, IsAssistantAllowedForKiosk_ArcKioskApp) {
-  ScopedLogIn login(GetFakeUserManager(), identity_test_env(),
-                    GetNonGaiaUserAccountId(profile()),
-                    user_manager::UserType::kArcKioskApp);
 
   EXPECT_EQ(ash::assistant::AssistantAllowedState::DISALLOWED_BY_KIOSK_MODE,
             IsAssistantAllowedForProfile(profile()));
@@ -368,8 +364,9 @@ TEST_F(ChromeAssistantUtilTest, IsAssistantAllowed_DLCEnabled) {
   feature_list_.InitAndEnableFeature(
       ash::assistant::features::kEnableLibAssistantDLC);
 
-  ScopedLogIn login(GetFakeUserManager(), identity_test_env(),
-                    GetGaiaUserAccountId("user2@googlemail.com", "0123456789"));
+  ScopedLogIn login(
+      GetFakeUserManager(), identity_test_env(),
+      GetGaiaUserAccountId("user2@googlemail.com", GaiaId("0123456789")));
 
   EXPECT_EQ(ash::assistant::AssistantAllowedState::ALLOWED,
             IsAssistantAllowedForProfile(profile()));
@@ -379,11 +376,25 @@ TEST_F(ChromeAssistantUtilTest, IsAssistantAllowed_DLCDisabled) {
   feature_list_.InitAndDisableFeature(
       ash::assistant::features::kEnableLibAssistantDLC);
 
-  ScopedLogIn login(GetFakeUserManager(), identity_test_env(),
-                    GetGaiaUserAccountId("user2@googlemail.com", "0123456789"));
+  ScopedLogIn login(
+      GetFakeUserManager(), identity_test_env(),
+      GetGaiaUserAccountId("user2@googlemail.com", GaiaId("0123456789")));
 
   EXPECT_EQ(ash::assistant::AssistantAllowedState::DISALLOWED_BY_NO_BINARY,
             IsAssistantAllowedForProfile(profile()));
+}
+
+TEST_F(ChromeAssistantUtilTest, IsAssistantAllowed_NewEntryPointEnabled) {
+  feature_list_.InitAndEnableFeature(
+      ash::assistant::features::kEnableNewEntryPoint);
+
+  ScopedLogIn login(
+      GetFakeUserManager(), identity_test_env(),
+      GetGaiaUserAccountId("user2@googlemail.com", GaiaId("0123456789")));
+
+  EXPECT_EQ(
+      ash::assistant::AssistantAllowedState::DISALLOWED_BY_NEW_ENTRY_POINT,
+      IsAssistantAllowedForProfile(profile()));
 }
 
 }  // namespace assistant

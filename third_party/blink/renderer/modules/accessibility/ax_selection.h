@@ -11,7 +11,6 @@
 #include <ostream>
 
 #include "base/dcheck_is_on.h"
-#include "base/logging.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
@@ -55,8 +54,8 @@ class MODULES_EXPORT AXSelection final {
   AXSelection& operator=(const AXSelection&) = default;
   ~AXSelection() = default;
 
-  const AXPosition Base() const { return base_; }
-  const AXPosition Extent() const { return extent_; }
+  const AXPosition Anchor() const { return anchor_; }
+  const AXPosition Focus() const { return focus_; }
 
   // The selection is invalid if either the anchor or the focus position is
   // invalid, or if the positions are in two separate documents.
@@ -105,10 +104,10 @@ class MODULES_EXPORT AXSelection final {
   std::optional<TextControlSelection> AsTextControlSelection() const;
 
   // The |AXPosition| where the selection starts.
-  AXPosition base_;
+  AXPosition anchor_;
 
   // The |AXPosition| where the selection ends.
-  AXPosition extent_;
+  AXPosition focus_;
 
 #if DCHECK_IS_ON()
   // TODO(accessibility): Use layout tree version in place of DOM and style
@@ -126,10 +125,10 @@ class MODULES_EXPORT AXSelection::Builder final {
  public:
   Builder() = default;
   ~Builder() = default;
-  Builder& SetBase(const AXPosition&);
-  Builder& SetBase(const Position&);
-  Builder& SetExtent(const AXPosition&);
-  Builder& SetExtent(const Position&);
+  Builder& SetAnchor(const AXPosition&);
+  Builder& SetAnchor(const Position&);
+  Builder& SetFocus(const AXPosition&);
+  Builder& SetFocus(const Position&);
   Builder& SetSelection(const SelectionInDOMTree&);
   const AXSelection Build();
 

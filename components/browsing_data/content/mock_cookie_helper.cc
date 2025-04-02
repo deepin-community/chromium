@@ -18,7 +18,7 @@ namespace browsing_data {
 MockCookieHelper::MockCookieHelper(content::StoragePartition* storage_partition)
     : CookieHelper(storage_partition, base::NullCallback()) {}
 
-MockCookieHelper::~MockCookieHelper() {}
+MockCookieHelper::~MockCookieHelper() = default;
 
 void MockCookieHelper::StartFetching(FetchCallback callback) {
   ASSERT_FALSE(callback.is_null());
@@ -35,9 +35,10 @@ void MockCookieHelper::AddCookieSamples(
     const GURL& url,
     const std::string& cookie_line,
     std::optional<net::CookiePartitionKey> cookie_partition_key) {
-  std::unique_ptr<net::CanonicalCookie> cc(net::CanonicalCookie::Create(
-      url, cookie_line, base::Time::Now(), std::nullopt /* server_time */,
-      cookie_partition_key));
+  std::unique_ptr<net::CanonicalCookie> cc(
+      net::CanonicalCookie::CreateForTesting(
+          url, cookie_line, base::Time::Now(), std::nullopt /* server_time */,
+          cookie_partition_key));
 
   if (cc.get()) {
     if (cookies_.count(*cc))

@@ -32,12 +32,14 @@ INDENT_SHIFT = 2
 CONTINUATION_SHIFT = 4
 
 
-def mojom_format(filename):
-    """Reads the contents of the Mojom file at `filename` and returns the
-    formatted output.
+def mojom_format(filename, contents=None):
+    """Formats the Mojom file at `filename` and returns the formatted output.
+    If `contents` is provided, then it is used instead of reading the file.
     """
-    with open(filename) as f:
-        tree = parser.Parse(f.read(), filename, with_comments=True)
+    if contents is None:
+        with open(filename) as f:
+            contents = f.read()
+    tree = parser.Parse(contents, filename, with_comments=True)
     output = StringIO()
     state = FormatState(output)
     _write_mojom(tree, state)
@@ -143,6 +145,10 @@ def _format_attribute_list(node, indent, newline=True):
                 lw.write('"')
                 lw.write(attr.value.replace('"', '\\"'))
                 lw.write('"')
+            elif isinstance(attr.value, ast.AttributeValueOrList):
+                lw.write('|'.join(x.name for x in attr.value))
+            elif isinstance(attr.value, ast.AttributeValueAndList):
+                lw.write('&'.join(x.name for x in attr.value))
             else:
                 raise ValueError(
                     f'Unxpected value type {type(attr.value)} for {attr}')

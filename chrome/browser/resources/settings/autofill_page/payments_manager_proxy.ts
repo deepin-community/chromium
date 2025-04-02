@@ -36,11 +36,6 @@ export interface PaymentsManagerProxy {
   removeCreditCard(guid: string): void;
 
   /**
-   * @param guid The GUID to credit card to remove from the cache.
-   */
-  clearCachedCreditCard(guid: string): void;
-
-  /**
    * Saves the given credit card.
    */
   saveCreditCard(creditCard: chrome.autofillPrivate.CreditCardEntry): void;
@@ -67,11 +62,6 @@ export interface PaymentsManagerProxy {
    * Logs that the server IBAN's "Edit in Google Pay" link was clicked.
    */
   logServerIbanLinkClicked(): void;
-
-  /**
-   * Enables FIDO authentication for card unmasking.
-   */
-  setCreditCardFidoAuthEnabledState(enabled: boolean): void;
 
   /**
    * Enrolls the card into virtual cards.
@@ -143,11 +133,7 @@ export class PaymentsManagerImpl implements PaymentsManagerProxy {
   }
 
   removeCreditCard(guid: string) {
-    chrome.autofillPrivate.removeEntry(guid);
-  }
-
-  clearCachedCreditCard(guid: string) {
-    chrome.autofillPrivate.maskCreditCard(guid);
+    chrome.autofillPrivate.removePaymentsEntity(guid);
   }
 
   saveCreditCard(creditCard: chrome.autofillPrivate.CreditCardEntry) {
@@ -159,7 +145,7 @@ export class PaymentsManagerImpl implements PaymentsManagerProxy {
   }
 
   removeIban(guid: string) {
-    chrome.autofillPrivate.removeEntry(guid);
+    chrome.autofillPrivate.removePaymentsEntity(guid);
   }
 
   migrateCreditCards() {
@@ -172,10 +158,6 @@ export class PaymentsManagerImpl implements PaymentsManagerProxy {
 
   logServerIbanLinkClicked() {
     chrome.autofillPrivate.logServerIbanLinkClicked();
-  }
-
-  setCreditCardFidoAuthEnabledState(enabled: boolean) {
-    chrome.autofillPrivate.setCreditCardFIDOAuthEnabledState(enabled);
   }
 
   addVirtualCard(cardId: string) {

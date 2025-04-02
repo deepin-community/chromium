@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/browser/speech/extension_api/tts_engine_extension_api.h"
 
 #include <stddef.h>
@@ -43,10 +48,6 @@
 #include "ash/webui/settings/public/constants/routes.mojom.h"
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chrome/browser/speech/tts_client_lacros.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
 using extensions::EventRouter;
 using extensions::Extension;
 using extensions::ExtensionSystem;
@@ -59,6 +60,10 @@ const char kOnSpeakWithAudioStream[] = "ttsEngine.onSpeakWithAudioStream";
 const char kOnStop[] = "ttsEngine.onStop";
 const char kOnPause[] = "ttsEngine.onPause";
 const char kOnResume[] = "ttsEngine.onResume";
+const char kOnInstallLanguageRequest[] = "ttsEngine.onInstallLanguageRequest";
+const char kOnLanguageStatusRequest[] = "ttsEngine.onLanguageStatusRequest";
+const char kOnUninstallLanguageRequest[] =
+    "ttsEngine.onUninstallLanguageRequest";
 }  // namespace tts_engine_events
 
 namespace {
@@ -176,7 +181,7 @@ std::unique_ptr<std::vector<extensions::TtsVoice>> GetVoicesInternal(
   return std::make_unique<std::vector<extensions::TtsVoice>>();
 }
 
-bool GetTtsEventType(const std::string event_type_string,
+bool GetTtsEventType(const std::string& event_type_string,
                      content::TtsEventType* event_type) {
   if (event_type_string == constants::kEventTypeStart) {
     *event_type = content::TTS_EVENT_START;
@@ -198,6 +203,33 @@ bool GetTtsEventType(const std::string event_type_string,
     return false;
   }
   return true;
+}
+
+std::string TtsClientSourceEnumToString(
+    tts_engine_events::TtsClientSource source) {
+  switch (source) {
+    case tts_engine_events::TtsClientSource::CHROMEFEATURE:
+      return "chromefeature";
+
+    case tts_engine_events::TtsClientSource::EXTENSION:
+      return "extension";
+  }
+}
+content::LanguageInstallStatus VoicePackInstallStatusFromString(
+    const std::string& install_status) {
+  if (install_status == constants::kVoicePackStatusNotInstalled) {
+    return content::LanguageInstallStatus::NOT_INSTALLED;
+  }
+  if (install_status == constants::kVoicePackStatusInstalling) {
+    return content::LanguageInstallStatus::INSTALLING;
+  }
+  if (install_status == constants::kVoicePackStatusInstalled) {
+    return content::LanguageInstallStatus::INSTALLED;
+  }
+  if (install_status == constants::kVoicePackStatusFailed) {
+    return content::LanguageInstallStatus::FAILED;
+  }
+  return content::LanguageInstallStatus::UNKNOWN;
 }
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -372,6 +404,69 @@ void TtsExtensionEngine::Resume(content::BrowserContext* browser_context,
   WarnIfMissingPauseOrResumeListener(profile, event_router, engine_id);
 }
 
+void TtsExtensionEngine::UninstallLanguageRequest(
+    content::BrowserContext* browser_context,
+    const std::string& lang,
+    const std::string& client_id,
+    int source,
+    bool uninstall_immediately) {
+  tts_engine_events::TtsClientSource tts_client_source =
+      static_cast<tts_engine_events::TtsClientSource>(source);
+  base::Value::List args =
+      BuildLanguagePackArgs(lang, client_id, tts_client_source);
+
+  base::Value::Dict removal_options = base::Value::Dict().Set(
+      constants::kUninstallImmediatelyKey, uninstall_immediately);
+  args.Append((std::move(removal_options)));
+
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  auto event = std::make_unique<extensions::Event>(
+      extensions::events::TTS_ENGINE_ON_UNINSTALL_LANGUAGE_REQUEST,
+      tts_engine_events::kOnUninstallLanguageRequest, std::move(args), profile);
+  EventRouter* event_router = EventRouter::Get(profile);
+
+  event_router->BroadcastEvent(std::move(event));
+}
+
+void TtsExtensionEngine::InstallLanguageRequest(
+    content::BrowserContext* browser_context,
+    const std::string& lang,
+    const std::string& client_id,
+    int source) {
+  tts_engine_events::TtsClientSource tts_client_source =
+      static_cast<tts_engine_events::TtsClientSource>(source);
+  base::Value::List args =
+      BuildLanguagePackArgs(lang, client_id, tts_client_source);
+
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  auto event = std::make_unique<extensions::Event>(
+      extensions::events::TTS_ENGINE_ON_INSTALL_LANGUAGE_REQUEST,
+      tts_engine_events::kOnInstallLanguageRequest, std::move(args), profile);
+  EventRouter* event_router = EventRouter::Get(profile);
+
+  event_router->BroadcastEvent(std::move(event));
+}
+
+void TtsExtensionEngine::LanguageStatusRequest(
+    content::BrowserContext* browser_context,
+    const std::string& lang,
+    const std::string& client_id,
+    int source) {
+  tts_engine_events::TtsClientSource tts_client_source =
+      static_cast<tts_engine_events::TtsClientSource>(source);
+
+  base::Value::List args =
+      BuildLanguagePackArgs(lang, client_id, tts_client_source);
+
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  auto event = std::make_unique<extensions::Event>(
+      extensions::events::TTS_ENGINE_ON_LANGUAGE_STATUS_REQUEST,
+      tts_engine_events::kOnLanguageStatusRequest, std::move(args), profile);
+  EventRouter* event_router = EventRouter::Get(profile);
+
+  event_router->BroadcastEvent(std::move(event));
+}
+
 void TtsExtensionEngine::LoadBuiltInTtsEngine(
     content::BrowserContext* browser_context) {
   // No built-in extension engines on non-Chrome OS.
@@ -381,6 +476,22 @@ bool TtsExtensionEngine::IsBuiltInTtsEngineInitialized(
     content::BrowserContext* browser_context) {
   // Vacuously; no built in engines on other platforms yet. TODO: network tts?
   return true;
+}
+
+base::Value::List TtsExtensionEngine::BuildLanguagePackArgs(
+    const std::string& lang,
+    const std::string& client_id,
+    tts_engine_events::TtsClientSource source) {
+  base::Value::List args;
+
+  base::Value::Dict tts_client =
+      base::Value::Dict()
+          .Set(constants::kIdKey, client_id)
+          .Set(constants::kSourceKey, TtsClientSourceEnumToString(source));
+
+  args.Append((std::move(tts_client)));
+  args.Append(lang);
+  return args;
 }
 
 base::Value::List TtsExtensionEngine::BuildSpeakArgs(
@@ -432,6 +543,30 @@ base::Value::List TtsExtensionEngine::BuildSpeakArgs(
   args.Append(std::move(options));
   args.Append(utterance->GetId());
   return args;
+}
+
+ExtensionFunction::ResponseAction
+ExtensionTtsEngineUpdateLanguageFunction::Run() {
+  EXTENSION_FUNCTION_VALIDATE(args().size() >= 1);
+
+  EXTENSION_FUNCTION_VALIDATE(args()[0].is_dict());
+  const base::Value::Dict& voice_pack_status = args()[0].GetDict();
+
+  const std::string* lang = voice_pack_status.FindString(constants::kLangKey);
+  EXTENSION_FUNCTION_VALIDATE(lang);
+
+  const std::string* install_status =
+      voice_pack_status.FindString(constants::kInstallStatusKey);
+  EXTENSION_FUNCTION_VALIDATE(install_status);
+
+  const std::string* error = voice_pack_status.FindString(constants::kErrorKey);
+  std::string error_message = error != nullptr ? *error : "";
+
+  // Notify that status of a language for a voice has changed.
+  content::TtsController::GetInstance()->UpdateLanguageStatus(
+      *lang, VoicePackInstallStatusFromString(*install_status), error_message);
+
+  return RespondNow(NoArguments());
 }
 
 ExtensionFunction::ResponseAction
@@ -515,19 +650,6 @@ ExtensionTtsEngineSendTtsEventFunction::Run() {
   if (!GetTtsEventType(*event_type, &tts_event_type)) {
     EXTENSION_FUNCTION_VALIDATE(false);
   } else {
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    // TODO(crbug/1422469): Remove the workaround for enable lacros tts support
-    // for testing and call tts_crosapi_util::ShouldEnableLacrosTtsSupport()
-    // instead.
-    if (content::TtsPlatform::GetInstance()->PlatformImplSupported()) {
-      TtsClientLacros::GetForBrowserContext(browser_context())
-          ->OnLacrosSpeechEngineTtsEvent(utterance_id, tts_event_type,
-                                         char_index, length, error_message);
-      return RespondNow(NoArguments());
-    }
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
-    // If lacros_tts_support is not enabled, TTS events routes to TtsController.
     content::TtsController::GetInstance()->OnTtsEvent(
         utterance_id, tts_event_type, char_index, length, error_message);
   }
@@ -578,6 +700,5 @@ ExtensionTtsEngineSendTtsAudioFunction::Run() {
 #else
   // Given tts engine json api definition, we should never get here.
   NOTREACHED();
-  return RespondNow(Error("Unsupported on this platform."));
 #endif
 }

@@ -4,8 +4,9 @@
 
 #include "chrome/browser/task_manager/providers/fallback_task_provider.h"
 
+#include <vector>
+
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -52,7 +53,7 @@ FallbackTaskProvider::FallbackTaskProvider(
   }
 }
 
-FallbackTaskProvider::~FallbackTaskProvider() {}
+FallbackTaskProvider::~FallbackTaskProvider() = default;
 
 Task* FallbackTaskProvider::GetTaskOfUrlRequest(int child_id, int route_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -103,7 +104,6 @@ void FallbackTaskProvider::ShowTaskLater(Task* task) {
                                            std::forward_as_tuple(this));
   } else {
     NOTREACHED();
-    it->second.InvalidateWeakPtrs();
   }
 
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
@@ -211,7 +211,7 @@ FallbackTaskProvider::SubproviderSource::SubproviderSource(
     : fallback_task_provider_(fallback_task_provider),
       subprovider_(std::move(subprovider)) {}
 
-FallbackTaskProvider::SubproviderSource::~SubproviderSource() {}
+FallbackTaskProvider::SubproviderSource::~SubproviderSource() = default;
 
 void FallbackTaskProvider::SubproviderSource::TaskAdded(Task* task) {
   DCHECK(task);
@@ -222,7 +222,7 @@ void FallbackTaskProvider::SubproviderSource::TaskAdded(Task* task) {
 void FallbackTaskProvider::SubproviderSource::TaskRemoved(Task* task) {
   DCHECK(task);
 
-  base::Erase(tasks_, task);
+  std::erase(tasks_, task);
   fallback_task_provider_->OnTaskRemovedBySource(task, this);
 }
 

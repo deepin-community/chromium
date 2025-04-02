@@ -4,14 +4,19 @@
 
 #include "quiche/quic/core/crypto/crypto_utils.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/base/macros.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "openssl/bytestring.h"
+#include "openssl/err.h"
 #include "openssl/hkdf.h"
 #include "openssl/mem.h"
 #include "openssl/sha.h"
@@ -94,7 +99,7 @@ std::vector<uint8_t> HkdfExpandLabel(const EVP_MD* prf,
 
 const std::string getLabelForVersion(const ParsedQuicVersion& version,
                                      const absl::string_view& predicate) {
-  static_assert(SupportedVersions().size() == 5u,
+  static_assert(SupportedVersions().size() == 4u,
                 "Supported versions out of sync with HKDF labels");
   if (version == ParsedQuicVersion::RFCv2()) {
     return absl::StrCat("quicv2 ", predicate);
@@ -160,10 +165,6 @@ const uint8_t kRFCv2InitialSalt[] = {
 // Salts used by deployed versions of QUIC. When introducing a new version,
 // generate a new salt by running `openssl rand -hex 20`.
 
-// Salt to use for initial obfuscators in version Q050.
-const uint8_t kQ050Salt[] = {0x50, 0x45, 0x74, 0xef, 0xd0, 0x66, 0xfe,
-                             0x2f, 0x9d, 0x94, 0x5c, 0xfc, 0xdb, 0xd3,
-                             0xa7, 0xf0, 0xd3, 0xb5, 0x6b, 0x45};
 // Salt to use for initial obfuscators in
 // ParsedQuicVersion::ReservedForNegotiation().
 const uint8_t kReservedForNegotiationSalt[] = {
@@ -172,7 +173,7 @@ const uint8_t kReservedForNegotiationSalt[] = {
 
 const uint8_t* InitialSaltForVersion(const ParsedQuicVersion& version,
                                      size_t* out_len) {
-  static_assert(SupportedVersions().size() == 5u,
+  static_assert(SupportedVersions().size() == 4u,
                 "Supported versions out of sync with initial encryption salts");
   if (version == ParsedQuicVersion::RFCv2()) {
     *out_len = ABSL_ARRAYSIZE(kRFCv2InitialSalt);
@@ -183,9 +184,6 @@ const uint8_t* InitialSaltForVersion(const ParsedQuicVersion& version,
   } else if (version == ParsedQuicVersion::Draft29()) {
     *out_len = ABSL_ARRAYSIZE(kDraft29InitialSalt);
     return kDraft29InitialSalt;
-  } else if (version == ParsedQuicVersion::Q050()) {
-    *out_len = ABSL_ARRAYSIZE(kQ050Salt);
-    return kQ050Salt;
   } else if (version == ParsedQuicVersion::ReservedForNegotiation()) {
     *out_len = ABSL_ARRAYSIZE(kReservedForNegotiationSalt);
     return kReservedForNegotiationSalt;
@@ -230,7 +228,7 @@ const uint8_t kReservedForNegotiationRetryIntegrityNonce[] = {
 bool RetryIntegrityKeysForVersion(const ParsedQuicVersion& version,
                                   absl::string_view* key,
                                   absl::string_view* nonce) {
-  static_assert(SupportedVersions().size() == 5u,
+  static_assert(SupportedVersions().size() == 4u,
                 "Supported versions out of sync with retry integrity keys");
   if (!version.UsesTls()) {
     QUIC_BUG(quic_bug_10699_2)
@@ -807,6 +805,31 @@ std::optional<std::string> CryptoUtils::GenerateProofPayloadToBeSigned(
     return std::nullopt;
   }
   return payload;
+}
+
+std::string CryptoUtils::GetSSLErrorStack() {
+  std::string result;
+  const char* file;
+  const char* data;
+  int line;
+  int flags;
+  int packed_error = ERR_get_error_line_data(&file, &line, &data, &flags);
+  if (packed_error != 0) {
+    char buffer[ERR_ERROR_STRING_BUF_LEN];
+    while (packed_error != 0) {
+      ERR_error_string_n(packed_error, buffer, sizeof(buffer));
+      absl::StrAppendFormat(&result, "[%s:%d] %s", PosixBasename(file), line,
+                            buffer);
+      if (data && (flags & ERR_TXT_STRING)) {
+        absl::StrAppendFormat(&result, "(%s)", data);
+      }
+      packed_error = ERR_get_error_line_data(&file, &line, &data, &flags);
+      if (packed_error != 0) {
+        absl::StrAppend(&result, ", ");
+      }
+    }
+  }
+  return result;
 }
 
 }  // namespace quic

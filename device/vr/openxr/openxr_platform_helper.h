@@ -26,6 +26,7 @@ class OpenXrGraphicsBinding;
 struct OpenXrCreateInfo {
   int render_process_id;
   int render_frame_id;
+  bool needs_separate_activity = true;
 };
 
 // This class exists to help provide an interface for working with OpenXR
@@ -113,10 +114,17 @@ class DEVICE_VR_EXPORT OpenXrPlatformHelper {
   void OnPlatformCreateInfoResult(CreateInstanceCallback callback,
                                   void* instance_create_info);
 
+  // Called when XrCreateInstance fails in order to provide a mechanism to clean
+  // up any state that was established prior to the call, since any external
+  // cleanup likely won't happen since we don't have an XrInstance.
+  virtual void OnInstanceCreateFailure() {}
+
   XrInstance xr_instance_ = XR_NULL_HANDLE;
   std::unique_ptr<OpenXrExtensionEnumeration> extension_enumeration_;
 
  private:
+  void UpdateExtensionFactorySupport();
+
   bool initialized_ = false;
 };
 

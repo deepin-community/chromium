@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
 
 #include "base/command_line.h"
@@ -42,7 +43,7 @@ namespace {
 
 const char kExtensionId[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-const char* const kUrlApiCalls[] = {
+const auto kUrlApiCalls = std::to_array<const char*>({
     "HTMLButtonElement.formAction", "HTMLEmbedElement.src",
     "HTMLFormElement.action",       "HTMLFrameElement.src",
     "HTMLHtmlElement.manifest",     "HTMLIFrameElement.src",
@@ -53,7 +54,8 @@ const char* const kUrlApiCalls[] = {
     "HTMLModElement.cite",          "HTMLObjectElement.data",
     "HTMLQuoteElement.cite",        "HTMLScriptElement.src",
     "HTMLSourceElement.src",        "HTMLTrackElement.src",
-    "HTMLVideoElement.poster"};
+    "HTMLVideoElement.poster",
+});
 
 }  // namespace
 
@@ -92,14 +94,17 @@ class InterceptingRendererStartupHelper : public RendererStartupHelper,
   void CancelSuspendExtension(const std::string& extension_id) override {}
   void SetDeveloperMode(bool current_developer_mode) override {}
   void SetSessionInfo(version_info::Channel channel,
-                      mojom::FeatureSessionType session,
-                      bool is_lock_screen_context) override {}
+                      mojom::FeatureSessionType session) override {}
   void SetSystemFont(const std::string& font_family,
                      const std::string& font_size) override {}
   void SetWebViewPartitionID(const std::string& partition_id) override {}
   void SetScriptingAllowlist(
       const std::vector<std::string>& extension_ids) override {}
-  void UpdateUserScriptWorld(mojom::UserScriptWorldInfoPtr info) override {}
+  void UpdateUserScriptWorlds(
+      std::vector<mojom::UserScriptWorldInfoPtr> info) override {}
+  void ClearUserScriptWorldConfig(
+      const std::string& extension_id,
+      const std::optional<std::string>& world_id) override {}
   void ShouldSuspend(ShouldSuspendCallback callback) override {
     std::move(callback).Run();
   }
@@ -165,8 +170,9 @@ class ActivityLogTest : public ChromeRenderViewHostTestHarness {
   }
 
   TestingProfile::TestingFactories GetTestingFactories() const override {
-    return {{RendererStartupHelperFactory::GetInstance(),
-             base::BindRepeating(&BuildFakeRendererStartupHelper)}};
+    return {TestingProfile::TestingFactory{
+        RendererStartupHelperFactory::GetInstance(),
+        base::BindRepeating(&BuildFakeRendererStartupHelper)}};
   }
 
   void TearDown() override {
@@ -331,10 +337,10 @@ TEST_F(ActivityLogTest, LogPrerender) {
 
   const gfx::Size kSize(640, 480);
   std::unique_ptr<prerender::NoStatePrefetchHandle> no_state_prefetch_handle(
-      no_state_prefetch_manager->StartPrefetchingFromOmnibox(
+      no_state_prefetch_manager->AddSameOriginSpeculation(
           url,
           web_contents()->GetController().GetDefaultSessionStorageNamespace(),
-          kSize, nullptr));
+          kSize, url::Origin::Create(url)));
 
   const std::vector<content::WebContents*> contentses =
       no_state_prefetch_manager->GetAllNoStatePrefetchingContentsForTesting();
@@ -484,8 +490,8 @@ TEST_F(ActivityLogTest, DeleteActivitiesByExtension) {
 
 class ActivityLogTestWithoutSwitch : public ActivityLogTest {
  public:
-  ActivityLogTestWithoutSwitch() {}
-  ~ActivityLogTestWithoutSwitch() override {}
+  ActivityLogTestWithoutSwitch() = default;
+  ~ActivityLogTestWithoutSwitch() override = default;
   bool enable_activity_logging_switch() const override { return false; }
 };
 

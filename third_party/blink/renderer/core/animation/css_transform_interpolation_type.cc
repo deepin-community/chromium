@@ -37,6 +37,11 @@ class InheritedTransformChecker
   InheritedTransformChecker(const TransformOperations& inherited_transform)
       : inherited_transform_(inherited_transform) {}
 
+  void Trace(Visitor* visitor) const final {
+    CSSConversionChecker::Trace(visitor);
+    visitor->Trace(inherited_transform_);
+  }
+
   bool IsValid(const StyleResolverState& state,
                const InterpolationValue& underlying) const final {
     return inherited_transform_ == state.ParentStyle()->Transform();
@@ -75,7 +80,7 @@ InterpolationValue CSSTransformInterpolationType::MaybeConvertInherit(
   const TransformOperations& inherited_transform =
       state.ParentStyle()->Transform();
   conversion_checkers.push_back(
-      std::make_unique<InheritedTransformChecker>(inherited_transform));
+      MakeGarbageCollected<InheritedTransformChecker>(inherited_transform));
   return ConvertTransform(inherited_transform);
 }
 
@@ -102,19 +107,18 @@ InterpolationValue CSSTransformInterpolationType::MaybeConvertValue(
         DCHECK(primitive_value ||
                (transform_function.FunctionType() == CSSValueID::kPerspective &&
                 argument->IsIdentifierValue()));
-        if (!primitive_value ||
-            (!primitive_value->IsLength() &&
-             !primitive_value->IsCalculatedPercentageWithLength())) {
+        if (!primitive_value || (!primitive_value->IsLength() &&
+                                 primitive_value->IsResolvableBeforeLayout())) {
           continue;
         }
         primitive_value->AccumulateLengthUnitTypes(types);
       }
     }
-    std::unique_ptr<InterpolationType::ConversionChecker> length_units_checker =
-        LengthUnitsChecker::MaybeCreate(types, *state);
 
-    if (length_units_checker)
-      conversion_checkers.push_back(std::move(length_units_checker));
+    if (InterpolationType::ConversionChecker* length_units_checker =
+            LengthUnitsChecker::MaybeCreate(types, *state)) {
+      conversion_checkers.push_back(length_units_checker);
+    }
   }
 
   return InterpolationValue(InterpolableTransformList::ConvertCSSValue(
@@ -135,7 +139,8 @@ CSSTransformInterpolationType::PreInterpolationCompositeIfNeeded(
   // to disable that caching in this case.
   // TODO(crbug.com/1009230): Remove this once our interpolation code isn't
   // caching composited values.
-  conversion_checkers.push_back(std::make_unique<AlwaysInvalidateChecker>());
+  conversion_checkers.push_back(
+      MakeGarbageCollected<AlwaysInvalidateChecker>());
 
   InterpolableTransformList& transform_list =
       To<InterpolableTransformList>(*value.interpolable_value);

@@ -11,11 +11,12 @@
 
 #include <immintrin.h>
 
-#include <xnnpack/gemm.h>
-#include <xnnpack/intrinsics-polyfill.h>
-#include <xnnpack/math.h>
-#include <xnnpack/unaligned.h>
-#include <xnnpack/prefetch.h>
+#include "xnnpack/common.h"
+#include "xnnpack/gemm.h"
+#include "xnnpack/intrinsics-polyfill.h"
+#include "xnnpack/math.h"
+#include "xnnpack/unaligned.h"
+#include "xnnpack/prefetch.h"
 
 
 void xnn_qd8_f32_qc8w_igemm_minmax_ukernel_1x8c8__avxvnni_prfm(
@@ -46,11 +47,14 @@ void xnn_qd8_f32_qc8w_igemm_minmax_ukernel_1x8c8__avxvnni_prfm(
   kc = round_up_po2(kc, 8 * sizeof(int8_t));
   float* c0 = c;
 
-  const __m256i vinput_zero_point = _mm256_set1_epi32((int) quantization_params->zero_point + 128);
+  const __m256i vinput_zero_point = _mm256_set1_epi32((int) quantization_params->zero_point);
   const __m256 vinput_inv_scale = _mm256_set1_ps(quantization_params->inv_scale);
-  const __m256 voutput_min = _mm256_set1_ps(params->avxvnni.min);
-  const __m256 voutput_max = _mm256_set1_ps(params->avxvnni.max);
-  const __m256i vsign_mask = _mm256_set1_epi8(params->avxvnni.sign_mask);  // 0x80
+  const __m256 voutput_min = _mm256_set1_ps(params->scalar.min);
+  const __m256 voutput_max = _mm256_set1_ps(params->scalar.max);
+  // XNN_FORCE_REALIZATION(vinput_zero_point);
+  // XNN_FORCE_REALIZATION(vinput_inv_scale);
+  // XNN_FORCE_REALIZATION(voutput_min);
+  // XNN_FORCE_REALIZATION(voutput_max);
   do {
     const __m256i vksum01234567 = _mm256_load_si256(w);
     const __m256i vsum0x01234567 = _mm256_mullo_epi32(vksum01234567, vinput_zero_point);
@@ -72,8 +76,8 @@ void xnn_qd8_f32_qc8w_igemm_minmax_ukernel_1x8c8__avxvnni_prfm(
 
       size_t k = kc;
       while (k >= 16 * sizeof(int8_t)) {
-        const __m256i va0x01234567 = _mm256_xor_si256(_mm256_set1_epi64x((int64_t) unaligned_load_u64(a0)), vsign_mask);
-        const __m256i va0x89ABCDEF = _mm256_xor_si256(_mm256_set1_epi64x((int64_t) unaligned_load_u64(a0 + 8)), vsign_mask);
+        const __m256i va0x01234567 = _mm256_set1_epi64x((int64_t) unaligned_load_u64(a0));
+        const __m256i va0x89ABCDEF = _mm256_set1_epi64x((int64_t) unaligned_load_u64(a0 + 8));
         a0 += 16;
 
         const __m256i vb01234567x0123 = _mm256_load_si256(w);
@@ -93,7 +97,7 @@ void xnn_qd8_f32_qc8w_igemm_minmax_ukernel_1x8c8__avxvnni_prfm(
       }
 
       if (k != 0) {
-        const __m256i va0x01234567 = _mm256_xor_si256(_mm256_set1_epi64x((int64_t) unaligned_load_u64(a0)), vsign_mask);
+        const __m256i va0x01234567 = _mm256_set1_epi64x((int64_t) unaligned_load_u64(a0));
         a0 += 8;
 
         const __m256i vb01234567x0123 = _mm256_load_si256(w);
@@ -124,16 +128,16 @@ void xnn_qd8_f32_qc8w_igemm_minmax_ukernel_1x8c8__avxvnni_prfm(
     const __m256 vfilter_output_scale01234567 = _mm256_load_ps((const float*) w);
     const __m256 vbias01234567 = _mm256_load_ps((const float*) w + 8);
     w = (const float*) w + 16;
-
     vout0x01234567 = _mm256_fmadd_ps(vout0x01234567, vfilter_output_scale01234567, vbias01234567);
 
     vout0x01234567 = _mm256_max_ps(vout0x01234567, voutput_min);
 
     vout0x01234567 = _mm256_min_ps(vout0x01234567, voutput_max);
 
-    if(nc >= 8) {
+    if XNN_LIKELY(nc >= 8) {
       _mm256_storeu_ps(c0, vout0x01234567);
       c0 = (float*) ((uintptr_t) c0 + cn_stride);
+
       a = (const int8_t**restrict) ((uintptr_t) a - ks);
       nc -= 8;
     } else {

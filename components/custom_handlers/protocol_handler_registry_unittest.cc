@@ -975,10 +975,11 @@ TEST_F(ProtocolHandlerRegistryTest, TestURIPercentEncoding) {
       translated_url,
       GURL("https://test.com/url=web%2Bcustom%3A%2F%2Fcustom%2F%2520handler"));
 
-  // Space character.
-  translated_url = ph.TranslateUrl(GURL("web+custom://custom handler"));
-  ASSERT_EQ(translated_url,
-            GURL("https://test.com/url=web%2Bcustom%3A%2F%2Fcustom%20handler"));
+  // Percent-encoded spaces in the host part.
+  translated_url = ph.TranslateUrl(GURL("web+custom://custom%20handler"));
+  ASSERT_EQ(
+      translated_url,
+      GURL("https://test.com/url=web%2Bcustom%3A%2F%2Fcustom%2520handler"));
 
   // Query parameters.
   translated_url = ph.TranslateUrl(GURL("web+custom://custom?foo=bar&bar=baz"));
@@ -988,9 +989,10 @@ TEST_F(ProtocolHandlerRegistryTest, TestURIPercentEncoding) {
 
   // Non-ASCII characters.
   translated_url = ph.TranslateUrl(GURL("web+custom://custom/<>`{}#?\"'😂"));
-  ASSERT_EQ(translated_url, GURL("https://test.com/"
-                                 "url=web%2Bcustom%3A%2F%2Fcustom%2F%3C%3E%60%"
-                                 "7B%7D%23%3F%2522'%25F0%259F%2598%2582"));
+  ASSERT_EQ(translated_url,
+            GURL("https://test.com/"
+                 "url=web%2Bcustom%3A%2F%2Fcustom%2F%253C%253E%2560%257B%257D%"
+                 "23%3F%2522'%25F0%259F%2598%2582"));
 
   // ASCII characters from the C0 controls percent-encode set.
   // GURL constructor encodes U+001F and U+007F as "%1F" and "%7F" first,
@@ -1329,10 +1331,9 @@ TEST_F(ProtocolHandlerRegistryTest, CredentialsForNonStandardSchemes) {
   ProtocolHandler ph =
       CreateProtocolHandler("web+bool", GURL("https://example.com/url=%s"));
   registry()->OnAcceptRegisterProtocolHandler(ph);
-
   EXPECT_EQ(ph.TranslateUrl(GURL("web+bool://user:password@example/y")),
             GURL("https://example.com/"
-                 "url=web%2Bbool%3A%2F%2Fuser%3Apassword%40example%2Fy"));
+                 "url=web%2Bbool%3A%2F%2Fexample%2Fy"));
 }
 
 }  // namespace custom_handlers

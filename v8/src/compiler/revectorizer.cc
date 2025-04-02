@@ -121,6 +121,7 @@ namespace {
   V(F32x4SConvertI32x4, F32x8SConvertI32x8) \
   V(F32x4UConvertI32x4, F32x8UConvertI32x8) \
   V(I32x4UConvertF32x4, I32x8UConvertF32x8) \
+  V(I32x4SConvertF32x4, I32x8SConvertF32x8) \
   V(S128And, S256And)                       \
   V(S128Or, S256Or)                         \
   V(S128Xor, S256Xor)                       \
@@ -1059,12 +1060,12 @@ Node* Revectorizer::VectorizeTree(PackNode* pnode) {
         // shuffling across 128-bit lane.
         if (wasm::SimdShuffle::TryMatchSplat<4>(shuffle, &index)) {
           new_op = mcgraph_->machine()->LoadTransform(
-              MemoryAccessKind::kProtected,
+              MemoryAccessKind::kProtectedByTrapHandler,
               LoadTransformation::kS256Load32Splat);
           offset = index * 4;
         } else if (wasm::SimdShuffle::TryMatchSplat<2>(shuffle, &index)) {
           new_op = mcgraph_->machine()->LoadTransform(
-              MemoryAccessKind::kProtected,
+              MemoryAccessKind::kProtectedByTrapHandler,
               LoadTransformation::kS256Load64Splat);
           offset = index * 8;
         } else {

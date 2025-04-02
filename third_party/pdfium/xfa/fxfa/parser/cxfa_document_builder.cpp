@@ -11,8 +11,10 @@
 #include <vector>
 
 #include "core/fxcrt/autorestorer.h"
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_extension.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxcrt/xml/cfx_xmlchardata.h"
 #include "core/fxcrt/xml/cfx_xmldocument.h"
 #include "core/fxcrt/xml/cfx_xmlelement.h"
@@ -20,8 +22,6 @@
 #include "core/fxcrt/xml/cfx_xmlnode.h"
 #include "core/fxcrt/xml/cfx_xmltext.h"
 #include "fxjs/xfa/cjx_object.h"
-#include "third_party/base/check.h"
-#include "third_party/base/notreached.h"
 #include "xfa/fxfa/parser/cxfa_document.h"
 #include "xfa/fxfa/parser/cxfa_node.h"
 #include "xfa/fxfa/parser/cxfa_subform.h"
@@ -147,7 +147,7 @@ CFX_XMLNode* GetDataSetsFromXDP(CFX_XMLNode* pXMLDocumentNode) {
 }
 
 bool IsStringAllWhitespace(WideString wsText) {
-  wsText.TrimRight(L"\x20\x9\xD\xA");
+  wsText.TrimBack(L"\x20\x9\xD\xA");
   return wsText.IsEmpty();
 }
 
@@ -170,7 +170,7 @@ void ConvertXMLToPlainText(CFX_XMLElement* pRootXMLNode, WideString& wsOutput) {
         break;
       }
       default:
-        NOTREACHED_NORETURN();
+        NOTREACHED();
     }
   }
 }
@@ -638,7 +638,7 @@ CXFA_Node* CXFA_DocumentBuilder::NormalLoader(CXFA_Node* pXFANode,
                                               CFX_XMLNode* pXMLDoc,
                                               XFA_PacketType ePacketID,
                                               bool bUseAttribute) {
-  constexpr size_t kMaxExecuteRecursion = 1000;
+  static constexpr size_t kMaxExecuteRecursion = 1000;
   if (execute_recursion_depth_ > kMaxExecuteRecursion)
     return nullptr;
   AutoRestorer<size_t> restorer(&execute_recursion_depth_);

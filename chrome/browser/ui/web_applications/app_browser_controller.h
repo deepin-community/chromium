@@ -12,12 +12,15 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "chrome/browser/web_applications/web_app_tab_helper.h"
 #include "components/url_formatter/url_formatter.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "third_party/blink/public/mojom/page/draggable_region.mojom-forward.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/color/color_provider.h"
@@ -29,11 +32,11 @@ class BrowserThemePack;
 class CustomThemeSupplier;
 class TabMenuModelFactory;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 namespace ash {
 class SystemWebAppDelegate;
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace gfx {
 class Rect;
@@ -71,6 +74,19 @@ class AppBrowserController : public ui::ColorProviderKey::InitializerSupplier,
   // order of last browser activation. Ignores pop-up Browsers.
   static Browser* FindForWebApp(const Profile& profile,
                                 const webapps::AppId& app_id);
+
+  // Returns the `browser` and `tab_index` for a tab for the given `app_id` in
+  // the given `profile`, where the tab does not have an opener, and the browser
+  // is of the specified `browser_type`. Prefers more recently activated
+  // windows and tabs over less recently used ones.
+  struct BrowserAndTabIndex {
+    raw_ptr<Browser> browser = nullptr;
+    int tab_index = -1;
+  };
+  static std::optional<BrowserAndTabIndex> FindTopLevelBrowsingContextForWebApp(
+      const Profile& profile,
+      const webapps::AppId& app_id,
+      BrowserWindowInterface::Type browser_type);
 
   // Renders |url|'s origin as Unicode.
   static std::u16string FormatUrlOrigin(
@@ -196,8 +212,8 @@ class AppBrowserController : public ui::ColorProviderKey::InitializerSupplier,
 
   virtual bool IsIsolatedWebApp() const;
 
-  // TODO(crbug.com/1316117): Remove this mock when `WebAppBrowserTest`s support
-  // creating Isolated Web Apps.
+  // TODO(crbug.com/40222062): Remove this mock when `WebAppBrowserTest`s
+  // support creating Isolated Web Apps.
   virtual void SetIsolatedWebAppTrueForTesting();
 
   // Returns true when the app's effective display mode is
@@ -221,12 +237,13 @@ class AppBrowserController : public ui::ColorProviderKey::InitializerSupplier,
   // Not appliccable to ChromeOS, because apps can be installed only for
   // one main profile there.
   virtual bool HasProfileMenuButton() const;
+  virtual bool IsProfileMenuButtonVisible() const;
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Returns the SystemWebAppDelegate if any for this controller.
   virtual const ash::SystemWebAppDelegate* system_app() const;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Updates the custom tab bar's visibility based on whether it should be
   // currently visible or not. If |animate| is set, the change will be
@@ -262,7 +279,9 @@ class AppBrowserController : public ui::ColorProviderKey::InitializerSupplier,
   void AddColorMixers(ui::ColorProvider* provider,
                       const ui::ColorProviderKey& key) const override;
 
-  void UpdateDraggableRegion(const SkRegion& region);
+  void DraggableRegionsChanged(
+      const std::vector<blink::mojom::DraggableRegionPtr>& regions,
+      content::WebContents* contents);
   const std::optional<SkRegion>& draggable_region() const {
     return draggable_region_;
   }
@@ -300,8 +319,8 @@ class AppBrowserController : public ui::ColorProviderKey::InitializerSupplier,
 
   // Indicates to the WebView whether it should support draggable regions via
   // the app-region CSS property.
-  void UpdateSupportsAppRegion(bool supports_app_region,
-                               content::RenderFrameHost* host);
+  void UpdateSupportsDraggableRegions(bool supports_draggable_regions,
+                                      content::RenderFrameHost* host);
 
   const raw_ptr<Browser> browser_;
   const webapps::AppId app_id_;

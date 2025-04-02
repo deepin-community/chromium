@@ -20,8 +20,8 @@ limitations under the License.
 #include <iosfwd>
 #include <optional>
 
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "xla/statusor.h"
 
 namespace xla {
 
@@ -75,6 +75,7 @@ namespace xla {
   V(kCholesky, "cholesky", 1)                                                  \
   V(kClamp, "clamp", 3)                                                        \
   V(kClz, "count-leading-zeros", 1)                                            \
+  V(kCollectiveBroadcast, "collective-broadcast", kHloOpcodeIsVariadic)        \
   V(kCollectivePermute, "collective-permute", kHloOpcodeIsVariadic)            \
   V(kCollectivePermuteDone, "collective-permute-done", 1)                      \
   V(kCollectivePermuteStart, "collective-permute-start", kHloOpcodeIsVariadic) \
@@ -92,7 +93,7 @@ namespace xla {
   V(kCustomCall, "custom-call", kHloOpcodeIsVariadic)                          \
   V(kDivide, "divide", 2)                                                      \
   V(kDomain, "domain", 1)                                                      \
-  V(kDot, "dot", 2)                                                            \
+  V(kDot, "dot", kHloOpcodeIsVariadic)                                         \
   V(kDynamicReshape, "dynamic-reshape", kHloOpcodeIsVariadic)                  \
   V(kDynamicSlice, "dynamic-slice", kHloOpcodeIsVariadic)                      \
   V(kDynamicUpdateSlice, "dynamic-update-slice", kHloOpcodeIsVariadic)         \
@@ -126,6 +127,8 @@ namespace xla {
   V(kPartitionId, "partition-id", 0)                                           \
   V(kPopulationCount, "popcnt", 1)                                             \
   V(kPower, "power", 2)                                                        \
+  V(kRaggedAllToAll, "ragged-all-to-all", 6)                                   \
+  V(kRaggedDot, "ragged-dot", 3)                                               \
   V(kReal, "real", 1)                                                          \
   V(kRecv, "recv", 1)                                                          \
   V(kRecvDone, "recv-done", 1)                                                 \
@@ -186,7 +189,7 @@ enum {
 absl::string_view HloOpcodeString(HloOpcode opcode);
 
 // Retrieves the opcode enum by name if the opcode exists.
-StatusOr<HloOpcode> StringToHloOpcode(absl::string_view opcode_name);
+absl::StatusOr<HloOpcode> StringToHloOpcode(absl::string_view opcode_name);
 
 inline std::ostream& operator<<(std::ostream& os, HloOpcode opcode) {
   return os << HloOpcodeString(opcode);

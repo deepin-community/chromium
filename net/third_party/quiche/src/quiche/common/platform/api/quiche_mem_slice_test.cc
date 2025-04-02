@@ -6,6 +6,7 @@
 
 #include <cstring>
 #include <memory>
+#include <utility>
 
 #include "absl/strings/string_view.h"
 #include "quiche/common/platform/api/quiche_test.h"
@@ -31,6 +32,13 @@ class QuicheMemSliceTest : public QuicheTest {
   const char* orig_data_;
   size_t orig_length_;
 };
+
+TEST_F(QuicheMemSliceTest, Empty) {
+  QuicheMemSlice empty;
+  EXPECT_EQ(empty.data(), nullptr);
+  EXPECT_EQ(empty.length(), 0);
+  EXPECT_TRUE(empty.empty());
+}
 
 TEST_F(QuicheMemSliceTest, MoveConstruct) {
   QuicheMemSlice moved(std::move(slice_));

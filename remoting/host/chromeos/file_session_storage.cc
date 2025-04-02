@@ -5,6 +5,7 @@
 #include "remoting/host/chromeos/file_session_storage.h"
 
 #include <optional>
+
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/callback.h"
@@ -95,7 +96,7 @@ FileSessionStorage::FileSessionStorage(const base::FilePath& storage_directory)
 
 void FileSessionStorage::StoreSession(const base::Value::Dict& information,
                                       base::OnceClosure on_done) {
-  WriteFileAsync(session_file(), base::WriteJson(information).value(),
+  WriteFileAsync(session_file(), *base::WriteJson(information),
                  base::BindOnce([](bool success) {
                    LOG_IF(ERROR, !success)
                        << "Failed to create CRD session information file";
@@ -119,8 +120,7 @@ void FileSessionStorage::RetrieveSession(
                     return make_nullopt<base::Value::Dict>();
                   }
 
-                  auto dict_optional =
-                      base::JSONReader::ReadDict(content.value());
+                  auto dict_optional = base::JSONReader::ReadDict(*content);
                   LOG_IF(ERROR, !dict_optional.has_value())
                       << "Failed to parse stored CRD session information";
                   return dict_optional;

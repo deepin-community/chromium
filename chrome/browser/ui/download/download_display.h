@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_DOWNLOAD_DOWNLOAD_DISPLAY_H_
 
 #include <optional>
+#include <string>
 
 namespace offline_items_collection {
 struct ContentId;
@@ -85,6 +86,9 @@ class DownloadDisplay {
   // Returns whether the details are visible.
   virtual bool IsShowingDetails() const = 0;
 
+  // Announces an accessible alert immediately.
+  virtual void AnnounceAccessibleAlertNow(const std::u16string& alert_text) = 0;
+
   // Returns whether it is currently in fullscreen and the view that hosts the
   // download display is hidden.
   virtual bool IsFullscreenWithParentViewHidden() const = 0;
@@ -101,12 +105,6 @@ class DownloadDisplay {
   // Open the security subpage for the download with `id`, if it exists.
   virtual void OpenSecuritySubpage(
       const offline_items_collection::ContentId& id) = 0;
-
-  // Opens the primary dialog to the item and scrolls to the item, and opens
-  // the security dialog if the item has a security warning. Returns whether
-  // bubble was opened to the requested item.
-  virtual bool OpenMostSpecificDialog(
-      const offline_items_collection::ContentId& content_id) = 0;
 
   // Gets the current icon state.
   virtual IconState GetIconState() const = 0;

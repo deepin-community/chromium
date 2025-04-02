@@ -2,16 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "services/tracing/perfetto/producer_host.h"
 
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "base/process/process.h"
-#include "base/tracing/perfetto_task_runner.h"
 #include "build/build_config.h"
 #include "services/tracing/perfetto/perfetto_service.h"
-#include "services/tracing/public/cpp/perfetto/producer_client.h"
 #include "services/tracing/public/cpp/perfetto/shared_memory.h"
 #include "third_party/perfetto/include/perfetto/ext/tracing/core/client_identity.h"
 #include "third_party/perfetto/include/perfetto/ext/tracing/core/commit_data_request.h"
@@ -20,8 +23,7 @@
 
 namespace tracing {
 
-ProducerHost::ProducerHost(base::tracing::PerfettoTaskRunner* task_runner)
-    : task_runner_(task_runner) {}
+ProducerHost::ProducerHost() = default;
 
 ProducerHost::~ProducerHost() {
   // Manually reset to prevent any callbacks from the ProducerEndpoint
@@ -72,24 +74,6 @@ ProducerHost::InitializationResult ProducerHost::Initialize(
   }
 
   // TODO(skyostil): Implement arbiter binding for the client API.
-#if !BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-  // When we are in-process, we don't use the in-process arbiter perfetto would
-  // provide (thus pass |in_process = false| to ConnectProducer), but rather
-  // bind the ProducerClient's arbiter to the service's endpoint and task runner
-  // directly. This allows us to use startup tracing via an unbound SMA, while
-  // avoiding some cross-sequence PostTasks when committing chunks (since we
-  // bypass mojo).
-  base::ProcessId pid;
-  if (PerfettoService::ParsePidFromProducerName(name, &pid)) {
-    bool in_process = (pid == base::Process::Current().Pid());
-    if (in_process) {
-      PerfettoTracedProcess::Get()
-          ->producer_client()
-          ->BindInProcessSharedMemoryArbiter(producer_endpoint_.get(),
-                                             task_runner_);
-    }
-  }
-#endif  // !BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
 
   return InitializationResult::kSuccess;
 }
@@ -173,6 +157,11 @@ void ProducerHost::CommitData(const perfetto::CommitDataRequest& data_request,
 void ProducerHost::RegisterDataSource(
     const perfetto::DataSourceDescriptor& registration_info) {
   producer_endpoint_->RegisterDataSource(registration_info);
+}
+
+void ProducerHost::UpdateDataSource(
+    const perfetto::DataSourceDescriptor& registration_info) {
+  producer_endpoint_->UpdateDataSource(registration_info);
 }
 
 void ProducerHost::RegisterTraceWriter(uint32_t writer_id,

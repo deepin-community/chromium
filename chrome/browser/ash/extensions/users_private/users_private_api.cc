@@ -19,11 +19,11 @@
 #include "chrome/browser/ash/ownership/owner_settings_service_ash_factory.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/users_private.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user.h"
@@ -250,11 +250,11 @@ ExtensionFunction::ResponseAction UsersPrivateRemoveUserFunction::Run() {
 ////////////////////////////////////////////////////////////////////////////////
 // UsersPrivateIsUserListManagedFunction
 
-UsersPrivateIsUserListManagedFunction::UsersPrivateIsUserListManagedFunction() {
-}
+UsersPrivateIsUserListManagedFunction::UsersPrivateIsUserListManagedFunction() =
+    default;
 
 UsersPrivateIsUserListManagedFunction::
-    ~UsersPrivateIsUserListManagedFunction() {}
+    ~UsersPrivateIsUserListManagedFunction() = default;
 
 ExtensionFunction::ResponseAction UsersPrivateIsUserListManagedFunction::Run() {
   return RespondNow(WithArguments(IsDeviceEnterpriseManaged()));

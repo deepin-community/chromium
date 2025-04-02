@@ -10,6 +10,7 @@
 #include "ash/shelf/shelf.h"
 #include "ash/shell.h"
 #include "ash/style/close_button.h"
+#include "ash/style/rounded_label_widget.h"
 #include "ash/style/system_shadow.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/overview/overview_drop_target.h"
@@ -44,6 +45,10 @@ void OverviewTestBase::EnterTabletMode() {
   base::RunLoop().RunUntilIdle();
 }
 
+void OverviewTestBase::LeaveTabletMode() {
+  TabletModeControllerTestApi().LeaveTabletMode();
+}
+
 bool OverviewTestBase::InOverviewSession() const {
   return OverviewController::Get()->InOverviewSession();
 }
@@ -69,7 +74,7 @@ void OverviewTestBase::ClickWindow(aura::Window* window) {
 }
 
 OverviewController* OverviewTestBase::GetOverviewController() {
-  return Shell::Get()->overview_controller();
+  return OverviewController::Get();
 }
 
 OverviewSession* OverviewTestBase::GetOverviewSession() {
@@ -232,7 +237,7 @@ void OverviewTestBase::CheckOverviewEnterExitHistogram(
   // animation throughput data to be passed from cc to ui.
   ui::Compositor* compositor =
       Shell::GetPrimaryRootWindow()->layer()->GetCompositor();
-  while (compositor->has_throughput_trackers_for_testing()) {
+  while (compositor->has_compositor_metrics_trackers_for_testing()) {
     compositor->ScheduleFullRedraw();
     std::ignore =
         ui::WaitForNextFrameToBePresented(compositor, base::Milliseconds(500));

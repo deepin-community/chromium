@@ -45,8 +45,8 @@ constexpr int kQrCodeImageSize = 100;
 
 // URL used for the QR code within the promo
 const char kQRCodeURL[] =
-    "https://itunes.apple.com/app/apple-store/"
-    "id535886823?pt=9008&ct=saved-passwords-ios-promo-direct-qr&mt=8";
+    "https://apps.apple.com/app/apple-store/"
+    "id535886823?pt=9008&ct=desktop-chr-passwords&mt=8";
 }  // namespace constants
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(IOSPromoPasswordBubble, kQRCodeView);
@@ -62,9 +62,7 @@ class IOSPromoPasswordBubbleDelegate : public ui::DialogModelDelegate {
   }
 
   // Handler for when the window closes.
-  void OnWindowClosing() {
-    ios_promo_password_delegate_ = nullptr;
-  }
+  void OnWindowClosing() { ios_promo_password_delegate_ = nullptr; }
 
   // Callback for when the bubble is dismissed.
   void OnDismissal() {
@@ -81,7 +79,7 @@ class IOSPromoPasswordBubbleDelegate : public ui::DialogModelDelegate {
     if (!impression_histogram_already_recorded_) {
       promos_utils::RecordIOSPasswordPromoUserInteractionHistogram(
           browser_->profile()->GetPrefs()->GetInteger(
-              promos_prefs::kiOSPasswordPromoImpressionsCounter),
+              promos_prefs::kDesktopToiOSPasswordPromoImpressionsCounter),
           promos_utils::DesktopIOSPasswordPromoAction::kDismissed);
     }
   }
@@ -89,11 +87,11 @@ class IOSPromoPasswordBubbleDelegate : public ui::DialogModelDelegate {
   // Callback for when the "No thanks" button is clicked.
   void OnNoThanksButtonClicked() {
     browser_->profile()->GetPrefs()->SetBoolean(
-        promos_prefs::kiOSPasswordPromoOptOut, true);
+        promos_prefs::kDesktopToiOSPasswordPromoOptOut, true);
 
     promos_utils::RecordIOSPasswordPromoUserInteractionHistogram(
         browser_->profile()->GetPrefs()->GetInteger(
-            promos_prefs::kiOSPasswordPromoImpressionsCounter),
+            promos_prefs::kDesktopToiOSPasswordPromoImpressionsCounter),
         promos_utils::DesktopIOSPasswordPromoAction::kExplicitlyClosed);
 
     impression_histogram_already_recorded_ = true;
@@ -204,11 +202,17 @@ std::unique_ptr<views::View> CreateFooter(
                             .AddChild(decline_button)))
           .Build();
 
-  auto qr_image = qr_code_generator::GenerateBitmap(
+  // TODO(https://crbug.com/325664342): Audit if `QuietZone::kIncluded`
+  // can/should be used instead (this may require testing if the different image
+  // size works well with surrounding UI elements).  Note that the absence of a
+  // quiet zone may interfere with decoding of QR codes even for small codes
+  // (for examples see #comment8, #comment9 and #comment6 in the bug).
+  auto qr_image = qr_code_generator::GenerateImage(
       base::as_byte_span(std::string_view(constants::kQRCodeURL)),
       qr_code_generator::ModuleStyle::kCircles,
       qr_code_generator::LocatorStyle::kRounded,
-      qr_code_generator::CenterImage::kDino);
+      qr_code_generator::CenterImage::kDino,
+      qr_code_generator::QuietZone::kWillBeAddedByClient);
 
   // Generating QR code for `kQRCodeURL` should always succeed (e.g. it can't
   // result in input-too-long error or other errors).
@@ -227,7 +231,7 @@ std::unique_ptr<views::View> CreateFooter(
   views::ImageView* image_view =
       views::AsViewClass<views::ImageView>(qr_code_views.front());
 
-  image_view->SetImage(gfx::ImageSkia::CreateFrom1xBitmap(qr_image->bitmap));
+  image_view->SetImage(qr_image.value());
 
   return built_footer_view;
 }

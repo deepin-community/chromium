@@ -19,8 +19,8 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "net/base/schemeful_site.h"
 #include "net/cookies/canonical_cookie.h"
-#include "net/extras/shared_dictionary/shared_dictionary_isolation_key.h"
 #include "net/extras/shared_dictionary/shared_dictionary_usage_info.h"
+#include "net/shared_dictionary/shared_dictionary_isolation_key.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/trust_tokens.mojom.h"
 #include "services/network/test/test_network_context.h"
@@ -471,7 +471,7 @@ TEST_F(BrowsingDataModelTest, IteratorCanHandleEmptyDataKeyEntriesMaps) {
 }
 
 TEST_F(BrowsingDataModelTest, RemoveBasedOnPartitioning) {
-  // TODO(crbug/1455899): Use helpers so this test can be broken up, likely
+  // TODO(crbug.com/40272946): Use helpers so this test can be broken up, likely
   // done alongside moving partition key detection to a visitor pattern.
   std::unique_ptr<BrowsingDataModel> model = BrowsingDataModel::BuildEmpty(
       storage_partition(),
@@ -599,6 +599,9 @@ TEST_F(BrowsingDataModelTest, ThirdPartyCookieTypes) {
   content::AttributionDataModel::DataKey attribution_reporting_key{kSiteOrigin};
   content::PrivateAggregationDataModel::DataKey private_aggregation_key{
       kSiteOrigin};
+  net::device_bound_sessions::SessionKey device_bound_session_key(
+      net::SchemefulSite(kSiteOrigin.GetURL()),
+      net::device_bound_sessions::SessionKey::Id("session_id"));
 
   std::map<BrowsingDataModel::StorageType, BrowsingDataModel::DataKey>
       third_party_cookie_types = {
@@ -612,7 +615,9 @@ TEST_F(BrowsingDataModelTest, ThirdPartyCookieTypes) {
            unpartitioned_session_storage_usage},
           {BrowsingDataModel::StorageType::kSharedWorker,
            unpartitioned_shared_worker_info},
-          {BrowsingDataModel::StorageType::kCookie, *unpartitioned_cookie}};
+          {BrowsingDataModel::StorageType::kCookie, *unpartitioned_cookie},
+          {BrowsingDataModel::StorageType::kDeviceBoundSession,
+           device_bound_session_key}};
 
   std::map<BrowsingDataModel::StorageType, BrowsingDataModel::DataKey>
       non_third_party_cookie_types = {
@@ -621,6 +626,8 @@ TEST_F(BrowsingDataModelTest, ThirdPartyCookieTypes) {
           {BrowsingDataModel::StorageType::kLocalStorage,
            partitioned_storage_key},
           {BrowsingDataModel::StorageType::kQuotaStorage,
+           partitioned_storage_key},
+          {BrowsingDataModel::StorageType::kCdmStorage,
            partitioned_storage_key},
           {BrowsingDataModel::StorageType::kSessionStorage,
            partitioned_session_storage_usage},

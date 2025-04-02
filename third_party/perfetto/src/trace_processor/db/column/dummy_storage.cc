@@ -17,6 +17,8 @@
 #include "src/trace_processor/db/column/dummy_storage.h"
 
 #include <cstdint>
+#include <optional>
+#include <vector>
 
 #include "perfetto/base/logging.h"
 #include "perfetto/trace_processor/basic_types.h"
@@ -28,12 +30,6 @@ namespace perfetto::trace_processor::column {
 SingleSearchResult DummyStorage::ChainImpl::SingleSearch(FilterOp,
                                                          SqlValue,
                                                          uint32_t) const {
-  PERFETTO_FATAL("Shouldn't be called");
-}
-
-UniqueSearchResult DummyStorage::ChainImpl::UniqueSearch(FilterOp,
-                                                         SqlValue,
-                                                         uint32_t*) const {
   PERFETTO_FATAL("Shouldn't be called");
 }
 
@@ -49,21 +45,17 @@ RangeOrBitVector DummyStorage::ChainImpl::SearchValidated(FilterOp,
   PERFETTO_FATAL("Shouldn't be called");
 }
 
-RangeOrBitVector DummyStorage::ChainImpl::IndexSearchValidated(FilterOp,
-                                                               SqlValue,
-                                                               Indices) const {
+void DummyStorage::ChainImpl::IndexSearchValidated(FilterOp,
+                                                   SqlValue,
+                                                   Indices&) const {
   PERFETTO_FATAL("Shouldn't be called");
 }
 
-Range DummyStorage::ChainImpl::OrderedIndexSearchValidated(FilterOp,
-                                                           SqlValue,
-                                                           Indices) const {
+void DummyStorage::ChainImpl::StableSort(Token*, Token*, SortDirection) const {
   PERFETTO_FATAL("Shouldn't be called");
 }
 
-void DummyStorage::ChainImpl::StableSort(SortToken*,
-                                         SortToken*,
-                                         SortDirection) const {
+void DummyStorage::ChainImpl::Distinct(Indices&) const {
   PERFETTO_FATAL("Shouldn't be called");
 }
 
@@ -71,7 +63,15 @@ uint32_t DummyStorage::ChainImpl::size() const {
   return 0;
 }
 
-void DummyStorage::ChainImpl::Serialize(StorageProto*) const {
+std::optional<Token> DummyStorage::ChainImpl::MaxElement(Indices&) const {
+  PERFETTO_FATAL("Shouldn't be called");
+}
+
+std::optional<Token> DummyStorage::ChainImpl::MinElement(Indices&) const {
+  PERFETTO_FATAL("Shouldn't be called");
+}
+
+SqlValue DummyStorage::ChainImpl::Get_AvoidUsingBecauseSlow(uint32_t) const {
   PERFETTO_FATAL("Shouldn't be called");
 }
 

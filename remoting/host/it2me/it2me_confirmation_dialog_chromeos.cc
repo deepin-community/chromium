@@ -68,7 +68,7 @@ class It2MeConfirmationDialogChromeOS : public It2MeConfirmationDialog {
   const gfx::VectorIcon& GetIcon() const {
     switch (style_) {
       case DialogStyle::kConsumer:
-        return gfx::kNoneIcon;
+        return gfx::VectorIcon::EmptyIcon();
       case DialogStyle::kEnterprise:
         return chromeos::kEnterpriseIcon;
     }
@@ -101,7 +101,7 @@ void It2MeConfirmationDialogChromeOS::Show(const std::string& remote_user_email,
 void It2MeConfirmationDialogChromeOS::ShowConfirmationNotification(
     const std::string& remote_user_email) {
   message_center::RichNotificationData data;
-  data.pinned = true;
+  data.pinned = false;
 
   data.buttons.emplace_back(
       l10n_util::GetStringUTF16(IDS_SHARE_CONFIRM_DIALOG_DECLINE));

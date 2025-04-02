@@ -118,6 +118,19 @@ enum class CookieAccessSemantics {
   LEGACY,
 };
 
+// When the scope is LEGACY, Origin-Bound Cookies behavior is disabled.
+// LINT.IfChange(CookieScopeSemantics)
+enum class CookieScopeSemantics {
+  // Has not been checked yet or there is no way to check.
+  UNKNOWN = -1,
+  // Has been checked and the cookie should *not* be subject to legacy scope
+  // rules
+  NONLEGACY = 0,
+  // Has been checked and the cookie should be subject to legacy scope rules
+  LEGACY = 1,
+};
+// LINT.ThenChange(/services/network/public/mojom/cookie_manager.mojom:CookieScopeSemanticsMojom)
+
 // What scheme was used in the setting of a cookie.
 // Do not renumber.
 enum class CookieSourceScheme {
@@ -334,23 +347,6 @@ CookieSourceSchemeName GetSchemeNameEnum(const GURL& url);
 // Empty string was chosen because it is the smallest, non-null value.
 NET_EXPORT extern const char kEmptyCookiePartitionKey[];
 
-// Used for a histogram that measures which character caused the cookie
-// string to be truncated.
-//
-// Do not reorder or renumber. Used for metrics.
-enum class TruncatingCharacterInCookieStringType {
-  // No truncating character in the cookie line.
-  kTruncatingCharNone = 0,
-  // Cookie line truncated because of \x0.
-  kTruncatingCharNull = 1,
-  // Cookie line truncated because of \xD.
-  kTruncatingCharNewline = 2,
-  // Cookie line truncated because of \xA.
-  kTruncatingCharLineFeed = 3,
-
-  kMaxValue = kTruncatingCharLineFeed,  // Keep as the last value.
-};
-
 // Enum for measuring usage patterns of CookiesAllowedForUrls.
 // The policy supports wildcards in the primary or secondary content setting
 // pattern, and explicit patterns for both. Each variant of this enum represents
@@ -367,6 +363,34 @@ enum class CookiesAllowedForUrlsUsage {
   kAllPresent = 6,
 
   kMaxValue = kAllPresent,
+};
+
+// Possible values for the 'source_type' column.
+//
+// Do not reorder or renumber. Used for metrics.
+enum class CookieSourceType {
+  // 'unknown' is used for tests or cookies set before this field was added.
+  kUnknown = 0,
+  // 'http' is used for cookies set via HTTP Response Headers.
+  kHTTP = 1,
+  // 'script' is used for cookies set via document.cookie.
+  kScript = 2,
+  // 'other' is used for cookies set via browser login, iOS, WebView APIs,
+  // Extension APIs, or DevTools.
+  kOther = 3,
+
+  kMaxValue = kOther,  // Keep as the last value.
+};
+
+// The special cookie prefixes as defined in
+// https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis-13#name-cookie-name-prefixes
+//
+// This enum is being histogrammed; do not reorder or remove values.
+enum CookiePrefix {
+  COOKIE_PREFIX_NONE = 0,
+  COOKIE_PREFIX_SECURE,
+  COOKIE_PREFIX_HOST,
+  COOKIE_PREFIX_LAST
 };
 
 }  // namespace net

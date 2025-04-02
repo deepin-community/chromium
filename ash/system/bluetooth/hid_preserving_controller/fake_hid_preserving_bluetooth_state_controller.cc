@@ -11,15 +11,14 @@
 namespace ash {
 
 FakeHidPreservingBluetoothStateController::
-    FakeHidPreservingBluetoothStateController() {
-  CHECK(features::IsBluetoothDisconnectWarningEnabled());
-}
+    FakeHidPreservingBluetoothStateController() = default;
 
 FakeHidPreservingBluetoothStateController::
     ~FakeHidPreservingBluetoothStateController() = default;
 
 void FakeHidPreservingBluetoothStateController::TryToSetBluetoothEnabledState(
-    bool enabled) {
+    bool enabled,
+    mojom::HidWarningDialogSource source) {
   if (should_show_warning_dialog_) {
     pending_bluetooth_enabled_request_ = enabled;
     dialog_shown_count_++;

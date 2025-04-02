@@ -25,9 +25,6 @@ namespace updater {
 // AppWakeAll finds and launches --wake applications for all versions of the
 // updater within the same scope.
 class AppWakeAll : public App {
- public:
-  AppWakeAll() = default;
-
  private:
   ~AppWakeAll() override = default;
 
@@ -51,29 +48,27 @@ void AppWakeAll::FirstTaskRun() {
                            .IsValid()) {
                     return;
                   }
-                  const base::FilePath executable =
-                      name.Append(GetExecutableRelativePath());
-                  if (!base::PathExists(executable)) {
-                    return;
-                  }
-                  base::CommandLine command(executable);
+                  base::CommandLine command(
+                      name.Append(GetExecutableRelativePath()));
                   command.AppendSwitch(kWakeSwitch);
                   if (IsSystemInstall(scope)) {
                     command.AppendSwitch(kSystemSwitch);
                   }
-                  command.AppendSwitch(kEnableLoggingSwitch);
-                  command.AppendSwitchASCII(kLoggingModuleSwitch,
-                                            kLoggingModuleSwitchValue);
                   VLOG(1) << "Launching `" << command.GetCommandLineString()
                           << "`";
                   int exit = 0;
-                  if (base::LaunchProcess(command, {})
-                          .WaitForExitWithTimeout(base::Minutes(10), &exit)) {
+                  const base::Process process =
+                      base::LaunchProcess(command, {});
+                  if (!process.IsValid()) {
+                    VPLOG(1) << "`" << command.GetCommandLineString()
+                             << "` process invalid";
+                  } else if (process.WaitForExitWithTimeout(base::Minutes(10),
+                                                            &exit)) {
                     VLOG(1) << "`" << command.GetCommandLineString()
                             << "` exited " << exit;
                   } else {
-                    VLOG(1) << "`" << command.GetCommandLineString()
-                            << "` timed out.";
+                    VPLOG(1) << "`" << command.GetCommandLineString()
+                             << "` timed out.";
                   }
                 });
             return kErrorOk;

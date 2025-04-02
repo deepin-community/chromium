@@ -4,6 +4,7 @@
 
 #include "chrome/browser/net/secure_dns_util.h"
 
+#include <algorithm>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -12,8 +13,6 @@
 #include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
-#include "base/strings/string_piece.h"
 #include "build/build_config.h"
 #include "chrome/browser/net/dns_probe_runner.h"
 #include "chrome/common/chrome_features.h"
@@ -37,7 +36,7 @@ bool EntryIsForCountry(const net::DohProviderEntry* entry, int country_id) {
     return true;
   }
   const auto& countries = entry->display_countries;
-  bool matches = base::ranges::any_of(
+  bool matches = std::ranges::any_of(
       countries, [country_id](const std::string& country_code) {
         return country_codes::CountryStringToCountryID(country_code) ==
                country_id;
@@ -56,8 +55,8 @@ void RegisterProbesSettingBackupPref(PrefRegistrySimple* registry) {
 }
 
 void MigrateProbesSettingToOrFromBackup(PrefService* prefs) {
-// TODO(crbug.com/1177778): remove this code around M97 to make sure the vast
-// majority of the clients are migrated.
+  // TODO(crbug.com/40748688): remove this code around M97 to make sure the vast
+  // majority of the clients are migrated.
   if (!prefs->HasPrefPath(kAlternateErrorPagesBackup)) {
     // If the user never changed the value of the preference and still uses
     // the hardcoded default value, we'll consider it to be the user value for
@@ -80,20 +79,21 @@ net::DohProviderEntry::List ProvidersForCountry(
     const net::DohProviderEntry::List& providers,
     int country_id) {
   net::DohProviderEntry::List local_providers;
-  base::ranges::copy_if(providers, std::back_inserter(local_providers),
-                        [country_id](const net::DohProviderEntry* entry) {
-                          return EntryIsForCountry(entry, country_id);
-                        });
+  std::ranges::copy_if(providers, std::back_inserter(local_providers),
+                       [country_id](const net::DohProviderEntry* entry) {
+                         return EntryIsForCountry(entry, country_id);
+                       });
   return local_providers;
 }
 
 net::DohProviderEntry::List SelectEnabledProviders(
     const net::DohProviderEntry::List& providers) {
   net::DohProviderEntry::List enabled_providers;
-  base::ranges::copy_if(providers, std::back_inserter(enabled_providers),
-                        [](const net::DohProviderEntry* entry) {
-                          return base::FeatureList::IsEnabled(entry->feature);
-                        });
+  std::ranges::copy_if(
+      providers, std::back_inserter(enabled_providers),
+      [](const net::DohProviderEntry* entry) {
+        return base::FeatureList::IsEnabled(entry->feature.get());
+      });
   return enabled_providers;
 }
 

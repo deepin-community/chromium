@@ -38,6 +38,7 @@
 #include "content/public/browser/web_ui_message_handler.h"
 #include "content/public/browser/webui_config_map.h"
 #include "content/public/common/content_switches.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -63,7 +64,7 @@ namespace {
 
 using WebUIImplBrowserTest = ContentBrowserTest;
 
-// TODO(crbug.com/154571): Shared workers are not available on Android.
+// TODO(crbug.com/40290702): Shared workers are not available on Android.
 #if !BUILDFLAG(IS_ANDROID)
 const char kLoadSharedWorkerScript[] = R"(
     new Promise((resolve) => {
@@ -172,7 +173,7 @@ class WebUIRequiringGestureBrowserTest : public ContentBrowserTest {
     main_rfh()->ExecuteJavaScriptForTests(
         u"chrome.send('messageRequiringGesture');"
         u"chrome.send('notifyFinish');",
-        base::NullCallback());
+        base::NullCallback(), ISOLATED_WORLD_ID_GLOBAL);
     base::RunLoop run_loop;
     test_handler()->set_finish_closure(run_loop.QuitClosure());
     run_loop.Run();
@@ -206,7 +207,7 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, ForceSwapOnDifferenteWebUITypes) {
       web_contents->GetBrowserContext(), web_ui_url));
   ASSERT_TRUE(NavigateToURL(web_contents, web_ui_url));
   EXPECT_TRUE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      web_contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
 
   // Capture the SiteInstance before navigating for later comparison.
   scoped_refptr<SiteInstance> orig_site_instance(
@@ -224,7 +225,7 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, ForceSwapOnDifferenteWebUITypes) {
   EXPECT_NE(orig_browsing_instance_id,
             new_site_instance->GetBrowsingInstanceId());
   EXPECT_TRUE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      web_contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
 }
 
 // Tests that a WebUI page will stay in the initial RenderFrameHost and its
@@ -253,7 +254,7 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest,
   ASSERT_TRUE(NavigateToURL(web_contents, web_ui_url));
 
   EXPECT_TRUE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      web_contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
   auto* new_site_instance = web_contents->GetSiteInstance();
   EXPECT_EQ(orig_site_instance, new_site_instance);
   EXPECT_TRUE(
@@ -348,13 +349,13 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, NavigateFromCrashedAboutBlank) {
   // the initial one. Crashing the about:blank page shouldn't affect this, so
   // the WebUI navigation should end up in a fresh SiteInstance and process.
   EXPECT_NE(orig_site_instance, web_contents->GetSiteInstance());
-  EXPECT_NE(orig_site_instance->GetProcess(),
+  EXPECT_NE(orig_site_instance->GetOrCreateProcess(),
             web_contents->GetPrimaryMainFrame()->GetProcess());
 
   // Check that the resulting WebUI page has bindings, and its process is
   // marked as used.
   EXPECT_TRUE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      web_contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
   EXPECT_FALSE(web_contents->GetPrimaryMainFrame()->GetProcess()->IsUnused());
 }
 
@@ -445,7 +446,11 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest,
   EXPECT_EQ(shell()->web_contents()->GetPrimaryMainFrame()->GetProcess(),
             new_shell->web_contents()->GetPrimaryMainFrame()->GetProcess());
   EXPECT_FALSE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      shell()->web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      shell()
+          ->web_contents()
+          ->GetPrimaryMainFrame()
+          ->GetProcess()
+          ->GetDeprecatedID()));
 
   // Navigate the second tab to a WebUI URL.  This should not reuse the
   // initial RFH's process and should end up in a new process.
@@ -454,7 +459,10 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest,
   EXPECT_NE(shell()->web_contents()->GetPrimaryMainFrame()->GetProcess(),
             new_shell->web_contents()->GetPrimaryMainFrame()->GetProcess());
   EXPECT_TRUE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      new_shell->web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      new_shell->web_contents()
+          ->GetPrimaryMainFrame()
+          ->GetProcess()
+          ->GetDeprecatedID()));
 }
 
 // Check that if two initial RenderFrameHosts in different tabs share a
@@ -500,7 +508,11 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest,
   EXPECT_FALSE(
       shell()->web_contents()->GetPrimaryMainFrame()->GetProcess()->IsUnused());
   EXPECT_TRUE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      shell()->web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      shell()
+          ->web_contents()
+          ->GetPrimaryMainFrame()
+          ->GetProcess()
+          ->GetDeprecatedID()));
 
   // Navigate the first tab to a normal web URL.  This should not stay in the
   // the initial process, which is now used by WebUI.
@@ -510,9 +522,16 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest,
   EXPECT_NE(shell()->web_contents()->GetPrimaryMainFrame()->GetProcess(),
             new_shell->web_contents()->GetPrimaryMainFrame()->GetProcess());
   EXPECT_FALSE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      shell()->web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      shell()
+          ->web_contents()
+          ->GetPrimaryMainFrame()
+          ->GetProcess()
+          ->GetDeprecatedID()));
   EXPECT_TRUE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      new_shell->web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      new_shell->web_contents()
+          ->GetPrimaryMainFrame()
+          ->GetProcess()
+          ->GetDeprecatedID()));
 
   // Navigate the third tab to the same WebUI URL.  This should stay in the
   // third tab's initial process which is shared with the second tab, since the
@@ -547,7 +566,7 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, ReuseProcessInClonedTab) {
   // The cloned WebContents will use the old tab's current SiteInstance for its
   // initial RFH.  That means its initial SiteInstance should already have a
   // site, and it should keep the same process (from the old tab).
-  // TODO(crbug.com/1468601): these expectations may change in the future if
+  // TODO(crbug.com/40277187): these expectations may change in the future if
   // duplicating tabs stops inheriting the old tab's SiteInstance.
   EXPECT_EQ(shell()->web_contents()->GetPrimaryMainFrame()->GetSiteInstance(),
             cloned_tab->GetPrimaryMainFrame()->GetSiteInstance());
@@ -559,7 +578,7 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, ReuseProcessInClonedTab) {
       cloned_tab_impl->GetPrimaryMainFrame()->GetProcess()->IsUnused());
 
   // Load the cloned tab.  This should reuse the old tab's WebUI process.
-  // TODO(crbug.com/1468601): this expectation may change in the future if
+  // TODO(crbug.com/40277187): this expectation may change in the future if
   // duplicating tabs stops inheriting the old tab's SiteInstance.
   {
     TestNavigationObserver clone_observer(cloned_tab_impl);
@@ -607,7 +626,7 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, ReuseInitialRFHInRestoredTab) {
   EXPECT_FALSE(
       static_cast<SiteInstanceImpl*>(restore_site_instance.get())->HasSite());
   EXPECT_FALSE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      restore_rfh->GetProcess()->GetID()));
+      restore_rfh->GetProcess()->GetDeprecatedID()));
   EXPECT_NE(shell()->web_contents()->GetPrimaryMainFrame()->GetSiteInstance(),
             restore_site_instance);
 
@@ -639,7 +658,7 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, ReuseInitialRFHInRestoredTab) {
   ASSERT_TRUE(restore_rfh.get());
   EXPECT_FALSE(restore_rfh->GetProcess()->IsUnused());
   EXPECT_TRUE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      restore_rfh->GetProcess()->GetID()));
+      restore_rfh->GetProcess()->GetDeprecatedID()));
 }
 
 // Tests that navigating from chrome:// to chrome-untrusted:// results in
@@ -655,7 +674,7 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, ForceSwapOnFromChromeToUntrusted) {
 
   ASSERT_TRUE(NavigateToURL(web_contents, web_ui_url));
   EXPECT_TRUE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      web_contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
 
   // Capture the SiteInstance before navigating for later comparison.
   scoped_refptr<SiteInstance> orig_site_instance(
@@ -671,7 +690,7 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, ForceSwapOnFromChromeToUntrusted) {
   EXPECT_NE(orig_browsing_instance_id,
             new_site_instance->GetBrowsingInstanceId());
   EXPECT_FALSE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      web_contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
 }
 
 // Tests that navigating from chrome-untrusted:// to chrome:// results in
@@ -684,7 +703,7 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, ForceSwapOnFromUntrustedToChrome) {
   ASSERT_TRUE(NavigateToURL(web_contents,
                             GetChromeUntrustedUIURL("test-host/title1.html")));
   EXPECT_FALSE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      web_contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
 
   // Capture the SiteInstance before navigating for later comparison.
   scoped_refptr<SiteInstance> orig_site_instance(
@@ -703,7 +722,7 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, ForceSwapOnFromUntrustedToChrome) {
   EXPECT_NE(orig_browsing_instance_id,
             new_site_instance->GetBrowsingInstanceId());
   EXPECT_TRUE(ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-      web_contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
 }
 
 IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, SameDocumentNavigationsAndReload) {
@@ -759,7 +778,7 @@ IN_PROC_BROWSER_TEST_F(WebUIRequiringGestureBrowserTest,
   main_rfh()->ExecuteJavaScriptWithUserGestureForTests(
       u"chrome.send('messageRequiringGesture');"
       u"chrome.send('notifyFinish');",
-      base::NullCallback());
+      base::NullCallback(), ISOLATED_WORLD_ID_GLOBAL);
   base::RunLoop run_loop;
   test_handler()->set_finish_closure(run_loop.QuitClosure());
   run_loop.Run();
@@ -789,7 +808,7 @@ IN_PROC_BROWSER_TEST_F(WebUIRequiringGestureBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(
     WebUIRequiringGestureBrowserTest,
-    // TODO(crbug.com/1342300): Re-enable this test
+    // TODO(crbug.com/40851657): Re-enable this test
     DISABLED_MessageRequiringGestureAllowedWithInteractiveEvent) {
   // Simulate a click at Now.
   content::SimulateMouseClick(web_contents(), 0,
@@ -823,7 +842,7 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, UntrustedSchemeLoads) {
 
 // Verify that we can successfully navigate to a chrome-untrusted:// URL
 // without a crash while WebUI::Send is being performed.
-// TODO(crbug.com/1221528): Enable this test once a root cause is identified.
+// TODO(crbug.com/40773523): Enable this test once a root cause is identified.
 IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, DISABLED_NavigateWhileWebUISend) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -850,7 +869,8 @@ IN_PROC_BROWSER_TEST_F(WebUIImplBrowserTest, DISABLED_NavigateWhileWebUISend) {
       u"onunload=function() { chrome.send('sendMessage')}",
       base::BindOnce([](base::OnceClosure callback,
                         base::Value) { std::move(callback).Run(); },
-                     run_loop.QuitClosure()));
+                     run_loop.QuitClosure()),
+      ISOLATED_WORLD_ID_GLOBAL);
   run_loop.Run();
 
   RenderFrameDeletedObserver delete_observer(
@@ -967,14 +987,16 @@ IN_PROC_BROWSER_TEST_F(WebUIRequestSchemesTest, DefaultSchemesCanBeRequested) {
     url = GURL(base::StrCat(
         {requestable_scheme, url::kStandardSchemeSeparator, host_and_path}));
     EXPECT_TRUE(ChildProcessSecurityPolicy::GetInstance()->CanRequestURL(
-        web_contents->GetPrimaryMainFrame()->GetProcess()->GetID(), url));
+        web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID(),
+        url));
   }
 
   for (const auto& unrequestable_scheme : unrequestable_schemes) {
     url = GURL(base::StrCat(
         {unrequestable_scheme, url::kStandardSchemeSeparator, host_and_path}));
     EXPECT_FALSE(ChildProcessSecurityPolicy::GetInstance()->CanRequestURL(
-        web_contents->GetPrimaryMainFrame()->GetProcess()->GetID(), url));
+        web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID(),
+        url));
   }
 }
 
@@ -1018,14 +1040,16 @@ IN_PROC_BROWSER_TEST_F(WebUIRequestSchemesTest,
     url = GURL(base::StrCat(
         {requestable_scheme, url::kStandardSchemeSeparator, host_and_path}));
     EXPECT_TRUE(ChildProcessSecurityPolicy::GetInstance()->CanRequestURL(
-        web_contents->GetPrimaryMainFrame()->GetProcess()->GetID(), url));
+        web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID(),
+        url));
   }
 
   for (const auto& unrequestable_scheme : unrequestable_schemes) {
     url = GURL(base::StrCat(
         {unrequestable_scheme, url::kStandardSchemeSeparator, host_and_path}));
     EXPECT_FALSE(ChildProcessSecurityPolicy::GetInstance()->CanRequestURL(
-        web_contents->GetPrimaryMainFrame()->GetProcess()->GetID(), url));
+        web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID(),
+        url));
   }
 }
 
@@ -1094,7 +1118,7 @@ class WebUIDedicatedWorkerTest : public WebUIWorkerTest,
 
 INSTANTIATE_TEST_SUITE_P(All, WebUIDedicatedWorkerTest, testing::Bool());
 
-// TODO(crbug.com/154571): Shared workers are not available on Android.
+// TODO(crbug.com/40290702): Shared workers are not available on Android.
 #if !BUILDFLAG(IS_ANDROID)
 // Verify that we can create SharedWorker with scheme "chrome://" under
 // WebUI page.
@@ -1117,7 +1141,7 @@ IN_PROC_BROWSER_TEST_F(WebUIWorkerTest,
       kLoadSharedWorkerScript);
 
   std::string expected_failure =
-      "a JavaScript error: \"Error: Failed to construct 'SharedWorker'";
+      "a JavaScript error: \"SecurityError: Failed to construct 'SharedWorker'";
   EXPECT_THAT(result.error, ::testing::StartsWith(expected_failure));
 }
 
@@ -1191,7 +1215,8 @@ IN_PROC_BROWSER_TEST_F(WebUIWorkerTest,
       kLoadSharedWorkerScript);
 
   std::string expected_failure =
-      "a JavaScript error: \"Error: Failed to construct 'SharedWorker': "
+      "a JavaScript error: \"SecurityError: Failed to construct "
+      "'SharedWorker': "
       "Script at 'chrome-untrusted://untrusted/web_ui_shared_worker.js' cannot "
       "be accessed from origin 'chrome://trusted'";
   EXPECT_THAT(result.error, ::testing::StartsWith(expected_failure));
@@ -1209,7 +1234,8 @@ IN_PROC_BROWSER_TEST_F(WebUIWorkerTest,
       kLoadSharedWorkerScript);
 
   std::string expected_failure =
-      "a JavaScript error: \"Error: Failed to construct 'SharedWorker': "
+      "a JavaScript error: \"SecurityError: Failed to construct "
+      "'SharedWorker': "
       "Script at 'chrome-untrusted://untrusted/web_ui_shared_worker.js' cannot "
       "be accessed from origin 'http://localhost";
   EXPECT_THAT(result.error, ::testing::StartsWith(expected_failure));
@@ -1226,7 +1252,8 @@ IN_PROC_BROWSER_TEST_F(WebUIWorkerTest,
       GetWebUIURL("trusted/web_ui_shared_worker.js"), kLoadSharedWorkerScript);
 
   std::string expected_failure =
-      "a JavaScript error: \"Error: Failed to construct 'SharedWorker': Script "
+      "a JavaScript error: \"SecurityError: Failed to construct "
+      "'SharedWorker': Script "
       "at 'chrome://trusted/web_ui_shared_worker.js' cannot be accessed from "
       "origin 'chrome-untrusted://untrusted'.";
   EXPECT_THAT(result.error, ::testing::StartsWith(expected_failure));
@@ -1256,7 +1283,7 @@ IN_PROC_BROWSER_TEST_P(WebUIDedicatedWorkerTest,
       kLoadDedicatedWorkerScript);
 
   std::string expected_failure =
-      "a JavaScript error: \"Error: Failed to construct 'Worker'";
+      "a JavaScript error: \"SecurityError: Failed to construct 'Worker'";
   EXPECT_THAT(result.error, ::testing::StartsWith(expected_failure));
 }
 
@@ -1328,7 +1355,7 @@ IN_PROC_BROWSER_TEST_P(
       kLoadDedicatedWorkerScript);
 
   std::string expected_failure =
-      "a JavaScript error: \"Error: Failed to construct 'Worker': "
+      "a JavaScript error: \"SecurityError: Failed to construct 'Worker': "
       "Script at 'chrome-untrusted://untrusted/web_ui_dedicated_worker.js' "
       "cannot be accessed from origin 'chrome://trusted'";
   EXPECT_THAT(result.error, ::testing::StartsWith(expected_failure));
@@ -1346,7 +1373,7 @@ IN_PROC_BROWSER_TEST_P(WebUIDedicatedWorkerTest,
       kLoadDedicatedWorkerScript);
 
   std::string expected_failure =
-      "a JavaScript error: \"Error: Failed to construct 'Worker': "
+      "a JavaScript error: \"SecurityError: Failed to construct 'Worker': "
       "Script at 'chrome-untrusted://untrusted/web_ui_dedicated_worker.js' "
       "cannot be accessed from origin 'http://localhost";
   EXPECT_THAT(result.error, ::testing::StartsWith(expected_failure));
@@ -1365,7 +1392,8 @@ IN_PROC_BROWSER_TEST_P(WebUIDedicatedWorkerTest,
       kLoadDedicatedWorkerScript);
 
   std::string expected_failure =
-      "a JavaScript error: \"Error: Failed to construct 'Worker': Script "
+      "a JavaScript error: \"SecurityError: Failed to construct 'Worker': "
+      "Script "
       "at 'chrome://trusted/web_ui_dedicated_worker.js' cannot be accessed "
       "from origin 'chrome-untrusted://untrusted'.";
   EXPECT_THAT(result.error, ::testing::StartsWith(expected_failure));

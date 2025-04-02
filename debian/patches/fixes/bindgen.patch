@@ -1,0 +1,54 @@
+author: Andres Salomon <dilinger@debian.org>
+description: fix bindgen-related stuff
+
+Two separate but related fixes:
+
+Crabbyav1f is calling bindgen features which are not currently in
+bookworm or sid; --allowlist-item was added in bindgen 0.68. As far
+as I can tell the build.rs stuff calls allowlist_item from there as
+well, so these arguments may just be redundant? Hopefully I'm not
+breaking stuff..  Drop this for sid once bindgen gets upgraded.
+
+
+Also, the call to bindgen sets the path for libclang to
+rust_bindgen_root, which is wrong. We're already passing
+clang_base_path with the path to libclang, there's no reason that
+we'd expect libclang to be in the same directory as bindgen. That
+fix should probably go upstream.
+
+
+--- a/third_party/crabbyavif/BUILD.gn
++++ b/third_party/crabbyavif/BUILD.gn
+@@ -13,6 +13,10 @@ rust_bindgen_generator("crabbyavif_dav1d
+   bindgen_flags = [
+     "no-doc-comments",
+     "generate=functions,types,vars,methods,constructors,destructors",
++  ]
++  junk = []
++  not_needed(["junk"])
++  junk = [
+     "allowlist-item=dav1d_close",
+     "allowlist-item=dav1d_data_unref",
+     "allowlist-item=dav1d_data_wrap",
+@@ -42,6 +46,10 @@ rust_bindgen_generator("crabbyavif_libyu
+   bindgen_flags = [
+     "no-doc-comments",
+     "generate=functions,types,vars,methods,constructors,destructors",
++  ]
++  junk = []
++  not_needed(["junk"])
++  junk = [
+     "allowlist-item=AR30ToAB30",
+     "allowlist-item=ARGBToABGR",
+     "allowlist-item=ARGBAttenuate",
+--- a/build/rust/rust_bindgen_generator.gni
++++ b/build/rust/rust_bindgen_generator.gni
+@@ -18,7 +18,7 @@ if (host_os == "win") {
+ 
+ # On Windows, the libclang.dll is beside the bindgen.exe, otherwise it is in
+ # ../lib.
+-_libclang_path = rust_bindgen_root
++_libclang_path = clang_base_path
+ if (host_os == "win") {
+   _libclang_path += "/bin"
+ } else {

@@ -6,7 +6,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
-#include "ash/focus_cycler.h"
+#include "ash/focus/focus_cycler.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
@@ -36,12 +36,11 @@ class VideoConferenceTrayPixelTest : public AshTestBase {
   // AshTestBase:
   void SetUp() override {
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{chromeos::features::kJellyroll,
-                              features::kVideoConference,
-                              features::kVcStopAllScreenShare,
-                              chromeos::features::kJelly,
-                              features::kCameraEffectsSupportedByHardware},
-        /*disabled_features=*/{});
+        /*enabled_features=*/{features::kVcStopAllScreenShare,
+                              features::kFeatureManagementVideoConference},
+        /*disabled_features=*/{features::kVcBackgroundReplace});
+    // TODO(b/334375880): Add a specific pixel test for the feature
+    // VcBackgroundReplace.
 
     // Instantiates a fake controller (the real one is created in
     // ChromeBrowserMainExtraPartsAsh::PreProfileInit() which is not called in

@@ -4,10 +4,13 @@
 
 #include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 
+#include <string_view>
+
 #include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/platform/heap/thread_state.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
@@ -17,6 +20,18 @@
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 
 namespace blink {
+
+namespace {
+
+class FakeUseCounter : public GarbageCollected<FakeUseCounter>,
+                       public UseCounter {
+ private:
+  void CountUse(mojom::WebFeature feature) override {}
+  void CountDeprecation(mojom::WebFeature feature) override {}
+  void CountWebDXFeature(WebDXFeature feature) override {}
+};
+
+}  // namespace
 
 class ResourceTest : public testing::Test {
  private:
@@ -110,8 +125,8 @@ TEST_F(ResourceTest, RevalidationFailed) {
   ResourceResponse response(url);
   response.SetHttpStatusCode(200);
   resource->ResponseReceived(response);
-  const char kData[5] = "abcd";
-  resource->AppendData(kData, 4);
+  const std::string_view kData = "abcd";
+  resource->AppendData(kData);
   resource->FinishForTest();
   MemoryCache::Get()->Add(resource);
 
@@ -130,9 +145,9 @@ TEST_F(ResourceTest, RevalidationFailed) {
   EXPECT_FALSE(resource->HasSuccessfulRevalidation());
   EXPECT_EQ(200, resource->GetResponse().HttpStatusCode());
   EXPECT_FALSE(resource->ResourceBuffer());
-  EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURL(url));
+  EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURLForTesting(url));
 
-  resource->AppendData(kData, 4);
+  resource->AppendData(kData);
 
   EXPECT_FALSE(client->NotifyFinishedCalled());
 
@@ -152,8 +167,8 @@ TEST_F(ResourceTest, RevalidationSucceeded) {
   ResourceResponse response(url);
   response.SetHttpStatusCode(200);
   resource->ResponseReceived(response);
-  const char kData[5] = "abcd";
-  resource->AppendData(kData, 4);
+  const std::string_view kData = "abcd";
+  resource->AppendData(kData);
   resource->FinishForTest();
   MemoryCache::Get()->Add(resource);
 
@@ -172,7 +187,7 @@ TEST_F(ResourceTest, RevalidationSucceeded) {
   EXPECT_TRUE(resource->HasSuccessfulRevalidation());
   EXPECT_EQ(200, resource->GetResponse().HttpStatusCode());
   EXPECT_EQ(4u, resource->ResourceBuffer()->size());
-  EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURL(url));
+  EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURLForTesting(url));
 
   MemoryCache::Get()->Remove(resource);
 
@@ -206,7 +221,7 @@ TEST_F(ResourceTest, RevalidationSucceededForResourceWithoutBody) {
   EXPECT_TRUE(resource->HasSuccessfulRevalidation());
   EXPECT_EQ(200, resource->GetResponse().HttpStatusCode());
   EXPECT_FALSE(resource->ResourceBuffer());
-  EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURL(url));
+  EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURLForTesting(url));
   MemoryCache::Get()->Remove(resource);
 
   resource->RemoveClient(client);
@@ -318,8 +333,8 @@ TEST_F(ResourceTest, RedirectDuringRevalidation) {
   ResourceResponse response(url);
   response.SetHttpStatusCode(200);
   resource->ResponseReceived(response);
-  const char kData[5] = "abcd";
-  resource->AppendData(kData, 4);
+  const std::string_view kData = "abcd";
+  resource->AppendData(kData);
   resource->FinishForTest();
   MemoryCache::Get()->Add(resource);
 
@@ -357,8 +372,8 @@ TEST_F(ResourceTest, RedirectDuringRevalidation) {
   revalidating_response.SetHttpStatusCode(200);
   resource->ResponseReceived(revalidating_response);
 
-  const char kData2[4] = "xyz";
-  resource->AppendData(kData2, 3);
+  const std::string_view kData2 = "xyz";
+  resource->AppendData(kData2);
   resource->FinishForTest();
   EXPECT_FALSE(resource->IsCacheValidator());
   EXPECT_FALSE(resource->HasSuccessfulRevalidation());
@@ -366,7 +381,7 @@ TEST_F(ResourceTest, RedirectDuringRevalidation) {
   EXPECT_EQ(redirect_target_url, resource->LastResourceRequest().Url());
   EXPECT_EQ(200, resource->GetResponse().HttpStatusCode());
   EXPECT_EQ(3u, resource->ResourceBuffer()->size());
-  EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURL(url));
+  EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURLForTesting(url));
 
   EXPECT_TRUE(client->NotifyFinishedCalled());
 
@@ -400,6 +415,7 @@ TEST_F(ResourceTest, StaleWhileRevalidateCacheControl) {
   ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler> mock;
   ScopedResourceMockClock clock(mock->test_task_runner()->GetMockClock());
   const KURL url("http://127.0.0.1:8000/foo.html");
+  auto* use_counter = MakeGarbageCollected<FakeUseCounter>();
   ResourceResponse response(url);
   response.SetHttpStatusCode(200);
   response.SetHttpHeaderField(
@@ -410,24 +426,25 @@ TEST_F(ResourceTest, StaleWhileRevalidateCacheControl) {
   resource->ResponseReceived(response);
   resource->FinishForTest();
 
-  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(false));
-  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(true));
-  EXPECT_FALSE(resource->ShouldRevalidateStaleResponse());
+  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(false, *use_counter));
+  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(true, *use_counter));
+  EXPECT_FALSE(resource->ShouldRevalidateStaleResponse(*use_counter));
 
   mock->AdvanceClockSeconds(1);
-  EXPECT_TRUE(resource->MustRevalidateDueToCacheHeaders(false));
-  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(true));
-  EXPECT_TRUE(resource->ShouldRevalidateStaleResponse());
+  EXPECT_TRUE(resource->MustRevalidateDueToCacheHeaders(false, *use_counter));
+  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(true, *use_counter));
+  EXPECT_TRUE(resource->ShouldRevalidateStaleResponse(*use_counter));
 
   mock->AdvanceClockSeconds(40);
-  EXPECT_TRUE(resource->MustRevalidateDueToCacheHeaders(false));
-  EXPECT_TRUE(resource->MustRevalidateDueToCacheHeaders(true));
-  EXPECT_TRUE(resource->ShouldRevalidateStaleResponse());
+  EXPECT_TRUE(resource->MustRevalidateDueToCacheHeaders(false, *use_counter));
+  EXPECT_TRUE(resource->MustRevalidateDueToCacheHeaders(true, *use_counter));
+  EXPECT_TRUE(resource->ShouldRevalidateStaleResponse(*use_counter));
 }
 
 TEST_F(ResourceTest, StaleWhileRevalidateCacheControlWithRedirect) {
   ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler> mock;
   ScopedResourceMockClock clock(mock->test_task_runner()->GetMockClock());
+  auto* use_counter = MakeGarbageCollected<FakeUseCounter>();
   const KURL url("http://127.0.0.1:8000/foo.html");
   const KURL redirect_target_url("http://127.0.0.1:8000/food.html");
   ResourceResponse response(url);
@@ -452,24 +469,25 @@ TEST_F(ResourceTest, StaleWhileRevalidateCacheControlWithRedirect) {
   resource->ResponseReceived(response);
   resource->FinishForTest();
 
-  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(false));
-  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(true));
-  EXPECT_FALSE(resource->ShouldRevalidateStaleResponse());
+  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(false, *use_counter));
+  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(true, *use_counter));
+  EXPECT_FALSE(resource->ShouldRevalidateStaleResponse(*use_counter));
 
   mock->AdvanceClockSeconds(41);
 
   // MustRevalidateDueToCacheHeaders only looks at the stored response not
   // any redirects but ShouldRevalidate and AsyncRevalidationRequest look
   // at the entire redirect chain.
-  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(false));
-  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(true));
-  EXPECT_TRUE(resource->ShouldRevalidateStaleResponse());
+  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(false, *use_counter));
+  EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(true, *use_counter));
+  EXPECT_TRUE(resource->ShouldRevalidateStaleResponse(*use_counter));
   EXPECT_TRUE(resource->StaleRevalidationRequested());
 }
 
 TEST_F(ResourceTest, FreshnessLifetime) {
   const KURL url("http://127.0.0.1:8000/foo.html");
   const KURL redirect_target_url("http://127.0.0.1:8000/food.html");
+  auto* use_counter = MakeGarbageCollected<FakeUseCounter>();
   ResourceResponse response(url);
   response.SetHttpHeaderField(http_names::kCacheControl,
                               AtomicString("max-age=50"));
@@ -478,7 +496,7 @@ TEST_F(ResourceTest, FreshnessLifetime) {
   auto* resource = MakeGarbageCollected<MockResource>(url);
   resource->ResponseReceived(response);
   resource->FinishForTest();
-  EXPECT_EQ(resource->FreshnessLifetime(), base::Seconds(50));
+  EXPECT_EQ(resource->FreshnessLifetime(*use_counter), base::Seconds(50));
 
   // The revalidating request is redirected.
   ResourceResponse redirect_response(url);
@@ -496,7 +514,8 @@ TEST_F(ResourceTest, FreshnessLifetime) {
   resource_redirected->ResponseReceived(response);
   resource_redirected->FinishForTest();
 
-  EXPECT_EQ(resource_redirected->FreshnessLifetime(), base::Seconds(10));
+  EXPECT_EQ(resource_redirected->FreshnessLifetime(*use_counter),
+            base::Seconds(10));
 }
 
 // This is a regression test for https://crbug.com/1062837.

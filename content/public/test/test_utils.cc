@@ -28,6 +28,7 @@
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/site_info.h"
 #include "content/browser/site_instance_impl.h"
+#include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/content_navigation_policy.h"
 #include "content/common/features.h"
 #include "content/public/browser/browser_child_process_host_iterator.h"
@@ -46,6 +47,29 @@
 #include "third_party/blink/public/common/fetch/fetch_api_request_headers_map.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
 #include "url/url_util.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "cc/slim/layer_tree.h"
+#include "content/browser/renderer_host/compositor_impl_android.h"
+#include "ui/android/window_android.h"
+#include "ui/android/window_android_compositor.h"
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_IOS)
+#include "content/browser/renderer_host/browser_compositor_ios.h"
+#include "content/browser/renderer_host/test_render_widget_host_view_ios_factory.h"
+#endif  // BUILDFLAG(IS_IOS)
+
+#if BUILDFLAG(IS_MAC)
+#include "content/browser/renderer_host/browser_compositor_view_mac.h"
+#include "content/browser/renderer_host/test_render_widget_host_view_mac_factory.h"
+#include "ui/compositor/compositor.h"
+#endif  // BUILDFLAG(IS_MAC)
+
+#if defined(USE_AURA)
+#include "content/browser/renderer_host/render_widget_host_view_aura.h"
+#include "ui/compositor/compositor.h"
+#endif  // defined(USE_AURA)
 
 namespace content {
 
@@ -183,20 +207,16 @@ bool IsOriginAgentClusterEnabledForOrigin(SiteInstance* site_instance,
       .is_origin_agent_cluster();
 }
 
-bool AreDefaultSiteInstancesEnabled() {
-  return !AreAllSitesIsolatedForTesting() &&
-         base::FeatureList::IsEnabled(
-             features::kProcessSharingWithDefaultSiteInstances);
-}
-
 bool AreStrictSiteInstancesEnabled() {
   return AreAllSitesIsolatedForTesting() ||
+         ShouldUseDefaultSiteInstanceGroup() ||
          base::FeatureList::IsEnabled(
              features::kProcessSharingWithStrictSiteInstances);
 }
 
 bool IsIsolatedOriginRequiredToGuaranteeDedicatedProcess() {
-  return AreDefaultSiteInstancesEnabled() ||
+  return !AreAllSitesIsolatedForTesting() ||
+         ShouldUseDefaultSiteInstanceGroup() ||
          base::FeatureList::IsEnabled(
              features::kProcessSharingWithStrictSiteInstances);
 }
@@ -257,11 +277,8 @@ WebContents* CreateAndAttachInnerContents(RenderFrameHost* rfh) {
 
   // Attach. |inner_contents| becomes owned by |outer_contents|.
   WebContents* inner_contents = inner_contents_ptr.get();
-  outer_contents->AttachInnerWebContents(
-      std::move(inner_contents_ptr), rfh,
-      /*remote_frame=*/mojo::NullAssociatedRemote(),
-      /*remote_frame_host_receiver=*/mojo::NullAssociatedReceiver(),
-      /*is_full_page=*/false);
+  outer_contents->AttachInnerWebContents(std::move(inner_contents_ptr), rfh,
+                                         /*is_full_page=*/false);
 
   return inner_contents;
 }
@@ -298,6 +315,16 @@ void AwaitDocumentOnLoadCompleted(WebContents* web_contents) {
   };
 
   Awaiter(web_contents).Await();
+}
+
+void FocusWebContentsOnFrame(WebContents* web_contents, RenderFrameHost* rfh) {
+  WebContentsImpl* contents = static_cast<WebContentsImpl*>(web_contents);
+  FrameTreeNode* node =
+      contents->GetPrimaryFrameTree().FindByID(rfh->GetFrameTreeNodeId());
+  CHECK(node);
+  CHECK_EQ(node->current_frame_host(), rfh);
+  contents->GetPrimaryFrameTree().SetFocusedFrame(
+      node, node->current_frame_host()->GetSiteInstance()->group());
 }
 
 MessageLoopRunner::MessageLoopRunner(QuitMode quit_mode)
@@ -342,7 +369,8 @@ void MessageLoopRunner::Quit() {
 }
 
 LoadStopObserver::LoadStopObserver(WebContents* web_contents)
-    : WebContentsObserver(web_contents) {}
+    : WebContentsObserver(web_contents),
+      run_loop_(base::RunLoop::Type::kNestableTasksAllowed) {}
 
 void LoadStopObserver::Wait() {
   if (!seen_)
@@ -583,6 +611,72 @@ ScopedContentBrowserClientSetting::ScopedContentBrowserClientSetting(
 
 ScopedContentBrowserClientSetting::~ScopedContentBrowserClientSetting() {
   SetBrowserClientForTesting(old_client_);
+}
+
+void WaitForBrowserCompositorFramePresented(WebContents* web_contents) {
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_IOS) && \
+    !defined(USE_AURA)
+  NOTREACHED();
+#else
+  base::RunLoop run_loop;
+  auto callback = base::BindOnce(
+      [](base::RepeatingClosure cb,
+         const viz::FrameTimingDetails& frame_timing_details) {
+        std::move(cb).Run();
+      },
+      run_loop.QuitClosure());
+#if BUILDFLAG(IS_ANDROID)
+  ui::WindowAndroidCompositor* compositor =
+      web_contents->GetNativeView()->GetWindowAndroid()->GetCompositor();
+  compositor->PostRequestSuccessfulPresentationTimeForNextFrame(
+      std::move(callback));
+#elif BUILDFLAG(IS_MAC)
+  auto* browser_compositor = GetBrowserCompositorMacForTesting(
+      web_contents->GetRenderWidgetHostView());
+  browser_compositor->GetCompositor()
+      ->RequestSuccessfulPresentationTimeForNextFrame(std::move(callback));
+#elif BUILDFLAG(IS_IOS)
+  auto* browser_compositor = GetBrowserCompositorIOSForTesting(
+      web_contents->GetRenderWidgetHostView());
+  browser_compositor->GetCompositor()
+      ->RequestSuccessfulPresentationTimeForNextFrame(std::move(callback));
+#elif defined(USE_AURA)
+  auto* compositor = static_cast<RenderWidgetHostViewAura*>(
+                         web_contents->GetRenderWidgetHostView())
+                         ->GetCompositor();
+  compositor->RequestSuccessfulPresentationTimeForNextFrame(
+      std::move(callback));
+#endif
+  run_loop.Run();
+#endif
+}
+
+void ForceNewCompositorFrameFromBrowser(WebContents* web_contents) {
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_IOS) && \
+    !defined(USE_AURA)
+  NOTREACHED();
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+  ui::WindowAndroid* window = web_contents->GetTopLevelNativeWindow();
+  ui::WindowAndroidCompositor* compositor = window->GetCompositor();
+  cc::slim::LayerTree* layer_tree =
+      static_cast<CompositorImpl*>(compositor)->GetLayerTreeForTesting();
+  layer_tree->SetNeedsRedrawForTesting();
+#elif BUILDFLAG(IS_MAC)
+  auto* browser_compositor = GetBrowserCompositorMacForTesting(
+      web_contents->GetRenderWidgetHostView());
+  browser_compositor->GetCompositor()->ScheduleFullRedraw();
+#elif BUILDFLAG(IS_IOS)
+  auto* browser_compositor = GetBrowserCompositorIOSForTesting(
+      web_contents->GetRenderWidgetHostView());
+  browser_compositor->GetCompositor()->ScheduleFullRedraw();
+#elif defined(USE_AURA)
+  auto* compositor = static_cast<RenderWidgetHostViewAura*>(
+                         web_contents->GetRenderWidgetHostView())
+                         ->GetCompositor();
+  compositor->ScheduleFullRedraw();
+#endif
 }
 
 }  // namespace content

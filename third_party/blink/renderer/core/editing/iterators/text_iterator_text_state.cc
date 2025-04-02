@@ -75,7 +75,7 @@ UChar TextIteratorTextState::CharacterAt(unsigned index) const {
 
 String TextIteratorTextState::GetTextForTesting() const {
   if (single_character_buffer_)
-    return String(&single_character_buffer_, 1u);
+    return String(base::span_from_ref(single_character_buffer_));
   return text_.Substring(text_start_offset_, length());
 }
 
@@ -141,7 +141,6 @@ void TextIteratorTextState::UpdatePositionOffsets(
     case PositionNodeType::kInText:
     case PositionNodeType::kNone:
       NOTREACHED();
-      return;
   }
   NOTREACHED() << static_cast<int>(position_node_type_);
 }

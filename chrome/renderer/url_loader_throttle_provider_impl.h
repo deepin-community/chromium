@@ -57,7 +57,7 @@ class URLLoaderThrottleProviderImpl : public blink::URLLoaderThrottleProvider {
 
   // blink::URLLoaderThrottleProvider implementation.
   std::unique_ptr<blink::URLLoaderThrottleProvider> Clone() override;
-  blink::WebVector<std::unique_ptr<blink::URLLoaderThrottle>> CreateThrottles(
+  std::vector<std::unique_ptr<blink::URLLoaderThrottle>> CreateThrottles(
       base::optional_ref<const blink::LocalFrameToken> local_frame_token,
       const network::ResourceRequest& request) override;
   void SetOnline(bool is_online) override;
@@ -71,8 +71,7 @@ class URLLoaderThrottleProviderImpl : public blink::URLLoaderThrottleProvider {
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
   blink::URLLoaderThrottleProviderType type_;
-  const raw_ptr<ChromeContentRendererClient, ExperimentalRenderer>
-      chrome_content_renderer_client_;
+  const raw_ptr<ChromeContentRendererClient> chrome_content_renderer_client_;
 
   mojo::PendingRemote<safe_browsing::mojom::SafeBrowsing>
       pending_safe_browsing_;

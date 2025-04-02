@@ -52,7 +52,6 @@ const base::Value::Dict* OncGetEap(const base::Value::Dict& network) {
     return eap;
   }
   NOTREACHED();
-  return nullptr;
 }
 
 base::Value::Dict* OncGetEap(base::Value::Dict* network) {

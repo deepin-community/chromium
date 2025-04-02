@@ -27,13 +27,13 @@
 #include "quiche/quic/core/crypto/tls_connection.h"
 #include "quiche/quic/core/crypto/tls_server_connection.h"
 #include "quiche/quic/core/crypto/transport_parameters.h"
+#include "quiche/quic/core/frames/quic_connection_close_frame.h"
 #include "quiche/quic/core/quic_config.h"
 #include "quiche/quic/core/quic_connection_context.h"
 #include "quiche/quic/core/quic_connection_id.h"
 #include "quiche/quic/core/quic_connection_stats.h"
 #include "quiche/quic/core/quic_crypto_server_stream_base.h"
 #include "quiche/quic/core/quic_crypto_stream.h"
-#include "quiche/quic/core/quic_error_codes.h"
 #include "quiche/quic/core/quic_time.h"
 #include "quiche/quic/core/quic_time_accumulator.h"
 #include "quiche/quic/core/quic_types.h"
@@ -75,7 +75,7 @@ class QUICHE_EXPORT TlsServerHandshaker : public TlsHandshaker,
   void OnPacketDecrypted(EncryptionLevel level) override;
   void OnOneRttPacketAcknowledged() override {}
   void OnHandshakePacketSent() override {}
-  void OnConnectionClosed(QuicErrorCode error,
+  void OnConnectionClosed(const QuicConnectionCloseFrame& frame,
                           ConnectionCloseSource source) override;
   void OnHandshakeDoneReceived() override;
   std::string GetAddressToken(
@@ -141,8 +141,12 @@ class QUICHE_EXPORT TlsServerHandshaker : public TlsHandshaker,
     return &tls_connection_;
   }
 
-  virtual void ProcessAdditionalTransportParameters(
-      const TransportParameters& /*params*/) {}
+  // Returns true if the handshake should continue. If false is returned, the
+  // caller should fail the handshake.
+  virtual bool ProcessAdditionalTransportParameters(
+      const TransportParameters& /*params*/) {
+    return true;
+  }
 
   // Called when a potentially async operation is done and the done callback
   // needs to advance the handshake.
@@ -208,6 +212,8 @@ class QUICHE_EXPORT TlsServerHandshaker : public TlsHandshaker,
   }
 
   bool WillNotCallComputeSignature() const override;
+
+  std::optional<uint16_t> GetCiphersuite() const override;
 
   void SetIgnoreTicketOpen(bool value) { ignore_ticket_open_ = value; }
 
@@ -398,6 +404,9 @@ class QUICHE_EXPORT TlsServerHandshaker : public TlsHandshaker,
 
   bool cert_matched_sni_ = false;
   TransportParameters server_params_;
+
+  // Functor for performing ALPN.  Unset if not using handshake hints.
+  ALPNSelectFunc select_alpn_;
 };
 
 }  // namespace quic

@@ -16,6 +16,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
+#include "chrome/browser/ash/login/oobe_configuration.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/enrollment/auto_enrollment_client.h"
 #include "chrome/browser/ash/policy/enrollment/auto_enrollment_client_impl.h"
@@ -234,8 +235,6 @@ AutoEnrollmentController::AutoEnrollmentController(
 AutoEnrollmentController::~AutoEnrollmentController() = default;
 
 void AutoEnrollmentController::Start() {
-  LOG(WARNING) << "Starting auto-enrollment controller.";
-
   if (state_.has_value() && IsFinalAutoEnrollmentState(state_.value())) {
     return;
   }
@@ -244,17 +243,6 @@ void AutoEnrollmentController::Start() {
     // The controller could have already subscribed on the start and now we're
     // restarting after an error.
     network_state_observation_.Observe(network_state_handler_);
-  }
-
-  if (!AutoEnrollmentTypeChecker::Initialized()) {
-    if (!auto_enrollment_check_type_init_started_) {
-      auto_enrollment_check_type_init_started_ = true;
-      AutoEnrollmentTypeChecker::Initialize(
-          shared_url_loader_factory_,
-          base::BindOnce(&AutoEnrollmentController::Start,
-                         weak_ptr_factory_.GetWeakPtr()));
-    }
-    return;
   }
 
   if (IsInProgress()) {
@@ -271,14 +259,21 @@ void AutoEnrollmentController::Start() {
     auto_enrollment_check_type_ = AutoEnrollmentTypeChecker::CheckType::
         kForcedReEnrollmentExplicitlyRequired;
 
-    device_management_service_->ScheduleInitialization(0);
+    // TODO(b/353731379): BrowserPolicyConnector::ScheduleServiceInitialization.
+    if (device_management_service_) {
+      device_management_service_->ScheduleInitialization(0);
+    } else {
+      CHECK_IS_TEST();
+    }
+
+    LOG(WARNING) << "Starting state determination";
     enrollment_state_fetcher_ = enrollment_state_fetcher_factory_.Run(
         base::BindRepeating(&AutoEnrollmentController::UpdateState,
                             weak_ptr_factory_.GetWeakPtr()),
         g_browser_process->local_state(), psm_rlwe_client_factory_,
         device_management_service_, shared_url_loader_factory_,
-        ash::SystemClockClient::Get(), state_keys_broker_,
-        device_settings_service_);
+        state_keys_broker_, device_settings_service_,
+        ash::OobeConfiguration::Get());
 
     enrollment_state_fetcher_->Start();
     return;
@@ -290,6 +285,7 @@ void AutoEnrollmentController::Start() {
   // `AutoEnrollmentController` could wait for it if requested.
   system_clock_sync_state_ = SystemClockSyncState::kCanWaitForSync;
 
+  LOG(WARNING) << "Starting legacy state determination";
   enrollment_fwmp_helper_->DetermineDevDisableBoot(
       base::BindOnce(&AutoEnrollmentController::OnDevDisableBootDetermined,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -394,13 +390,14 @@ void AutoEnrollmentController::OnOwnershipStatusCheckDone(
             kForcedReEnrollmentImplicitlyRequired:
           ++request_state_keys_tries_;
           // For FRE, request state keys first.
-          LOG(WARNING) << "Requesting state keys";
+          LOG(WARNING) << "Requesting state keys. Attempt "
+                       << request_state_keys_tries_ << ".";
           state_keys_broker_->RequestStateKeys(
               base::BindOnce(&AutoEnrollmentController::StartClientForFRE,
                              client_start_weak_factory_.GetWeakPtr()));
           break;
         case AutoEnrollmentTypeChecker::CheckType::kInitialStateDetermination:
-          LOG(WARNING) << "Start client for initial state determination";
+          LOG(WARNING) << "Start client for initial state determination.";
           StartClientForInitialEnrollment();
           break;
         case AutoEnrollmentTypeChecker::CheckType::
@@ -410,7 +407,6 @@ void AutoEnrollmentController::OnOwnershipStatusCheckDone(
           // `auto_enrollment_check_type_` indicates that an auto-enrollment
           // check should be done.
           NOTREACHED();
-          break;
       }
       return;
     case ash::DeviceSettingsService::OwnershipStatus::kOwnershipTaken:
@@ -519,7 +515,8 @@ void AutoEnrollmentController::StartClientForInitialEnrollment() {
       std::string(rlz_brand_code.value()),
       std::make_unique<psm::RlweDmserverClientImpl>(
           device_management_service_, shared_url_loader_factory_, plaintext_id,
-          psm_rlwe_client_factory_));
+          psm_rlwe_client_factory_),
+      ash::OobeConfiguration::Get());
 
   LOG(WARNING) << "Starting auto-enrollment client for Initial Enrollment.";
   client_->Start();
@@ -673,7 +670,7 @@ bool AutoEnrollmentController::IsInProgress() const {
   if (AutoEnrollmentTypeChecker::IsUnifiedStateDeterminationEnabled()) {
     if (enrollment_state_fetcher_) {
       // If a fetcher has already been created, bail out.
-      LOG(ERROR) << "Enrollment state fetcher is already running.";
+      VLOG(1) << "Enrollment state fetcher is already running.";
       return true;
     }
 
@@ -682,7 +679,7 @@ bool AutoEnrollmentController::IsInProgress() const {
 
   // If a client is being created or already existing, bail out.
   if (client_start_weak_factory_.HasWeakPtrs() || client_) {
-    LOG(ERROR) << "Enrollment state client is already running.";
+    VLOG(1) << "Enrollment state client is already running.";
     return true;
   }
 
@@ -693,7 +690,7 @@ bool AutoEnrollmentController::IsInProgress() const {
   // the timing, or the timer is extended to some other steps, the check will
   // become wrong.
   if (safeguard_timer_.IsRunning()) {
-    LOG(ERROR) << "State determination is already running.";
+    VLOG(1) << "State determination is already running.";
     return true;
   }
 
@@ -709,6 +706,12 @@ void AutoEnrollmentController::SetEnrollmentStateFetcherFactoryForTesting(
     enrollment_state_fetcher_factory_ =
         base::BindRepeating(EnrollmentStateFetcher::Create);
   }
+}
+
+bool AutoEnrollmentController::IsGuestSigninAllowed() const {
+  return auto_enrollment_check_type_ !=
+         AutoEnrollmentTypeChecker::CheckType::
+             kForcedReEnrollmentExplicitlyRequired;
 }
 
 }  // namespace policy

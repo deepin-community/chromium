@@ -92,13 +92,19 @@ class VizMainImpl : public mojom::VizMain {
     // We use a |PowerMonitorSource| here instead of a boolean flag so that
     // tests can use mocks and fakes for testing.
     mutable std::unique_ptr<base::PowerMonitorSource> power_monitor_source;
-    raw_ptr<gpu::SyncPointManager> sync_point_manager = nullptr;
-    raw_ptr<gpu::SharedImageManager> shared_image_manager = nullptr;
-    raw_ptr<gpu::Scheduler> scheduler = nullptr;
     raw_ptr<base::WaitableEvent> shutdown_event = nullptr;
     scoped_refptr<base::SingleThreadTaskRunner> io_thread_task_runner;
     std::unique_ptr<ukm::MojoUkmRecorder> ukm_recorder;
+#if BUILDFLAG(IS_ANDROID)
+    // GpuServiceImpl normally creates the below objects internally. However,
+    // on Android WebView it is created by the embedder.
+    raw_ptr<gpu::SyncPointManager> sync_point_manager = nullptr;
+    raw_ptr<gpu::SharedImageManager> shared_image_manager = nullptr;
+    raw_ptr<gpu::Scheduler> scheduler = nullptr;
     raw_ptr<VizCompositorThreadRunner> viz_compositor_thread_runner = nullptr;
+    raw_ptr<const gpu::SharedContextState::GrContextOptionsProvider>
+        gr_context_options_provider = nullptr;
+#endif
   };
 
   VizMainImpl(Delegate* delegate,
@@ -121,7 +127,11 @@ class VizMainImpl : public mojom::VizMain {
           discardable_memory::mojom::DiscardableSharedMemoryManager>
           discardable_memory_manager,
       base::UnsafeSharedMemoryRegion use_shader_cache_shm_region,
-      gfx::FontRenderParams::SubpixelRendering subpixel_rendering) override;
+      mojom::GpuServiceCreationParamsPtr params) override;
+  void SetRenderParams(
+      gfx::FontRenderParams::SubpixelRendering subpixel_rendering,
+      float text_contrast,
+      float text_gamma) override;
 #if BUILDFLAG(IS_WIN)
   void CreateInfoCollectionGpuService(
       mojo::PendingReceiver<mojom::InfoCollectionGpuService> pending_receiver)
@@ -154,6 +164,7 @@ class VizMainImpl : public mojom::VizMain {
 
  private:
   void CreateFrameSinkManagerInternal(mojom::FrameSinkManagerParamsPtr params);
+  void RequestBeginFrameForGpuService(bool toggle);
 
   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner() const {
     return io_thread_ ? io_thread_->task_runner()

@@ -6,30 +6,31 @@
 // CLDeviceVk.cpp: Implements the class methods for CLDeviceVk.
 
 #include "libANGLE/renderer/vulkan/CLDeviceVk.h"
-#include "libANGLE/renderer/vulkan/CLPlatformVk.h"
-#include "libANGLE/renderer/vulkan/RendererVk.h"
+#include "libANGLE/renderer/vulkan/clspv_utils.h"
+#include "libANGLE/renderer/vulkan/vk_renderer.h"
 
-#include "libANGLE/Display.h"
+#include "libANGLE/renderer/cl_types.h"
+
 #include "libANGLE/cl_utils.h"
 
 namespace rx
 {
 
-CLDeviceVk::CLDeviceVk(const cl::Device &device, RendererVk *renderer)
-    : CLDeviceImpl(device), mRenderer(renderer)
+CLDeviceVk::CLDeviceVk(const cl::Device &device, vk::Renderer *renderer)
+    : CLDeviceImpl(device), mRenderer(renderer), mSpirvVersion(ClspvGetSpirvVersion(renderer))
 {
     const VkPhysicalDeviceProperties &props = mRenderer->getPhysicalDeviceProperties();
 
     // Setup initial device mInfo fields
     // TODO(aannestrand) Create cl::Caps and use for device creation
-    // http://anglebug.com/8529
+    // http://anglebug.com/42266954
     mInfoString = {
         {cl::DeviceInfo::Name, std::string(props.deviceName)},
         {cl::DeviceInfo::Vendor, mRenderer->getVendorString()},
         {cl::DeviceInfo::DriverVersion, mRenderer->getVersionString(true)},
         {cl::DeviceInfo::Version, std::string("OpenCL 3.0 " + mRenderer->getVersionString(true))},
         {cl::DeviceInfo::Profile, std::string("FULL_PROFILE")},
-        {cl::DeviceInfo::OpenCL_C_Version, std::string("OpenCL C 3.0 ")},
+        {cl::DeviceInfo::OpenCL_C_Version, std::string("OpenCL C 1.2 ")},
         {cl::DeviceInfo::LatestConformanceVersionPassed, std::string("FIXME")}};
     mInfoSizeT = {
         {cl::DeviceInfo::MaxWorkGroupSize, props.limits.maxComputeWorkGroupInvocations},
@@ -37,7 +38,7 @@ CLDeviceVk::CLDeviceVk(const cl::Device &device, RendererVk *renderer)
         {cl::DeviceInfo::GlobalVariablePreferredTotalSize, 0},
 
         // TODO(aannestrand) Update these hardcoded platform/device queries
-        // http://anglebug.com/8511
+        // http://anglebug.com/42266935
         {cl::DeviceInfo::MaxParameterSize, 1024},
         {cl::DeviceInfo::ProfilingTimerResolution, 1},
         {cl::DeviceInfo::PrintfBufferSize, 1024 * 1024},
@@ -52,7 +53,7 @@ CLDeviceVk::CLDeviceVk(const cl::Device &device, RendererVk *renderer)
         {cl::DeviceInfo::QueueOnHostProperties, CL_QUEUE_PROFILING_ENABLE},
 
         // TODO(aannestrand) Update these hardcoded platform/device queries
-        // http://anglebug.com/8511
+        // http://anglebug.com/42266935
         {cl::DeviceInfo::HalfFpConfig, 0},
         {cl::DeviceInfo::DoubleFpConfig, 0},
         {cl::DeviceInfo::GlobalMemCacheSize, 0},
@@ -61,15 +62,18 @@ CLDeviceVk::CLDeviceVk(const cl::Device &device, RendererVk *renderer)
         {cl::DeviceInfo::SingleFpConfig, CL_FP_ROUND_TO_NEAREST | CL_FP_INF_NAN | CL_FP_FMA},
         {cl::DeviceInfo::AtomicMemoryCapabilities,
          CL_DEVICE_ATOMIC_ORDER_RELAXED | CL_DEVICE_ATOMIC_SCOPE_WORK_GROUP},
+        // TODO (http://anglebug.com/379669750) Add these based on the Vulkan features query
         {cl::DeviceInfo::AtomicFenceCapabilities, CL_DEVICE_ATOMIC_ORDER_RELAXED |
-                                                      CL_DEVICE_ATOMIC_SCOPE_WORK_ITEM |
-                                                      CL_DEVICE_ATOMIC_SCOPE_WORK_GROUP},
+                                                      CL_DEVICE_ATOMIC_ORDER_ACQ_REL |
+                                                      CL_DEVICE_ATOMIC_SCOPE_WORK_GROUP |
+                                                      // non-mandatory
+                                                      CL_DEVICE_ATOMIC_SCOPE_WORK_ITEM},
     };
     mInfoUInt = {
         {cl::DeviceInfo::VendorID, props.vendorID},
-        {cl::DeviceInfo::MaxReadImageArgs, props.limits.maxPerStageDescriptorSampledImages},
-        {cl::DeviceInfo::MaxWriteImageArgs, props.limits.maxPerStageDescriptorStorageImages},
-        {cl::DeviceInfo::MaxReadWriteImageArgs, props.limits.maxPerStageDescriptorStorageImages},
+        {cl::DeviceInfo::MaxReadImageArgs, cl::IMPLEMENATION_MAX_READ_IMAGES},
+        {cl::DeviceInfo::MaxWriteImageArgs, cl::IMPLEMENATION_MAX_WRITE_IMAGES},
+        {cl::DeviceInfo::MaxReadWriteImageArgs, cl::IMPLEMENATION_MAX_WRITE_IMAGES},
         {cl::DeviceInfo::GlobalMemCachelineSize,
          static_cast<cl_uint>(props.limits.nonCoherentAtomSize)},
         {cl::DeviceInfo::Available, CL_TRUE},
@@ -88,11 +92,13 @@ CLDeviceVk::CLDeviceVk(const cl::Device &device, RendererVk *renderer)
         {cl::DeviceInfo::ExecutionCapabilities, CL_EXEC_KERNEL},
 
         // TODO(aannestrand) Update these hardcoded platform/device queries
-        // http://anglebug.com/8511
-        {cl::DeviceInfo::AddressBits, 64},
+        // http://anglebug.com/42266935
+        {cl::DeviceInfo::AddressBits, 32},
         {cl::DeviceInfo::EndianLittle, CL_TRUE},
         {cl::DeviceInfo::LocalMemType, CL_LOCAL},
-        {cl::DeviceInfo::MaxSamplers, 0},
+        // TODO (http://anglebug.com/379669750) Vulkan reports a big sampler count number, we dont
+        // need that many and set it to minimum req for now.
+        {cl::DeviceInfo::MaxSamplers, 16u},
         {cl::DeviceInfo::MaxConstantArgs, 8},
         {cl::DeviceInfo::MaxNumSubGroups, 0},
         {cl::DeviceInfo::MaxComputeUnits, 4},
@@ -139,20 +145,19 @@ CLDeviceImpl::Info CLDeviceVk::createInfo(cl::DeviceType type) const
     info.maxWorkItemSizes.push_back(properties.limits.maxComputeWorkGroupSize[2]);
 
     // TODO(aannestrand) Update these hardcoded platform/device queries
-    // http://anglebug.com/8511
+    // http://anglebug.com/42266935
     info.maxMemAllocSize  = 1 << 30;
     info.memBaseAddrAlign = 1024;
 
-    // TODO(aannestrand) Add image and sampler support later
-    // http://anglebug.com/8512
-    info.imageSupport = CL_FALSE;
+    info.imageSupport = CL_TRUE;
 
-    info.image2D_MaxWidth          = properties.limits.maxImageDimension2D;
-    info.image2D_MaxHeight         = properties.limits.maxImageDimension2D;
-    info.image3D_MaxWidth          = properties.limits.maxImageDimension3D;
-    info.image3D_MaxHeight         = properties.limits.maxImageDimension3D;
-    info.image3D_MaxDepth          = properties.limits.maxImageDimension3D;
-    info.imageMaxBufferSize        = properties.limits.maxImageDimension1D;
+    info.image2D_MaxWidth  = properties.limits.maxImageDimension2D;
+    info.image2D_MaxHeight = properties.limits.maxImageDimension2D;
+    info.image3D_MaxWidth  = properties.limits.maxImageDimension3D;
+    info.image3D_MaxHeight = properties.limits.maxImageDimension3D;
+    info.image3D_MaxDepth  = properties.limits.maxImageDimension3D;
+    // TODO (http://anglebug.com/379669750) For now set it minimum requirement.
+    info.imageMaxBufferSize        = 65536;
     info.imageMaxArraySize         = properties.limits.maxImageArrayLayers;
     info.imagePitchAlignment       = 0u;
     info.imageBaseAddressAlignment = 0u;
@@ -162,27 +167,60 @@ CLDeviceImpl::Info CLDeviceVk::createInfo(cl::DeviceType type) const
     info.builtInKernels       = "";
     info.version              = CL_MAKE_VERSION(3, 0, 0);
     info.versionStr           = "OpenCL 3.0 " + mRenderer->getVersionString(true);
-    info.OpenCL_C_AllVersions = {{CL_MAKE_VERSION(3, 0, 0), "OpenCL C"},
-                                 {CL_MAKE_VERSION(2, 0, 0), "OpenCL C"},
-                                 {CL_MAKE_VERSION(1, 2, 0), "OpenCL C"},
+    info.OpenCL_C_AllVersions = {{CL_MAKE_VERSION(1, 0, 0), "OpenCL C"},
                                  {CL_MAKE_VERSION(1, 1, 0), "OpenCL C"},
-                                 {CL_MAKE_VERSION(1, 0, 0), "OpenCL C"}};
+                                 {CL_MAKE_VERSION(1, 2, 0), "OpenCL C"},
+                                 {CL_MAKE_VERSION(3, 0, 0), "OpenCL C"}};
 
     info.OpenCL_C_Features         = {};
-    info.extensionsWithVersion     = {};
     info.ILsWithVersion            = {};
     info.builtInKernelsWithVersion = {};
     info.partitionProperties       = {};
     info.partitionType             = {};
     info.IL_Version                = "";
 
-    // Below extensions are required as of OpenCL 1.1
-    info.extensions =
-        "cl_khr_byte_addressable_store "
-        "cl_khr_global_int32_base_atomics "
-        "cl_khr_global_int32_extended_atomics "
-        "cl_khr_local_int32_base_atomics "
-        "cl_khr_local_int32_extended_atomics ";
+    // Below extensions are required as of OpenCL 1.1, add their versioned strings
+    NameVersionVector versionedExtensionList = {
+        // Below extensions are required as of OpenCL 1.1
+        cl_name_version{.version = CL_MAKE_VERSION(1, 0, 0),
+                        .name    = "cl_khr_byte_addressable_store"},
+        cl_name_version{.version = CL_MAKE_VERSION(1, 0, 0),
+                        .name    = "cl_khr_global_int32_base_atomics"},
+        cl_name_version{.version = CL_MAKE_VERSION(1, 0, 0),
+                        .name    = "cl_khr_global_int32_extended_atomics"},
+        cl_name_version{.version = CL_MAKE_VERSION(1, 0, 0),
+                        .name    = "cl_khr_local_int32_base_atomics"},
+        cl_name_version{.version = CL_MAKE_VERSION(1, 0, 0),
+                        .name    = "cl_khr_local_int32_extended_atomics"},
+    };
+    if (info.imageSupport && info.image3D_MaxDepth > 1)
+    {
+        versionedExtensionList.push_back(
+            cl_name_version{.version = CL_MAKE_VERSION(1, 0, 0), .name = "cl_khr_3d_image_writes"});
+    }
+    info.initializeVersionedExtensions(std::move(versionedExtensionList));
+
+    if (!mRenderer->getFeatures().supportsUniformBufferStandardLayout.enabled)
+    {
+        ERR() << "VK_KHR_uniform_buffer_standard_layout extension support is needed to properly "
+                 "support uniform buffers. Otherwise, you must disable OpenCL.";
+    }
+
+    // Populate supported features
+    if (info.imageSupport)
+    {
+        info.OpenCL_C_Features.push_back(
+            cl_name_version{.version = CL_MAKE_VERSION(3, 0, 0), .name = "__opencl_c_images"});
+        info.OpenCL_C_Features.push_back(cl_name_version{.version = CL_MAKE_VERSION(3, 0, 0),
+                                                         .name    = "__opencl_c_3d_image_writes"});
+        info.OpenCL_C_Features.push_back(cl_name_version{.version = CL_MAKE_VERSION(3, 0, 0),
+                                                         .name = "__opencl_c_read_write_images"});
+    }
+    if (mRenderer->getEnabledFeatures().features.shaderInt64)
+    {
+        info.OpenCL_C_Features.push_back(
+            cl_name_version{.version = CL_MAKE_VERSION(3, 0, 0), .name = "__opencl_c_int64"});
+    }
 
     return info;
 }
@@ -244,6 +282,38 @@ angle::Result CLDeviceVk::createSubDevices(const cl_device_partition_property *p
 {
     UNIMPLEMENTED();
     ANGLE_CL_RETURN_ERROR(CL_OUT_OF_RESOURCES);
+}
+
+cl::WorkgroupSize CLDeviceVk::selectWorkGroupSize(const cl::NDRange &ndrange) const
+{
+    // Limit total work-group size to the Vulkan device's limit
+    const VkPhysicalDeviceProperties &props = mRenderer->getPhysicalDeviceProperties();
+    uint32_t maxSize = static_cast<uint32_t>(mInfoSizeT.at(cl::DeviceInfo::MaxWorkGroupSize));
+    maxSize          = std::min(maxSize, 64u);
+
+    bool keepIncreasing         = false;
+    cl::WorkgroupSize localSize = {1, 1, 1};
+    do
+    {
+        keepIncreasing = false;
+        for (cl_uint i = 0; i < ndrange.workDimensions; i++)
+        {
+            cl::WorkgroupSize newLocalSize = localSize;
+            newLocalSize[i] *= 2;
+
+            // TODO: Add support for non-uniform WGS
+            // http://anglebug.com/42267067
+            if (ndrange.globalWorkSize[i] % newLocalSize[i] == 0 &&
+                newLocalSize[i] <= props.limits.maxComputeWorkGroupCount[i] &&
+                newLocalSize[0] * newLocalSize[1] * newLocalSize[2] <= maxSize)
+            {
+                localSize      = newLocalSize;
+                keepIncreasing = true;
+            }
+        }
+    } while (keepIncreasing);
+
+    return localSize;
 }
 
 }  // namespace rx

@@ -27,8 +27,6 @@
 
 #include "src/tint/lang/core/ir/transform/demote_to_helper.h"
 
-#include <utility>
-
 #include "src/tint/lang/core/ir/builder.h"
 #include "src/tint/lang/core/ir/module.h"
 #include "src/tint/lang/core/ir/validator.h"
@@ -191,10 +189,10 @@ struct State {
                 [&](Return* ret) {
                     // Insert a conditional terminate invocation instruction before each return
                     // instruction in the entry point function.
-                    if (ret->Func()->Stage() == Function::PipelineStage::kFragment) {
+                    if (ret->Func()->IsFragment()) {
                         b.InsertBefore(ret, [&] {
                             auto* cond = b.Load(continue_execution);
-                            auto* ifelse = b.If(b.Equal(ty.bool_(), cond, false));
+                            auto* ifelse = b.If(b.Not<bool>(cond));
                             b.Append(ifelse->True(), [&] {  //
                                 b.TerminateInvocation();
                             });
@@ -216,7 +214,7 @@ struct State {
 }  // namespace
 
 Result<SuccessType> DemoteToHelper(Module& ir) {
-    auto result = ValidateAndDumpIfNeeded(ir, "DemoteToHelper transform");
+    auto result = ValidateAndDumpIfNeeded(ir, "core.DemoteToHelper", kDemoteToHelperCapabilities);
     if (result != Success) {
         return result;
     }

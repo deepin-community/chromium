@@ -27,6 +27,9 @@
 
 #include "third_party/blink/renderer/core/editing/commands/editor_command.h"
 
+#include <array>
+#include <iterator>
+
 #include "base/metrics/histogram_functions.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
@@ -47,6 +50,7 @@
 #include "third_party/blink/renderer/core/editing/commands/remove_format_command.h"
 #include "third_party/blink/renderer/core/editing/commands/style_commands.h"
 #include "third_party/blink/renderer/core/editing/commands/typing_command.h"
+#include "third_party/blink/renderer/core/editing/commands/undo_stack.h"
 #include "third_party/blink/renderer/core/editing/commands/unlink_command.h"
 #include "third_party/blink/renderer/core/editing/editing_tri_state.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
@@ -79,8 +83,6 @@
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
-
-#include <iterator>
 
 namespace blink {
 
@@ -146,6 +148,8 @@ InputEvent::InputType InputTypeFromCommandType(EditingCommandType command_type,
       return InputType::kInsertOrderedList;
     case CommandType::kInsertUnorderedList:
       return InputType::kInsertUnorderedList;
+    case CommandType::kCreateLink:
+      return InputType::kInsertLink;
 
     // Deletion.
     case CommandType::kDelete:
@@ -285,7 +289,6 @@ static bool ExecuteApplyParagraphStyle(LocalFrame& frame,
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 bool ExpandSelectionToGranularity(LocalFrame& frame,
@@ -434,7 +437,6 @@ static bool ExecuteDelete(LocalFrame& frame,
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 static bool DeleteWithDirection(LocalFrame& frame,
@@ -446,42 +448,33 @@ static bool DeleteWithDirection(LocalFrame& frame,
   if (!editor.CanEdit())
     return false;
 
-  EditingState editing_state;
   if (frame.Selection()
           .ComputeVisibleSelectionInDOMTreeDeprecated()
-          .IsRange()) {
-    if (is_typing_action) {
-      DCHECK(frame.GetDocument());
-      TypingCommand::DeleteKeyPressed(
-          *frame.GetDocument(),
-          CanSmartCopyOrDelete(frame) ? TypingCommand::kSmartDelete : 0,
-          granularity);
-      editor.RevealSelectionAfterEditingOperation();
-    } else {
-      if (kill_ring)
-        editor.AddToKillRing(editor.SelectedRange());
-      editor.DeleteSelectionWithSmartDelete(
-          CanSmartCopyOrDelete(frame) ? DeleteMode::kSmart
-                                      : DeleteMode::kSimple,
-          DeletionInputTypeFromTextGranularity(direction, granularity));
-      // Implicitly calls revealSelectionAfterEditingOperation().
+          .IsRange() &&
+      !is_typing_action) {
+    if (kill_ring) {
+      editor.AddToKillRing(editor.SelectedRange());
     }
+    editor.DeleteSelectionWithSmartDelete(
+        CanSmartCopyOrDelete(frame) ? DeleteMode::kSmart : DeleteMode::kSimple,
+        DeletionInputTypeFromTextGranularity(direction, granularity));
+    // Implicitly calls revealSelectionAfterEditingOperation().
   } else {
+    EditingState editing_state;
     TypingCommand::Options options = 0;
     if (CanSmartCopyOrDelete(frame))
       options |= TypingCommand::kSmartDelete;
     if (kill_ring)
       options |= TypingCommand::kKillRing;
+    DCHECK(frame.GetDocument());
     switch (direction) {
       case DeleteDirection::kForward:
-        DCHECK(frame.GetDocument());
         TypingCommand::ForwardDeleteKeyPressed(
             *frame.GetDocument(), &editing_state, options, granularity);
         if (editing_state.IsAborted())
           return false;
         break;
       case DeleteDirection::kBackward:
-        DCHECK(frame.GetDocument());
         TypingCommand::DeleteKeyPressed(*frame.GetDocument(), options,
                                         granularity);
         break;
@@ -618,7 +611,9 @@ static bool ExecuteFindString(LocalFrame& frame,
                               Event*,
                               EditorCommandSource,
                               const String& value) {
-  return Editor::FindString(frame, value, kCaseInsensitive | kWrapAround);
+  return Editor::FindString(
+      frame, value,
+      FindOptions().SetCaseInsensitive(true).SetWrappingAround(true));
 }
 
 static bool ExecuteFormatBlock(LocalFrame& frame,
@@ -666,7 +661,6 @@ static bool ExecuteForwardDelete(LocalFrame& frame,
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 static bool ExecuteIgnoreSpelling(LocalFrame& frame,
@@ -832,7 +826,10 @@ static bool ExecuteSelectAll(LocalFrame& frame,
       source == EditorCommandSource::kMenuOrKeyBinding
           ? SetSelectionBy::kUser
           : SetSelectionBy::kSystem;
-  frame.Selection().SelectAll(set_selection_by);
+  frame.Selection().SelectAll(
+      set_selection_by,
+      /* canonicalize_selection */ RuntimeEnabledFeatures::
+          RemoveVisibleSelectionInDOMSelectionEnabled());
   return true;
 }
 
@@ -1173,7 +1170,6 @@ static bool EnabledDelete(LocalFrame& frame,
       return EnabledInEditableText(frame, event, source);
   }
   NOTREACHED();
-  return false;
 }
 
 static bool EnabledInRichlyEditableText(LocalFrame& frame,
@@ -1363,7 +1359,6 @@ static String ValueDefaultParagraphSeparator(const EditorInternalCommand&,
   }
 
   NOTREACHED();
-  return String();
 }
 
 static String ValueFormatBlock(const EditorInternalCommand&,
@@ -1392,7 +1387,7 @@ static bool CanNotExecuteWhenDisabled(LocalFrame&, EditorCommandSource) {
 
 static const EditorInternalCommand* InternalCommand(
     const String& command_name) {
-  static const EditorInternalCommand kEditorCommands[] = {
+  static const auto kEditorCommands = std::to_array<EditorInternalCommand>({
       // Lists all commands in blink::EditingCommandType.
       // Must be ordered by |commandType| for index lookup.
       // Covered by unit tests in editing_command_test.cc
@@ -1899,7 +1894,7 @@ static const EditorInternalCommand* InternalCommand(
        ClipboardCommands::ExecutePasteFromImageURL,
        SupportedFromMenuOrKeyBinding, EnabledInEditableText, StateNone,
        ValueStateOrNull, kNotTextInsertion, CanNotExecuteWhenDisabled},
-  };
+  });
   // Handles all commands except EditingCommandType::Invalid.
   static_assert(
       std::size(kEditorCommands) + 1 ==
@@ -2031,10 +2026,28 @@ bool EditorCommand::Execute(const String& parameter,
     InputEvent::InputType input_type =
         InputTypeFromCommandType(command_->command_type, *frame_);
     if (input_type != InputEvent::InputType::kNone) {
-      if (DispatchBeforeInputEditorCommand(
-              EventTargetNodeForDocument(frame_->GetDocument()), input_type,
-              GetTargetRanges()) != DispatchEventResult::kNotCanceled)
+      UndoStep* undo_step = nullptr;
+      // The node associated with the Undo/Redo command may not necessarily be
+      // the currently focused node. See
+      // https://issues.chromium.org/issues/326117120 for more details.
+      if (RuntimeEnabledFeatures::
+              UseUndoStepElementDispatchBeforeInputEnabled()) {
+        if (command_->command_type == EditingCommandType::kUndo &&
+            frame_->GetEditor().CanUndo()) {
+          undo_step = *frame_->GetEditor().GetUndoStack().UndoSteps().begin();
+        } else if (command_->command_type == EditingCommandType::kRedo &&
+                   frame_->GetEditor().CanRedo()) {
+          undo_step = *frame_->GetEditor().GetUndoStack().RedoSteps().begin();
+        }
+      }
+      Node* target_node =
+          undo_step ? undo_step->StartingRootEditableElement()
+                    : EventTargetNodeForDocument(frame_->GetDocument());
+      if (DispatchBeforeInputEditorCommand(target_node, input_type,
+                                           GetTargetRanges()) !=
+          DispatchEventResult::kNotCanceled) {
         return true;
+      }
       // 'beforeinput' event handler may destroy target frame.
       if (frame_->GetDocument()->GetFrame() != frame_)
         return false;
@@ -2115,7 +2128,6 @@ bool EditorCommand::IsSupported() const {
       return command_->is_supported_from_dom(frame_);
   }
   NOTREACHED();
-  return false;
 }
 
 bool EditorCommand::IsEnabled(Event* triggering_event) const {

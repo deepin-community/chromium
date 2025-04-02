@@ -23,15 +23,20 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "third_party/blink/renderer/platform/wtf/text/encoding_tables.h"
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
 
-#include <memory>
-#include <mutex>
+#include "third_party/blink/renderer/platform/wtf/text/encoding_tables.h"
 
 #include <unicode/ucnv.h>
 
+#include <algorithm>
+#include <memory>
+#include <mutex>
+
 #include "base/feature_list.h"
-#include "base/ranges/algorithm.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
@@ -193,7 +198,7 @@ const Jis0208EncodeIndex& EnsureJis0208EncodeIndexForEncode() {
     auto& index = EnsureJis0208EncodeIndexForDecode();
     for (size_t i = 0; i < index.size(); ++i)
       (*table)[i] = {index[i].second, index[i].first};
-    base::ranges::stable_sort(*table, CompareFirst{});
+    std::ranges::stable_sort(*table, CompareFirst{});
   });
   return *table;
 }
@@ -296,7 +301,7 @@ const EucKrEncodeIndex& EnsureEucKrEncodeIndexForEncode() {
     auto& index = EnsureEucKrEncodeIndexForDecode();
     for (size_t i = 0; i < index.size(); ++i)
       (*table)[i] = {index[i].second, index[i].first};
-    base::ranges::sort(*table, CompareFirst{});
+    std::ranges::sort(*table, CompareFirst{});
     DCHECK(SortedFirstsAreUnique(*table));
   });
   return *table;
@@ -333,29 +338,27 @@ const Gb18030EncodeTable& EnsureGb18030EncodeTable() {
     DCHECK_EQ((*array)[6555], 0x3000);
   });
 
-  if (base::FeatureList::IsEnabled(blink::features::kGb18030_2022Enabled)) {
-    constexpr std::array<std::pair<size_t, UChar>, 18> kGb18030_2022Differences{
-        {{7182, 0xfe10},
-         {7183, 0xfe12},
-         {7184, 0xfe11},
-         {7185, 0xfe13},
-         {7186, 0xfe14},
-         {7187, 0xfe15},
-         {7188, 0xfe16},
-         {7201, 0xfe17},
-         {7202, 0xfe18},
-         {7208, 0xfe19},
-         {23775, 0x9fb4},
-         {23783, 0x9fb5},
-         {23788, 0x9fb6},
-         {23789, 0x9fb7},
-         {23795, 0x9fb8},
-         {23812, 0x9fb9},
-         {23829, 0x9fba},
-         {23845, 0x9fbb}}};
-    for (auto& pair : kGb18030_2022Differences) {
-      (*array)[pair.first] = pair.second;
-    }
+  constexpr std::array<std::pair<size_t, UChar>, 18> kGb18030_2022Differences{
+      {{7182, 0xfe10},
+       {7183, 0xfe12},
+       {7184, 0xfe11},
+       {7185, 0xfe13},
+       {7186, 0xfe14},
+       {7187, 0xfe15},
+       {7188, 0xfe16},
+       {7201, 0xfe17},
+       {7202, 0xfe18},
+       {7208, 0xfe19},
+       {23775, 0x9fb4},
+       {23783, 0x9fb5},
+       {23788, 0x9fb6},
+       {23789, 0x9fb7},
+       {23795, 0x9fb8},
+       {23812, 0x9fb9},
+       {23829, 0x9fba},
+       {23845, 0x9fbb}}};
+  for (auto& pair : kGb18030_2022Differences) {
+    (*array)[pair.first] = pair.second;
   }
 
   return *array;
@@ -372,7 +375,7 @@ const Gb18030EncodeIndex& EnsureGb18030EncodeIndexForEncode() {
     auto& index = EnsureGb18030EncodeTable();
     for (uint16_t i = 0; i < index.size(); ++i)
       (*table)[i] = {index[i], i};
-    base::ranges::stable_sort(*table, CompareFirst{});
+    std::ranges::stable_sort(*table, CompareFirst{});
   });
   return *table;
 }

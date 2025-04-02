@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <string_view>
+
 #include "base/auto_reset.h"
 #include "base/check_deref.h"
 #include "base/containers/map_util.h"
@@ -14,10 +16,12 @@
 #include "chrome/browser/extensions/api/document_scan/scanner_discovery_runner.h"
 #include "chrome/browser/extensions/api/document_scan/start_scan_runner.h"
 #include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/crosapi/mojom/document_scan.mojom.h"
-#include "chromeos/lacros/lacros_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/common/constants.h"
@@ -27,6 +31,8 @@
 namespace extensions {
 
 namespace {
+
+constexpr size_t kRealBackendMinimumReadSize = 32768;
 
 // Enum used to initialize the parameterized test with different types of
 // extensions.
@@ -40,7 +46,7 @@ enum class ExtensionType {
 // manifest file names to create an extension of that type. The actual location
 // of these files is at //chrome/test/data/extensions/api_test/document_scan/.
 static constexpr auto kManifestFileNames =
-    base::MakeFixedFlatMap<ExtensionType, base::StringPiece>(
+    base::MakeFixedFlatMap<ExtensionType, std::string_view>(
         {{ExtensionType::kChromeApp, "manifest_chrome_app.json"},
          {ExtensionType::kExtensionMV2, "manifest_extension_v2.json"},
          {ExtensionType::kExtensionMV3, "manifest_extension_v3.json"}});
@@ -103,14 +109,10 @@ class DocumentScanApiTest : public ExtensionApiTest,
   void SetUpOnMainThread() override {
     ExtensionApiTest::SetUpOnMainThread();
 
-    // Replace the production DocumentScanAsh with a mock for testing.
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    chromeos::LacrosService::Get()->InjectRemoteForTesting(
-        receiver_.BindNewPipeAndPassRemote());
-#else
     DocumentScanAPIHandler::Get(browser()->profile())
         ->SetDocumentScanForTesting(&document_scan_ash_);
-#endif
+
+    document_scan()->SetSmallestMaxReadSize(kRealBackendMinimumReadSize);
   }
 
  protected:
@@ -129,9 +131,6 @@ class DocumentScanApiTest : public ExtensionApiTest,
 
  private:
   FakeDocumentScanAsh document_scan_ash_;
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  mojo::Receiver<crosapi::mojom::DocumentScan> receiver_{&document_scan_ash_};
-#endif
 };
 
 IN_PROC_BROWSER_TEST_P(DocumentScanApiTest, TestLoadPermissions) {
@@ -162,6 +161,9 @@ IN_PROC_BROWSER_TEST_P(DocumentScanApiTest, PerformScan_PermissionAllowed) {
   base::AutoReset<std::optional<bool>> testing_scope =
       StartScanRunner::SetStartScanConfirmationResultForTesting(true);
   document_scan()->AddScanner(CreateTestScannerInfo());
+  const std::vector<std::string> scan_data = {"img", "data", "img", "data", ""};
+  document_scan()->SetReadScanDataResponses(
+      scan_data, crosapi::mojom::ScannerOperationResult::kEndOfData);
   RunTest("perform_scan.html");
   // TODO(b/313494616): Load a second extension to verify (lack of)
   // cross-extension handle sharing.
@@ -175,11 +177,11 @@ IN_PROC_BROWSER_TEST_P(DocumentScanApiTest, PerformScan_ExtensionTrusted) {
   base::AutoReset<std::optional<bool>> testing_scope =
       StartScanRunner::SetStartScanConfirmationResultForTesting(false);
   document_scan()->AddScanner(CreateTestScannerInfo());
+  const std::vector<std::string> scan_data = {"img", "data", "img", "data", ""};
+  document_scan()->SetReadScanDataResponses(
+      scan_data, crosapi::mojom::ScannerOperationResult::kEndOfData);
   RunTest("perform_scan.html");
 }
-
-// TODO (b/313494616): Add a test that checks for the expected unsupported
-// response when the AdvancedDocumentScan flag is disabled.
 
 INSTANTIATE_TEST_SUITE_P(/**/,
                          DocumentScanApiTest,

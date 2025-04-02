@@ -136,7 +136,6 @@ bool IsValidMathMLScript(const BlockNode& node) {
       return IsValidMultiscript(node);
     default:
       NOTREACHED();
-      return false;
   }
 }
 

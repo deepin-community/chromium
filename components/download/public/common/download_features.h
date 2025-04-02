@@ -23,9 +23,6 @@ COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(
     kSmartSuggestionForLargeDownloads);
 #endif
 
-// Whether downloads uses Android Jobs API instead of FGS.
-COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(kDownloadsMigrateToJobsAPI);
-
 // Whether download notification service uses new unified API based on offline
 // item and native persistence of notification IDs.
 COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(
@@ -55,10 +52,11 @@ COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(kDeleteOverwrittenDownloads);
 // Whether to allow changing the size of file buffer.
 COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(kAllowFileBufferSizeControl);
 
-#if BUILDFLAG(IS_ANDROID)
-// Whether to make pdf download from a link a transient download.
-COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(kTransientPdfLinkDownload);
-#endif  // BUILDFLAG(IS_ANDROID)
+// Whether mixed-content PDF links can be downloaded if opening inline.
+COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(kAllowedMixedContentInlinePdf);
+
+// Whether to write filename to the clipboard when copying image downloads.
+COMPONENTS_DOWNLOAD_EXPORT BASE_DECLARE_FEATURE(kCopyImageFilenameToClipboard);
 }  // namespace features
 
 }  // namespace download

@@ -5,6 +5,7 @@
 #include "components/component_updater/installer_policies/first_party_sets_component_installer_policy.h"
 
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include "base/files/file.h"
@@ -166,9 +167,8 @@ base::FilePath FirstPartySetsComponentInstallerPolicy::GetRelativeInstallDir()
 // static
 void FirstPartySetsComponentInstallerPolicy::GetPublicKeyHash(
     std::vector<uint8_t>* hash) {
-  hash->assign(kFirstPartySetsPublicKeySHA256,
-               kFirstPartySetsPublicKeySHA256 +
-                   std::size(kFirstPartySetsPublicKeySHA256));
+  hash->assign(std::begin(kFirstPartySetsPublicKeySHA256),
+               std::end(kFirstPartySetsPublicKeySHA256));
 }
 
 void FirstPartySetsComponentInstallerPolicy::GetHash(
@@ -194,7 +194,7 @@ void FirstPartySetsComponentInstallerPolicy::ResetForTesting() {
 void FirstPartySetsComponentInstallerPolicy::WriteComponentForTesting(
     base::Version version,
     const base::FilePath& install_dir,
-    base::StringPiece contents) {
+    std::string_view contents) {
   CHECK(base::WriteFile(GetInstalledPath(install_dir), contents));
 
   GetConfigPathInstance() =

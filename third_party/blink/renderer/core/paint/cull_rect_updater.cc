@@ -4,9 +4,10 @@
 
 #include "third_party/blink/renderer/core/paint/cull_rect_updater.h"
 
-#include "base/auto_reset.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/frame/pagination_state.h"
 #include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
@@ -24,6 +25,13 @@
 namespace blink {
 
 namespace {
+
+float ExpansionRatio(const LayoutObject& object) {
+  const int dpr_coef = features::kCullRectExpansionDPRCoef.Get();
+  float device_pixel_ratio =
+      object.GetFrame()->LocalFrameRoot().GetDocument()->DevicePixelRatio();
+  return 1 + (device_pixel_ratio - 1) * dpr_coef;
+}
 
 using FragmentCullRects = OverriddenCullRectScope::FragmentCullRects;
 // This is set to non-null when we are updating overridden cull rects for
@@ -165,7 +173,7 @@ bool HasScrolledEnough(const LayoutObject& object) {
                              scrollable_area->LastCullRectUpdateScrollPosition()
                                  .OffsetFromOrigin();
       return object.FirstFragment().GetContentsCullRect().HasScrolledEnough(
-          delta, *scroll_translation);
+          delta, *scroll_translation, ExpansionRatio(object));
     }
   }
   return false;
@@ -173,8 +181,12 @@ bool HasScrolledEnough(const LayoutObject& object) {
 
 }  // anonymous namespace
 
-CullRectUpdater::CullRectUpdater(PaintLayer& starting_layer)
-    : starting_layer_(starting_layer) {
+CullRectUpdater::CullRectUpdater(PaintLayer& starting_layer,
+                                 bool disable_expansion)
+    : starting_layer_(starting_layer),
+      expansion_ratio_(disable_expansion
+                           ? 0.f
+                           : ExpansionRatio(starting_layer.GetLayoutObject())) {
   view_transition_supplement_ = ViewTransitionSupplement::FromIfExists(
       starting_layer.GetLayoutObject().GetDocument());
 }
@@ -185,13 +197,6 @@ void CullRectUpdater::Update() {
   SCOPED_BLINK_UMA_HISTOGRAM_TIMER_HIGHRES("Blink.CullRect.UpdateTime");
 
   UpdateInternal(CullRect::Infinite());
-
-#if DCHECK_IS_ON()
-  if (VLOG_IS_ON(2)) {
-    VLOG(2) << "PaintLayer tree after cull rect update:";
-    ShowLayerTree(&starting_layer_);
-  }
-#endif
 }
 
 void CullRectUpdater::UpdateForTesting(const CullRect& input_cull_rect) {
@@ -207,7 +212,8 @@ void CullRectUpdater::UpdateInternal(const CullRect& input_cull_rect) {
     return;
   }
 
-  object.GetFrameView()->SetCullRectNeedsUpdateForFrames(disable_expansion_);
+  object.GetFrameView()->SetCullRectNeedsUpdateForFrames(
+      /*disable_expansion=*/expansion_ratio_ == 0);
 
   if (!starting_layer_.NeedsCullRectUpdate() &&
       !starting_layer_.DescendantNeedsCullRectUpdate() &&
@@ -243,6 +249,13 @@ void CullRectUpdater::UpdateInternal(const CullRect& input_cull_rect) {
 
   if (!g_original_cull_rects)
     starting_layer_.ClearNeedsCullRectUpdate();
+
+#if DCHECK_IS_ON()
+  if (VLOG_IS_ON(2)) {
+    VLOG(2) << "PaintLayer tree after cull rect update:";
+    ShowLayerTree(&starting_layer_);
+  }
+#endif
 }
 
 // See UpdateForDescendants for how |force_update_self| is propagated.
@@ -414,21 +427,42 @@ CullRect CullRectUpdater::ComputeFragmentCullRect(
   auto local_state = fragment.LocalBorderBoxProperties().Unalias();
   CullRect cull_rect = parent_fragment.GetContentsCullRect();
   auto parent_state = parent_fragment.ContentsProperties().Unalias();
+  const LayoutObject& object = layer.GetLayoutObject();
+  const auto& parent_object = context.current.container->GetLayoutObject();
+  const LocalFrameView* frame_view = object.GetFrameView();
+  const LayoutView& layout_view = *object.View();
+  const PaginationState* pagination_state = frame_view->GetPaginationState();
+  if (parent_object.IsLayoutView() && pagination_state) {
+    parent_state = pagination_state->ContentAreaPropertyTreeStateForCurrentPage(
+        layout_view);
+  }
 
-  if (layer.GetLayoutObject().IsFixedPositioned()) {
-    const auto& view_fragment = layer.GetLayoutObject().View()->FirstFragment();
-    auto view_state = view_fragment.LocalBorderBoxProperties().Unalias();
+  if (object.IsFixedPositioned()) {
     if (const auto* properties = fragment.PaintProperties()) {
       if (const auto* translation = properties->PaintOffsetTranslation()) {
-        if (translation->Parent() == &view_state.Transform()) {
-          // Use the viewport clip and ignore additional clips (e.g. clip-paths)
-          // because they are applied on this fixed-position layer by
-          // non-containers which may change location relative to this layer on
-          // viewport scroll for which we don't want to change fixed-position
-          // cull rects for performance.
-          local_state.SetClip(
-              view_fragment.ContentsProperties().Clip().Unalias());
-          parent_state = view_state;
+        const auto& view_fragment = object.View()->FirstFragment();
+        auto root_contents_state =
+            view_fragment.LocalBorderBoxProperties().Unalias();
+        if (pagination_state) {
+          // Document contents are parented under the pagination properties,
+          // which in turn are parented under the LayoutView.
+          root_contents_state =
+              pagination_state->ContentAreaPropertyTreeStateForCurrentPage(
+                  layout_view);
+        }
+        if (translation->Parent() == &root_contents_state.Transform()) {
+          // Use the viewport / page area clip and ignore additional clips
+          // (e.g. clip-paths) because they are applied on this fixed-position
+          // layer by non-containers which may change location relative to this
+          // layer on viewport scroll for which we don't want to change
+          // fixed-position cull rects for performance.
+          if (pagination_state) {
+            local_state.SetClip(root_contents_state.Clip());
+          } else {
+            local_state.SetClip(
+                view_fragment.ContentsProperties().Clip().Unalias());
+          }
+          parent_state = root_contents_state;
           cull_rect = view_fragment.GetCullRect();
         }
       }
@@ -443,7 +477,7 @@ CullRect CullRectUpdater::ComputeFragmentCullRect(
       old_cull_rect = fragment.GetCullRect();
     bool expanded =
         cull_rect.ApplyPaintProperties(root_state_, parent_state, local_state,
-                                       old_cull_rect, disable_expansion_);
+                                       old_cull_rect, expansion_ratio_);
     if (expanded && fragment.GetCullRect() != cull_rect)
       context.current.force_proactive_update = true;
   }
@@ -466,7 +500,7 @@ CullRect CullRectUpdater::ComputeFragmentContentsCullRect(
       old_contents_cull_rect = fragment.GetContentsCullRect();
     bool expanded = contents_cull_rect.ApplyPaintProperties(
         root_state_, local_state, contents_state, old_contents_cull_rect,
-        disable_expansion_);
+        expansion_ratio_);
     if (expanded && fragment.GetContentsCullRect() != contents_cull_rect)
       context.current.force_proactive_update = true;
   }
@@ -539,7 +573,20 @@ void CullRectUpdater::PaintPropertiesChanged(
   }
 
   if (object.HasLayer()) {
-    To<LayoutBoxModelObject>(object).Layer()->SetNeedsCullRectUpdate();
+    PaintLayer* layer = To<LayoutBoxModelObject>(object).Layer();
+    layer->SetNeedsCullRectUpdate();
+
+    // For change of scroll properties (e.g. contents rect), SetNeedsRepaint to
+    // force proactive update of cull rect because the ChangedEnough logic
+    // doesn't apply. In most cases, other code paths also SetNeedsRepaint
+    // on such changes, but not for the case where a containing-block-order
+    // descendant causing the change is not a paint-order descendant of the
+    // scroller.
+    if (properties_changed.scroll_changed >=
+        PaintPropertyChangeType::kChangedOnlySimpleValues) {
+      layer->SetNeedsRepaint();
+    }
+
     // Fixed-position cull rects depend on view clip. See
     // ComputeFragmentCullRect().
     if (const auto* layout_view = DynamicTo<LayoutView>(object)) {
@@ -599,8 +646,7 @@ OverriddenCullRectScope::OverriddenCullRectScope(PaintLayer& starting_layer,
   }
 
   g_original_cull_rects = &original_cull_rects_;
-  CullRectUpdater updater(starting_layer);
-  updater.disable_expansion_ = disable_expansion;
+  CullRectUpdater updater(starting_layer, disable_expansion);
   updater.UpdateInternal(cull_rect);
 }
 

@@ -226,7 +226,6 @@ TEST_P(ComputeDispatchTests, IndirectBasic) {
     // TODO(crbug.com/dawn/1196): Fails on Chromium's Quadro P400 bots
     DAWN_SUPPRESS_TEST_IF(IsD3D12() && IsNvidia());
 #endif
-
     IndirectTest({2, 3, 4}, 0);
 }
 
@@ -256,7 +255,6 @@ TEST_P(ComputeDispatchTests, IndirectOffset) {
     // TODO(crbug.com/dawn/1196): Fails on Chromium's Quadro P400 bots
     DAWN_SUPPRESS_TEST_IF(IsD3D12() && IsNvidia());
 #endif
-
     IndirectTest({0, 0, 0, 2, 3, 4}, 3 * sizeof(uint32_t));
 }
 
@@ -271,10 +269,6 @@ TEST_P(ComputeDispatchTests, MaxWorkgroups) {
     // TODO(crbug.com/dawn/1196): Fails on Chromium's Quadro P400 bots
     DAWN_SUPPRESS_TEST_IF(IsD3D12() && IsNvidia());
 #endif
-
-    // TODO(crbug.com/dawn/1165): Fails with WARP
-    DAWN_SUPPRESS_TEST_IF(IsWARP());
-
     uint32_t max = GetSupportedLimits().limits.maxComputeWorkgroupsPerDimension;
 
     // Test that the maximum works in each dimension.
@@ -287,9 +281,6 @@ TEST_P(ComputeDispatchTests, MaxWorkgroups) {
 // Test indirect dispatches exceeding the max limit are noop-ed.
 TEST_P(ComputeDispatchTests, ExceedsMaxWorkgroupsNoop) {
     DAWN_TEST_UNSUPPORTED_IF(HasToggleEnabled("skip_validation"));
-
-    // TODO(crbug.com/dawn/839): Investigate why this test fails with WARP.
-    DAWN_SUPPRESS_TEST_IF(IsWARP());
 
     uint32_t max = GetSupportedLimits().limits.maxComputeWorkgroupsPerDimension;
 
@@ -312,9 +303,6 @@ TEST_P(ComputeDispatchTests, ExceedsMaxWorkgroupsNoop) {
 // Test indirect dispatches exceeding the max limit with an offset are noop-ed.
 TEST_P(ComputeDispatchTests, ExceedsMaxWorkgroupsWithOffsetNoop) {
     DAWN_TEST_UNSUPPORTED_IF(HasToggleEnabled("skip_validation"));
-
-    // TODO(crbug.com/dawn/839): Investigate why this test fails with WARP.
-    DAWN_SUPPRESS_TEST_IF(IsWARP());
 
     uint32_t max = GetSupportedLimits().limits.maxComputeWorkgroupsPerDimension;
 
@@ -569,9 +557,6 @@ TEST_P(ComputeMultipleDispatchesTests, ExceedsMaxWorkgroupsWithOffsetNoop) {
     // TODO(crbug.com/dawn/1196): Fails on Chromium's Quadro P400 bots
     DAWN_SUPPRESS_TEST_IF(IsD3D12() && IsNvidia());
 #endif
-
-    // TODO(crbug.com/dawn/839): Investigate why this test fails with WARP.
-    DAWN_SUPPRESS_TEST_IF(IsWARP());
 
     uint32_t max = GetSupportedLimits().limits.maxComputeWorkgroupsPerDimension;
 

@@ -60,7 +60,7 @@
 #include "extensions/common/manifest_url_handlers.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_switches.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/ash/app_mode/kiosk_app_update_install_gate.h"
@@ -118,20 +118,21 @@ void ExtensionSystemImpl::Shared::InitPrefs() {
   dynamic_user_scripts_store_ = std::make_unique<StateStore>(
       profile_, store_factory_, StateStore::BackendType::SCRIPTS, false);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // We can not perform check for Signin Profile here, as it would result in
   // recursive call upon creation of Signin Profile, so we will create
   // SigninScreenPolicyProvider lazily in RegisterManagementPolicyProviders.
 
   const user_manager::User* user =
       user_manager::UserManager::Get()->GetActiveUser();
-  policy::DeviceLocalAccount::Type device_local_account_type;
-  if (user &&
-      policy::IsDeviceLocalAccountUser(user->GetAccountId().GetUserEmail(),
-                                       &device_local_account_type)) {
-    device_local_account_management_policy_provider_ =
-        std::make_unique<chromeos::DeviceLocalAccountManagementPolicyProvider>(
-            device_local_account_type);
+  if (user) {
+    auto device_local_account_type =
+        policy::GetDeviceLocalAccountType(user->GetAccountId().GetUserEmail());
+    if (device_local_account_type.has_value()) {
+      device_local_account_management_policy_provider_ = std::make_unique<
+          chromeos::DeviceLocalAccountManagementPolicyProvider>(
+          device_local_account_type.value());
+    }
   }
 #endif
 }
@@ -141,7 +142,7 @@ void ExtensionSystemImpl::Shared::RegisterManagementPolicyProviders() {
       ExtensionManagementFactory::GetForBrowserContext(profile_)
           ->GetProviders());
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Lazy creation of SigninScreenPolicyProvider.
   if (!signin_screen_policy_provider_) {
     if (ash::ProfileHelper::IsSigninProfile(profile_)) {
@@ -157,7 +158,7 @@ void ExtensionSystemImpl::Shared::RegisterManagementPolicyProviders() {
   if (signin_screen_policy_provider_) {
     management_policy_->RegisterProvider(signin_screen_policy_provider_.get());
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   management_policy_->RegisterProvider(InstallVerifier::Get(profile_));
 }
@@ -165,16 +166,16 @@ void ExtensionSystemImpl::Shared::RegisterManagementPolicyProviders() {
 void ExtensionSystemImpl::Shared::InitInstallGates() {
   update_install_gate_ = std::make_unique<UpdateInstallGate>(profile_);
   extension_service_->RegisterInstallGate(
-      ExtensionPrefs::DELAY_REASON_WAIT_FOR_IDLE, update_install_gate_.get());
+      ExtensionPrefs::DelayReason::kWaitForIdle, update_install_gate_.get());
   extension_service_->RegisterInstallGate(
-      ExtensionPrefs::DELAY_REASON_WAIT_FOR_IMPORTS,
+      ExtensionPrefs::DelayReason::kWaitForImports,
       extension_service_->shared_module_service());
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (chrome::IsRunningInForcedAppMode()) {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (IsRunningInForcedAppMode()) {
     kiosk_app_update_install_gate_ =
         std::make_unique<ash::KioskAppUpdateInstallGate>(profile_);
     extension_service_->RegisterInstallGate(
-        ExtensionPrefs::DELAY_REASON_WAIT_FOR_OS_UPDATE,
+        ExtensionPrefs::DelayReason::kWaitForOsUpdate,
         kiosk_app_update_install_gate_.get());
   }
 #endif
@@ -198,12 +199,11 @@ void ExtensionSystemImpl::Shared::Init(bool extensions_enabled) {
 
   bool autoupdate_enabled =
       !profile_->IsGuestSession() && !profile_->IsSystemProfile();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (!extensions_enabled ||
-      ash::ProfileHelper::IsLockScreenAppProfile(profile_)) {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (!extensions_enabled) {
     autoupdate_enabled = false;
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
   extension_service_ = std::make_unique<ExtensionService>(
       profile_, base::CommandLine::ForCurrentProcess(),
       profile_->GetPath().AppendASCII(kInstallDirectoryName),
@@ -221,14 +221,14 @@ void ExtensionSystemImpl::Shared::Init(bool extensions_enabled) {
     InstallVerifier::Get(profile_)->Init();
     ChromeContentVerifierDelegate::VerifyInfo::Mode mode =
         ChromeContentVerifierDelegate::GetDefaultMode();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     mode = std::max(mode,
                     ChromeContentVerifierDelegate::VerifyInfo::Mode::BOOTSTRAP);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
     if (mode >= ChromeContentVerifierDelegate::VerifyInfo::Mode::BOOTSTRAP) {
       content_verifier_->Start();
     }
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     // This class is used to check the permissions of the force-installed
     // extensions inside the managed guest session. It updates the local state
     // perf with the result, a boolean value deciding whether the full warning
@@ -250,13 +250,13 @@ void ExtensionSystemImpl::Shared::Init(bool extensions_enabled) {
   quota_service_ = std::make_unique<QuotaService>();
 
   bool skip_session_extensions = false;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Skip loading session extensions if we are not in a user session or if the
   // profile is the sign-in or lock screen app profile, which don't correspond
   // to a user session.
   skip_session_extensions = !ash::LoginState::Get()->IsUserLoggedIn() ||
                             !ash::ProfileHelper::IsUserProfile(profile_);
-  if (chrome::IsRunningInForcedAppMode()) {
+  if (IsRunningInForcedAppMode()) {
     extension_service_->component_loader()
         ->AddDefaultComponentExtensionsForKioskMode(skip_session_extensions);
   } else {

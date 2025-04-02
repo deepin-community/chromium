@@ -6,13 +6,13 @@
 #define CC_TILES_GPU_IMAGE_DECODE_CACHE_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include <optional>
 #include "base/containers/flat_map.h"
 #include "base/containers/lru_cache.h"
 #include "base/feature_list.h"
@@ -32,7 +32,7 @@
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/skia/include/core/SkYUVAInfo.h"
-#include "third_party/skia/include/gpu/gl/GrGLTypes.h"
+#include "third_party/skia/include/gpu/ganesh/gl/GrGLTypes.h"
 
 namespace viz {
 class RasterContextProvider;
@@ -146,8 +146,6 @@ class CC_EXPORT GpuImageDecodeCache
     : public ImageDecodeCache,
       public base::trace_event::MemoryDumpProvider {
  public:
-  enum class DecodeTaskType { kPartOfUploadTask, kStandAloneDecodeTask };
-
   explicit GpuImageDecodeCache(viz::RasterContextProvider* context,
                                bool use_transfer_cache,
                                SkColorType color_type,
@@ -201,8 +199,9 @@ class CC_EXPORT GpuImageDecodeCache
 
   // Called by Decode / Upload tasks when tasks are finished.
   void OnImageDecodeTaskCompleted(const DrawImage& image,
-                                  DecodeTaskType task_type);
-  void OnImageUploadTaskCompleted(const DrawImage& image);
+                                  TaskType task_type,
+                                  ClientId client_id);
+  void OnImageUploadTaskCompleted(const DrawImage& image, ClientId client_id);
 
   bool SupportsColorSpaceConversion() const;
 
@@ -325,8 +324,8 @@ class CC_EXPORT GpuImageDecodeCache
     }
 
     std::unique_ptr<base::DiscardableMemory> data;
-    sk_sp<SkImage> images[SkYUVAInfo::kMaxPlanes];
-    SkPixmap pixmaps[SkYUVAInfo::kMaxPlanes];
+    std::array<sk_sp<SkImage>, SkYUVAInfo::kMaxPlanes> images;
+    std::array<SkPixmap, SkYUVAInfo::kMaxPlanes> pixmaps;
   };
 
   // Stores the CPU-side decoded bits of an image and supporting fields.
@@ -339,8 +338,9 @@ class CC_EXPORT GpuImageDecodeCache
     bool Lock();
     void Unlock();
 
-    void SetLockedData(DecodedAuxImageData aux_image_data[kAuxImageCount],
-                       bool out_of_raster);
+    void SetLockedData(
+        base::span<DecodedAuxImageData, kAuxImageCount> aux_image_data,
+        bool out_of_raster);
     void ResetData();
     bool HasData() const {
       for (const auto& aux_image_data : aux_image_data_) {
@@ -367,7 +367,7 @@ class CC_EXPORT GpuImageDecodeCache
       return aux_image_data_[AuxImageIndex(aux_image)].images[plane];
     }
 
-    const SkPixmap* pixmaps(AuxImage aux_image) const {
+    base::span<const SkPixmap> pixmaps(AuxImage aux_image) const {
       DCHECK(is_locked() || is_bitmap_backed_);
       return aux_image_data_[AuxImageIndex(aux_image)].pixmaps;
     }
@@ -405,7 +405,7 @@ class CC_EXPORT GpuImageDecodeCache
     void ReportUsageStats() const;
 
     const bool is_bitmap_backed_;
-    DecodedAuxImageData aux_image_data_[kAuxImageCount];
+    std::array<DecodedAuxImageData, kAuxImageCount> aux_image_data_;
 
     // Keeps tracks of images that could go through hardware decode acceleration
     // though they're possibly prevented from doing so because of a disabled
@@ -558,7 +558,7 @@ class CC_EXPORT GpuImageDecodeCache
     // May be null if image not yet uploaded / prepared.
     sk_sp<SkImage> image_;
     std::optional<YUVSkImages> image_yuv_planes_;
-    // TODO(crbug/910276): Change after alpha support.
+    // TODO(crbug.com/40604431): Change after alpha support.
     bool is_alpha_ = false;
     GrGLuint gl_id_ = 0;
     std::optional<std::array<GrGLuint, kNumYUVPlanes>> gl_plane_ids_;
@@ -602,7 +602,7 @@ class CC_EXPORT GpuImageDecodeCache
               bool is_bitmap_backed,
               bool can_do_hardware_accelerated_decode,
               bool do_hardware_accelerated_decode,
-              ImageInfo image_info[kAuxImageCount]);
+              base::span<ImageInfo, kAuxImageCount> image_info);
 
     bool IsGpuOrTransferCache() const;
     bool HasUploadedData() const;
@@ -704,7 +704,7 @@ class CC_EXPORT GpuImageDecodeCache
       ClientId client_id,
       const DrawImage& image,
       const TracingInfo& tracing_info,
-      DecodeTaskType task_type) EXCLUSIVE_LOCKS_REQUIRED(lock_);
+      TaskType task_type) EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
   // Note that this function behaves as if it was public (all of the same locks
   // need to be acquired). Uses |client_id| to identify which client created a
@@ -714,7 +714,7 @@ class CC_EXPORT GpuImageDecodeCache
   TaskResult GetTaskForImageAndRefInternal(ClientId client_id,
                                            const DrawImage& image,
                                            const TracingInfo& tracing_info,
-                                           DecodeTaskType task_type);
+                                           TaskType task_type);
 
   void RefImageDecode(const DrawImage& draw_image,
                       const InUseCacheKey& cache_key)
@@ -937,8 +937,8 @@ class CC_EXPORT GpuImageDecodeCache
   size_t persistent_cache_memory_size_ GUARDED_BY(lock_) = 0;
 
   struct CacheEntries {
-    PaintImage::ContentId content_ids[2] = {PaintImage::kInvalidContentId,
-                                            PaintImage::kInvalidContentId};
+    std::array<PaintImage::ContentId, 2> content_ids = {
+        PaintImage::kInvalidContentId, PaintImage::kInvalidContentId};
 
     // The number of cache entries for a PaintImage. Note that there can be
     // multiple entries per content_id.

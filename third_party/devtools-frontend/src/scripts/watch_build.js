@@ -2,14 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-const chokidar = require('chokidar');
-const path = require('path');
 const childProcess = require('child_process');
 const fs = require('fs');
+const path = require('path');
 const cwd = process.cwd();
 const frontEndDir = path.join(cwd, 'front_end');
 const testsDir = path.join(cwd, 'test');
-const {WebSocketServer} = require('ws');
 const env = process.env;
 
 const extractArgument = argName => {
@@ -34,12 +32,10 @@ const NODE_PATH = path.join('third_party', 'node', 'node.py');
 const ESBUILD_PATH = path.join('third_party', 'esbuild', 'esbuild');
 const GENERATE_CSS_JS_FILES_PATH = path.join('scripts', 'build', 'generate_css_js_files.js');
 
-const connections = {};
-let lastConnectionId = 0;
+let tId = -1;
 
 // Extract the target if it's provided.
 const target = extractArgument('--target') || 'Default';
-const PORT = 8080;
 const TARGET_GEN_DIR = path.join('out', target, 'gen');
 
 // Make sure that the target has
@@ -59,6 +55,9 @@ const assertTargetArgsForWatchBuild = async () => {
   try {
     args = JSON.parse(stdoutText);
   } catch (err) {
+    if (stdoutText.includes('devtools_css_hot_reload_enabled')) {
+      console.error('\n❗❗ You must remove `devtools_css_hot_reload_enabled` from your args.gn.\n');
+    }
     throw `Parsing args of target ${target} is failed\n${err}`;
   }
 
@@ -80,76 +79,50 @@ const assertTargetArgsForWatchBuild = async () => {
   }
 };
 
-const startWebSocketServerForCssChanges = () => {
-  const wss = new WebSocketServer({port: PORT});
-
-  wss.on('listening', () => {
-    console.log(`Listening connections for CSS changes at ${PORT}\n`);
-  });
-
-  wss.on('connection', ws => {
-    const connection = {
-      id: ++lastConnectionId,
-      ws,
-    };
-
-    connections[connection.id] = connection;
-    ws.on('close', () => {
-      delete connections[connection.id];
-    });
-  });
-};
-
-const runGenerateCssFiles = ({fileName, isLegacy}) => {
+const runGenerateCssFiles = ({fileName}) => {
   const scriptArgs = [
     /* buildTimestamp */ Date.now(),
     /* isDebugString */ 'true',
-    /* isLegacyString */ isLegacy ? 'true' : 'false',
     /* targetName */ target,
     /* srcDir */ '',
     /* targetGenDir */ TARGET_GEN_DIR,
     /* files */ relativeFileName(fileName),
-    /* hotReloadEnabledString */ 'true'
   ];
 
   childProcess.spawnSync(
-      'vpython', [NODE_PATH, '--output', GENERATE_CSS_JS_FILES_PATH, ...scriptArgs], {cwd, env, stdio: 'inherit'});
+      'vpython3', [NODE_PATH, '--output', GENERATE_CSS_JS_FILES_PATH, ...scriptArgs], {cwd, env, stdio: 'inherit'});
 };
 
-const isLegacyCss = absoluteFilePath => {
-  if (!absoluteFilePath.endsWith('.css')) {
-    return false;
-  }
-
-  const relativePath = path.relative(cwd, absoluteFilePath);
-  const possibleLegacyCssPath = path.join(TARGET_GEN_DIR, `${relativePath}.legacy.js`);
-  return fs.existsSync(possibleLegacyCssPath);
-};
-
-const notifyWebSocketConections = message => {
-  Object.values(connections).forEach(connection => connection.ws.send(message));
-};
+const changedFiles = new Set();
 
 const onFileChange = async fileName => {
-  if (!fileName) {
+  changedFiles.add(fileName);
+  // Debounce to handle them in batch.
+  // At 250ms, we're optimizing for individual file changes.
+  // On branch changes, its possible a ninja rebuild may start before the checkout is complete, but it will likely quickly error out. Either way, another rebuild will be attempted immediately after.
+  clearTimeout(tId);
+  tId = setTimeout(buildFiles, 250);
+};
+
+const buildFiles = async () => {
+  // If we need a ninja rebuild, do that and quit
+  const nonTSOrCSSFileNames = Array.from(changedFiles).filter(f => !f.endsWith('.css') && !f.endsWith('.ts'));
+  if (nonTSOrCSSFileNames.length) {
+    console.log(`${currentTimeString()} - ${nonTSOrCSSFileNames.map(relativeFileName)} changed, running ninja`);
+    changedFiles.clear();
+    childProcess.spawnSync('autoninja', ['-C', `out/${target}`], {cwd, env, stdio: 'inherit'});
     return;
   }
+  // …Otherwise we can do fast rebuilds
+  changedFiles.forEach(fastRebuildFile);
+  console.assert(changedFiles.size === 0, `⚠️⚠️⚠️ Some changed files NOT built: ${Array.from(changedFiles.values())}`);
+};
 
+const fastRebuildFile = async fileName => {
   if (fileName.endsWith('.css')) {
     console.log(`${currentTimeString()} - ${relativeFileName(fileName)} changed, notifying frontend`);
-    const isLegacy = isLegacyCss(fileName);
-    const content = fs.readFileSync(fileName, {encoding: 'utf8', flag: 'r'});
-    runGenerateCssFiles({fileName: relativeFileName(fileName), isLegacy});
-
-    if (isLegacy) {
-      notifyWebSocketConections(JSON.stringify({
-        event: 'log-warn',
-        message: `a legacy css file \x1B[1m${
-            path.relative(cwd, fileName)}\x1B[m is updated, you need to refresh the page to see changes.`
-      }));
-    } else {
-      notifyWebSocketConections(JSON.stringify({event: 'css-change', file: fileName, content}));
-    }
+    runGenerateCssFiles({fileName: relativeFileName(fileName)});
+    changedFiles.delete(fileName);
     return;
   }
 
@@ -158,20 +131,20 @@ const onFileChange = async fileName => {
 
     const jsFileName = `${fileName.substring(0, fileName.length - 3)}.js`;
     const outFile = path.resolve('out', target, 'gen', relativeFileName(jsFileName));
+    const tsConfigLocation = path.join(cwd, 'tsconfig.json');
+    // Hack to mimic node_ts_library for test files.
+    const cjsForTests = fileName.includes('/test/') ? ['--format=cjs'] : [];
+    changedFiles.delete(fileName);
     const res = childProcess.spawnSync(
-        ESBUILD_PATH, [fileName, `--outfile=${outFile}`, '--sourcemap'], {cwd, env, stdio: 'inherit'});
+        ESBUILD_PATH,
+        [fileName, `--outfile=${outFile}`, '--sourcemap', `--tsconfig=${tsConfigLocation}`, ...cjsForTests],
+        {cwd, env, stdio: 'inherit'});
 
-    if (res && res.status === 1) {
-      notifyWebSocketConections(JSON.stringify({
-        event: 'log-warn',
-        message: `TS compilation failed for \x1B[1m${path.relative(cwd, fileName)}\x1B[m, check your terminal.`
-      }));
+    if (res?.status === 1) {
+      console.warn(`TS compilation failed for \x1B[1m${path.relative(cwd, fileName)}\x1B`);
     }
     return;
   }
-
-  console.log(`${currentTimeString()} - ${relativeFileName(fileName)} changed, running ninja`);
-  childProcess.spawnSync('autoninja', ['-C', `out/${target}`], {cwd, env, stdio: 'inherit'});
 };
 
 console.log('Running initial build before watching changes');
@@ -180,6 +153,5 @@ childProcess.spawnSync('autoninja', ['-C', `out/${target}`], {cwd, env, stdio: '
 
 // Watch the front_end and test folder and build on any change.
 console.log(`Watching for changes in ${frontEndDir} and ${testsDir}`);
-chokidar.watch(frontEndDir, {usePolling: false, useFsEvents: true}).on('change', onFileChange);
-chokidar.watch(testsDir, {usePolling: false, useFsEvents: true}).on('change', onFileChange);
-startWebSocketServerForCssChanges();
+fs.watch(frontEndDir, {recursive: true}).on('change', (_, fileName) => onFileChange(path.join(frontEndDir, fileName)));
+fs.watch(testsDir, {recursive: true}).on('change', (_, fileName) => onFileChange(path.join(testsDir, fileName)));

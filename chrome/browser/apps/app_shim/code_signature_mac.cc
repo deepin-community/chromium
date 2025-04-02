@@ -11,7 +11,6 @@
 #include "base/debug/dump_without_crashing.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
-#include "base/types/expected_macros.h"
 #include "components/crash/core/common/crash_key.h"
 
 namespace {
@@ -144,26 +143,6 @@ base::apple::ScopedCFTypeRef<SecRequirementRef> RequirementFromString(
   }
 
   return requirement;
-}
-
-// Verify the code signature of |pid| against |requirement|.
-OSStatus ProcessIsSignedAndFulfillsRequirement(pid_t pid,
-                                               SecRequirementRef requirement) {
-  base::apple::ScopedCFTypeRef<CFNumberRef> pid_cf(
-      CFNumberCreate(nullptr, kCFNumberIntType, &pid));
-  const void* attribute_keys[] = {kSecGuestAttributePid};
-  const void* attribute_values[] = {pid_cf.get()};
-  base::apple::ScopedCFTypeRef<CFDictionaryRef> attributes(CFDictionaryCreate(
-      nullptr, attribute_keys, attribute_values, std::size(attribute_keys),
-      &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
-  base::apple::ScopedCFTypeRef<SecCodeRef> code;
-  OSStatus status = SecCodeCopyGuestWithAttributes(
-      nullptr, attributes.get(), kSecCSDefaultFlags, code.InitializeInto());
-  if (status != errSecSuccess) {
-    DumpOSStatusError(status, "SecCodeCopyGuestWithAttributes");
-    return status;
-  }
-  return SecCodeCheckValidity(code.get(), kSecCSDefaultFlags, requirement);
 }
 
 }  // namespace apps

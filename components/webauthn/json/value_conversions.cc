@@ -4,12 +4,15 @@
 
 #include "components/webauthn/json/value_conversions.h"
 
+#include <iterator>
 #include <optional>
+#include <ranges>
+#include <string_view>
 
 #include "base/base64url.h"
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/feature_list.h"
-#include "base/ranges/ranges.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "device/fido/attestation_object.h"
 #include "device/fido/authenticator_selection_criteria.h"
@@ -32,14 +35,12 @@ std::string Base64UrlEncode(base::span<const uint8_t> input) {
   // Byte strings, which appear in the WebAuthn IDL as ArrayBuffer or
   // ByteSource, are base64url-encoded without trailing '=' padding.
   std::string output;
-  base::Base64UrlEncode(
-      base::StringPiece(reinterpret_cast<const char*>(input.data()),
-                        input.size()),
-      base::Base64UrlEncodePolicy::OMIT_PADDING, &output);
+  base::Base64UrlEncode(input, base::Base64UrlEncodePolicy::OMIT_PADDING,
+                        &output);
   return output;
 }
 
-bool Base64UrlDecode(base::StringPiece input, std::string* output) {
+bool Base64UrlDecode(std::string_view input, std::string* output) {
   return base::Base64UrlDecode(
       input, base::Base64UrlDecodePolicy::DISALLOW_PADDING, output);
 }
@@ -72,17 +73,13 @@ std::optional<std::string> Base64UrlDecodeStringKey(
 // string failed.
 std::tuple<bool, std::optional<std::string>> Base64UrlDecodeOptionalStringKey(
     const base::Value::Dict& dict,
-    const std::string& key,
-    const JSONUser user) {
+    const std::string& key) {
   const base::Value* value = dict.Find(key);
   if (!value) {
     return {true, std::nullopt};
   }
   if (value->is_none()) {
-    return {!base::FeatureList::IsEnabled(
-                device::kWebAuthnRequireUpToDateJSONForRemoteDesktop) &&
-                user == JSONUser::kRemoteDesktop,
-            std::nullopt};
+    return {false, std::nullopt};
   }
   std::string decoded;
   if (!value->is_string() || !Base64UrlDecode(value->GetString(), &decoded)) {
@@ -92,8 +89,7 @@ std::tuple<bool, std::optional<std::string>> Base64UrlDecodeOptionalStringKey(
 }
 
 std::vector<uint8_t> ToByteVector(const std::string& in) {
-  const uint8_t* in_ptr = reinterpret_cast<const uint8_t*>(in.data());
-  return std::vector<uint8_t>(in_ptr, in_ptr + in.size());
+  return base::ToVector(base::as_byte_span(in));
 }
 
 base::Value ToValue(const device::PublicKeyCredentialRpEntity& relying_party) {
@@ -155,7 +151,6 @@ base::Value ToValue(
     case device::AuthenticatorAttachment::kAny:
       // Any maps to the key being omitted, not a null value.
       NOTREACHED();
-      return base::Value("invalid");
   }
 }
 
@@ -227,7 +222,6 @@ base::Value ToValue(const blink::mojom::ProtectionPolicy policy) {
   switch (policy) {
     case blink::mojom::ProtectionPolicy::UNSPECIFIED:
       NOTREACHED();
-      return base::Value("invalid");
     case blink::mojom::ProtectionPolicy::NONE:
       return base::Value("userVerificationOptional");
     case blink::mojom::ProtectionPolicy::UV_OR_CRED_ID_REQUIRED:
@@ -241,7 +235,6 @@ base::Value ToValue(const device::LargeBlobSupport large_blob) {
   switch (large_blob) {
     case device::LargeBlobSupport::kNotRequested:
       NOTREACHED();
-      return base::Value("invalid");
     case device::LargeBlobSupport::kRequired:
       return base::Value("required");
     case device::LargeBlobSupport::kPreferred:
@@ -254,7 +247,6 @@ base::Value ToValue(const device::CableDiscoveryData& cable_authentication) {
   switch (cable_authentication.version) {
     case device::CableDiscoveryData::Version::INVALID:
       NOTREACHED();
-      break;
     case device::CableDiscoveryData::Version::V1:
       value.Set("version", 1);
       value.Set("clientEid",
@@ -304,6 +296,15 @@ base::Value ToValue(
   return base::Value(std::move(value));
 }
 
+base::Value ToValue(const std::vector<std::string>& strings) {
+  base::Value::List ret;
+  ret.reserve(strings.size());
+  for (const auto& string : strings) {
+    ret.Append(string);
+  }
+  return base::Value(std::move(ret));
+}
+
 std::optional<device::FidoTransportProtocol> FidoTransportProtocolFromValue(
     const base::Value& value) {
   if (!value.is_string()) {
@@ -313,22 +314,13 @@ std::optional<device::FidoTransportProtocol> FidoTransportProtocolFromValue(
 }
 
 std::optional<device::AuthenticatorAttachment>
-OptionalAuthenticatorAttachmentFromValue(const base::Value* value,
-                                         const JSONUser user) {
+OptionalAuthenticatorAttachmentFromValue(const base::Value* value) {
   if (!value) {
     // PublicKeyCredential.authenticatorAttachment can be omitted,
     // which is equivalent to `AuthenticatorAttachment::kAny`.
     return device::AuthenticatorAttachment::kAny;
   }
-  if (value->is_none()) {
-    if (base::FeatureList::IsEnabled(
-            device::kWebAuthnRequireUpToDateJSONForRemoteDesktop) ||
-        user != JSONUser::kRemoteDesktop) {
-      return std::nullopt;
-    }
-    return device::AuthenticatorAttachment::kAny;
-  }
-  if (!value->is_string()) {
+  if (value->is_none() || !value->is_string()) {
     return std::nullopt;
   }
   const std::string& attachment_name = value->GetString();
@@ -359,6 +351,24 @@ base::Value ToValue(const blink::mojom::PRFValuesPtr& prf_input) {
   return base::Value(std::move(prf_value));
 }
 
+base::Value ToValue(const std::vector<blink::mojom::Hint>& hints) {
+  base::Value::List ret;
+  for (const auto& hint : hints) {
+    switch (hint) {
+      case blink::mojom::Hint::SECURITY_KEY:
+        ret.Append(base::Value("security-key"));
+        break;
+      case blink::mojom::Hint::HYBRID:
+        ret.Append(base::Value("hybrid"));
+        break;
+      case blink::mojom::Hint::CLIENT_DEVICE:
+        ret.Append(base::Value("client-device"));
+        break;
+    }
+  }
+  return base::Value(std::move(ret));
+}
+
 }  // namespace
 
 base::Value ToValue(
@@ -383,7 +393,14 @@ base::Value ToValue(
     value.Set("authenticatorSelection",
               ToValue(*options->authenticator_selection));
   }
+  if (!options->hints.empty()) {
+    value.Set("hints", ToValue(options->hints));
+  }
   value.Set("attestation", ToValue(options->attestation));
+
+  if (!options->attestation_formats.empty()) {
+    value.Set("attestationFormats", ToValue(options->attestation_formats));
+  }
 
   base::Value::Dict extensions;
 
@@ -459,7 +476,12 @@ base::Value ToValue(
     const blink::mojom::PublicKeyCredentialRequestOptionsPtr& options) {
   CHECK(!options->extensions.is_null());
   base::Value::Dict value;
-  value.Set("challenge", Base64UrlEncode(options->challenge));
+  if (options->challenge.has_value()) {
+    value.Set("challenge", Base64UrlEncode(*options->challenge));
+  } else {
+    CHECK(options->challenge_url.has_value());
+    value.Set("challengeUrl", options->challenge_url->spec());
+  }
   value.Set("rpId", options->relying_party_id);
 
   base::Value::List allow_credentials;
@@ -470,6 +492,9 @@ base::Value ToValue(
   value.Set("allowCredentials", std::move(allow_credentials));
 
   value.Set("userVerification", ToValue(options->user_verification));
+  if (!options->hints.empty()) {
+    value.Set("hints", ToValue(options->hints));
+  }
 
   base::Value::Dict extensions;
 
@@ -510,11 +535,6 @@ base::Value ToValue(
   }
 
   if (!options->extensions->prf_inputs.empty()) {
-    // Hashed PRF inputs are only used when Chrome is acting as a caBLE
-    // authenticator on Android. We can't convert the request to JSON in that
-    // context and should never try.
-    CHECK(!options->extensions->prf_inputs_hashed);
-
     base::Value::Dict prf_value;
     base::Value::Dict eval_by_cred;
     bool is_first = true;
@@ -550,16 +570,14 @@ base::Value ToValue(
 }
 
 std::optional<blink::mojom::PRFValuesPtr> ParsePRFResults(
-    const base::Value::Dict* results,
-    const JSONUser user) {
+    const base::Value::Dict* results) {
   const std::optional<std::string> first =
       Base64UrlDecodeStringKey(*results, "first");
   if (!first || first->size() != 32) {
     return std::nullopt;
   }
 
-  auto [ok, second] =
-      Base64UrlDecodeOptionalStringKey(*results, "second", user);
+  auto [ok, second] = Base64UrlDecodeOptionalStringKey(*results, "second");
   if (!ok || (second && second->size() != 32)) {
     return std::nullopt;
   }
@@ -595,7 +613,7 @@ ParseSupplementalPubKeys(const base::Value::Dict* json) {
 }
 
 std::pair<blink::mojom::MakeCredentialAuthenticatorResponsePtr, std::string>
-MakeCredentialResponseFromValue(const base::Value& value, JSONUser user) {
+MakeCredentialResponseFromValue(const base::Value& value) {
   if (!value.is_dict()) {
     return {nullptr, "value is not a dict"};
   }
@@ -622,7 +640,7 @@ MakeCredentialResponseFromValue(const base::Value& value, JSONUser user) {
 
   std::optional<device::AuthenticatorAttachment> authenticator_attachment =
       OptionalAuthenticatorAttachmentFromValue(
-          dict.Find("authenticatorAttachment"), user);
+          dict.Find("authenticatorAttachment"));
   if (!authenticator_attachment) {
     return InvalidMakeCredentialField("authenticatorAttachment");
   }
@@ -650,88 +668,47 @@ MakeCredentialResponseFromValue(const base::Value& value, JSONUser user) {
   }
   response->attestation_object = std::move(fields->attestation_object_bytes);
 
-  if (base::FeatureList::IsEnabled(
-          device::kWebAuthnRequireUpToDateJSONForRemoteDesktop) ||
-      user != JSONUser::kRemoteDesktop) {
-    // These fields are checked against the calculated values to ensure that
-    // bugs in providers don't sneak in.
-    std::optional<int> opt_public_key_algo =
-        attestation_response->FindInt("publicKeyAlgorithm");
-    if (!opt_public_key_algo ||
-        *opt_public_key_algo != fields->public_key_algo) {
-      return InvalidMakeCredentialField("publicKeyAlgorithm");
-    }
-    response->public_key_algo = *opt_public_key_algo;
+  // These fields are checked against the calculated values to ensure that
+  // bugs in providers don't sneak in.
+  std::optional<int> opt_public_key_algo =
+      attestation_response->FindInt("publicKeyAlgorithm");
+  if (!opt_public_key_algo || *opt_public_key_algo != fields->public_key_algo) {
+    return InvalidMakeCredentialField("publicKeyAlgorithm");
+  }
+  response->public_key_algo = *opt_public_key_algo;
 
-    std::optional<std::string> opt_authenticator_data =
-        Base64UrlDecodeStringKey(*attestation_response, "authenticatorData");
-    if (!opt_authenticator_data) {
-      return InvalidMakeCredentialField("authenticatorData");
-    }
-    response->info->authenticator_data = ToByteVector(*opt_authenticator_data);
-    if (!base::ranges::equal(response->info->authenticator_data,
-                             fields->authenticator_data)) {
-      return InvalidMakeCredentialField("authenticatorData");
-    }
+  std::optional<std::string> opt_authenticator_data =
+      Base64UrlDecodeStringKey(*attestation_response, "authenticatorData");
+  if (!opt_authenticator_data) {
+    return InvalidMakeCredentialField("authenticatorData");
+  }
+  response->info->authenticator_data = ToByteVector(*opt_authenticator_data);
+  if (!std::ranges::equal(response->info->authenticator_data,
+                          fields->authenticator_data)) {
+    return InvalidMakeCredentialField("authenticatorData");
+  }
 
-    auto [ok, opt_public_key] = Base64UrlDecodeOptionalStringKey(
-        *attestation_response, "publicKey", user);
-    if (!ok) {
-      return InvalidMakeCredentialField("publicKey");
-    }
-    if (opt_public_key) {
-      response->public_key_der = ToByteVector(*opt_public_key);
-    }
-    // For P-256 and Ed25519 keys, providers must be able to provide the
-    // publicKey.
-    if ((response->public_key_algo ==
-             static_cast<int>(device::CoseAlgorithmIdentifier::kEs256) ||
-         response->public_key_algo ==
-             static_cast<int>(device::CoseAlgorithmIdentifier::kEdDSA)) &&
-        !opt_public_key) {
-      return InvalidMakeCredentialField("publicKey");
-    }
-    // For any key, providers must calculate the same key as us.
-    if (fields->public_key_der && opt_public_key &&
-        !base::ranges::equal(*response->public_key_der,
-                             *fields->public_key_der)) {
-      return InvalidMakeCredentialField("publicKey");
-    }
-  } else {
-    response->info->authenticator_data = std::move(fields->authenticator_data);
-    response->public_key_algo = fields->public_key_algo;
-    if (fields->public_key_der) {
-      response->public_key_der = std::move(*fields->public_key_der);
-    }
-
-    // These three values are things that we have already calculated with
-    // `ParseForResponseFields`, above. We will transition to requiring them
-    // from providers on Android but, for now, just check that they have the
-    // correct value if provided.
-
-    std::optional<int> opt_public_key_algo =
-        attestation_response->FindInt("publicKeyAlgorithm");
-    if (opt_public_key_algo &&
-        response->public_key_algo != *opt_public_key_algo) {
-      return InvalidMakeCredentialField("publicKeyAlgorithm");
-    }
-
-    auto [ok, opt_authenticator_data] = Base64UrlDecodeOptionalStringKey(
-        *attestation_response, "authenticatorData", user);
-    if (!ok || (opt_authenticator_data &&
-                !base::ranges::equal(response->info->authenticator_data,
-                                     ToByteVector(*opt_authenticator_data)))) {
-      return InvalidMakeCredentialField("authenticatorData");
-    }
-
-    std::optional<std::string> opt_public_key_der;
-    std::tie(ok, opt_public_key_der) = Base64UrlDecodeOptionalStringKey(
-        *attestation_response, "publicKey", user);
-    if (!ok || (response->public_key_der && opt_public_key_der &&
-                !base::ranges::equal(*response->public_key_der,
-                                     ToByteVector(*opt_public_key_der)))) {
-      return InvalidMakeCredentialField("publicKey");
-    }
+  auto [ok, opt_public_key] =
+      Base64UrlDecodeOptionalStringKey(*attestation_response, "publicKey");
+  if (!ok) {
+    return InvalidMakeCredentialField("publicKey");
+  }
+  if (opt_public_key) {
+    response->public_key_der = ToByteVector(*opt_public_key);
+  }
+  // For P-256 and Ed25519 keys, providers must be able to provide the
+  // publicKey.
+  if ((response->public_key_algo ==
+           static_cast<int>(device::CoseAlgorithmIdentifier::kEs256) ||
+       response->public_key_algo ==
+           static_cast<int>(device::CoseAlgorithmIdentifier::kEdDSA)) &&
+      !opt_public_key) {
+    return InvalidMakeCredentialField("publicKey");
+  }
+  // For any key, providers must calculate the same key as us.
+  if (fields->public_key_der && opt_public_key &&
+      !std::ranges::equal(*response->public_key_der, *fields->public_key_der)) {
+    return InvalidMakeCredentialField("publicKey");
   }
 
   std::optional<std::string> client_data_json =
@@ -807,7 +784,7 @@ MakeCredentialResponseFromValue(const base::Value& value, JSONUser user) {
     const base::Value::Dict* results = prf->FindDict("results");
     if (results) {
       std::optional<blink::mojom::PRFValuesPtr> prf_results =
-          ParsePRFResults(results, user);
+          ParsePRFResults(results);
       if (!prf_results) {
         return InvalidMakeCredentialField("prf");
       }
@@ -828,7 +805,7 @@ MakeCredentialResponseFromValue(const base::Value& value, JSONUser user) {
 }
 
 std::pair<blink::mojom::GetAssertionAuthenticatorResponsePtr, std::string>
-GetAssertionResponseFromValue(const base::Value& value, const JSONUser user) {
+GetAssertionResponseFromValue(const base::Value& value) {
   if (!value.is_dict()) {
     return {nullptr, "value is not a dict"};
   }
@@ -857,7 +834,7 @@ GetAssertionResponseFromValue(const base::Value& value, const JSONUser user) {
 
   std::optional<device::AuthenticatorAttachment> authenticator_attachment =
       OptionalAuthenticatorAttachmentFromValue(
-          dict.Find("authenticatorAttachment"), user);
+          dict.Find("authenticatorAttachment"));
   if (!authenticator_attachment) {
     return InvalidGetAssertionField("authenticatorAttachment");
   }
@@ -891,7 +868,7 @@ GetAssertionResponseFromValue(const base::Value& value, const JSONUser user) {
   response->signature = ToByteVector(*signature);
 
   auto [ok, opt_user_handle] =
-      Base64UrlDecodeOptionalStringKey(*assertion_response, "userHandle", user);
+      Base64UrlDecodeOptionalStringKey(*assertion_response, "userHandle");
   if (!ok) {
     return InvalidGetAssertionField("userHandle");
   }
@@ -941,7 +918,7 @@ GetAssertionResponseFromValue(const base::Value& value, const JSONUser user) {
     const base::Value::Dict* results = prf->FindDict("results");
     if (results) {
       std::optional<blink::mojom::PRFValuesPtr> prf_results =
-          ParsePRFResults(results, user);
+          ParsePRFResults(results);
       if (!prf_results) {
         return InvalidGetAssertionField("prf");
       }

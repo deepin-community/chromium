@@ -48,7 +48,6 @@
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "ui/display/types/display_constants.h"
 
@@ -83,8 +82,6 @@ class PLATFORM_EXPORT MediaStreamSource final
     kReadyStateMuted = 1,
     kReadyStateEnded = 2
   };
-
-  enum class EchoCancellationMode { kDisabled, kBrowser, kAec3, kSystem };
 
   MediaStreamSource(
       const String& id,
@@ -123,7 +120,7 @@ class PLATFORM_EXPORT MediaStreamSource final
     return platform_source_.get();
   }
 
-  void SetAudioProcessingProperties(EchoCancellationMode echo_cancellation_mode,
+  void SetAudioProcessingProperties(bool echo_cancellation,
                                     bool auto_gain_control,
                                     bool noise_supression,
                                     bool voice_isolation);
@@ -138,7 +135,6 @@ class PLATFORM_EXPORT MediaStreamSource final
     Vector<double> aspect_ratio;
     Vector<double> frame_rate;
     Vector<bool> echo_cancellation;
-    Vector<String> echo_cancellation_type;
     Vector<bool> auto_gain_control;
     Vector<bool> noise_suppression;
     Vector<bool> voice_isolation;
@@ -216,7 +212,7 @@ class PLATFORM_EXPORT MediaStreamSource final
       GUARDED_BY(audio_consumer_lock_);
   std::unique_ptr<WebPlatformMediaStreamSource> platform_source_;
   Capabilities capabilities_;
-  std::optional<EchoCancellationMode> echo_cancellation_mode_;
+  std::optional<bool> echo_cancellation_;
   std::optional<bool> auto_gain_control_;
   std::optional<bool> noise_supression_;
   std::optional<bool> voice_isolation_;

@@ -24,10 +24,11 @@
 #include "chrome/test/base/chrome_ash_test_base.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
-#include "chromeos/constants/chromeos_features.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/test_web_ui.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -37,7 +38,7 @@ namespace ash::personalization_app {
 namespace {
 
 constexpr char kFakeTestEmail[] = "fakeemail@personalization";
-constexpr char kTestGaiaId[] = "1234567890";
+constexpr GaiaId::Literal kTestGaiaId("1234567890");
 AccountId kAccountId =
     AccountId::FromUserEmailGaiaId(kFakeTestEmail, kTestGaiaId);
 
@@ -76,8 +77,11 @@ class TestThemeObserver
     static_color_ = static_color;
   }
 
-  void OnGeolocationPermissionForSystemServicesChanged(bool enabled) override {
+  void OnGeolocationPermissionForSystemServicesChanged(
+      bool enabled,
+      bool is_user_modifiable) override {
     geolocation_for_system_enabled_ = enabled;
+    is_geolocation_user_modifiable_ = is_user_modifiable;
   }
 
   void OnDaylightTimeChanged(const std::u16string& sunrise_time,
@@ -116,6 +120,13 @@ class TestThemeObserver
     return geolocation_for_system_enabled_;
   }
 
+  bool is_geolocation_user_modifiable() {
+    if (theme_observer_receiver_.is_bound()) {
+      theme_observer_receiver_.FlushForTesting();
+    }
+    return is_geolocation_user_modifiable_;
+  }
+
   ash::style::mojom::ColorScheme GetColorScheme() {
     if (theme_observer_receiver_.is_bound()) {
       theme_observer_receiver_.FlushForTesting();
@@ -138,6 +149,7 @@ class TestThemeObserver
   bool dark_mode_enabled_ = false;
   bool color_mode_auto_schedule_enabled_ = false;
   bool geolocation_for_system_enabled_ = false;
+  bool is_geolocation_user_modifiable_ = true;
   ash::style::mojom::ColorScheme color_scheme_ =
       ash::style::mojom::ColorScheme::kTonalSpot;
   std::optional<::SkColor> static_color_ = std::nullopt;
@@ -212,11 +224,40 @@ class PersonalizationAppThemeProviderImplTest : public ChromeAshTestBase {
     return test_theme_observer_.is_color_mode_auto_schedule_enabled();
   }
 
+  // Depending on the `managed` argument, sets the value of the
+  // `kUserGeolocationAccessLevel` pref either in `PrefStoreType::MANAGED_STORE`
+  // or in `PrefStoreType::USER_STORE` PrefStore.
+  void SetGeolocationPref(bool enabled, bool managed) {
+    GeolocationAccessLevel level;
+    if (enabled) {
+      level = GeolocationAccessLevel::kOnlyAllowedForSystem;
+    } else {
+      level = GeolocationAccessLevel::kDisallowed;
+    }
+
+    if (managed) {
+      profile()->GetTestingPrefService()->SetManagedPref(
+          ash::prefs::kUserGeolocationAccessLevel,
+          base::Value(static_cast<int>(level)));
+    } else {
+      profile()->GetTestingPrefService()->SetUserPref(
+          ash::prefs::kUserGeolocationAccessLevel,
+          base::Value(static_cast<int>(level)));
+    }
+  }
+
   bool is_geolocation_enabled_for_system_services() {
     if (theme_provider_remote_.is_bound()) {
       theme_provider_remote_.FlushForTesting();
     }
     return test_theme_observer_.is_geolocation_enabled_for_system_services();
+  }
+
+  bool is_geolocation_user_modifiable() {
+    if (theme_provider_remote_.is_bound()) {
+      theme_provider_remote_.FlushForTesting();
+    }
+    return test_theme_observer_.is_geolocation_user_modifiable();
   }
 
   ash::style::mojom::ColorScheme GetColorScheme() {
@@ -290,16 +331,32 @@ TEST_F(PersonalizationAppThemeProviderImplTest,
        EnableGeolocationForSystemServices) {
   SetThemeObserver();
 
-  theme_provider()->EnableGeolocationForSystemServices();
+  // Check default geolocation state.
   EXPECT_TRUE(is_geolocation_enabled_for_system_services());
+  EXPECT_TRUE(is_geolocation_user_modifiable());
+
+  // Check consumer scenarios:
+  SetGeolocationPref(/*enabled=*/false, /*managed=*/false);
+  // theme_provider()->EnableGeolocationForSystemServices();
+  EXPECT_FALSE(is_geolocation_enabled_for_system_services());
+  EXPECT_TRUE(is_geolocation_user_modifiable());
+  SetGeolocationPref(/*enabled=*/true, /*managed=*/false);
+  EXPECT_TRUE(is_geolocation_enabled_for_system_services());
+  EXPECT_TRUE(is_geolocation_user_modifiable());
+
+  // Check managed scenarios:
+  SetGeolocationPref(/*enabled=*/false, /*managed=*/true);
+  EXPECT_FALSE(is_geolocation_enabled_for_system_services());
+  EXPECT_FALSE(is_geolocation_user_modifiable());
+  SetGeolocationPref(/*enabled=*/true, /*managed=*/true);
+  EXPECT_TRUE(is_geolocation_enabled_for_system_services());
+  EXPECT_FALSE(is_geolocation_user_modifiable());
 }
 
 class PersonalizationAppThemeProviderImplJellyTest
     : public PersonalizationAppThemeProviderImplTest {
  public:
-  PersonalizationAppThemeProviderImplJellyTest() {
-    scoped_feature_list_.InitAndEnableFeature(chromeos::features::kJelly);
-  }
+  PersonalizationAppThemeProviderImplJellyTest() = default;
 
   PersonalizationAppThemeProviderImplJellyTest(
       const PersonalizationAppThemeProviderImplJellyTest&) = delete;
@@ -317,9 +374,6 @@ class PersonalizationAppThemeProviderImplJellyTest
     return Shell::Get()->session_controller()->GetUserPrefServiceForUser(
         kAccountId);
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(PersonalizationAppThemeProviderImplJellyTest, SetStaticColor) {

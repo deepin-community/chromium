@@ -50,6 +50,8 @@ class MockGpuVideoAcceleratorFactories : public GpuVideoAcceleratorFactories {
 
   MOCK_METHOD0(GetVideoEncodeAcceleratorSupportedProfiles,
                std::optional<VideoEncodeAccelerator::SupportedProfiles>());
+  MOCK_METHOD0(GetSupportedVideoDecoderConfigs,
+               std::optional<media::SupportedVideoDecoderConfigs>());
   MOCK_METHOD0(IsEncoderSupportKnown, bool());
   MOCK_METHOD1(NotifyEncoderSupportKnown, void(base::OnceClosure));
   // CreateVideoEncodeAccelerator returns scoped_ptr, which the mocking
@@ -62,14 +64,8 @@ class MockGpuVideoAcceleratorFactories : public GpuVideoAcceleratorFactories {
   MOCK_METHOD1(SetRenderingColorSpace, void(const gfx::ColorSpace&));
   MOCK_CONST_METHOD0(GetRenderingColorSpace, const gfx::ColorSpace&());
 
-  std::unique_ptr<gfx::GpuMemoryBuffer> CreateGpuMemoryBuffer(
-      const gfx::Size& size,
-      gfx::BufferFormat format,
-      gfx::BufferUsage usage) override;
-
   bool ShouldUseGpuMemoryBuffersForVideoFrames(
       bool for_media_stream) const override;
-  unsigned ImageTextureTarget(gfx::BufferFormat format) override;
   OutputFormat VideoFrameOutputFormat(VideoPixelFormat pixel_format) override {
     return video_frame_output_format_;
   }
@@ -106,7 +102,7 @@ class MockGpuVideoAcceleratorFactories : public GpuVideoAcceleratorFactories {
 
  private:
   base::Lock lock_;
-  OutputFormat video_frame_output_format_ = OutputFormat::I420;
+  OutputFormat video_frame_output_format_ = OutputFormat::YV12;
 
   bool fail_to_allocate_gpu_memory_buffer_ = false;
 

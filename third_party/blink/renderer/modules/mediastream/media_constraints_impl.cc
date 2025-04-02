@@ -28,11 +28,15 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "third_party/blink/renderer/modules/mediastream/media_constraints_impl.h"
 
 #include "build/build_config.h"
 #include "third_party/blink/public/platform/web_string.h"
-#include "third_party/blink/renderer/bindings/core/v8/array_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/dictionary.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_string_stringsequence.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_constrain_boolean_parameters.h"
@@ -99,15 +103,6 @@ const char kMediaStreamRenderToAssociatedSink[] =
 // RenderToAssociatedSink will be going away some time.
 const char kEchoCancellation[] = "echoCancellation";
 const char kDisableLocalEcho[] = "disableLocalEcho";
-const char kGoogEchoCancellation[] = "googEchoCancellation";
-const char kGoogExperimentalEchoCancellation[] = "googEchoCancellation2";
-const char kGoogAutoGainControl[] = "googAutoGainControl";
-const char kGoogNoiseSuppression[] = "googNoiseSuppression";
-const char kGoogExperimentalNoiseSuppression[] = "googNoiseSuppression2";
-const char kGoogHighpassFilter[] = "googHighpassFilter";
-const char kGoogAudioMirroring[] = "googAudioMirroring";
-// Audio constraints.
-const char kDAEchoCancellation[] = "googDAEchoCancellation";
 // Google-specific constraint keys for a local video source (getUserMedia).
 const char kNoiseReduction[] = "googNoiseReduction";
 
@@ -215,24 +210,6 @@ static void ParseOldStyleNames(
       // Should give TypeError when it's not parseable.
       // https://crbug.com/576582
       result.render_to_associated_sink.SetExact(ToBoolean(constraint.value_));
-    } else if (constraint.name_ == kGoogEchoCancellation) {
-      result.goog_echo_cancellation.SetExact(ToBoolean(constraint.value_));
-    } else if (constraint.name_ == kGoogExperimentalEchoCancellation) {
-      result.goog_experimental_echo_cancellation.SetExact(
-          ToBoolean(constraint.value_));
-    } else if (constraint.name_ == kGoogAutoGainControl) {
-      result.goog_auto_gain_control.SetExact(ToBoolean(constraint.value_));
-    } else if (constraint.name_ == kGoogNoiseSuppression) {
-      result.goog_noise_suppression.SetExact(ToBoolean(constraint.value_));
-    } else if (constraint.name_ == kGoogExperimentalNoiseSuppression) {
-      result.goog_experimental_noise_suppression.SetExact(
-          ToBoolean(constraint.value_));
-    } else if (constraint.name_ == kGoogHighpassFilter) {
-      result.goog_highpass_filter.SetExact(ToBoolean(constraint.value_));
-    } else if (constraint.name_ == kGoogAudioMirroring) {
-      result.goog_audio_mirroring.SetExact(ToBoolean(constraint.value_));
-    } else if (constraint.name_ == kDAEchoCancellation) {
-      result.goog_da_echo_cancellation.SetExact(ToBoolean(constraint.value_));
     } else if (constraint.name_ == kNoiseReduction) {
       result.goog_noise_reduction.SetExact(ToBoolean(constraint.value_));
     }
@@ -381,7 +358,6 @@ bool ValidateStringConstraint(
     }
   }
   NOTREACHED();
-  return false;
 }
 
 bool ValidateStringConstraint(const V8ConstrainDOMString* blink_union_form,
@@ -407,7 +383,6 @@ bool ValidateStringConstraint(const V8ConstrainDOMString* blink_union_form,
                                error_message);
   }
   NOTREACHED();
-  return false;
 }
 
 [[nodiscard]] bool ValidateAndCopyStringConstraint(
@@ -558,12 +533,12 @@ bool ValidateAndCopyConstraintSet(
 
   if (constraints_in->hasAutoGainControl()) {
     CopyBooleanConstraint(constraints_in->autoGainControl(), naked_treatment,
-                          constraint_buffer.goog_auto_gain_control);
+                          constraint_buffer.auto_gain_control);
   }
 
   if (constraints_in->hasNoiseSuppression()) {
     CopyBooleanConstraint(constraints_in->noiseSuppression(), naked_treatment,
-                          constraint_buffer.goog_noise_suppression);
+                          constraint_buffer.noise_suppression);
   }
 
   if (constraints_in->hasVoiceIsolation()) {
@@ -597,6 +572,52 @@ bool ValidateAndCopyConstraintSet(
     }
   }
 
+  if (constraints_in->hasExposureCompensation()) {
+    CopyDoubleConstraint(constraints_in->exposureCompensation(),
+                         naked_treatment,
+                         constraint_buffer.exposure_compensation);
+  }
+
+  if (constraints_in->hasExposureTime()) {
+    CopyDoubleConstraint(constraints_in->exposureTime(), naked_treatment,
+                         constraint_buffer.exposure_time);
+  }
+
+  if (constraints_in->hasColorTemperature()) {
+    CopyDoubleConstraint(constraints_in->colorTemperature(), naked_treatment,
+                         constraint_buffer.color_temperature);
+  }
+
+  if (constraints_in->hasIso()) {
+    CopyDoubleConstraint(constraints_in->iso(), naked_treatment,
+                         constraint_buffer.iso);
+  }
+
+  if (constraints_in->hasBrightness()) {
+    CopyDoubleConstraint(constraints_in->brightness(), naked_treatment,
+                         constraint_buffer.brightness);
+  }
+
+  if (constraints_in->hasContrast()) {
+    CopyDoubleConstraint(constraints_in->contrast(), naked_treatment,
+                         constraint_buffer.contrast);
+  }
+
+  if (constraints_in->hasSaturation()) {
+    CopyDoubleConstraint(constraints_in->saturation(), naked_treatment,
+                         constraint_buffer.saturation);
+  }
+
+  if (constraints_in->hasSharpness()) {
+    CopyDoubleConstraint(constraints_in->sharpness(), naked_treatment,
+                         constraint_buffer.sharpness);
+  }
+
+  if (constraints_in->hasFocusDistance()) {
+    CopyDoubleConstraint(constraints_in->focusDistance(), naked_treatment,
+                         constraint_buffer.focus_distance);
+  }
+
   if (constraints_in->hasPan()) {
     CopyBooleanOrDoubleConstraint(constraints_in->pan(), naked_treatment,
                                   constraint_buffer.pan);
@@ -620,6 +641,12 @@ bool ValidateAndCopyConstraintSet(
   if (constraints_in->hasBackgroundBlur()) {
     CopyBooleanConstraint(constraints_in->backgroundBlur(), naked_treatment,
                           constraint_buffer.background_blur);
+  }
+
+  if (constraints_in->hasBackgroundSegmentationMask()) {
+    CopyBooleanConstraint(constraints_in->backgroundSegmentationMask(),
+                          naked_treatment,
+                          constraint_buffer.background_segmentation_mask);
   }
 
   if (constraints_in->hasEyeGazeCorrection()) {
@@ -661,7 +688,6 @@ bool UseNakedNumeric(const T& input, NakedValueDisposition which) {
       break;
   }
   NOTREACHED();
-  return false;
 }
 
 template <class T>
@@ -675,7 +701,6 @@ bool UseNakedNonNumeric(const T& input, NakedValueDisposition which) {
       break;
   }
   NOTREACHED();
-  return false;
 }
 
 template <typename U, class T>
@@ -689,7 +714,6 @@ U GetNakedValue(const T& input, NakedValueDisposition which) {
       break;
   }
   NOTREACHED();
-  return input.Exact();
 }
 
 V8ConstrainLong* ConvertLong(const LongConstraint& input,
@@ -825,13 +849,13 @@ void ConvertConstraintSet(const MediaTrackConstraintSetPlatform& input,
     output->setEchoCancellation(
         ConvertBoolean(input.echo_cancellation, naked_treatment));
   }
-  if (!input.goog_auto_gain_control.IsUnconstrained()) {
+  if (!input.auto_gain_control.IsUnconstrained()) {
     output->setAutoGainControl(
-        ConvertBoolean(input.goog_auto_gain_control, naked_treatment));
+        ConvertBoolean(input.auto_gain_control, naked_treatment));
   }
-  if (!input.goog_noise_suppression.IsUnconstrained()) {
+  if (!input.noise_suppression.IsUnconstrained()) {
     output->setNoiseSuppression(
-        ConvertBoolean(input.goog_noise_suppression, naked_treatment));
+        ConvertBoolean(input.noise_suppression, naked_treatment));
   }
   if (!input.voice_isolation.IsUnconstrained()) {
     output->setVoiceIsolation(
@@ -845,6 +869,37 @@ void ConvertConstraintSet(const MediaTrackConstraintSetPlatform& input,
     output->setDeviceId(ConvertString(input.device_id, naked_treatment));
   if (!input.group_id.IsUnconstrained())
     output->setGroupId(ConvertString(input.group_id, naked_treatment));
+  if (!input.exposure_compensation.IsUnconstrained()) {
+    output->setExposureCompensation(
+        ConvertDouble(input.exposure_compensation, naked_treatment));
+  }
+  if (!input.exposure_time.IsUnconstrained()) {
+    output->setExposureTime(
+        ConvertDouble(input.exposure_time, naked_treatment));
+  }
+  if (!input.color_temperature.IsUnconstrained()) {
+    output->setColorTemperature(
+        ConvertDouble(input.color_temperature, naked_treatment));
+  }
+  if (!input.iso.IsUnconstrained()) {
+    output->setIso(ConvertDouble(input.iso, naked_treatment));
+  }
+  if (!input.brightness.IsUnconstrained()) {
+    output->setBrightness(ConvertDouble(input.brightness, naked_treatment));
+  }
+  if (!input.contrast.IsUnconstrained()) {
+    output->setContrast(ConvertDouble(input.contrast, naked_treatment));
+  }
+  if (!input.saturation.IsUnconstrained()) {
+    output->setSaturation(ConvertDouble(input.saturation, naked_treatment));
+  }
+  if (!input.sharpness.IsUnconstrained()) {
+    output->setSharpness(ConvertDouble(input.sharpness, naked_treatment));
+  }
+  if (!input.focus_distance.IsUnconstrained()) {
+    output->setFocusDistance(
+        ConvertDouble(input.focus_distance, naked_treatment));
+  }
   if (!input.pan.IsUnconstrained())
     output->setPan(ConvertBooleanOrDouble(input.pan, naked_treatment));
   if (!input.tilt.IsUnconstrained())
@@ -857,6 +912,10 @@ void ConvertConstraintSet(const MediaTrackConstraintSetPlatform& input,
   if (!input.background_blur.IsUnconstrained()) {
     output->setBackgroundBlur(
         ConvertBoolean(input.background_blur, naked_treatment));
+  }
+  if (!input.background_segmentation_mask.IsUnconstrained()) {
+    output->setBackgroundSegmentationMask(
+        ConvertBoolean(input.background_segmentation_mask, naked_treatment));
   }
   if (!input.eye_gaze_correction.IsUnconstrained()) {
     output->setEyeGazeCorrection(

@@ -37,6 +37,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"dawn.googlesource.com/dawn/tools/src/cmd/run-cts/common"
 )
@@ -108,6 +109,9 @@ func (c *cmd) runTestCaseWithCmdline(ctx context.Context, testCase common.TestCa
 	if c.flags.compatibilityMode {
 		args = append(args, "--compat")
 	}
+	if c.flags.enforceDefaultLimits {
+		args = append(args, "--enforce-default-limits")
+	}
 	for _, f := range c.flags.dawn {
 		args = append(args, "--gpu-provider-flag", f)
 	}
@@ -121,8 +125,10 @@ func (c *cmd) runTestCaseWithCmdline(ctx context.Context, testCase common.TestCa
 	cmd.Stderr = &buf
 
 	if c.flags.Verbose {
-		PrintCommand(cmd)
+		PrintCommand(cmd, c.flags.skipVSCodeInfo)
 	}
+
+	start := time.Now()
 	err := cmd.Run()
 
 	msg := buf.String()
@@ -131,6 +137,7 @@ func (c *cmd) runTestCaseWithCmdline(ctx context.Context, testCase common.TestCa
 		Status:   common.Pass,
 		Message:  msg,
 		Error:    err,
+		Duration: time.Since(start),
 	}
 
 	if err == nil && c.coverage != nil {

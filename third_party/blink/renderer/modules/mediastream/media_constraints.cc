@@ -374,8 +374,9 @@ MediaTrackConstraintSetPlatform::MediaTrackConstraintSetPlatform()
       sample_rate("sampleRate"),
       sample_size("sampleSize"),
       echo_cancellation("echoCancellation"),
+      auto_gain_control("autoGainControl"),
+      noise_suppression("noiseSuppression"),
       voice_isolation("voiceIsolation"),
-      echo_cancellation_type("echoCancellationType"),
       latency("latency"),
       channel_count("channelCount"),
       device_id("deviceId"),
@@ -383,23 +384,25 @@ MediaTrackConstraintSetPlatform::MediaTrackConstraintSetPlatform()
       suppress_local_audio_playback("suppressLocalAudioPlayback"),
       group_id("groupId"),
       display_surface("displaySurface"),
+      exposure_compensation("exposureCompensation"),
+      exposure_time("exposureTime"),
+      color_temperature("colorTemperature"),
+      iso("iso"),
+      brightness("brightness"),
+      contrast("contrast"),
+      saturation("saturation"),
+      sharpness("sharpness"),
+      focus_distance("focusDistance"),
       pan("pan"),
       tilt("tilt"),
       zoom("zoom"),
       torch("torch"),
       background_blur("backgroundBlur"),
+      background_segmentation_mask("backgroundSegmentationMask"),
       eye_gaze_correction("eyeGazeCorrection"),
       face_framing("faceFraming"),
       media_stream_source("mediaStreamSource"),
       render_to_associated_sink("chromeRenderToAssociatedSink"),
-      goog_echo_cancellation("googEchoCancellation"),
-      goog_experimental_echo_cancellation("googExperimentalEchoCancellation"),
-      goog_auto_gain_control("autoGainControl"),
-      goog_noise_suppression("noiseSuppression"),
-      goog_highpass_filter("googHighpassFilter"),
-      goog_experimental_noise_suppression("googExperimentalNoiseSuppression"),
-      goog_audio_mirroring("googAudioMirroring"),
-      goog_da_echo_cancellation("googDAEchoCancellation"),
       goog_noise_reduction("googNoiseReduction") {}
 
 Vector<const BaseConstraint*> MediaTrackConstraintSetPlatform::AllConstraints()
@@ -414,7 +417,9 @@ Vector<const BaseConstraint*> MediaTrackConstraintSetPlatform::AllConstraints()
           &sample_rate,
           &sample_size,
           &echo_cancellation,
-          &echo_cancellation_type,
+          &auto_gain_control,
+          &noise_suppression,
+          &voice_isolation,
           &latency,
           &channel_count,
           &device_id,
@@ -423,23 +428,24 @@ Vector<const BaseConstraint*> MediaTrackConstraintSetPlatform::AllConstraints()
           &media_stream_source,
           &disable_local_echo,
           &suppress_local_audio_playback,
+          &exposure_compensation,
+          &exposure_time,
+          &color_temperature,
+          &iso,
+          &brightness,
+          &contrast,
+          &saturation,
+          &sharpness,
+          &focus_distance,
           &pan,
           &tilt,
           &zoom,
           &torch,
           &background_blur,
+          &background_segmentation_mask,
           &eye_gaze_correction,
           &face_framing,
           &render_to_associated_sink,
-          &goog_echo_cancellation,
-          &goog_experimental_echo_cancellation,
-          &goog_auto_gain_control,
-          &goog_noise_suppression,
-          &voice_isolation,
-          &goog_highpass_filter,
-          &goog_experimental_noise_suppression,
-          &goog_audio_mirroring,
-          &goog_da_echo_cancellation,
           &goog_noise_reduction};
 }
 
@@ -556,7 +562,7 @@ const Vector<MediaTrackConstraintSetPlatform>& MediaConstraints::Advanced()
 
 const String MediaConstraints::ToString() const {
   if (IsNull()) {
-    return String("");
+    return g_empty_string;
   }
   return private_->ToString();
 }

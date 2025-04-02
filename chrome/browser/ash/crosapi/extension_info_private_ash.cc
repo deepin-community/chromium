@@ -6,7 +6,6 @@
 
 #include <string_view>
 
-#include "ash/components/arc/arc_util.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/stylus_utils.h"
 #include "base/memory/ptr_util.h"
@@ -15,12 +14,12 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "build/config/chromebox_for_meetings/buildflags.h"
+#include "build/config/cuttlefish/buildflags.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/system/timezone_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
@@ -30,8 +29,10 @@
 #include "chromeos/ash/components/network/device_state.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
 #include "chromeos/constants/devicetype.h"
 #include "components/metrics/metrics_service.h"
 #include "components/prefs/pref_service.h"
@@ -58,6 +59,9 @@ const char kPropertyDeviceRequisition[] = "deviceRequisition";
 
 // Key which corresponds to the isMeetDevice property in JS.
 const char kPropertyMeetDevice[] = "isMeetDevice";
+
+// Key which corresponds to the isCuttlefishDevice property in JS.
+const char kPropertyCuttlefishDevice[] = "isCuttlefishDevice";
 
 // Key which corresponds to the home provider property.
 const char kPropertyHomeProvider[] = "homeProvider";
@@ -232,8 +236,9 @@ const struct {
     {kPropertySendFunctionsKeys, ash::prefs::kSendFunctionKeys}};
 
 bool IsEnterpriseKiosk() {
-  if (!chrome::IsRunningInForcedAppMode())
+  if (!IsRunningInForcedAppMode()) {
     return false;
+  }
 
   policy::BrowserPolicyConnectorAsh* connector =
       g_browser_process->platform_part()->browser_policy_connector_ash();
@@ -283,6 +288,14 @@ std::unique_ptr<base::Value> GetValue(const std::string& property_name) {
 
   if (property_name == kPropertyMeetDevice) {
 #if BUILDFLAG(PLATFORM_CFM)
+    return std::make_unique<base::Value>(true);
+#else
+    return std::make_unique<base::Value>(false);
+#endif
+  }
+
+  if (property_name == kPropertyCuttlefishDevice) {
+#if BUILDFLAG(PLATFORM_CUTTLEFISH)
     return std::make_unique<base::Value>(true);
 #else
     return std::make_unique<base::Value>(false);
@@ -385,7 +398,7 @@ std::unique_ptr<base::Value> GetValue(const std::string& property_name) {
               prefs::kUserTimezone);
       return std::make_unique<base::Value>(timezone->GetValue()->Clone());
     }
-    // TODO(crbug.com/697817): Convert CrosSettings::Get to take a unique_ptr.
+    // TODO(crbug.com/40508978): Convert CrosSettings::Get to take a unique_ptr.
     return base::Value::ToUniquePtrValue(
         ash::CrosSettings::Get()->GetPref(ash::kSystemTimezone)->Clone());
   }

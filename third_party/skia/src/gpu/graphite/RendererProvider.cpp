@@ -9,14 +9,19 @@
 
 #include "include/core/SkPathTypes.h"
 #include "include/core/SkVertices.h"
+#include "src/gpu/AtlasTypes.h"
 #include "src/gpu/graphite/Caps.h"
+#include "src/gpu/graphite/InternalDrawTypeFlags.h"
+#include "src/gpu/graphite/render/AnalyticBlurRenderStep.h"
 #include "src/gpu/graphite/render/AnalyticRRectRenderStep.h"
 #include "src/gpu/graphite/render/BitmapTextRenderStep.h"
+#include "src/gpu/graphite/render/CircularArcRenderStep.h"
 #include "src/gpu/graphite/render/CommonDepthStencilSettings.h"
 #include "src/gpu/graphite/render/CoverBoundsRenderStep.h"
 #include "src/gpu/graphite/render/CoverageMaskRenderStep.h"
 #include "src/gpu/graphite/render/MiddleOutFanRenderStep.h"
 #include "src/gpu/graphite/render/PerEdgeAAQuadRenderStep.h"
+#include "src/gpu/graphite/render/SDFTextLCDRenderStep.h"
 #include "src/gpu/graphite/render/SDFTextRenderStep.h"
 #include "src/gpu/graphite/render/TessellateCurvesRenderStep.h"
 #include "src/gpu/graphite/render/TessellateStrokesRenderStep.h"
@@ -59,27 +64,59 @@ RendererProvider::RendererProvider(const Caps* caps, StaticBufferManager* buffer
         std::string name = "SingleStep[";
         name += singleStep->name();
         name += "]";
-        fRenderSteps.push_back(std::move(singleStep));
-        return Renderer(name, drawTypes, fRenderSteps.back().get());
+        return Renderer(name, drawTypes, this->assumeOwnership(std::move(singleStep)));
     };
 
     fConvexTessellatedWedges =
             makeFromStep(std::make_unique<TessellateWedgesRenderStep>(
-                                 "convex", infinitySupport, kDirectDepthGreaterPass, bufferManager),
-                         DrawTypeFlags::kShape);
+                                 RenderStep::RenderStepID::kTessellateWedges_Convex,
+                                 infinitySupport, kDirectDepthGreaterPass, bufferManager),
+                         DrawTypeFlags::kNonSimpleShape);
     fTessellatedStrokes = makeFromStep(
-            std::make_unique<TessellateStrokesRenderStep>(infinitySupport), DrawTypeFlags::kShape);
-    fCoverageMask = makeFromStep(std::make_unique<CoverageMaskRenderStep>(), DrawTypeFlags::kShape);
-    for (bool lcd : {false, true}) {
-        fBitmapText[lcd] = makeFromStep(std::make_unique<BitmapTextRenderStep>(lcd),
-                                        DrawTypeFlags::kText);
-        fSDFText[lcd] = makeFromStep(std::make_unique<SDFTextRenderStep>(lcd),
-                                     DrawTypeFlags::kText);
+            std::make_unique<TessellateStrokesRenderStep>(infinitySupport),
+            DrawTypeFlags::kNonSimpleShape);
+    fCoverageMask = makeFromStep(
+            std::make_unique<CoverageMaskRenderStep>(),
+            static_cast<DrawTypeFlags>(static_cast<int>(DrawTypeFlags::kNonSimpleShape) |
+                                       static_cast<int>(InternalDrawTypeFlags::kCoverageMask)));
+
+    static constexpr struct {
+        skgpu::MaskFormat fFormat;
+        DrawTypeFlags     fDrawType;
+    } kBitmapTextVariants [] = {
+        // We are using 565 here to represent LCD text, regardless of texture format
+        { skgpu::MaskFormat::kA8,   DrawTypeFlags::kBitmapText_Mask  },
+        { skgpu::MaskFormat::kA565, DrawTypeFlags::kBitmapText_LCD   },
+        { skgpu::MaskFormat::kARGB, DrawTypeFlags::kBitmapText_Color }
+    };
+
+    for (auto textVariant : kBitmapTextVariants) {
+        fBitmapText[int(textVariant.fFormat)] =
+                makeFromStep(std::make_unique<BitmapTextRenderStep>(textVariant.fFormat),
+                             textVariant.fDrawType);
     }
-    fAnalyticRRect = makeFromStep(std::make_unique<AnalyticRRectRenderStep>(bufferManager),
-                                  DrawTypeFlags::kShape);
+    for (bool lcd : {false, true}) {
+        fSDFText[lcd] = lcd ? makeFromStep(std::make_unique<SDFTextLCDRenderStep>(),
+                                           DrawTypeFlags::kSDFText_LCD)
+                            : makeFromStep(std::make_unique<SDFTextRenderStep>(),
+                                           DrawTypeFlags::kSDFText);
+    }
+    fAnalyticRRect = makeFromStep(
+            std::make_unique<AnalyticRRectRenderStep>(bufferManager),
+            static_cast<DrawTypeFlags>(static_cast<int>(DrawTypeFlags::kSimpleShape) |
+                                       static_cast<int>(InternalDrawTypeFlags::kAnalyticRRect)));
     fPerEdgeAAQuad = makeFromStep(std::make_unique<PerEdgeAAQuadRenderStep>(bufferManager),
-                                  DrawTypeFlags::kShape);
+                                  DrawTypeFlags::kSimpleShape);
+    fNonAABoundsFill = makeFromStep(std::make_unique<CoverBoundsRenderStep>(
+                                            RenderStep::RenderStepID::kCoverBounds_NonAAFill,
+                                            kDirectDepthGreaterPass),
+                                    DrawTypeFlags::kSimpleShape);
+    fCircularArc = makeFromStep(std::make_unique<CircularArcRenderStep>(bufferManager),
+                                DrawTypeFlags::kSimpleShape);
+    fAnalyticBlur = makeFromStep(std::make_unique<AnalyticBlurRenderStep>(),
+                                 DrawTypeFlags::kSimpleShape);
+
+    // vertices
     for (PrimitiveType primType : {PrimitiveType::kTriangles, PrimitiveType::kTriangleStrip}) {
         for (bool color : {false, true}) {
             for (bool texCoords : {false, true}) {
@@ -92,8 +129,10 @@ RendererProvider::RendererProvider(const Caps* caps, StaticBufferManager* buffer
     }
 
     // The tessellating path renderers that use stencil can share the cover steps.
-    auto coverFill = std::make_unique<CoverBoundsRenderStep>(false);
-    auto coverInverse = std::make_unique<CoverBoundsRenderStep>(true);
+    auto coverFill = std::make_unique<CoverBoundsRenderStep>(
+            RenderStep::RenderStepID::kCoverBounds_RegularCover, kRegularCoverPass);
+    auto coverInverse = std::make_unique<CoverBoundsRenderStep>(
+            RenderStep::RenderStepID::kCoverBounds_InverseCover, kInverseCoverPass);
 
     for (bool evenOdd : {false, true}) {
         // These steps can be shared by regular and inverse fills
@@ -102,9 +141,11 @@ RendererProvider::RendererProvider(const Caps* caps, StaticBufferManager* buffer
                 evenOdd, infinitySupport, bufferManager);
         auto stencilWedge =
                 evenOdd ? std::make_unique<TessellateWedgesRenderStep>(
-                                  "evenodd", infinitySupport, kEvenOddStencilPass, bufferManager)
+                                RenderStep::RenderStepID::kTessellateWedges_EvenOdd,
+                                infinitySupport, kEvenOddStencilPass, bufferManager)
                         : std::make_unique<TessellateWedgesRenderStep>(
-                                  "winding", infinitySupport, kWindingStencilPass, bufferManager);
+                                RenderStep::RenderStepID::kTessellateWedges_Winding,
+                                infinitySupport, kWindingStencilPass, bufferManager);
 
         for (bool inverse : {false, true}) {
             static const char* kTessVariants[4] =
@@ -113,29 +154,26 @@ RendererProvider::RendererProvider(const Caps* caps, StaticBufferManager* buffer
             int index = 2*inverse + evenOdd; // matches SkPathFillType
             std::string variant = kTessVariants[index];
 
-            constexpr DrawTypeFlags kTextAndShape =
-                    static_cast<DrawTypeFlags>(DrawTypeFlags::kText|DrawTypeFlags::kShape);
-
             const RenderStep* coverStep = inverse ? coverInverse.get() : coverFill.get();
             fStencilTessellatedCurves[index] = Renderer("StencilTessellatedCurvesAndTris" + variant,
-                                                        kTextAndShape,
+                                                        DrawTypeFlags::kNonSimpleShape,
                                                         stencilFan.get(),
                                                         stencilCurve.get(),
                                                         coverStep);
 
             fStencilTessellatedWedges[index] = Renderer("StencilTessellatedWedges" + variant,
-                                                        kTextAndShape,
+                                                        DrawTypeFlags::kNonSimpleShape,
                                                         stencilWedge.get(),
                                                         coverStep);
         }
 
-        fRenderSteps.push_back(std::move(stencilFan));
-        fRenderSteps.push_back(std::move(stencilCurve));
-        fRenderSteps.push_back(std::move(stencilWedge));
+        this->assumeOwnership(std::move(stencilFan));
+        this->assumeOwnership(std::move(stencilCurve));
+        this->assumeOwnership(std::move(stencilWedge));
     }
 
-    fRenderSteps.push_back(std::move(coverInverse));
-    fRenderSteps.push_back(std::move(coverFill));
+    this->assumeOwnership(std::move(coverInverse));
+    this->assumeOwnership(std::move(coverFill));
 
     // Fill out 'fRenderers' by iterating the "span" from fStencilTessellatedCurves to fRenderers
     // and checking if they've been skipped or not.
@@ -149,15 +187,6 @@ RendererProvider::RendererProvider(const Caps* caps, StaticBufferManager* buffer
 #ifdef SK_ENABLE_VELLO_SHADERS
     fVelloRenderer = std::make_unique<VelloRenderer>(caps);
 #endif
-}
-
-const RenderStep* RendererProvider::lookup(uint32_t uniqueID) const {
-    for (auto&& rs : fRenderSteps) {
-        if (rs->uniqueID() == uniqueID) {
-            return rs.get();
-        }
-    }
-    return nullptr;
 }
 
 } // namespace skgpu::graphite

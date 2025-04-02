@@ -5,10 +5,12 @@
 #include "components/viz/test/fake_skia_output_surface.h"
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/not_fatal_until.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
@@ -20,7 +22,7 @@
 #include "components/viz/service/display/output_surface_frame.h"
 #include "gpu/GLES2/gl2extchromium.h"
 #include "gpu/command_buffer/client/client_shared_image.h"
-#include "gpu/command_buffer/common/mailbox_holder.h"
+#include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/common/swap_buffers_complete_params.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_format_service_utils.h"
@@ -28,12 +30,12 @@
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkPixelRef.h"
 #include "third_party/skia/include/gpu/GpuTypes.h"
-#include "third_party/skia/include/gpu/GrBackendSurface.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/GrBackendSurface.h"
+#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
 #include "third_party/skia/include/gpu/ganesh/SkImageGanesh.h"
 #include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "third_party/skia/include/gpu/ganesh/gl/GrGLBackendSurface.h"
-#include "third_party/skia/include/gpu/gl/GrGLTypes.h"
+#include "third_party/skia/include/gpu/ganesh/gl/GrGLTypes.h"
 #include "ui/gfx/gpu_fence_handle.h"
 #include "ui/gfx/presentation_feedback.h"
 #include "ui/gfx/swap_result.h"
@@ -85,16 +87,6 @@ void FakeSkiaOutputSurface::SwapBuffers(OutputSurfaceFrame frame) {
                                 weak_ptr_factory_.GetWeakPtr()));
 }
 
-void FakeSkiaOutputSurface::ScheduleOutputSurfaceAsOverlay(
-    OverlayProcessorInterface::OutputSurfaceOverlayPlane output_surface_plane) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  NOTIMPLEMENTED();
-}
-
-bool FakeSkiaOutputSurface::IsDisplayedAsOverlayPlane() const {
-  return false;
-}
-
 void FakeSkiaOutputSurface::SetNeedsSwapSizeNotifications(
     bool needs_swap_size_notifications) {
   NOTIMPLEMENTED();
@@ -138,24 +130,13 @@ void FakeSkiaOutputSurface::MakePromiseSkImage(
     return;
   }
 
-  auto sk_color_type =
-      ToClosestSkColorType(true /* gpu_compositing */, image_context->format());
+  auto sk_color_type = ToClosestSkColorType(image_context->format());
   image_context->SetImage(
       SkImages::BorrowTextureFrom(gr_context(), backend_texture,
                                   kTopLeft_GrSurfaceOrigin, sk_color_type,
                                   image_context->alpha_type(),
                                   image_context->color_space()),
       {backend_texture.getBackendFormat()});
-}
-
-sk_sp<SkImage> FakeSkiaOutputSurface::MakePromiseSkImageFromYUV(
-    const std::vector<ImageContext*>& contexts,
-    sk_sp<SkColorSpace> image_color_space,
-    SkYUVAInfo::PlaneConfig plane_config,
-    SkYUVAInfo::Subsampling subsampling) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  NOTIMPLEMENTED();
-  return nullptr;
 }
 
 gpu::SyncToken FakeSkiaOutputSurface::ReleaseImageContexts(
@@ -165,7 +146,9 @@ gpu::SyncToken FakeSkiaOutputSurface::ReleaseImageContexts(
 
 std::unique_ptr<ExternalUseClient::ImageContext>
 FakeSkiaOutputSurface::CreateImageContext(
-    const gpu::MailboxHolder& holder,
+    const gpu::Mailbox& mailbox,
+    const gpu::SyncToken& sync_token,
+    uint32_t texture_target,
     const gfx::Size& size,
     SharedImageFormat format,
     bool concurrent_reads,
@@ -173,7 +156,8 @@ FakeSkiaOutputSurface::CreateImageContext(
     sk_sp<SkColorSpace> color_space,
     bool raw_draw_if_possible) {
   return std::make_unique<ExternalUseClient::ImageContext>(
-      holder, size, format, ycbcr_info, std::move(color_space));
+      mailbox, sync_token, texture_target, size, format, ycbcr_info,
+      std::move(color_space));
 }
 
 SkCanvas* FakeSkiaOutputSurface::BeginPaintRenderPass(
@@ -194,8 +178,7 @@ SkCanvas* FakeSkiaOutputSurface::BeginPaintRenderPass(
   auto& sk_surface = sk_surfaces_[id];
 
   if (!sk_surface) {
-    SkColorType color_type =
-        ToClosestSkColorType(true /* gpu_compositing */, format);
+    SkColorType color_type = ToClosestSkColorType(format);
     SkImageInfo image_info = SkImageInfo::Make(
         surface_size.width(), surface_size.height(), color_type,
         kPremul_SkAlphaType, std::move(color_space));
@@ -235,7 +218,7 @@ sk_sp<SkImage> FakeSkiaOutputSurface::MakePromiseSkImageFromRenderPass(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   auto it = sk_surfaces_.find(id);
-  DCHECK(it != sk_surfaces_.end());
+  CHECK(it != sk_surfaces_.end(), base::NotFatalUntil::M130);
   return it->second->makeImageSnapshot();
 }
 
@@ -246,7 +229,7 @@ void FakeSkiaOutputSurface::RemoveRenderPassResource(
 
   for (const auto& id : ids) {
     auto it = sk_surfaces_.find(id);
-    DCHECK(it != sk_surfaces_.end());
+    CHECK(it != sk_surfaces_.end(), base::NotFatalUntil::M130);
     sk_surfaces_.erase(it);
   }
 
@@ -278,7 +261,7 @@ void FakeSkiaOutputSurface::CopyOutput(
   if (request->result_format() != CopyOutputResult::Format::RGBA ||
       request->is_scaled() ||
       geometry.result_bounds != geometry.result_selection) {
-    // TODO(crbug.com/644851): Complete the implementation for all request
+    // TODO(crbug.com/40483986): Complete the implementation for all request
     // types, scaling, etc.
     NOTIMPLEMENTED();
     return;
@@ -292,12 +275,13 @@ void FakeSkiaOutputSurface::CopyOutput(
     // usage flags passed in are currently arbitrary, since callers don't
     // actually do anything meaningful with the SharedImage.
     auto* sii = GetSharedImageInterface();
-    auto client_shared_image = sii->CreateSharedImage(
-        SinglePlaneFormat::kRGBA_8888, geometry.result_selection.size(),
-        color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
-        gpu::SHARED_IMAGE_USAGE_GLES2_READ |
-            gpu::SHARED_IMAGE_USAGE_GLES2_WRITE,
-        "CopyOutput", gpu::kNullSurfaceHandle);
+    auto client_shared_image =
+        sii->CreateSharedImage({SinglePlaneFormat::kRGBA_8888,
+                                geometry.result_selection.size(), color_space,
+                                gpu::SHARED_IMAGE_USAGE_GLES2_READ |
+                                    gpu::SHARED_IMAGE_USAGE_GLES2_WRITE,
+                                "CopyOutput"},
+                               gpu::kNullSurfaceHandle);
     CHECK(client_shared_image);
     gpu::Mailbox local_mailbox = client_shared_image->mailbox();
 
@@ -309,8 +293,7 @@ void FakeSkiaOutputSurface::CopyOutput(
 
     request->SendResult(std::make_unique<CopyOutputTextureResult>(
         CopyOutputResult::Format::RGBA, geometry.result_bounds,
-        CopyOutputResult::TextureResult(local_mailbox, GenerateSyncToken(),
-                                        color_space),
+        CopyOutputResult::TextureResult(local_mailbox, color_space),
         std::move(release_callbacks)));
     return;
   }
@@ -321,7 +304,7 @@ void FakeSkiaOutputSurface::CopyOutput(
   // Send copy request by copying into a bitmap.
   SkBitmap bitmap;
   copy_image->asLegacyBitmap(&bitmap);
-  // TODO(crbug.com/795132): Plumb color space throughout SkiaRenderer up to
+  // TODO(crbug.com/40554816): Plumb color space throughout SkiaRenderer up to
   // the SkSurface/SkImage here. Until then, play "musical chairs" with the
   // SkPixelRef to hack-in the RenderPass's |color_space|.
   sk_sp<SkPixelRef> pixels(SkSafeRef(bitmap.pixelRef()));
@@ -347,10 +330,6 @@ gpu::SyncToken FakeSkiaOutputSurface::Flush() {
   return GenerateSyncToken();
 }
 
-bool FakeSkiaOutputSurface::EnsureMinNumberOfBuffers(int n) {
-  return false;
-}
-
 void FakeSkiaOutputSurface::SetOutOfOrderCallbacks(
     bool out_of_order_callbacks) {
   TestContextSupport* support =
@@ -369,18 +348,16 @@ gpu::SyncToken FakeSkiaOutputSurface::GenerateSyncToken() {
 bool FakeSkiaOutputSurface::GetGrBackendTexture(
     const ImageContext& image_context,
     GrBackendTexture* backend_texture) {
-  DCHECK(!image_context.mailbox_holder().mailbox.IsZero());
+  DCHECK(!image_context.mailbox().IsZero());
 
   auto* gl = context_provider()->ContextGL();
-  gl->WaitSyncTokenCHROMIUM(
-      image_context.mailbox_holder().sync_token.GetConstData());
+  gl->WaitSyncTokenCHROMIUM(image_context.sync_token().GetConstData());
   auto texture_id = gl->CreateAndTexStorage2DSharedImageCHROMIUM(
-      image_context.mailbox_holder().mailbox.name);
+      image_context.mailbox().name);
   auto gl_format_desc = gpu::GLFormatCaps().ToGLFormatDesc(
       image_context.format(), /*plane_index=*/0);
-  GrGLTextureInfo gl_texture_info = {
-      image_context.mailbox_holder().texture_target, texture_id,
-      gl_format_desc.storage_internal_format};
+  GrGLTextureInfo gl_texture_info = {image_context.texture_target(), texture_id,
+                                     gl_format_desc.storage_internal_format};
   *backend_texture = GrBackendTextures::MakeGL(
       image_context.size().width(), image_context.size().height(),
       skgpu::Mipmapped::kNo, gl_texture_info);
@@ -426,16 +403,16 @@ gpu::Mailbox FakeSkiaOutputSurface::CreateSharedImage(
     const gfx::Size& size,
     const gfx::ColorSpace& color_space,
     RenderPassAlphaType alpha_type,
-    uint32_t usage,
-    base::StringPiece debug_label,
+    gpu::SharedImageUsageSet usage,
+    std::string_view debug_label,
     gpu::SurfaceHandle surface_handle) {
-  return gpu::Mailbox::GenerateForSharedImage();
+  return gpu::Mailbox::Generate();
 }
 
 gpu::Mailbox FakeSkiaOutputSurface::CreateSolidColorSharedImage(
     const SkColor4f& color,
     const gfx::ColorSpace& color_space) {
-  return gpu::Mailbox::GenerateForSharedImage();
+  return gpu::Mailbox::Generate();
 }
 
 void FakeSkiaOutputSurface::SetSharedImagePurgeable(const gpu::Mailbox& mailbox,

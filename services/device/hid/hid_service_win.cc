@@ -300,7 +300,7 @@ std::vector<mojom::HidReportDescriptionPtr> CreateReportDescriptions(
   auto report_items = preparsed_data.GetReportItems(report_type);
 
   // Sort items by |report_id| and |bit_index|.
-  base::ranges::sort(report_items, [](const auto& a, const auto& b) {
+  std::ranges::sort(report_items, [](const auto& a, const auto& b) {
     if (a.report_id < b.report_id)
       return true;
     if (a.report_id == b.report_id)
@@ -454,7 +454,6 @@ uint16_t HidServiceWin::PreparsedData::GetReportByteLength(
       break;
     default:
       NOTREACHED();
-      break;
   }
   // Whether or not the device includes report IDs in its reports the size
   // of the report ID is included in the value provided by Windows. This
@@ -612,7 +611,7 @@ void HidServiceWin::AddDeviceBlocking(
   auto device_info = base::MakeRefCounted<HidDeviceInfo>(
       device_path, physical_device_id, base::SysWideToUTF8(interface_id),
       vendor_id, product_id, product_string, serial_number,
-      // TODO(crbug.com/443335): Detect Bluetooth.
+      // TODO(crbug.com/40398791): Detect Bluetooth.
       mojom::HidBusType::kHIDBusTypeUSB, std::move(collection),
       max_input_report_size, max_output_report_size, max_feature_report_size);
 

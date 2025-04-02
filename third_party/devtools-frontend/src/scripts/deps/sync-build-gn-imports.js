@@ -13,9 +13,9 @@
  * You can also execute the tests: `./node_modules/.bin/mocha scripts/deps/tests
  **/
 
-const ts = require('typescript');
-const path = require('path');
 const fs = require('fs');
+const path = require('path');
+const ts = require('typescript');
 
 /**
  * Parses the inputs listed when they are all on one line, for example:
@@ -367,16 +367,16 @@ function validateDirectory(dirPath) {
     }
 
     for (const missingDep of diffWithGN.inOnlySourceCode) {
-      result.missingBuildGNDeps.push({importPath: missingDep, sourceFile: sourceFile});
+      result.missingBuildGNDeps.push({importPath: missingDep, sourceFile});
     }
   }
   return result;
 }
 
 module.exports = {
+  compareDeps,
   parseBuildGN,
   parseSourceFileForImports,
-  compareDeps,
   validateDirectory
 };
 

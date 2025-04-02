@@ -109,7 +109,6 @@ base::FilePath BaseTestServer::SSLOptions::GetCertificateFile() const {
     default:
       NOTREACHED();
   }
-  return base::FilePath();
 }
 
 BaseTestServer::BaseTestServer(Type type) : type_(type) {
@@ -142,7 +141,6 @@ std::string BaseTestServer::GetScheme() const {
     default:
       NOTREACHED();
   }
-  return std::string();
 }
 
 bool BaseTestServer::GetAddressList(AddressList* address_list) const {

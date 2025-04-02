@@ -75,7 +75,6 @@ class WebContentsViewMac : public WebContentsView,
   void RestoreFocus() override;
   void FocusThroughTabTraversal(bool reverse) override;
   DropData* GetDropData() const override;
-  void TransferDragSecurityInfo(WebContentsView* view) override;
   gfx::Rect GetViewBounds() const override;
   void CreateView(gfx::NativeView context) override;
   RenderWidgetHostViewBase* CreateViewForWidget(
@@ -93,6 +92,7 @@ class WebContentsViewMac : public WebContentsView,
   void UpdateWindowControlsOverlay(const gfx::Rect& bounding_rect) override;
   BackForwardTransitionAnimationManager*
   GetBackForwardTransitionAnimationManager() override;
+  void DestroyBackForwardTransitionAnimationManager() override;
 
   // RenderViewHostDelegateView:
   void StartDragging(const DropData& drop_data,
@@ -114,7 +114,6 @@ class WebContentsViewMac : public WebContentsView,
       RenderFrameHost* render_frame_host,
       mojo::PendingRemote<blink::mojom::PopupMenuClient> popup_client,
       const gfx::Rect& bounds,
-      int item_height,
       double item_font_size,
       int selected_item,
       std::vector<blink::mojom::MenuItemPtr> menu_items,
@@ -150,11 +149,14 @@ class WebContentsViewMac : public WebContentsView,
   CONTENT_EXPORT static void InstallCreateHookForTests(
       RenderWidgetHostViewCreateFunction create_render_widget_host_view);
 
+  CONTENT_EXPORT static void SetReadWritePermissionsForFileForTests(
+      base::File& file);
+
  private:
   WebContentsViewCocoa* GetInProcessNSView() const;
 
   // remote_cocoa::mojom::WebContentsNSViewHost:
-  void OnMouseEvent(bool motion, bool exited) override;
+  void OnMouseEvent(std::unique_ptr<ui::Event> event) override;
   void OnBecameFirstResponder(
       remote_cocoa::mojom::SelectionDirection direction) override;
   void OnWindowVisibilityChanged(
@@ -170,6 +172,7 @@ class WebContentsViewMac : public WebContentsView,
   bool DragPromisedFileTo(const base::FilePath& file_path,
                           const DropData& drop_data,
                           const GURL& download_url,
+                          const url::Origin& source_origin,
                           base::FilePath* out_file_path) override;
   void EndDrag(uint32_t drag_opeation,
                const gfx::PointF& local_point,
@@ -185,6 +188,7 @@ class WebContentsViewMac : public WebContentsView,
   void DragPromisedFileTo(const base::FilePath& file_path,
                           const DropData& drop_data,
                           const GURL& download_url,
+                          const url::Origin& source_origin,
                           DragPromisedFileToCallback callback) override;
 
   // Return the list of child RenderWidgetHostViewMacs. This will remove any

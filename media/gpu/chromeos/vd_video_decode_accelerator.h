@@ -16,11 +16,13 @@
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/thread_annotations.h"
+#include "base/unguessable_token.h"
 #include "build/chromeos_buildflags.h"
 #include "media/base/status.h"
 #include "media/base/video_decoder.h"
 #include "media/gpu/chromeos/dmabuf_video_frame_pool.h"
 #include "media/gpu/chromeos/fourcc.h"
+#include "media/gpu/chromeos/platform_video_frame_utils.h"
 #include "media/gpu/chromeos/vda_video_frame_pool.h"
 #include "media/gpu/chromeos/video_decoder_pipeline.h"
 #include "media/gpu/media_gpu_export.h"
@@ -30,7 +32,7 @@
 
 namespace media {
 
-class VideoFrame;
+class FrameResource;
 
 // Implements the VideoDecodeAccelerator backed by a VideoDecoder.
 // Currently GpuArcVideoDecodeAccelerator bridges the video codec from
@@ -48,7 +50,7 @@ class MEDIA_GPU_EXPORT VdVideoDecodeAccelerator
  public:
   // Callback for creating VideoDecoder instance.
   using CreateVideoDecoderCb =
-      base::RepeatingCallback<decltype(VideoDecoderPipeline::Create)>;
+      base::RepeatingCallback<decltype(VideoDecoderPipeline::CreateForARC)>;
 
   // Create VdVideoDecodeAccelerator instance, and call Initialize().
   // Return nullptr if Initialize() failed.
@@ -56,7 +58,6 @@ class MEDIA_GPU_EXPORT VdVideoDecodeAccelerator
       CreateVideoDecoderCb create_vd_cb,
       Client* client,
       const Config& config,
-      bool low_delay,
       scoped_refptr<base::SequencedTaskRunner> task_runner);
   VdVideoDecodeAccelerator(const VdVideoDecodeAccelerator&) = delete;
   VdVideoDecodeAccelerator& operator=(const VdVideoDecodeAccelerator&) = delete;
@@ -112,9 +113,9 @@ class MEDIA_GPU_EXPORT VdVideoDecodeAccelerator
   static void OnFrameReleasedThunk(
       std::optional<base::WeakPtr<VdVideoDecodeAccelerator>> weak_this,
       scoped_refptr<base::SequencedTaskRunner> task_runner,
-      scoped_refptr<VideoFrame> origin_frame);
+      scoped_refptr<FrameResource> origin_frame);
   // Called when a frame gets destroyed.
-  void OnFrameReleased(scoped_refptr<VideoFrame> origin_frame);
+  void OnFrameReleased(scoped_refptr<FrameResource> origin_frame);
 
   // Called when any error occurs. Notify |client_| an error occurred.
   void OnError(base::Location location, Error error);
@@ -141,9 +142,12 @@ class MEDIA_GPU_EXPORT VdVideoDecodeAccelerator
   gfx::Size coded_size_;
   std::optional<VideoFrameLayout> layout_;
 
-  // Mapping from VideoFrame's GpuMemoryBufferId to picture buffer id.
-  std::map<gfx::GpuMemoryBufferId, int32_t /* picture_buffer_id */>
-      frame_id_to_picture_id_;
+  // Used to guarantee that frames are produced with unique tracking tokens.
+  media::UniqueTrackingTokenHelper frame_tracking_token_helper_;
+
+  // Mapping from a frame's UnguessableToken to picture buffer id.
+  std::map<base::UnguessableToken, int32_t /* picture_buffer_id */>
+      frame_token_to_picture_id_;
   // Record how many times the picture is sent to the client, and keep a refptr
   // of corresponding VideoFrame when the client owns the buffers.
   std::map<int32_t /* picture_buffer_id */,

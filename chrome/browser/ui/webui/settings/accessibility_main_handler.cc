@@ -8,7 +8,6 @@
 
 #include "base/functional/bind.h"
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/accessibility/accessibility_state_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_context_menu/accessibility_labels_bubble_model.h"
@@ -18,10 +17,7 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
-
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
 #include "ui/accessibility/accessibility_features.h"
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
 
 namespace settings {
 
@@ -39,57 +35,50 @@ void AccessibilityMainHandler::RegisterMessages() {
       base::BindRepeating(
           &AccessibilityMainHandler::HandleCheckAccessibilityImageLabels,
           base::Unretained(this)));
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
   web_ui()->RegisterMessageCallback(
       "getScreenAiInstallState",
       base::BindRepeating(
           &AccessibilityMainHandler::HandleGetScreenAIInstallState,
           base::Unretained(this)));
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
 }
 
 void AccessibilityMainHandler::OnJavascriptAllowed() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   accessibility_subscription_ =
       ash::AccessibilityManager::Get()->RegisterCallback(base::BindRepeating(
           &AccessibilityMainHandler::OnAccessibilityStatusChanged,
           base::Unretained(this)));
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
-  if (features::IsPdfOcrEnabled()) {
+  if (features::IsMainNodeAnnotationsEnabled()) {
     CHECK(!component_ready_observer_.IsObserving());
     component_ready_observer_.Observe(
         screen_ai::ScreenAIInstallState::GetInstance());
   }
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
 }
 
 void AccessibilityMainHandler::OnJavascriptDisallowed() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   accessibility_subscription_ = {};
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
-  if (features::IsPdfOcrEnabled()) {
+  if (features::IsMainNodeAnnotationsEnabled()) {
     component_ready_observer_.Reset();
   }
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
 }
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
 void AccessibilityMainHandler::DownloadProgressChanged(double progress) {
   CHECK_GE(progress, 0.0);
   CHECK_LE(progress, 1.0);
   const int progress_num = progress * 100;
-  FireWebUIListener("pdf-ocr-downloading-progress-changed",
+  FireWebUIListener("screen-ai-downloading-progress-changed",
                     base::Value(progress_num));
 }
 
 void AccessibilityMainHandler::StateChanged(
     screen_ai::ScreenAIInstallState::State state) {
   base::Value state_value = base::Value(static_cast<int>(state));
-  FireWebUIListener("pdf-ocr-state-changed", state_value);
+  FireWebUIListener("screen-ai-state-changed", state_value);
 }
 
 void AccessibilityMainHandler::HandleGetScreenAIInstallState(
@@ -103,7 +92,6 @@ void AccessibilityMainHandler::HandleGetScreenAIInstallState(
   ResolveJavascriptCallback(
       callback_id, base::Value(static_cast<int>(current_install_state)));
 }
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
 
 void AccessibilityMainHandler::HandleGetScreenReaderState(
     const base::Value::List& args) {
@@ -138,7 +126,7 @@ void AccessibilityMainHandler::SendScreenReaderStateChanged() {
   FireWebUIListener("screen-reader-state-changed", result);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void AccessibilityMainHandler::OnAccessibilityStatusChanged(
     const ash::AccessibilityStatusEventDetails& details) {
   if (details.notification_type ==
@@ -146,6 +134,6 @@ void AccessibilityMainHandler::OnAccessibilityStatusChanged(
     SendScreenReaderStateChanged();
   }
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace settings

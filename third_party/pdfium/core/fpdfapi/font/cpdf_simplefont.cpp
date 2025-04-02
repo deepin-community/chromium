@@ -15,6 +15,7 @@
 #include "core/fpdfapi/parser/cpdf_dictionary.h"
 #include "core/fpdfapi/parser/cpdf_name.h"
 #include "core/fxcrt/fx_codepage.h"
+#include "core/fxcrt/stl_util.h"
 #include "core/fxge/freetype/fx_freetype.h"
 #include "core/fxge/fx_font.h"
 
@@ -36,10 +37,9 @@ void GetPredefinedEncoding(const ByteString& value, FontEncoding* basemap) {
 CPDF_SimpleFont::CPDF_SimpleFont(CPDF_Document* pDocument,
                                  RetainPtr<CPDF_Dictionary> pFontDict)
     : CPDF_Font(pDocument, std::move(pFontDict)) {
-  memset(m_CharWidth, 0xff, sizeof(m_CharWidth));
-  memset(m_GlyphIndex, 0xff, sizeof(m_GlyphIndex));
-  for (size_t i = 0; i < std::size(m_CharBBox); ++i)
-    m_CharBBox[i] = FX_RECT(-1, -1, -1, -1);
+  m_CharWidth.fill(0xffff);
+  m_GlyphIndex.fill(0xffff);
+  m_CharBBox.fill(FX_RECT(-1, -1, -1, -1));
 }
 
 CPDF_SimpleFont::~CPDF_SimpleFont() = default;
@@ -243,14 +243,14 @@ bool CPDF_SimpleFont::LoadCommon() {
   }
 
   if (FontStyleIsAllCaps(m_Flags)) {
-    static const unsigned char kLowercases[][2] = {
-        {'a', 'z'}, {0xe0, 0xf6}, {0xf8, 0xfd}};
-    for (size_t range = 0; range < std::size(kLowercases); ++range) {
-      const auto& lower = kLowercases[range];
-      for (int i = lower[0]; i <= lower[1]; ++i) {
-        if (m_GlyphIndex[i] != 0xffff && m_pFontFile)
+    static const auto kLowercases =
+        fxcrt::ToArray<std::pair<const uint8_t, const uint8_t>>(
+            {{'a', 'z'}, {0xe0, 0xf6}, {0xf8, 0xfd}});
+    for (const auto& lower : kLowercases) {
+      for (int i = lower.first; i <= lower.second; ++i) {
+        if (m_GlyphIndex[i] != 0xffff && m_pFontFile) {
           continue;
-
+        }
         int j = i - 32;
         m_GlyphIndex[i] = m_GlyphIndex[j];
         if (m_CharWidth[j]) {
@@ -269,19 +269,28 @@ void CPDF_SimpleFont::LoadSubstFont() {
     int width = 0;
     size_t i;
     for (i = 0; i < kInternalTableSize; i++) {
-      if (m_CharWidth[i] == 0 || m_CharWidth[i] == 0xffff)
+      if (m_CharWidth[i] == 0 || m_CharWidth[i] == 0xffff) {
         continue;
+      }
 
-      if (width == 0)
+      if (width == 0) {
         width = m_CharWidth[i];
-      else if (width != m_CharWidth[i])
+      } else if (width != m_CharWidth[i]) {
         break;
+      }
     }
-    if (i == kInternalTableSize && width)
-      m_Flags |= FXFONT_FIXED_PITCH;
+    if (i == kInternalTableSize && width) {
+      m_Flags |= pdfium::kFontStyleFixedPitch;
+    }
   }
-  m_Font.LoadSubst(m_BaseFontName, IsTrueTypeFont(), m_Flags, GetFontWeight(),
-                   m_ItalicAngle, FX_CodePage::kDefANSI, false);
+
+  int weight = GetFontWeight().value_or(pdfium::kFontWeightNormal);
+  if (weight < pdfium::kFontWeightExtraLight ||
+      weight > pdfium::kFontWeightExtraBold) {
+    weight = pdfium::kFontWeightNormal;
+  }
+  m_Font.LoadSubst(m_BaseFontName, IsTrueTypeFont(), m_Flags, weight,
+                   m_ItalicAngle, FX_CodePage::kDefANSI, /*bVertical=*/false);
 }
 
 bool CPDF_SimpleFont::IsUnicodeCompatible() const {

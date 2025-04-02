@@ -13,6 +13,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
+#include "base/types/pass_key.h"
 #include "base/unguessable_token.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "media/base/media_drm_storage.h"
@@ -50,6 +51,11 @@ class MediaDrmOriginIdManager : public KeyedService {
 
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
+  // MediaDrmOriginIdManager should only be created by
+  // MediaDrmOriginIdManagerFactory.
+  explicit MediaDrmOriginIdManager(
+      PrefService* pref_service,
+      base::PassKey<MediaDrmOriginIdManagerFactory>);
   // Destructor must be public as it's used in std::unique_ptr<>.
   ~MediaDrmOriginIdManager() override;
 
@@ -59,7 +65,7 @@ class MediaDrmOriginIdManager : public KeyedService {
   // Asynchronously returns a preprovisioned origin ID using |callback|, if one
   // is available. If none are available, an un-provisioned origin ID is
   // returned.
-  // TODO(crbug.com/917527): Return an empty origin ID once callers
+  // TODO(crbug.com/41433110): Return an empty origin ID once callers
   // can handle it.
   void GetOriginId(ProvisionedOriginIdCB callback);
 
@@ -71,10 +77,6 @@ class MediaDrmOriginIdManager : public KeyedService {
  private:
   class NetworkObserver;
   friend class MediaDrmOriginIdManagerFactory;
-
-  // MediaDrmOriginIdManager should only be created by
-  // MediaDrmOriginIdManagerFactory.
-  explicit MediaDrmOriginIdManager(PrefService* pref_service);
 
   // Complete the pre-provisioning steps.
   void ResumePreProvisionIfNecessary(

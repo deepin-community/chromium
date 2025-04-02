@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/memory/singleton.h"
@@ -18,14 +19,15 @@
 #include "chrome/browser/ash/login/saml/in_session_password_change_manager.h"
 #include "chrome/browser/ash/login/session/chrome_session_manager.h"
 #include "chrome/browser/ash/login/users/avatar/user_image_manager_registry.h"
-#include "chrome/browser/ash/login/users/chrome_user_manager_impl.h"
+#include "chrome/browser/ash/login/users/policy_user_manager_controller.h"
+#include "chrome/browser/ash/login/users/profile_user_manager_controller.h"
+#include "chrome/browser/ash/login/users/user_manager_delegate_impl.h"
 #include "chrome/browser/ash/net/ash_proxy_monitor.h"
-#include "chrome/browser/ash/net/delay_network_call.h"
+#include "chrome/browser/ash/net/secure_dns_manager.h"
 #include "chrome/browser/ash/net/system_proxy_manager.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/scheduler_configuration_manager.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
+#include "chrome/browser/ash/settings/cros_settings_holder.h"
 #include "chrome/browser/ash/system/automatic_reboot_manager.h"
 #include "chrome/browser/ash/system/device_disabling_manager.h"
 #include "chrome/browser/ash/system/device_disabling_manager_default_delegate.h"
@@ -34,17 +36,25 @@
 #include "chrome/browser/ash/system/timezone_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/component_updater/metadata_table_chromeos.h"
+#include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/common/chrome_switches.h"
 #include "chromeos/ash/components/account_manager/account_manager_factory.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_flusher.h"
 #include "chromeos/ash/components/dbus/debug_daemon/debug_daemon_client.h"
 #include "chromeos/ash/components/geolocation/simple_geolocation_provider.h"
+#include "chromeos/ash/components/login/login_state/login_state.h"
+#include "chromeos/ash/components/policy/restriction_schedule/device_restriction_schedule_controller.h"
+#include "chromeos/ash/components/policy/restriction_schedule/device_restriction_schedule_controller_delegate_impl.h"
+#include "chromeos/ash/components/scheduler_config/scheduler_configuration_manager.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/timezone/timezone_resolver.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/keyed_service/content/browser_context_keyed_service_shutdown_notifier_factory.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user_manager.h"
+#include "components/user_manager/user_manager_impl.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/preferences/public/mojom/preferences.mojom.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
@@ -73,7 +83,7 @@ class PrimaryProfileServicesShutdownNotifierFactory
   PrimaryProfileServicesShutdownNotifierFactory()
       : BrowserContextKeyedServiceShutdownNotifierFactory(
             "PrimaryProfileServices") {}
-  ~PrimaryProfileServicesShutdownNotifierFactory() override {}
+  ~PrimaryProfileServicesShutdownNotifierFactory() override = default;
 };
 
 }  // namespace
@@ -103,35 +113,73 @@ void BrowserProcessPlatformPart::ShutdownAutomaticRebootManager() {
 
 void BrowserProcessPlatformPart::InitializeUserManager() {
   DCHECK(!user_manager_);
-  user_manager_ = ash::ChromeUserManagerImpl::CreateChromeUserManager();
+  CHECK(session_manager_);
+  auto* local_state = g_browser_process->local_state();
+  user_manager_ = std::make_unique<user_manager::UserManagerImpl>(
+      std::make_unique<ash::UserManagerDelegateImpl>(), local_state,
+      ash::CrosSettings::Get());
+  profile_user_manager_controller_ =
+      std::make_unique<ash::ProfileUserManagerController>(
+          g_browser_process->profile_manager(), user_manager_.get());
+  policy_user_manager_controller_ =
+      std::make_unique<ash::PolicyUserManagerController>(
+          user_manager_.get(), ash::CrosSettings::Get(),
+          ash::DeviceSettingsService::Get(),
+          browser_policy_connector_ash()->GetMinimumVersionPolicyHandler());
   user_image_manager_registry_ =
       std::make_unique<ash::UserImageManagerRegistry>(user_manager_.get());
+  multi_user_sign_in_policy_controller_ =
+      std::make_unique<user_manager::MultiUserSignInPolicyController>(
+          local_state, user_manager_.get());
+  session_manager_->OnUserManagerCreated(user_manager_.get());
   // LoginState and DeviceCloudPolicyManager outlives UserManager, so on
   // their initialization, there's no way to start observing UserManager.
   // This is the earliest timing to do so.
+  // TODO(b/332481586): Consider move the initialization to the constructor
+  // of each class.
   if (auto* login_state = ash::LoginState::Get()) {
     login_state->OnUserManagerCreated(user_manager_.get());
   }
-  if (auto* policy_manager =
-          browser_policy_connector_ash()->GetDeviceCloudPolicyManager()) {
-    policy_manager->OnUserManagerCreated(user_manager_.get());
-  }
-
+  browser_policy_connector_ash()->OnUserManagerCreated(user_manager_.get());
   user_manager_->Initialize();
+}
+
+void BrowserProcessPlatformPart::ShutdownUserManager() {
+  if (!user_manager_) {
+    return;
+  }
+  user_image_manager_registry_->Shutdown();
+  browser_policy_connector_ash()->OnUserManagerShutdown();
+  policy_user_manager_controller_.reset();
+  user_manager_->Shutdown();
 }
 
 void BrowserProcessPlatformPart::DestroyUserManager() {
   user_manager_->Destroy();
-  if (auto* policy_manager =
-          browser_policy_connector_ash()->GetDeviceCloudPolicyManager()) {
-    policy_manager->OnUserManagerWillBeDestroyed(user_manager_.get());
-  }
+  browser_policy_connector_ash()->OnUserManagerWillBeDestroyed();
   if (auto* login_state = ash::LoginState::Get()) {
     login_state->OnUserManagerWillBeDestroyed(user_manager_.get());
   }
 
+  multi_user_sign_in_policy_controller_.reset();
   user_image_manager_registry_.reset();
+  profile_user_manager_controller_.reset();
   user_manager_.reset();
+}
+
+void BrowserProcessPlatformPart::
+    InitializeDeviceRestrictionScheduleController() {
+  device_restriction_schedule_controller_delegate_impl_ = std::make_unique<
+      policy::DeviceRestrictionScheduleControllerDelegateImpl>();
+  device_restriction_schedule_controller_ =
+      std::make_unique<policy::DeviceRestrictionScheduleController>(
+          *device_restriction_schedule_controller_delegate_impl_,
+          CHECK_DEREF(g_browser_process->local_state()));
+}
+
+void BrowserProcessPlatformPart::ShutdownDeviceRestrictionScheduleController() {
+  device_restriction_schedule_controller_.reset();
+  device_restriction_schedule_controller_delegate_impl_.reset();
 }
 
 void BrowserProcessPlatformPart::InitializeDeviceDisablingManager() {
@@ -152,7 +200,7 @@ void BrowserProcessPlatformPart::ShutdownDeviceDisablingManager() {
 }
 
 void BrowserProcessPlatformPart::InitializeSessionManager() {
-  DCHECK(!session_manager_);
+  CHECK(!session_manager_);
   session_manager_ = std::make_unique<ash::ChromeSessionManager>();
 }
 
@@ -160,26 +208,38 @@ void BrowserProcessPlatformPart::ShutdownSessionManager() {
   session_manager_.reset();
 }
 
-void BrowserProcessPlatformPart::InitializeCrosComponentManager() {
-  if (using_testing_cros_component_manager_)
-    return;
+void BrowserProcessPlatformPart::InitializeCrosSettings() {
+  CHECK(!cros_settings_holder_);
+  cros_settings_holder_ = std::make_unique<ash::CrosSettingsHolder>(
+      ash::DeviceSettingsService::Get(), g_browser_process->local_state());
+}
 
-  DCHECK(!cros_component_manager_);
-  cros_component_manager_ =
+void BrowserProcessPlatformPart::ShutdownCrosSettings() {
+  cros_settings_holder_.reset();
+}
+
+void BrowserProcessPlatformPart::InitializeComponentManager() {
+  if (using_testing_component_manager_ash_) {
+    return;
+  }
+
+  DCHECK(!component_manager_ash_);
+  component_manager_ash_ =
       base::MakeRefCounted<component_updater::CrOSComponentInstaller>(
           std::make_unique<component_updater::MetadataTable>(
               g_browser_process->local_state()),
           g_browser_process->component_updater());
 
   // Register all installed components for regular update.
-  cros_component_manager_->RegisterInstalled();
+  component_manager_ash_->RegisterInstalled();
 }
 
-void BrowserProcessPlatformPart::ShutdownCrosComponentManager() {
-  if (using_testing_cros_component_manager_)
+void BrowserProcessPlatformPart::ShutdownComponentManager() {
+  if (using_testing_component_manager_ash_) {
     return;
+  }
 
-  cros_component_manager_.reset();
+  component_manager_ash_.reset();
 }
 
 void BrowserProcessPlatformPart::InitializeSchedulerConfigurationManager() {
@@ -226,9 +286,18 @@ void BrowserProcessPlatformPart::InitializePrimaryProfileServices(
     ash::SystemProxyManager::Get()->StartObservingPrimaryProfilePrefs(
         primary_profile);
   }
+
+  // The current sesison may be guest session, where the Profile is
+  // an OTR one. Take the original profile for the case.
+  auto* user = user_manager::UserManager::Get()->FindUserAndModify(CHECK_DEREF(
+      ash::AnnotatedAccountId::Get(primary_profile->GetOriginalProfile())));
+  secure_dns_manager_ = std::make_unique<ash::SecureDnsManager>(
+      g_browser_process->local_state(), CHECK_DEREF(user),
+      primary_profile->GetProfilePolicyConnector()->IsManaged());
 }
 
 void BrowserProcessPlatformPart::ShutdownPrimaryProfileServices() {
+  secure_dns_manager_.reset();
   if (ash::SystemProxyManager::Get())
     ash::SystemProxyManager::Get()->StopObservingPrimaryProfilePrefs();
   essential_search_manager_.reset();
@@ -264,42 +333,18 @@ BrowserProcessPlatformPart::GetTimezoneResolverManager() {
   if (!timezone_resolver_manager_.get()) {
     timezone_resolver_manager_ =
         std::make_unique<ash::system::TimeZoneResolverManager>(
-            ash::SimpleGeolocationProvider::GetInstance());
+            ash::SimpleGeolocationProvider::GetInstance(),
+            session_manager::SessionManager::Get());
   }
   return timezone_resolver_manager_.get();
 }
 
-ash::TimeZoneResolver* BrowserProcessPlatformPart::GetTimezoneResolver() {
-  if (!timezone_resolver_.get()) {
-    timezone_resolver_ = std::make_unique<ash::TimeZoneResolver>(
-        GetTimezoneResolverManager(),
-        ash::SimpleGeolocationProvider::GetInstance(),
-        g_browser_process->shared_url_loader_factory(),
-        base::BindRepeating(&ash::system::ApplyTimeZone),
-        base::BindRepeating(&ash::DelayNetworkCall),
-        g_browser_process->local_state());
-  }
-  return timezone_resolver_.get();
-}
-
 void BrowserProcessPlatformPart::StartTearDown() {
   // Some tests check for memory leaks before this object is
-  // destroyed.  So we need to destroy |timezone_resolver_| and
-  // |timezone_resolver_manager_| here.
-  timezone_resolver_.reset();
+  // destroyed.  So we need to destroy |timezone_resolver_manager_| here.
   timezone_resolver_manager_.reset();
   profile_helper_.reset();
   browser_context_flusher_.reset();
-}
-
-void BrowserProcessPlatformPart::AttemptExit(bool try_to_quit_application) {
-  // Request Lacros terminate early during shutdown to give it the opportunity
-  // to shutdown gracefully. Check to make sure `browser_manager` is available
-  // as it may be null in tests.
-  if (auto* browser_manager = crosapi::BrowserManager::Get())
-    browser_manager->Shutdown();
-
-  BrowserProcessPlatformPartChromeOS::AttemptExit(try_to_quit_application);
 }
 
 ash::system::SystemClock* BrowserProcessPlatformPart::GetSystemClock() {

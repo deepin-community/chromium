@@ -5,7 +5,6 @@
 #include "chrome/browser/ui/webui/ash/login/choobe_screen_handler.h"
 
 #include "base/logging.h"
-
 #include "chrome/browser/ash/login/choobe_flow_controller.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
@@ -57,6 +56,10 @@ void ChoobeScreenHandler::Show(const std::vector<ScreenSummary>& screens) {
   data.Set("screens", std::move(screens_list));
 
   ShowInWebUI(std::move(data));
+}
+
+base::WeakPtr<ChoobeScreenView> ChoobeScreenHandler::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 }  // namespace ash

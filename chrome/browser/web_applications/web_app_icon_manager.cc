@@ -4,12 +4,14 @@
 
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
 #include <ostream>
+#include <string_view>
 #include <utility>
 
 #include "base/check.h"
@@ -28,10 +30,8 @@
 #include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -79,7 +79,7 @@ struct TypedResult {
   bool HasErrors() const { return !error_log.empty(); }
 };
 
-std::string CreateError(std::initializer_list<base::StringPiece> parts) {
+std::string CreateError(std::initializer_list<std::string_view> parts) {
   std::string error = base::StrCat(parts);
   LOG(ERROR) << error;
   return error;
@@ -112,7 +112,7 @@ struct IconId {
 };
 
 struct IconSrcAndSize {
-  GURL src = GURL();
+  GURL src;
   SquareSizePx size_px = 0;
 };
 
@@ -242,15 +242,14 @@ TypedResult<SkBitmap> ReadIconBlocking(scoped_refptr<FileUtilsWrapper> utils,
   TRACE_EVENT0("ui", "web_app_icon_manager::ReadIconBlocking");
   base::FilePath icon_file = GetIconFileName(web_apps_directory, icon_id);
   auto icon_data = base::MakeRefCounted<base::RefCountedString>();
-  if (!utils->ReadFileToString(icon_file, &icon_data->data())) {
+  if (!utils->ReadFileToString(icon_file, &icon_data->as_string())) {
     return {.error_log = {CreateError(
                 {"Could not read icon file: ", icon_file.AsUTF8Unsafe()})}};
   }
 
   TypedResult<SkBitmap> result;
-
-  if (!gfx::PNGCodec::Decode(icon_data->front(), icon_data->size(),
-                             &result.value)) {
+  result.value = gfx::PNGCodec::Decode(*icon_data);
+  if (result.value.isNull()) {
     return {.error_log = {CreateError({"Could not decode icon data for file: ",
                                        icon_file.AsUTF8Unsafe()})}};
   }
@@ -299,10 +298,8 @@ TypedResult<SkBitmap> ReadShortcutsMenuIconBlocking(
   }
 
   TypedResult<SkBitmap> result;
-
-  if (!gfx::PNGCodec::Decode(
-          reinterpret_cast<const unsigned char*>(icon_data.c_str()),
-          icon_data.size(), &result.value)) {
+  result.value = gfx::PNGCodec::Decode(base::as_byte_span(icon_data));
+  if (result.value.isNull()) {
     return {.error_log = {CreateError({"Could not decode icon data for file: ",
                                        icon_file.AsUTF8Unsafe()})}};
   }
@@ -330,9 +327,8 @@ TypedResult<SkBitmap> ReadHomeTabIconFromFileAndResizeBlocking(
   }
 
   TypedResult<SkBitmap> result;
-  if (!gfx::PNGCodec::Decode(
-          reinterpret_cast<const unsigned char*>(icon_data.c_str()),
-          icon_data.size(), &result.value)) {
+  result.value = gfx::PNGCodec::Decode(base::as_byte_span(icon_data));
+  if (result.value.isNull()) {
     return {.error_log = {CreateError({"Could not decode icon data for file: ",
                                        icon_file.AsUTF8Unsafe()})}};
   }
@@ -497,7 +493,7 @@ std::optional<IconSrcAndSize> FindBestImageResourceMatch(
 
   for (const IconPurpose& purpose : purposes) {
     for (const blink::Manifest::ImageResource& icon : icons) {
-      // TODO(crbug.com/1381377): Need to add check if icon has been
+      // TODO(crbug.com/40245169): Need to add check if icon has been
       // successfully downloaded.
       if (!base::Contains(icon.purpose, purpose)) {
         continue;
@@ -672,8 +668,8 @@ gfx::ImageSkia ConvertFaviconBitmapsToImageSkia(
       image_skia.AddRepresentation(
           gfx::ImageSkiaRep(bitmap_to_resize, largest_favicon_scale));
     } else {
-      image_skia.AddRepresentation(
-          gfx::ImageSkiaRep(bitmap, (float)size / gfx::kFaviconSize));
+      image_skia.AddRepresentation(gfx::ImageSkiaRep(
+          bitmap, static_cast<float>(size) / gfx::kFaviconSize));
     }
   }
 
@@ -929,15 +925,15 @@ class WriteIconsJob {
     base::FilePath icon_file =
         icons_dir.AppendASCII(base::StringPrintf("%i.png", bitmap.width()));
 
-    std::vector<unsigned char> image_data;
-    const bool discard_transparency = false;
-    if (!gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, discard_transparency,
-                                           &image_data)) {
+    std::optional<std::vector<uint8_t>> image_data =
+        gfx::PNGCodec::EncodeBGRASkBitmap(bitmap,
+                                          /*discard_transparency=*/false);
+    if (!image_data) {
       return {.error_log = {CreateError({"Could not encode icon data for file ",
                                          icon_file.AsUTF8Unsafe()})}};
     }
 
-    if (!utils_->WriteFile(icon_file, base::as_byte_span(image_data))) {
+    if (!utils_->WriteFile(icon_file, image_data.value())) {
       return {.error_log = {CreateError(
                   {"Could not write icon file: ", icon_file.AsUTF8Unsafe()})}};
     }
@@ -957,10 +953,10 @@ class WriteIconsJob {
 uint64_t AccumulateIconsSizeForApp(std::vector<base::FilePath> icon_paths) {
   uint64_t total_size = 0;
 
-  for (base::FilePath icon_path : icon_paths) {
-    int64_t file_size;
-    if (base::GetFileSize(std::move(icon_path), &file_size)) {
-      total_size += file_size;
+  for (const base::FilePath& icon_path : icon_paths) {
+    std::optional<int64_t> file_size = base::GetFileSize(icon_path);
+    if (file_size.has_value()) {
+      total_size += file_size.value();
     }
   }
   return total_size;
@@ -1038,8 +1034,8 @@ bool WebAppIconManager::HasIcons(const webapps::AppId& app_id,
   if (!web_app)
     return false;
 
-  return base::ranges::includes(web_app->downloaded_icon_sizes(purpose),
-                                icon_sizes);
+  return std::ranges::includes(web_app->downloaded_icon_sizes(purpose),
+                               icon_sizes);
 }
 
 std::optional<WebAppIconManager::IconSizeAndPurpose>

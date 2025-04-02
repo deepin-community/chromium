@@ -5,6 +5,7 @@
 #include "components/affiliations/core/browser/affiliation_backend.h"
 
 #include <stdint.h>
+
 #include <algorithm>
 #include <utility>
 #include <vector>
@@ -25,6 +26,7 @@
 #include "components/affiliations/core/browser/affiliation_fetcher_interface.h"
 #include "components/affiliations/core/browser/affiliation_utils.h"
 #include "components/affiliations/core/browser/facet_manager.h"
+#include "components/affiliations/core/browser/features.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace affiliations {
@@ -115,8 +117,10 @@ void AffiliationBackend::CancelPrefetch(const FacetURI& facet_uri,
     return;
   facet_manager_it->second->CancelPrefetch(keep_fresh_until);
 
-  if (facet_manager_it->second->CanBeDiscarded())
+  if (facet_manager_it->second->CanBeDiscarded()) {
     facet_managers_.erase(facet_uri);
+    TrimCacheForFacetURI(facet_uri);
+  }
 }
 
 void AffiliationBackend::KeepPrefetchForFacets(
@@ -409,14 +413,18 @@ bool AffiliationBackend::OnCanSendNetworkRequest() {
     return false;
 
   fetcher_ = fetcher_factory_->CreateInstance(url_loader_factory_, this);
-
-  // TODO(crbug.com/1354196): There is no need to request psl extension every
+  // Not possible to create facet, return false to indicate this.
+  if (!fetcher_) {
+    return false;
+  }
+  // TODO(crbug.com/40858918): There is no need to request psl extension every
   // time, find a better way of caching it.
 #if BUILDFLAG(IS_ANDROID)
-  // psl_extension_list isn't needed on Android because the OS API will apply
-  // it..
-  fetcher_->StartRequest(requested_facet_uris,
-                         {.branding_info = true, .psl_extension_list = false});
+  const bool is_android_enabled =
+      base::FeatureList::IsEnabled(features::kAffiliationsGroupInfoEnabled);
+  fetcher_->StartRequest(
+      requested_facet_uris,
+      {.branding_info = true, .psl_extension_list = is_android_enabled});
 #else
   fetcher_->StartRequest(requested_facet_uris,
                          {.branding_info = true, .psl_extension_list = true});

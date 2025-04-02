@@ -5,7 +5,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -14,10 +13,10 @@
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/ssl_test_utils.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
-#include "chrome/browser/ui/web_applications/web_app_controller_browsertest.h"
+#include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -69,7 +68,7 @@ bool TryToLoadImage(const content::ToRenderFrameHost& adapter,
 
 namespace web_app {
 
-class PWAMixedContentBrowserTest : public WebAppControllerBrowserTest {
+class PWAMixedContentBrowserTest : public WebAppBrowserTestBase {
  public:
   GURL GetMixedContentAppURL() {
     return https_server()->GetURL("app.com",
@@ -109,7 +108,8 @@ IN_PROC_BROWSER_TEST_F(PWAMixedContentBrowserTest,
       NavigateAndAwaitInstallabilityCheck(browser(), GetMixedContentAppURL()));
 
   EXPECT_EQ(GetAppMenuCommandState(IDC_CREATE_SHORTCUT, browser()), kEnabled);
-  EXPECT_EQ(GetAppMenuCommandState(IDC_INSTALL_PWA, browser()), kNotPresent);
+
+  EXPECT_EQ(GetAppMenuCommandState(IDC_INSTALL_PWA, browser()), kEnabled);
 }
 
 // Tests that mixed content is loaded inside PWA windows.
@@ -149,8 +149,7 @@ IN_PROC_BROWSER_TEST_F(PWAMixedContentBrowserTestWithAutoupgradesDisabled,
   EXPECT_EQ(GetAppMenuCommandState(IDC_OPEN_IN_PWA_WINDOW, browser()),
             kEnabled);
 
-  ui_test_utils::UrlLoadObserver url_observer(
-      GetMixedContentAppURL(), content::NotificationService::AllSources());
+  ui_test_utils::UrlLoadObserver url_observer(GetMixedContentAppURL());
   chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
   url_observer.Wait();
 
@@ -192,8 +191,7 @@ IN_PROC_BROWSER_TEST_F(PWAMixedContentBrowserTestWithAutoupgradesDisabled,
   // loaded.
   CheckMixedContentLoaded(app_browser);
 
-  ui_test_utils::UrlLoadObserver url_observer(
-      GetMixedContentAppURL(), content::NotificationService::AllSources());
+  ui_test_utils::UrlLoadObserver url_observer(GetMixedContentAppURL());
   chrome::Reload(app_browser, WindowOpenDisposition::CURRENT_TAB);
   url_observer.Wait();
 
@@ -241,8 +239,7 @@ IN_PROC_BROWSER_TEST_F(
 // Tests that iframes can't dynamically load mixed content in a regular browser
 // tab, when the iframe was created in a PWA window.
 // https://crbug.com/1087382: Flaky on Windows, CrOS and ASAN
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS_ASH) || \
-    defined(ADDRESS_SANITIZER)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || defined(ADDRESS_SANITIZER)
 #define MAYBE_IFrameDynamicMixedContentInPWAOpenInChrome \
   DISABLED_IFrameDynamicMixedContentInPWAOpenInChrome
 #else

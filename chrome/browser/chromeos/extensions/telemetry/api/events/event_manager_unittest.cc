@@ -2,25 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/chromeos/extensions/telemetry/api/events/event_manager.h"
+
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/containers/flat_map.h"
 #include "base/memory/scoped_refptr.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/common/app_ui_observer.h"
-#include "chrome/browser/chromeos/extensions/telemetry/api/events/event_manager.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/events/event_router.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/events/fake_events_service.h"
+#include "chrome/browser/chromeos/extensions/telemetry/api/events/fake_events_service_factory.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
+#include "chrome/common/chromeos/extensions/chromeos_system_extension_info.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
+#include "chromeos/ash/components/telemetry_extension/events/telemetry_event_service_ash.h"
 #include "chromeos/crosapi/mojom/telemetry_event_service.mojom.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/ssl_status.h"
+#include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
@@ -32,25 +37,10 @@
 #include "net/test/test_data_directory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "base/test/scoped_feature_list.h"
-#include "chrome/browser/ash/telemetry_extension/events/telemetry_event_service_ash.h"
-#include "chrome/browser/chromeos/extensions/telemetry/api/events/fake_events_service_factory.h"
-#include "chrome/common/chromeos/extensions/chromeos_system_extension_info.h"
-#include "chromeos/constants/chromeos_features.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/lacros/lacros_service.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
 namespace chromeos {
 
 namespace {
-
 namespace crosapi = ::crosapi::mojom;
-
 }
 
 class TelemetryExtensionEventManagerTest : public BrowserWithTestWindowTest {
@@ -58,32 +48,29 @@ class TelemetryExtensionEventManagerTest : public BrowserWithTestWindowTest {
   void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
     fake_events_service_factory_.SetCreateInstanceResponse(
         std::make_unique<FakeEventsService>());
     ash::TelemetryEventServiceAsh::Factory::SetForTesting(
         &fake_events_service_factory_);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    fake_events_service_impl_ = std::make_unique<FakeEventsService>();
-    // Replace the production TelemetryEventsService with a fake for testing.
-    chromeos::LacrosService::Get()->InjectRemoteForTesting(
-        fake_events_service_impl_->BindNewPipeAndPassRemote());
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
   }
 
  protected:
   void OpenAppUiUrlAndSetCertificateWithStatus(const GURL& url,
                                                net::CertStatus cert_status) {
+    AddTab(browser(), url);
+
+    // AddTab() adds a new tab at index 0.
+    auto* web_contents = browser()->tab_strip_model()->GetWebContentsAt(0);
+    SetCertificateWithStatus(web_contents, cert_status);
+  }
+
+  void SetCertificateWithStatus(content::WebContents* web_contents,
+                                net::CertStatus cert_status) {
     const base::FilePath certs_dir = net::GetTestCertsDirectory();
     scoped_refptr<net::X509Certificate> test_cert(
         net::ImportCertFromFile(certs_dir, "ok_cert.pem"));
     ASSERT_TRUE(test_cert);
 
-    AddTab(browser(), url);
-
-    // AddTab() adds a new tab at index 0.
-    auto* web_contents = browser()->tab_strip_model()->GetWebContentsAt(0);
     auto* entry = web_contents->GetController().GetVisibleEntry();
     content::SSLStatus& ssl = entry->GetSSL();
     ssl.certificate = test_cert;
@@ -134,13 +121,8 @@ class TelemetryExtensionEventManagerTest : public BrowserWithTestWindowTest {
   EventRouter& event_router() { return event_manager()->event_router_; }
 
  private:
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   FakeEventsServiceFactory fake_events_service_factory_;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  std::unique_ptr<FakeEventsService> fake_events_service_impl_;
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-};      // namespace chromeos
+};
 
 TEST_F(TelemetryExtensionEventManagerTest, RegisterEventNoExtension) {
   EXPECT_EQ(EventManager::kAppUiClosed,
@@ -843,12 +825,7 @@ TEST_F(TelemetryExtensionEventManagerTest, RemoveExtensionCutsConnection) {
   EXPECT_FALSE(event_router().IsExtensionObserving(extension_id));
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
 TEST_F(TelemetryExtensionEventManagerTest, RegisterEventIWASuccess) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      ::chromeos::features::kIWAForTelemetryExtensionAPI);
-
   auto info = ScopedChromeOSSystemExtensionInfo::CreateForTesting();
   // TODO(b/293560424): Remove this override after we add some valid IWA id to
   // the allowlist.
@@ -877,10 +854,13 @@ TEST_F(TelemetryExtensionEventManagerTest, RegisterEventIWASuccess) {
       extension_id, crosapi::TelemetryEventCategoryEnum::kAudioJack));
 
   // Open IWA.
-  OpenAppUiUrlAndSetCertificateWithStatus(
+  AddTab(browser(), GURL("about:blank"));
+  auto* web_contents = browser()->tab_strip_model()->GetWebContentsAt(0);
+  web_app::SimulateIsolatedWebAppNavigation(
+      web_contents,
       GURL("isolated-app://"
-           "pt2jysa7yu326m2cbu5mce4rrajvguagronrsqwn5dhbaris6eaaaaic"),
-      /*cert_status=*/net::OK);
+           "pt2jysa7yu326m2cbu5mce4rrajvguagronrsqwn5dhbaris6eaaaaic"));
+  SetCertificateWithStatus(web_contents, net::OK);
   EXPECT_TRUE(app_ui_observers().contains(extension_id));
   EXPECT_TRUE(event_router().IsExtensionObserving(extension_id));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
@@ -900,6 +880,5 @@ TEST_F(TelemetryExtensionEventManagerTest, RegisterEventIWASuccess) {
   EXPECT_FALSE(app_ui_observers().contains(extension_id));
   EXPECT_FALSE(event_router().IsExtensionObserving(extension_id));
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 }  // namespace chromeos

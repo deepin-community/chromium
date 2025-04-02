@@ -10,7 +10,7 @@ import * as IconButton from '../../ui/components/icon_button/icon_button.js';
 import {ApplicationPanelTreeElement} from './ApplicationPanelTreeElement.js';
 import * as ApplicationComponents from './components/components.js';
 import {ReportingApiView} from './ReportingApiView.js';
-import {type ResourcesPanel} from './ResourcesPanel.js';
+import type {ResourcesPanel} from './ResourcesPanel.js';
 
 const UIStrings = {
   /**
@@ -25,7 +25,7 @@ export class ReportingApiTreeElement extends ApplicationPanelTreeElement {
   private view?: ReportingApiView;
 
   constructor(storagePanel: ResourcesPanel) {
-    super(storagePanel, i18nString(UIStrings.reportingApi), false);
+    super(storagePanel, i18nString(UIStrings.reportingApi), false, 'reporting-api');
     const icon = IconButton.Icon.create('document');
     this.setLeadingIcons([icon]);
   }

@@ -5,7 +5,9 @@
 #include "chrome/browser/ash/app_list/search/local_image_search/local_image_search_service.h"
 
 #include "base/task/thread_pool.h"
+#include "chrome/browser/ash/app_list/search/common/file_util.h"
 #include "chrome/browser/ash/app_list/search/local_image_search/image_annotation_worker.h"
+#include "chrome/browser/ash/app_list/search/local_image_search/search_utils.h"
 #include "chrome/browser/ash/app_list/search/search_features.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ash/file_manager/trash_common_util.h"
@@ -19,20 +21,6 @@ base::FilePath ConstructPathToAnnotationDb(const Profile* const profile) {
   return profile->GetPath()
       .AppendASCII("annotation_storage")
       .AppendASCII("annotation.db");
-}
-
-std::vector<base::FilePath> GetTrashPaths(Profile* const profile) {
-  std::vector<base::FilePath> excluded_paths;
-  if (file_manager::trash::IsTrashEnabledForProfile(profile)) {
-    const auto trash_locations =
-        file_manager::trash::GenerateEnabledTrashLocationsForProfile(
-            profile, /*base_path=*/base::FilePath());
-    for (const auto& location : trash_locations) {
-      excluded_paths.emplace_back(
-          location.first.Append(location.second.relative_folder_path));
-    }
-  }
-  return excluded_paths;
 }
 
 }  // namespace
@@ -50,6 +38,7 @@ LocalImageSearchService::LocalImageSearchService(Profile* profile)
           std::make_unique<ImageAnnotationWorker>(
               file_manager::util::GetMyFilesFolderForProfile(profile),
               GetTrashPaths(profile),
+              profile,
               /*use_file_watchers=*/true,
               search_features::IsLauncherImageSearchOcrEnabled(),
               search_features::IsLauncherImageSearchIcaEnabled())) {
@@ -70,8 +59,11 @@ void LocalImageSearchService::Search(
 }
 
 void LocalImageSearchService::Insert(const ImageInfo& image_info) {
+  // TODO(b:343320265): This function is used in unit tests on at the moment,
+  // update it set up the proper indexing source if we want to use it in
+  // production.
   annotation_storage_.AsyncCall(&AnnotationStorage::Insert)
-      .WithArgs(image_info);
+      .WithArgs(image_info, IndexingSource::kOcr);
 }
 
 }  // namespace app_list

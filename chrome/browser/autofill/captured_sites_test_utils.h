@@ -15,12 +15,12 @@
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
+#include "base/time/time_override.h"
 #include "base/types/strong_alias.h"
 #include "base/values.h"
 #include "chrome/browser/ui/browser.h"
 #include "components/autofill/core/browser/data_model/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/credit_card.h"
-#include "components/autofill/core/browser/test_autofill_clock.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/test/browser_test_utils.h"
 #include "services/network/public/cpp/network_switches.h"
@@ -90,6 +90,10 @@ struct GetParamAsString {
     return base::StrCat({info.param.scenario_dir, "_", info.param.site_name});
   }
 };
+
+// Reads the recipe file and returns the recipe as a base::Value::Dict.
+std::optional<base::Value::Dict> ReadRecipeFile(
+    const base::FilePath& recipe_file_path);
 
 std::optional<base::FilePath> GetCommandFilePath();
 
@@ -296,11 +300,11 @@ class TestRecipeReplayer {
   static bool ScrollElementIntoView(const std::string& element_xpath,
                                     content::RenderFrameHost* frame);
   static bool PlaceFocusOnElement(const std::string& element_xpath,
-                                  const std::vector<std::string> iframe_path,
+                                  const std::vector<std::string>& iframe_path,
                                   content::RenderFrameHost* frame);
   static bool GetBoundingRectOfTargetElement(
       const std::string& target_element_xpath,
-      const std::vector<std::string> iframe_path,
+      const std::vector<std::string>& iframe_path,
       content::RenderFrameHost* frame,
       gfx::Rect* output_rect);
   static bool SimulateLeftMouseClickAt(
@@ -404,10 +408,9 @@ class TestRecipeReplayer {
       IgnoreCase ignore_case = IgnoreCase(false));
   void SimulateKeyPressWrapper(content::WebContents* web_contents,
                                ui::DomKey key);
-  void NavigateAwayAndDismissBeforeUnloadDialog();
   bool HasChromeStoredCredential(const base::Value::Dict& action,
                                  bool* stored_cred);
-  bool OverrideAutofillClock(const base::FilePath capture_file_path);
+  bool OverrideTimeClock(const base::FilePath capture_file_path);
   bool SetupSavedAutofillProfile(
       base::Value::List saved_autofill_profile_container);
   bool SetupSavedPasswords(base::Value::List saved_password_list_container);
@@ -432,8 +435,8 @@ class TestRecipeReplayer {
 
   std::vector<testing::AssertionResult> validation_failures_;
 
-  // Overrides the AutofillClock to use the recorded date.
-  autofill::TestAutofillClock test_clock_;
+  // Overrides the TimeClock to use the recorded date.
+  std::unique_ptr<base::subtle::ScopedTimeClockOverrides> time_override_;
 };
 
 }  // namespace captured_sites_test_utils

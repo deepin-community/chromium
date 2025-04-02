@@ -7,10 +7,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
+#include <array>
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -21,7 +25,6 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
@@ -91,15 +94,17 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/third_party/mozilla/url_parse.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "base/files/scoped_temp_dir.h"
-#include "chrome/browser/ash/login/users/chrome_user_manager_impl.h"
+#include "chrome/browser/ash/login/users/user_manager_delegate_impl.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/extensions/load_error_reporter.h"
 #include "chrome/browser/extensions/updater/chromeos_extension_cache_delegate.h"
 #include "chrome/browser/extensions/updater/extension_cache_impl.h"
 #include "chrome/browser/extensions/updater/local_extension_cache.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/user_manager_impl.h"
 #endif
 
 using base::Time;
@@ -594,7 +599,7 @@ class ExtensionUpdaterTest : public testing::Test {
       const std::vector<std::pair<ExtensionDownloaderTask, DownloadFailure>>&
           failures,
       const ExtensionId& id) {
-    auto it = base::ranges::find(
+    auto it = std::ranges::find(
         failures, id, [](const auto& failure) { return failure.first.id; });
     return it == failures.end() ? nullptr : &it->second;
   }
@@ -769,17 +774,18 @@ class ExtensionUpdaterTest : public testing::Test {
         fetch_headers.HasHeader(ExtensionDownloader::kUpdateUpdaterHeader));
 
     if (should_include_traffic_management_headers) {
-      std::string interactivity_value;
-      fetch_headers.GetHeader(ExtensionDownloader::kUpdateInteractivityHeader,
-                              &interactivity_value);
+      std::string interactivity_value =
+          fetch_headers
+              .GetHeader(ExtensionDownloader::kUpdateInteractivityHeader)
+              .value_or(std::string());
 
       std::string expected_interactivity_value =
           fetch_priority == DownloadFetchPriority::kForeground ? "fg" : "bg";
       EXPECT_EQ(expected_interactivity_value, interactivity_value);
 
-      std::string appid_value;
-      fetch_headers.GetHeader(ExtensionDownloader::kUpdateAppIdHeader,
-                              &appid_value);
+      std::string appid_value =
+          fetch_headers.GetHeader(ExtensionDownloader::kUpdateAppIdHeader)
+              .value_or(std::string());
       if (num_extensions > 1) {
         for (int i = 0; i < num_extensions; ++i) {
           EXPECT_TRUE(
@@ -789,9 +795,9 @@ class ExtensionUpdaterTest : public testing::Test {
         EXPECT_EQ(extensions[0]->id(), appid_value);
       }
 
-      std::string updater_value;
-      fetch_headers.GetHeader(ExtensionDownloader::kUpdateUpdaterHeader,
-                              &updater_value);
+      std::string updater_value =
+          fetch_headers.GetHeader(ExtensionDownloader::kUpdateUpdaterHeader)
+              .value_or(std::string());
       const std::string expected_updater_value = base::StringPrintf(
           "%s-%s", UpdateQueryParams::GetProdIdString(UpdateQueryParams::CRX),
           UpdateQueryParams::GetProdVersion().c_str());
@@ -1541,7 +1547,7 @@ class ExtensionUpdaterTest : public testing::Test {
     EXPECT_TRUE(base::TouchFile(file, timestamp, timestamp));
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // This tests the condition when the entry for the crx file is already
   // present in the cache but the crx file is itself corrupted. In this case,
   // after detecting the corruption of the crx file, it's entry should be
@@ -1817,9 +1823,9 @@ class ExtensionUpdaterTest : public testing::Test {
             net::HttpRequestHeaders::kAuthorization));
         std::string expected_header_value = base::StringPrintf("Bearer %s",
             kFakeOAuth2Token);
-        std::string actual_header_value;
-        fetch_headers.GetHeader(net::HttpRequestHeaders::kAuthorization,
-                                &actual_header_value);
+        std::string actual_header_value =
+            fetch_headers.GetHeader(net::HttpRequestHeaders::kAuthorization)
+                .value_or(std::string());
         EXPECT_EQ(expected_header_value, actual_header_value);
         using_oauth2 = true;
       } else {
@@ -2060,7 +2066,12 @@ class ExtensionUpdaterTest : public testing::Test {
 
     // We want to test a variety of combinations of expected ping conditions for
     // rollcall and active pings.
-    int ping_cases[] = { ManifestFetchData::kNeverPinged, 0, 1, 5 };
+    auto ping_cases = std::to_array<int>({
+        ManifestFetchData::kNeverPinged,
+        0,
+        1,
+        5,
+    });
 
     for (size_t i = 0; i < std::size(ping_cases); i++) {
       for (size_t j = 0; j < std::size(ping_cases); j++) {
@@ -2313,10 +2324,13 @@ class ExtensionUpdaterTest : public testing::Test {
 
   ScopedTestingLocalState testing_local_state_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ash::ScopedCrosSettingsTestHelper cros_settings_test_helper_;
-  user_manager::ScopedUserManager test_user_manager_{
-      ash::ChromeUserManagerImpl::CreateChromeUserManager()};
+  user_manager::ScopedUserManager user_manager_{
+      std::make_unique<user_manager::UserManagerImpl>(
+          std::make_unique<ash::UserManagerDelegateImpl>(),
+          testing_local_state_.Get(),
+          ash::CrosSettings::Get())};
 #endif
 };
 
@@ -2405,7 +2419,7 @@ TEST_F(ExtensionUpdaterTest, TestSingleExtensionDownloadingFailurePending) {
   TestSingleExtensionDownloading(true, false, true);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(ExtensionUpdaterTest, TestCacheCorruptionCrxDownload) {
   TestCacheCorruption();
 }
@@ -2582,6 +2596,78 @@ TEST_F(ExtensionUpdaterTest, TestUpdatingRemotelyDisabledExtensions) {
 
   service.set_extensions(enabled_extensions, ExtensionList(),
                          blocklisted_extensions);
+  updater.Start();
+  updater.CheckNow(ExtensionUpdater::CheckParams());
+}
+
+TEST_F(ExtensionUpdaterTest, TestPendingInstall) {
+  class ServiceForPendingVersionTests : public MockService {
+   public:
+    explicit ServiceForPendingVersionTests(
+        TestExtensionPrefs* prefs,
+        scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
+        : MockService(prefs, url_loader_factory),
+          registry_(ExtensionRegistry::Get(profile())) {
+      base::Value::Dict manifest;
+      manifest.Set(manifest_keys::kName, "Fake extension");
+      manifest.Set(manifest_keys::kVersion, "1.0.0.1");
+      manifest.Set(manifest_keys::kManifestVersion, 2);
+      manifest.Set(manifest_keys::kDifferentialFingerprint, "fingerprint");
+      pending_update_ = prefs_->AddExtensionWithManifest(
+          manifest, ManifestLocation::kInternal);
+    }
+
+    void SetExtensions(const ExtensionList& extensions) {
+      registry_->ClearAll();
+      for (auto extension : extensions) {
+        registry_->AddEnabled(extension);
+      }
+    }
+
+    PendingExtensionManager* pending_extension_manager() override {
+      return &pending_extension_manager_;
+    }
+
+    const Extension* GetPendingExtensionUpdate(
+        const std::string& id) const override {
+      return pending_update_.get();
+    }
+
+   private:
+    raw_ptr<ExtensionRegistry> registry_;
+    scoped_refptr<Extension> pending_update_;
+  };
+
+  ExtensionDownloaderTestHelper helper;
+  ServiceForPendingVersionTests service(prefs_.get(),
+                                        helper.url_loader_factory());
+  ExtensionUpdater updater(&service, service.extension_prefs(),
+                           service.pref_service(), service.profile(),
+                           kUpdateFrequencySecs, nullptr,
+                           service.GetDownloaderFactory());
+  NiceMock<MockUpdateService> update_service;
+  OverrideUpdateService(&updater, &update_service);
+
+  ExtensionList enabled_extensions;
+  service.CreateTestExtensions(1, 1, &enabled_extensions, nullptr,
+                               ManifestLocation::kInternal);
+  ASSERT_EQ(1u, enabled_extensions.size());
+  ASSERT_EQ(enabled_extensions[0]->VersionString(), "1.0.0.0");
+
+  // When StartUpdateCheck is called, we expect the pending version is used.
+  EXPECT_CALL(
+      update_service,
+      StartUpdateCheck(
+          ::testing::Field(
+              &ExtensionUpdateCheckParams::update_info,
+              ::testing::ElementsAre(::testing::Pair(
+                  enabled_extensions[0]->id(),
+                  ::testing::FieldsAre(
+                      "", false, ::testing::Optional(std::string("1.0.0.1")),
+                      ::testing::Optional(std::string("fingerprint")))))),
+          _, _));
+
+  service.SetExtensions(enabled_extensions);
   updater.Start();
   updater.CheckNow(ExtensionUpdater::CheckParams());
 }

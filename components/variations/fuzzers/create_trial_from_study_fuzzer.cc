@@ -28,7 +28,7 @@ class TestOverrideStringCallback {
   TestOverrideStringCallback& operator=(const TestOverrideStringCallback&) =
       delete;
 
-  virtual ~TestOverrideStringCallback() {}
+  virtual ~TestOverrideStringCallback() = default;
 
   const VariationsSeedProcessor::UIStringOverrideCallback& callback() const {
     return callback_;
@@ -58,11 +58,10 @@ void CreateTrialFromStudyFuzzer(const Study& study) {
   base::FeatureList feature_list;
 
   TestOverrideStringCallback override_callback;
-  // TODO(crbug.com/1518402): Support limited entropy randomization for the
-  // study fuzzer.
   EntropyProviders entropy_providers(
       "client_id", {7999, 8000},
-      /*limited_entropy_randomization_source=*/std::string_view());
+      // Test value for limited entropy randomization source.
+      "00000000000000000000000000000001");
   ProcessedStudy processed_study;
   VariationsLayers layers;
   if (processed_study.Init(&study)) {

@@ -10,12 +10,12 @@
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/ash/login/existing_user_controller.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/chromeos/extensions/login_screen/login/cleanup/cleanup_manager_ash.h"
 #include "chrome/browser/chromeos/extensions/login_screen/login/errors.h"
 #include "chrome/browser/chromeos/extensions/login_screen/login/login_api_lock_handler.h"
-#include "chrome/browser/ui/ash/session_controller_client_impl.h"
+#include "chrome/browser/ui/ash/session/session_controller_client_impl.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/session_manager_types.h"
@@ -199,12 +199,8 @@ void SharedSessionHandler::UnlockSharedSession(
     return;
   }
 
-  const std::string& hash_key = *scrypt_result;
-
-  CHECK(hash_key.length() == user_secret_hash_.length());
-
-  if (!crypto::SecureMemEqual(hash_key.data(), user_secret_hash_.data(),
-                              user_secret_hash_.size())) {
+  if (!crypto::SecureMemEqual(base::as_byte_span(*scrypt_result),
+                              base::as_byte_span(user_secret_hash_))) {
     std::move(callback).Run(
         extensions::login_api_errors::kAuthenticationFailed);
     return;
@@ -270,6 +266,8 @@ void SharedSessionHandler::ResetStateForTesting() {
   user_secret_salt_.clear();
 }
 
+// TODO(https://issues.chromium.org/issues/372283556): migrate to the new
+// //crypto KDF API and make this infallible.
 std::optional<std::string> SharedSessionHandler::GetHashFromScrypt(
     const std::string& password,
     const std::string& salt) {

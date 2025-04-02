@@ -16,19 +16,25 @@
 // Simple tool to print the list of targets that were compiled in when building
 // this tool.
 
+#include <stdint.h>
 #include <stdio.h>
 
 #include "hwy/highway.h"
 
+namespace {
+
 void PrintTargets(const char* msg, int64_t targets) {
   fprintf(stderr, "%s", msg);
-  // For each bit:
-  for (int64_t x = targets; x != 0; x = x & (x - 1)) {
+  // For each bit other than the sign bit:
+  for (int64_t x = targets & hwy::LimitsMax<int64_t>(); x != 0;
+       x = x & (x - 1)) {
     // Extract value of least-significant bit.
     fprintf(stderr, " %s", hwy::TargetName(x & (~x + 1)));
   }
   fprintf(stderr, "\n");
 }
+
+}  // namespace
 
 int main() {
 #ifdef HWY_COMPILE_ONLY_EMU128

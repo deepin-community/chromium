@@ -6,7 +6,9 @@
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/extensions/speech/speech_recognition_private_base_test.h"
+#include "chrome/browser/ash/extensions/speech/speech_recognition_private_manager_factory.h"
 #include "chrome/browser/ash/extensions/speech/speech_recognition_private_recognizer.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/speech/speech_recognition_constants.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
@@ -21,7 +23,7 @@ namespace extensions {
 class SpeechRecognitionPrivateManagerTest
     : public SpeechRecognitionPrivateBaseTest {
  protected:
-  SpeechRecognitionPrivateManagerTest() {}
+  SpeechRecognitionPrivateManagerTest() = default;
   ~SpeechRecognitionPrivateManagerTest() override = default;
   SpeechRecognitionPrivateManagerTest(
       const SpeechRecognitionPrivateManagerTest&) = delete;
@@ -30,7 +32,8 @@ class SpeechRecognitionPrivateManagerTest
 
   void SetUpOnMainThread() override {
     SpeechRecognitionPrivateBaseTest::SetUpOnMainThread();
-    manager_ = SpeechRecognitionPrivateManager::Get(profile());
+    manager_ =
+        SpeechRecognitionPrivateManagerFactory::GetForBrowserContext(profile());
   }
 
   void TearDownOnMainThread() override {
@@ -70,7 +73,7 @@ class SpeechRecognitionPrivateManagerTest
   }
 
   void DispatchOnResultEvent(const std::string& key,
-                             const std::u16string transcript,
+                             const std::u16string& transcript,
                              bool is_final) {
     manager_->HandleSpeechRecognitionResult(key, transcript, is_final);
   }

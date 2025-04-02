@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/containers/heap_array.h"
 #include "base/numerics/safe_math.h"
 
@@ -83,7 +84,7 @@ void DrainableIOBuffer::SetOffset(int bytes) {
   CHECK_GE(bytes, 0);
   CHECK_LE(bytes, size_);
   used_ = bytes;
-  data_ = base_->data() + used_;
+  data_ = UNSAFE_TODO(base_->data() + used_);
 }
 
 DrainableIOBuffer::~DrainableIOBuffer() {
@@ -114,7 +115,7 @@ void GrowableIOBuffer::set_offset(int offset) {
   CHECK_GE(offset, 0);
   CHECK_LE(offset, capacity_);
   offset_ = offset;
-  data_ = real_data_.get() + offset;
+  data_ = UNSAFE_TODO(real_data_.get() + offset);
   size_ = capacity_ - offset;
 }
 
@@ -122,8 +123,26 @@ int GrowableIOBuffer::RemainingCapacity() {
   return capacity_ - offset_;
 }
 
-char* GrowableIOBuffer::StartOfBuffer() {
-  return real_data_.get();
+base::span<uint8_t> GrowableIOBuffer::everything() {
+  return base::as_writable_bytes(
+      // SAFETY: The capacity_ is the size of the allocation.
+      UNSAFE_BUFFERS(
+          base::span(real_data_.get(), base::checked_cast<size_t>(capacity_))));
+}
+
+base::span<const uint8_t> GrowableIOBuffer::everything() const {
+  return base::as_bytes(
+      // SAFETY: The capacity_ is the size of the allocation.
+      UNSAFE_BUFFERS(
+          base::span(real_data_.get(), base::checked_cast<size_t>(capacity_))));
+}
+
+base::span<uint8_t> GrowableIOBuffer::span_before_offset() {
+  return everything().first(base::checked_cast<size_t>(offset_));
+}
+
+base::span<const uint8_t> GrowableIOBuffer::span_before_offset() const {
+  return everything().first(base::checked_cast<size_t>(offset_));
 }
 
 GrowableIOBuffer::~GrowableIOBuffer() {
@@ -143,7 +162,9 @@ PickledIOBuffer::~PickledIOBuffer() {
 }
 
 WrappedIOBuffer::WrappedIOBuffer(base::span<const char> data)
-    : IOBuffer(base::make_span(const_cast<char*>(data.data()), data.size())) {}
+    // SAFETY: const cast does not affect size.
+    : IOBuffer(UNSAFE_BUFFERS(
+          base::span(const_cast<char*>(data.data()), data.size()))) {}
 
 WrappedIOBuffer::WrappedIOBuffer(base::span<const uint8_t> data)
     : WrappedIOBuffer(base::as_chars(data)) {}

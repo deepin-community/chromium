@@ -44,8 +44,7 @@ class TrackedElementWebContents;
 //  - Wait for a condition (evaluated as a JS statement or function) to become
 //    true and then send a custom event.
 //  - Track when a WebContents is destroyed or removed from a browser window.
-class WebContentsInteractionTestUtil : private content::WebContentsObserver,
-                                       private TabStripModelObserver {
+class WebContentsInteractionTestUtil : protected content::WebContentsObserver {
  public:
   // How often to poll for state changes we're watching; see
   // SendEventOnStateChange().
@@ -234,6 +233,17 @@ class WebContentsInteractionTestUtil : private content::WebContentsObserver,
   static std::unique_ptr<WebContentsInteractionTestUtil> ForNextTabInAnyBrowser(
       ui::ElementIdentifier page_identifier);
 
+  // Creates a util object that becomes valid when an already-instrumented
+  // web contents with `outer_identifier` has an inner WebContents at
+  // `inner_contents_index` is loaded and ready.
+  //
+  // This is for chrome.webviewTag/<webview> elements in WebUI, apps, and
+  // extensions only, not for iframes, which you should just use DeepQuery for.
+  static std::unique_ptr<WebContentsInteractionTestUtil> ForInnerWebContents(
+      ui::ElementIdentifier outer_page_identifier,
+      size_t inner_contents_index,
+      ui::ElementIdentifier inner_page_identifier);
+
   // Returns whether the given value is "truthy" in the Javascript sense.
   static bool IsTruthy(const base::Value& value);
 
@@ -254,8 +264,18 @@ class WebContentsInteractionTestUtil : private content::WebContentsObserver,
   // Evaluate() or SendEventOnStateChange().
   bool is_page_loaded() const { return current_element_ != nullptr; }
 
+  // Returns whether any non-empty paints have occurred on the current page.
+  // The first non-empty paint is required before a page can be screenshot or
+  // receive keyboard or accelerator input. Note that completely empty pages
+  // will not receive a paint.
+  bool HasPageBeenPainted() const;
+
   // Returns the instrumented WebView, or null if none.
-  views::WebView* GetWebView();
+  virtual views::WebView* GetWebView() const = 0;
+
+  // Returns what the context would be if an element could be created or is
+  // already present; null if it cannot be determined.
+  virtual ui::ElementContext GetElementContext() const = 0;
 
   // Page Navigation ///////////////////////////////////////////////////////////
 
@@ -273,7 +293,7 @@ class WebContentsInteractionTestUtil : private content::WebContentsObserver,
   //
   // Can also be used if you are waiting for a tab to open, but only if you
   // have specified a valid Browser or ElementContext.
-  void LoadPageInNewTab(const GURL& url, bool activate_tab);
+  virtual void LoadPageInNewTab(const GURL& url, bool activate_tab);
 
   // Direct Javascript Evaluation //////////////////////////////////////////////
 
@@ -372,39 +392,13 @@ class WebContentsInteractionTestUtil : private content::WebContentsObserver,
   //
   // If the element is in a tab or window that is not visible, an empty `Rect`
   // will be returned.
-  gfx::Rect GetElementBoundsInScreen(const DeepQuery& where);
-  gfx::Rect GetElementBoundsInScreen(const std::string& where);
-
-  // Miscellaneous Tools ///////////////////////////////////////////////////////
-
-  // Convenience method to wait on a state change when the element at `where`
-  // reaches `minimum_size`. If `must_already_exist` is false (recommended),
-  // Type::kExistsAndConditionTrue is used; if true, then Type::kConditionTrue
-  // is used instead.
-  void SendEventOnElementMinimumSize(ui::CustomElementEventType event_type,
-                                     const DeepQuery& where,
-                                     const gfx::Size& minimum_size,
-                                     bool must_already_exist);
-
-  // Sends an event on the instrumented WebView when its size exceeds some
-  // minimum, then checks that an element within the WebView is present and of
-  // minimum size. If no `element_to_check` is specified, the body element of
-  // the document is checked instead.
-  //
-  // Currently only supported for WebView instrumented with ForNonTabWebView().
-  //
-  // Useful when you expect a secondary UI to resize in response to loading data
-  // but that resize might not be synchronous (and you have some idea how large
-  // the surface should be).
-  //
-  // If the surface never reaches the minimum size, the current test will fail.
-  void SendEventOnWebViewMinimumSize(
-      const gfx::Size& minimum_webui_size,
-      ui::CustomElementEventType event_type,
-      const DeepQuery& element_to_check = DeepQuery({"body"}),
-      const gfx::Size& minimum_element_size = gfx::Size(1, 1));
+  virtual gfx::Rect GetElementBoundsInScreen(const DeepQuery& where) const;
+  gfx::Rect GetElementBoundsInScreen(const std::string& where) const;
 
  protected:
+  WebContentsInteractionTestUtil(content::WebContents* web_contents,
+                                 ui::ElementIdentifier page_identifier);
+
   // content::WebContentsObserver:
   void DidStopLoading() override;
   void DidFinishLoad(content::RenderFrameHost* render_frame_host,
@@ -412,31 +406,28 @@ class WebContentsInteractionTestUtil : private content::WebContentsObserver,
   void DocumentOnLoadCompletedInPrimaryMainFrame() override;
   void PrimaryPageChanged(content::Page& page) override;
   void WebContentsDestroyed() override;
+  void DidFirstVisuallyNonEmptyPaint() override;
 
-  // TabStripModelObserver:
-  void OnTabStripModelChanged(
-      TabStripModel* tab_strip_model,
-      const TabStripModelChange& change,
-      const TabStripSelectionChange& selection) override;
+  void MaybeCreateElement();
+  void DiscardCurrentElement();
+
+  virtual bool ForceNavigateWithController() const;
+
+  TrackedElementWebContents* current_element() {
+    return current_element_.get();
+  }
+  const TrackedElementWebContents* current_element() const {
+    return current_element_.get();
+  }
 
  private:
   FRIEND_TEST_ALL_PREFIXES(WebContentsInteractionTestUtilInteractiveUiTest,
                            OpenTabSearchMenuAndTestVisibility);
-  class NewTabWatcher;
   class Poller;
-  class WebViewData;
 
-  WebContentsInteractionTestUtil(content::WebContents* web_contents,
-                                 ui::ElementIdentifier page_identifier,
-                                 std::optional<Browser*> browser,
-                                 views::WebView* web_view);
-
-  void MaybeCreateElement(bool force = false);
-  void DiscardCurrentElement();
+  void MaybeSendPaintEvent();
 
   void OnPollEvent(Poller* poller, ui::CustomElementEventType event);
-
-  void StartWatchingWebContents(content::WebContents* web_contents);
 
   // Dictates the identifier that will be assigned to the new
   // TrackedElementWebContents created for the target WebContents on the next
@@ -447,18 +438,14 @@ class WebContentsInteractionTestUtil : private content::WebContentsObserver,
   // We'll ignore those events.
   std::optional<GURL> navigating_away_from_;
 
-  // Tracks the WebView that hosts a non-tab WebContents; null otherwise.
-  std::unique_ptr<WebViewData> web_view_data_;
+  // Whether a painted event was sent for the current page.
+  bool sent_paint_event_ = false;
 
   // Virtual element representing the currently-loaded webpage; null if none.
   std::unique_ptr<TrackedElementWebContents> current_element_;
 
   // List of active event pollers for the current page.
   std::list<std::unique_ptr<Poller>> pollers_;
-
-  // Optional object that watches for a new tab to be created, either in a
-  // specific browser or in any browser.
-  std::unique_ptr<NewTabWatcher> new_tab_watcher_;
 };
 
 extern void PrintTo(const WebContentsInteractionTestUtil::DeepQuery& deep_query,

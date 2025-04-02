@@ -80,19 +80,16 @@ class SessionRestoreTestChromeOS : public InProcessBrowserTest {
   SessionRestoreTestChromeOS()
       : faster_animations_(
             ui::ScopedAnimationDurationScaleMode::ZERO_DURATION) {}
-  ~SessionRestoreTestChromeOS() override {}
+  ~SessionRestoreTestChromeOS() override = default;
 
  protected:
   void SetUpDefaultCommandLine(base::CommandLine* command_line) override {
-    base::CommandLine default_command_line(base::CommandLine::NO_PROGRAM);
-    InProcessBrowserTest::SetUpDefaultCommandLine(&default_command_line);
+    InProcessBrowserTest::SetUpDefaultCommandLine(command_line);
 
     // Animations have caused crashes in session restore in the past but are
     // usually disabled in tests. Remove --wm-window-animations-disabled to
     // re-enable animations.
-    test_launcher_utils::RemoveCommandLineSwitch(
-        default_command_line, wm::switches::kWindowAnimationsDisabled,
-        command_line);
+    command_line->RemoveSwitch(wm::switches::kWindowAnimationsDisabled);
   }
 
   Browser* CreateBrowserWithParams(Browser::CreateParams params) {

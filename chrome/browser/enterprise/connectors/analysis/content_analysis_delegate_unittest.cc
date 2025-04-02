@@ -2,13 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/browser/enterprise/connectors/analysis/content_analysis_delegate.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
@@ -22,7 +29,6 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "chrome/browser/enterprise/connectors/analysis/analysis_settings.h"
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/enterprise/connectors/connectors_service.h"
 #include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"
@@ -36,6 +42,7 @@
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/enterprise/buildflags/buildflags.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
+#include "components/enterprise/connectors/core/analysis_settings.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/safe_browsing/core/common/features.h"
@@ -107,7 +114,7 @@ std::string small_text() {
 base::ReadOnlySharedMemoryRegion create_page(size_t size) {
   base::MappedReadOnlyRegion page =
       base::ReadOnlySharedMemoryRegion::Create(size);
-  memset(page.mapping.memory(), 'a', size);
+  std::ranges::fill(base::span(page.mapping), 'a');
   return std::move(page.region);
 }
 
@@ -152,7 +159,7 @@ class BaseTest : public testing::Test {
     for (const auto& file_name : file_names) {
       base::FilePath path = temp_dir_.GetPath().Append(file_name);
       base::File file(path, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
-      file.WriteAtCurrentPos(content.data(), content.size());
+      file.WriteAtCurrentPos(base::as_byte_span(content));
       data->paths.emplace_back(path);
     }
   }
@@ -952,8 +959,9 @@ TEST_F(ContentAnalysisDelegateAuditOnlyTest, FileIsEncrypted_PolicyAllows) {
                  },
                  &called));
   RunUntilDone();
-  // "FILE_ATTACHED" is exempt from scanning.
-  EXPECT_EQ(0,
+  // When resumable upload is in use and the policy does not block encrypted
+  // files by default, the file's metadata is uploaded for scanning.
+  EXPECT_EQ(1,
             test::FakeContentAnalysisDelegate::GetTotalAnalysisRequestsCount());
   EXPECT_TRUE(called);
 }
@@ -1464,7 +1472,9 @@ class ContentAnalysisDelegateResultHandlingTest
                          FAILED_TO_GET_TOKEN ||
            result ==
                safe_browsing::BinaryUploadService::Result::TOO_MANY_REQUESTS ||
-           result == safe_browsing::BinaryUploadService::Result::UNKNOWN;
+           result == safe_browsing::BinaryUploadService::Result::UNKNOWN ||
+           result ==
+               safe_browsing::BinaryUploadService::Result::INCOMPLETE_RESPONSE;
   }
 
 #if BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)

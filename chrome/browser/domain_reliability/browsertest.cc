@@ -31,6 +31,7 @@
 #include "net/test/embedded_test_server/http_response.h"
 #include "net/test/url_request/url_request_failed_job.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "url/gurl.h"
@@ -48,7 +49,7 @@ class DomainReliabilityBrowserTest : public InProcessBrowserTest {
   DomainReliabilityBrowserTest& operator=(const DomainReliabilityBrowserTest&) =
       delete;
 
-  ~DomainReliabilityBrowserTest() override {}
+  ~DomainReliabilityBrowserTest() override = default;
 
   // Note: In an ideal world, instead of appending the command-line switch and
   // manually setting discard_uploads to false, Domain Reliability would
@@ -92,9 +93,9 @@ class DomainReliabilityDisabledBrowserTest
       const DomainReliabilityDisabledBrowserTest&) = delete;
 
  protected:
-  DomainReliabilityDisabledBrowserTest() {}
+  DomainReliabilityDisabledBrowserTest() = default;
 
-  ~DomainReliabilityDisabledBrowserTest() override {}
+  ~DomainReliabilityDisabledBrowserTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitch(switches::kDisableDomainReliability);

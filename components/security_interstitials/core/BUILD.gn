@@ -53,6 +53,7 @@ static_library("core") {
     "//base",
     "//base:i18n",
     "//components/content_settings/core/browser",
+    "//components/feature_engagement/public",
     "//components/google/core/common",
     "//components/history/core/browser",
     "//components/metrics",
@@ -78,13 +79,14 @@ static_library("unsafe_resource") {
   sources = [
     "unsafe_resource.cc",
     "unsafe_resource.h",
+    "unsafe_resource_locator.cc",
+    "unsafe_resource_locator.h",
   ]
 
   deps = [
     "//base",
     "//components/safe_browsing/core/browser/db:hit_report",
     "//components/safe_browsing/core/browser/db:util",
-    "//components/safe_browsing/core/common:common",
     "//components/safe_browsing/core/common/proto:realtimeapi_proto",
     "//net",
     "//services/network/public/mojom",

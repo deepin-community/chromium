@@ -7,6 +7,7 @@
 #include "base/command_line.h"
 #include "chrome/common/pdf_util.h"
 #include "chrome/common/plugin.mojom.h"
+#include "components/pdf/common/pdf_util.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/renderer/render_frame.h"
 #include "gin/object_template_builder.h"
@@ -28,7 +29,7 @@ PDFPluginPlaceholder::PDFPluginPlaceholder(content::RenderFrame* render_frame,
                                            const blink::WebPluginParams& params)
     : plugins::PluginPlaceholderBase(render_frame, params) {}
 
-PDFPluginPlaceholder::~PDFPluginPlaceholder() {}
+PDFPluginPlaceholder::~PDFPluginPlaceholder() = default;
 
 v8::Local<v8::Value> PDFPluginPlaceholder::GetV8Handle(v8::Isolate* isolate) {
   return gin::CreateHandle(isolate, this).ToV8();

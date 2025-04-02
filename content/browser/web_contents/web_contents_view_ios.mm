@@ -10,9 +10,12 @@
 #include <string>
 #include <utility>
 
+#include "base/apple/foundation_util.h"
+#include "base/memory/weak_ptr.h"
 #include "content/browser/renderer_host/popup_menu_helper_ios.h"
 #include "content/browser/renderer_host/render_widget_host_view_ios.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "ui/base/cocoa/animation_utils.h"
@@ -90,7 +93,11 @@ gfx::Rect WebContentsViewIOS::GetContainerBounds() const {
 
 void WebContentsViewIOS::OnCapturerCountChanged() {}
 
-void WebContentsViewIOS::FullscreenStateChanged(bool is_fullscreen) {}
+void WebContentsViewIOS::FullscreenStateChanged(bool is_fullscreen) {
+  if (is_fullscreen && popup_menu_helper_) {
+    popup_menu_helper_->CloseMenu();
+  }
+}
 
 void WebContentsViewIOS::UpdateWindowControlsOverlay(
     const gfx::Rect& bounding_rect) {}
@@ -154,12 +161,9 @@ DropData* WebContentsViewIOS::GetDropData() const {
   return nullptr;
 }
 
-void WebContentsViewIOS::TransferDragSecurityInfo(WebContentsView* view) {
-  NOTIMPLEMENTED();
-}
-
 gfx::Rect WebContentsViewIOS::GetViewBounds() const {
-  return gfx::Rect();
+  return gfx::Rect(ui_view_->view_.contentSize.width,
+                   ui_view_->view_.contentSize.height);
 }
 
 void WebContentsViewIOS::GotFocus(RenderWidgetHostImpl* render_widget_host) {
@@ -170,11 +174,19 @@ void WebContentsViewIOS::LostFocus(RenderWidgetHostImpl* render_widget_host) {
   web_contents_->NotifyWebContentsLostFocus(render_widget_host);
 }
 
+void WebContentsViewIOS::ShowContextMenu(RenderFrameHost& render_frame_host,
+                                         const ContextMenuParams& params) {
+  if (delegate_) {
+    delegate_->ShowContextMenu(render_frame_host, params);
+  } else {
+    DLOG(ERROR) << "Cannot show context menus without a delegate.";
+  }
+}
+
 void WebContentsViewIOS::ShowPopupMenu(
     RenderFrameHost* render_frame_host,
     mojo::PendingRemote<blink::mojom::PopupMenuClient> popup_client,
     const gfx::Rect& bounds,
-    int item_height,
     double item_font_size,
     int selected_item,
     std::vector<blink::mojom::MenuItemPtr> menu_items,
@@ -182,9 +194,9 @@ void WebContentsViewIOS::ShowPopupMenu(
     bool allow_multiple_selection) {
   popup_menu_helper_ = std::make_unique<PopupMenuHelper>(
       this, render_frame_host, std::move(popup_client));
-  popup_menu_helper_->ShowPopupMenu(bounds, item_height, item_font_size,
-                                    selected_item, std::move(menu_items),
-                                    right_aligned, allow_multiple_selection);
+  popup_menu_helper_->ShowPopupMenu(bounds, item_font_size, selected_item,
+                                    std::move(menu_items), right_aligned,
+                                    allow_multiple_selection);
 }
 
 void WebContentsViewIOS::OnMenuClosed() {
@@ -230,7 +242,7 @@ void WebContentsViewIOS::RenderViewHostChanged(RenderViewHost* old_host,
   }
   web_contents_->UpdateBrowserControlsState(cc::BrowserControlsState::kBoth,
                                             cc::BrowserControlsState::kHidden,
-                                            false);
+                                            false, std::nullopt);
 }
 
 void WebContentsViewIOS::SetOverscrollControllerEnabled(bool enabled) {}
@@ -275,5 +287,7 @@ BackForwardTransitionAnimationManager*
 WebContentsViewIOS::GetBackForwardTransitionAnimationManager() {
   return nullptr;
 }
+
+void WebContentsViewIOS::DestroyBackForwardTransitionAnimationManager() {}
 
 }  // namespace content

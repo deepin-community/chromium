@@ -9,8 +9,10 @@
 
 #include "base/containers/flat_map.h"
 #include "base/memory/raw_ptr.h"
+#include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_web_contents_host.h"
+#include "content/public/browser/web_contents.h"
 
 class Profile;
 class ProfileManagementStepController;
@@ -27,19 +29,16 @@ class ProfilePickerWebContentsHost;
 // the next steps.
 class ProfileManagementFlowController {
  public:
-  // TODO(https://crbug.com/1358843): Split the steps more granularly across
+  // TODO(crbug.com/40237131): Split the steps more granularly across
   // logical steps instead of according to implementation details.
   enum class Step {
     kUnknown,
     // Renders the `chrome://profile-picker` app, covering the profile picker,
     // the profile type choice at the beginning of the profile creation
-    // flow and the account selection on Lacros.
+    // flow and the account selection.
     kProfilePicker,
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
     // Renders the sign in screen on Dice platforms.
-    // TODO(https://crbug.com/1360773): Support the `kAccountSelection` step on
-    // Lacros. Picking an account during the `kLacrosSelectAvailableAccount`
-    // flow and the profile creation should be implemented as a standalone step.
     kAccountSelection,
     // Moves the rest of the flow to a browser tab so that the user can complete
     // the SAML sign in they started at the previous step.
@@ -71,11 +70,7 @@ class ProfileManagementFlowController {
   virtual ~ProfileManagementFlowController();
 
   // Starts the flow by registering and switching to the first step.
-  // If `step_switch_finished_callback` is provided, it will be called with
-  // `true` when the navigation to the initial step succeeded, or with `false`
-  // otherwise.
-  virtual void Init(StepSwitchFinishedCallback step_switch_finished_callback =
-                        StepSwitchFinishedCallback()) = 0;
+  virtual void Init() = 0;
 
   // Instructs a step registered as `step` to be shown.
   // If `step_switch_finished_callback` is provided, it will be called
@@ -98,6 +93,15 @@ class ProfileManagementFlowController {
   // screen (if the original EntryPoint was to open the picker).
   virtual void CancelPostSignInFlow() = 0;
 
+  // Picks the profile with `profile_path`.
+  virtual void PickProfile(const base::FilePath& profile_path,
+                           ProfilePicker::ProfilePickingArgs args) = 0;
+
+  // Clears the current state and reset it to the initial state that shows the
+  // main screen. When calling this function the state should not be the
+  // initial one. Executes `callback` when the initial state is shown.
+  void Reset(StepSwitchFinishedCallback callback);
+
   // Returns a string to use as title for the window, for accessibility
   // purposes. It is used in case the host is not able to obtain a title from
   // the content it's rendering. As a final fallback, if this value is empty
@@ -116,6 +120,9 @@ class ProfileManagementFlowController {
   void UnregisterStep(Step step);
 
   bool IsStepInitialized(Step step) const;
+
+  // Checks whether the flow has already attempted to exit.
+  bool HasFlowExited() const;
 
   // Closes the flow, calling `clear_host_callback_`, which would cause the
   // `host()` to be deleted.
@@ -141,6 +148,13 @@ class ProfileManagementFlowController {
 
   ProfilePickerWebContentsHost* host() { return host_; }
 
+  // Creates the web contents associated with `profile` and stores them in
+  // `signed_out_flow_web_contents_`.
+  void CreateSignedOutFlowWebContents(Profile* profile);
+
+  // Returns a pointer to `signed_out_flow_web_contents_`.
+  content::WebContents* GetSignedOutFlowWebContents() const;
+
  private:
   // Called after a browser is open. Clears the host and then runs the callback.
   void CloseHostAndRunCallback(
@@ -148,6 +162,10 @@ class ProfileManagementFlowController {
       Browser* browser);
 
   Step current_step_ = Step::kUnknown;
+
+  // The signed out flow web contents are used in some steps inside
+  // `initialized_steps_`. They have to be destroyed after `initialized_steps_`.
+  std::unique_ptr<content::WebContents> signed_out_flow_web_contents_;
 
   raw_ptr<ProfilePickerWebContentsHost> host_;
   ClearHostClosure clear_host_callback_;

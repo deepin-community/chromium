@@ -138,7 +138,6 @@ GLFenceWin::~GLFenceWin() = default;
 
 bool GLFenceWin::HasCompleted() {
   NOTREACHED();
-  return false;
 }
 
 void GLFenceWin::ClientWait() {

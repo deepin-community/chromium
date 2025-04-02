@@ -47,13 +47,12 @@ std::optional<double> CSSTimeInterpolationType::GetSeconds(
     const CSSPropertyID& property,
     const ComputedStyle& style) {
   switch (property) {
-    case CSSPropertyID::kPopoverShowDelay:
-      return style.PopoverShowDelay();
-    case CSSPropertyID::kPopoverHideDelay:
-      return style.PopoverHideDelay();
+    case CSSPropertyID::kInterestTargetShowDelay:
+      return style.InterestTargetShowDelay();
+    case CSSPropertyID::kInterestTargetHideDelay:
+      return style.InterestTargetHideDelay();
     default:
       NOTREACHED();
-      return std::optional<double>();
   }
 }
 
@@ -69,12 +68,11 @@ std::optional<double> CSSTimeInterpolationType::GetSeconds(
 double CSSTimeInterpolationType::ClampTime(const CSSPropertyID& property,
                                            double value) const {
   switch (property) {
-    case CSSPropertyID::kPopoverShowDelay:
-    case CSSPropertyID::kPopoverHideDelay:
+    case CSSPropertyID::kInterestTargetShowDelay:
+    case CSSPropertyID::kInterestTargetHideDelay:
       return ClampTo<float>(value, 0);
     default:
       NOTREACHED();
-      return 0;
   }
 }
 
@@ -95,15 +93,14 @@ void CSSTimeInterpolationType::ApplyStandardPropertyValue(
   double clamped_seconds =
       ClampTime(property, To<InterpolableNumber>(interpolable_value).Value());
   switch (property) {
-    case CSSPropertyID::kPopoverShowDelay:
-      builder.SetPopoverShowDelay(clamped_seconds);
+    case CSSPropertyID::kInterestTargetShowDelay:
+      builder.SetInterestTargetShowDelay(clamped_seconds);
       break;
-    case CSSPropertyID::kPopoverHideDelay:
-      builder.SetPopoverHideDelay(clamped_seconds);
+    case CSSPropertyID::kInterestTargetHideDelay:
+      builder.SetInterestTargetHideDelay(clamped_seconds);
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 
@@ -140,8 +137,8 @@ InterpolationValue CSSTimeInterpolationType::MaybeConvertInherit(
   if (!state.ParentStyle())
     return nullptr;
   std::optional<double> inherited_seconds = GetSeconds(*state.ParentStyle());
-  conversion_checkers.push_back(
-      std::make_unique<InheritedTimeChecker>(CssProperty(), inherited_seconds));
+  conversion_checkers.push_back(MakeGarbageCollected<InheritedTimeChecker>(
+      CssProperty(), inherited_seconds));
   if (!inherited_seconds)
     return nullptr;
   return CreateTimeValue(*inherited_seconds);

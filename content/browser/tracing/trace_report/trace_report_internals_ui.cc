@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/browser/tracing/trace_report/trace_report_internals_ui.h"
 
 #include "content/browser/renderer_host/render_frame_host_impl.h"
@@ -25,15 +30,16 @@ TraceReportInternalsUI::TraceReportInternalsUI(WebUI* web_ui)
       web_ui->GetWebContents()->GetBrowserContext(),
       kChromeUITracesInternalsHost);
 
-  source->AddResourcePaths(base::make_span(kTracesInternalsResources,
-                                           kTracesInternalsResourcesSize));
+  source->AddResourcePaths(kTracesInternalsResources);
   source->AddResourcePath("", IDR_TRACES_INTERNALS_TRACE_REPORT_INTERNALS_HTML);
 
   // Add TrustedTypes policies necessary for using Polymer.
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::TrustedTypes,
       "trusted-types static-types polymer-html-literal "
-      "polymer-template-event-attribute-policy;");
+      "polymer-template-event-attribute-policy "
+      // Add TrustedTypes policies necessary for using Lit.
+      "lit-html-desktop;");
 }
 
 TraceReportInternalsUI::~TraceReportInternalsUI() = default;

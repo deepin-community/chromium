@@ -5,6 +5,7 @@
 #include "components/variations/service/variations_service_client.h"
 
 #include "base/command_line.h"
+#include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/system/sys_info.h"
@@ -36,10 +37,16 @@ version_info::Channel VariationsServiceClient::GetChannelForVariations() {
 
   auto channel = GetChannel();
 #if BUILDFLAG(IS_ANDROID)
-  // TODO(crbug.com/1493502): Remove this if block after automotive beta ends.
+  // TODO(crbug.com/40936710): Remove this if block after automotive beta ends.
   if (channel == version_info::Channel::BETA &&
       base::android::BuildInfo::GetInstance()->is_automotive()) {
     return version_info::Channel::STABLE;
+  }
+  // TODO(crbug.com/389565104): Remove this if block when ready to move desktop
+  // to stable builds.
+  if (channel == version_info::Channel::STABLE &&
+      base::android::BuildInfo::GetInstance()->is_desktop()) {
+    return version_info::Channel::DEV;
   }
 #endif
   // Return the embedder-provided channel if no forced channel is specified.
@@ -76,8 +83,11 @@ Study::FormFactor VariationsServiceClient::GetCurrentFormFactor() {
       return Study::FOLDABLE;
   }
   NOTREACHED();
-  return Study::DESKTOP;
 #endif  // BUILDFLAG(PLATFORM_CFM)
+}
+
+base::FilePath VariationsServiceClient::GetVariationsSeedFileDir() {
+  return base::FilePath();
 }
 
 std::unique_ptr<SeedResponse>

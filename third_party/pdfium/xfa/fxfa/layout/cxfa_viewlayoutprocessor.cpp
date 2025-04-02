@@ -8,11 +8,11 @@
 
 #include <utility>
 
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/stl_util.h"
 #include "fxjs/gc/container_trace.h"
 #include "fxjs/xfa/cfxjse_engine.h"
 #include "fxjs/xfa/cjx_object.h"
-#include "third_party/base/check.h"
 #include "xfa/fxfa/cxfa_ffnotify.h"
 #include "xfa/fxfa/cxfa_ffpageview.h"
 #include "xfa/fxfa/layout/cxfa_contentlayoutitem.h"
@@ -171,7 +171,7 @@ CXFA_Node* ResolveBreakTarget(CXFA_Node* pPageSetRoot,
   if (pTargetAll->IsEmpty())
     return nullptr;
 
-  pTargetAll->Trim();
+  pTargetAll->TrimWhitespace();
   size_t iSplitIndex = 0;
   bool bTargetAllFind = true;
   while (true) {
@@ -732,7 +732,7 @@ int32_t CXFA_ViewLayoutProcessor::GetPageIndex(
     const CXFA_ViewLayoutItem* pPage) const {
   auto it = std::find(m_PageArray.begin(), m_PageArray.end(), pPage);
   return it != m_PageArray.end()
-             ? pdfium::base::checked_cast<int32_t>(it - m_PageArray.begin())
+             ? pdfium::checked_cast<int32_t>(it - m_PageArray.begin())
              : -1;
 }
 
@@ -921,15 +921,17 @@ CXFA_Node* CXFA_ViewLayoutProcessor::ProcessBookendLeaderOrTrailer(
   CXFA_Node* pFormNode = pBookendNode->GetContainerParent();
   CXFA_Node* pLeaderTemplate =
       ResolveBookendLeaderOrTrailer(pBookendNode, bLeader);
-  if (!pLeaderTemplate)
+  if (!pLeaderTemplate || !pLeaderTemplate->IsContainerNode()) {
     return nullptr;
+  }
 
   CXFA_Document* pDocument = pBookendNode->GetDocument();
   CXFA_Node* pDataScope = XFA_DataMerge_FindDataScope(pFormNode);
   CXFA_Node* pBookendAppendNode = pDocument->DataMerge_CopyContainer(
       pLeaderTemplate, pFormNode, pDataScope, true, true, true);
-  if (!pBookendAppendNode)
+  if (!pBookendAppendNode) {
     return nullptr;
+  }
 
   pDocument->DataMerge_UpdateBindingRelations(pBookendAppendNode);
   SetLayoutGeneratedNodeFlag(pBookendAppendNode);
@@ -1945,9 +1947,7 @@ void CXFA_ViewLayoutProcessor::PrepareLayout() {
 void CXFA_ViewLayoutProcessor::ProcessSimplexOrDuplexPageSets(
     CXFA_ViewLayoutItem* pPageSetLayoutItem,
     bool bIsSimplex) {
-  size_t nPageAreaCount;
-  CXFA_LayoutItem* pLastPageAreaLayoutItem;
-  std::tie(nPageAreaCount, pLastPageAreaLayoutItem) =
+  auto [nPageAreaCount, pLastPageAreaLayoutItem] =
       GetPageAreaCountAndLastPageAreaFromPageSet(pPageSetLayoutItem);
   if (!pLastPageAreaLayoutItem)
     return;

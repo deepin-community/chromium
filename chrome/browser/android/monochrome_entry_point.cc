@@ -25,7 +25,6 @@ bool NativeInit(base::android::LibraryProcessType library_process_type) {
 
     default:
       NOTREACHED();
-      return false;
   }
 }
 

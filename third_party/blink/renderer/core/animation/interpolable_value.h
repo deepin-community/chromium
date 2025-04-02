@@ -84,6 +84,13 @@ class CORE_EXPORT InterpolableValue
   virtual InterpolableValue* RawCloneAndZero() const = 0;
 };
 
+template <typename T>
+struct ThreadingTrait<
+    T,
+    std::enable_if_t<std::is_base_of_v<InterpolableValue, T>>> {
+  static constexpr ThreadAffinity kAffinity = kMainThreadOnly;
+};
+
 class CORE_EXPORT InlinedInterpolableDouble final {
   DISALLOW_NEW();
 
@@ -115,6 +122,7 @@ class CORE_EXPORT InterpolableNumber final : public InterpolableValue {
                               CSSPrimitiveValue::UnitType unit_type =
                                   CSSPrimitiveValue::UnitType::kNumber);
   explicit InterpolableNumber(const CSSMathExpressionNode& expression);
+  explicit InterpolableNumber(const CSSPrimitiveValue& value);
 
   // TODO(crbug.com/1521261): Remove this, once the bug is fixed.
   double Value() const { return value_.Value(); }
@@ -127,6 +135,7 @@ class CORE_EXPORT InterpolableNumber final : public InterpolableValue {
   bool IsNumber() const final { return true; }
   bool Equals(const InterpolableValue& other) const final;
   void Scale(double scale) final;
+  void Scale(const InterpolableNumber& other);
   void Add(const InterpolableValue& other) final;
   void AssertCanInterpolateWith(const InterpolableValue& other) const final;
 
@@ -142,12 +151,13 @@ class CORE_EXPORT InterpolableNumber final : public InterpolableValue {
  private:
   InterpolableNumber* RawClone() const final {
     if (IsDoubleValue()) {
-      return MakeGarbageCollected<InterpolableNumber>(value_.Value());
+      return MakeGarbageCollected<InterpolableNumber>(value_.Value(),
+                                                      unit_type_);
     }
     return MakeGarbageCollected<InterpolableNumber>(*expression_);
   }
   InterpolableNumber* RawCloneAndZero() const final {
-    return MakeGarbageCollected<InterpolableNumber>(0);
+    return MakeGarbageCollected<InterpolableNumber>(0, unit_type_);
   }
 
   bool IsDoubleValue() const { return type_ == Type::kDouble; }
@@ -156,6 +166,9 @@ class CORE_EXPORT InterpolableNumber final : public InterpolableValue {
   void SetDouble(double value, CSSPrimitiveValue::UnitType unit_type);
   void SetExpression(const CSSMathExpressionNode& expression);
   const CSSMathExpressionNode& AsExpression() const;
+  CSSPrimitiveValue::UnitType ResolvedUnitType() const {
+    return IsDouble() ? unit_type_ : expression_->ResolvedUnitType();
+  }
 
   enum class Type { kDouble, kExpression };
   Type type_;

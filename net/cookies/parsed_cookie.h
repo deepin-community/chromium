@@ -8,6 +8,7 @@
 #include <stddef.h>
 
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -36,10 +37,7 @@ class NET_EXPORT ParsedCookie {
   // informative exclusion reasons if the resulting ParsedCookie is invalid.
   // The CookieInclusionStatus will not be altered if the resulting ParsedCookie
   // is valid.
-  // `block_truncated` indicates whether cookies containing '\00', '\r', or '\n'
-  // characters should be treated as invalid.
-  explicit ParsedCookie(const std::string& cookie_line,
-                        bool block_truncated = true,
+  explicit ParsedCookie(std::string_view cookie_line,
                         CookieInclusionStatus* status_out = nullptr);
 
   ParsedCookie(const ParsedCookie&) = delete;
@@ -87,10 +85,6 @@ class NET_EXPORT ParsedCookie {
   CookiePriority Priority() const;
   bool IsPartitioned() const { return partitioned_index_ != 0; }
   bool HasInternalHtab() const { return internal_htab_; }
-  TruncatingCharacterInCookieStringType
-  GetTruncatingCharacterInCookieStringType() const {
-    return truncating_char_in_cookie_string_type_;
-  }
   // Returns the number of attributes, for example, returning 2 for:
   //   "BLAH=hah; path=/; domain=.google.com"
   size_t NumberOfAttributes() const { return pairs_.size() - 1; }
@@ -122,7 +116,7 @@ class NET_EXPORT ParsedCookie {
 
   // Returns an iterator pointing to the first terminator character found in
   // the given string.
-  static std::string::const_iterator FindFirstTerminator(const std::string& s);
+  static std::string_view::iterator FindFirstTerminator(std::string_view s);
 
   // Given iterators pointing to the beginning and end of a string segment,
   // returns as output arguments token_start and token_end to the start and end
@@ -130,24 +124,24 @@ class NET_EXPORT ParsedCookie {
   // updates the segment iterator to point to the next segment to be parsed.
   // If no token is found, the function returns false and the segment iterator
   // is set to end.
-  static bool ParseToken(std::string::const_iterator* it,
-                         const std::string::const_iterator& end,
-                         std::string::const_iterator* token_start,
-                         std::string::const_iterator* token_end);
+  static bool ParseToken(std::string_view::iterator* it,
+                         const std::string_view::iterator& end,
+                         std::string_view::iterator* token_start,
+                         std::string_view::iterator* token_end);
 
   // Given iterators pointing to the beginning and end of a string segment,
   // returns as output arguments value_start and value_end to the start and end
   // positions of a cookie attribute value parsed from the segment, and updates
   // the segment iterator to point to the next segment to be parsed.
-  static void ParseValue(std::string::const_iterator* it,
-                         const std::string::const_iterator& end,
-                         std::string::const_iterator* value_start,
-                         std::string::const_iterator* value_end);
+  static void ParseValue(std::string_view::iterator* it,
+                         const std::string_view::iterator& end,
+                         std::string_view::iterator* value_start,
+                         std::string_view::iterator* value_end);
 
   // Same as the above functions, except the input is assumed to contain the
   // desired token/value and nothing else.
-  static std::string ParseTokenString(const std::string& token);
-  static std::string ParseValueString(const std::string& value);
+  static std::string ParseTokenString(std::string_view token);
+  static std::string ParseValueString(std::string_view value);
 
   // Returns |true| if the parsed version of |value| matches |value|.
   static bool ValueMatchesParsedValue(const std::string& value);
@@ -174,8 +168,7 @@ class NET_EXPORT ParsedCookie {
       CookieInclusionStatus* status_out = nullptr);
 
  private:
-  void ParseTokenValuePairs(const std::string& cookie_line,
-                            bool block_truncated,
+  void ParseTokenValuePairs(std::string_view cookie_line,
                             CookieInclusionStatus& status_out);
   void SetupAttributes();
 
@@ -212,8 +205,6 @@ class NET_EXPORT ParsedCookie {
   size_t same_site_index_ = 0;
   size_t priority_index_ = 0;
   size_t partitioned_index_ = 0;
-  TruncatingCharacterInCookieStringType truncating_char_in_cookie_string_type_ =
-      TruncatingCharacterInCookieStringType::kTruncatingCharNone;
   // For metrics on cookie name/value internal HTABS
   bool internal_htab_ = false;
 };

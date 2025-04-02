@@ -4,10 +4,15 @@
 
 #include "components/autofill/core/browser/metrics/payments/card_metadata_metrics.h"
 
+#include <unordered_set>
+
+#include "base/containers/fixed_flat_set.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
+#include "components/autofill/core/browser/metrics/form_events/form_events.h"
 #include "components/autofill/core/browser/payments/constants.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
+#include "components/autofill/core/common/credit_card_network_identifiers.h"
 
 namespace autofill::autofill_metrics {
 
@@ -32,9 +37,37 @@ std::string_view GetMetadataAvailabilitySuffix(
 CardMetadataLoggingContext::CardMetadataLoggingContext() = default;
 CardMetadataLoggingContext::CardMetadataLoggingContext(
     const CardMetadataLoggingContext&) = default;
+CardMetadataLoggingContext::CardMetadataLoggingContext(
+    CardMetadataLoggingContext&&) = default;
 CardMetadataLoggingContext& CardMetadataLoggingContext::operator=(
     const CardMetadataLoggingContext&) = default;
+CardMetadataLoggingContext& CardMetadataLoggingContext::operator=(
+    CardMetadataLoggingContext&&) = default;
 CardMetadataLoggingContext::~CardMetadataLoggingContext() = default;
+
+bool CardMetadataLoggingContext::DidShowCardWithBenefitAvailable() const {
+  return !instrument_ids_to_issuer_ids_with_benefits_available.empty();
+}
+
+bool CardMetadataLoggingContext::SelectedCardHasBenefitAvailable() const {
+  return instrument_ids_to_issuer_ids_with_benefits_available.contains(
+      selected_card_instrument_id);
+}
+
+bool CardMetadataLoggingContext::SelectedCardHasMetadataAvailable() const {
+  return instruments_with_metadata_available.contains(
+      selected_card_instrument_id);
+}
+
+void CardMetadataLoggingContext::SetSelectedCardInfo(
+    const CreditCard& credit_card) {
+  selected_card_instrument_id = credit_card.instrument_id();
+  selected_issuer_id = credit_card.issuer_id();
+
+  selected_issuer_or_network_to_metadata_availability = {
+      {selected_issuer_id, SelectedCardHasMetadataAvailable()},
+      {credit_card.network(), SelectedCardHasMetadataAvailable()}};
+}
 
 std::string_view GetCardIssuerIdOrNetworkSuffix(
     const std::string& card_issuer_id_or_network) {
@@ -42,6 +75,8 @@ std::string_view GetCardIssuerIdOrNetworkSuffix(
     return kAmericanExpress;
   } else if (card_issuer_id_or_network == kAnzCardIssuerId) {
     return kAnz;
+  } else if (card_issuer_id_or_network == kBmoCardIssuerId) {
+    return kBmo;
   } else if (card_issuer_id_or_network == kCapitalOneCardIssuerId) {
     return kCapitalOne;
   } else if (card_issuer_id_or_network == kChaseCardIssuerId) {
@@ -58,9 +93,9 @@ std::string_view GetCardIssuerIdOrNetworkSuffix(
     return kNab;
   } else if (card_issuer_id_or_network == kNatwestCardIssuerId) {
     return kNatwest;
-  } else if (card_issuer_id_or_network == autofill::kMasterCard) {
+  } else if (card_issuer_id_or_network == kMasterCard) {
     return kMastercard;
-  } else if (card_issuer_id_or_network == autofill::kVisaCard) {
+  } else if (card_issuer_id_or_network == kVisaCard) {
     return kVisa;
   } else {
     return "";
@@ -68,9 +103,9 @@ std::string_view GetCardIssuerIdOrNetworkSuffix(
 }
 
 CardMetadataLoggingContext GetMetadataLoggingContext(
-    const std::vector<CreditCard>& cards) {
-  const base::flat_set<std::string> kLoggedNetworks{autofill::kMasterCard,
-                                                    autofill::kVisaCard};
+    base::span<const CreditCard> cards) {
+  constexpr auto kLoggedNetworks =
+      base::MakeFixedFlatSet<std::string_view>({kMasterCard, kVisaCard});
   CardMetadataLoggingContext metadata_logging_context;
   for (const CreditCard& card : cards) {
     // If there is a product description, denote in the
@@ -86,8 +121,7 @@ CardMetadataLoggingContext GetMetadataLoggingContext(
     // denote in the `metadata_logging_context` that we have shown an enriched
     // card art so we can log it later.
     if (card.HasRichCardArtImageFromMetadata()) {
-      metadata_logging_context.card_art_image_shown =
-          base::FeatureList::IsEnabled(features::kAutofillEnableCardArtImage);
+      metadata_logging_context.card_art_image_shown = true;
     }
 
     bool card_has_metadata = !card.product_description().empty() ||
@@ -104,24 +138,25 @@ CardMetadataLoggingContext GetMetadataLoggingContext(
           card_has_metadata;
     }
 
-    // If there is at least one card having product description or rich card
-    // art, denote in the `metadata_logging_context`.
     if (card_has_metadata) {
-      metadata_logging_context.card_metadata_available = true;
+      metadata_logging_context.instruments_with_metadata_available.insert(
+          card.instrument_id());
     }
   }
 
   return metadata_logging_context;
 }
 
-// TODO(crbug.com/1521067): Refactor and cleanup FormEvent logging.
+// TODO(crbug.com/41494039): Refactor and cleanup FormEvent logging.
 void LogCardWithMetadataFormEventMetric(
     CardMetadataLoggingEvent event,
     const CardMetadataLoggingContext& context,
     HasBeenLogged has_been_logged) {
   bool selected_with_metadata_logged = false;
   for (const auto& [issuer_or_network, has_metadata] :
-       context.issuer_or_network_to_metadata_availability) {
+       context.selected_issuer_or_network_to_metadata_availability.has_value()
+           ? *context.selected_issuer_or_network_to_metadata_availability
+           : context.issuer_or_network_to_metadata_availability) {
     const std::string_view& histogram_issuer_or_network =
         GetCardIssuerIdOrNetworkSuffix(issuer_or_network);
     if (histogram_issuer_or_network.empty()) {
@@ -203,6 +238,52 @@ void LogCardWithMetadataFormEventMetric(
   }
 }
 
+void LogCardWithBenefitFormEventMetric(
+    CardMetadataLoggingEvent event,
+    const CardMetadataLoggingContext& context) {
+  switch (event) {
+    case CardMetadataLoggingEvent::kShown: {
+      LogBenefitFormEventForAllIssuersWithBenefitAvailable(
+          context.instrument_ids_to_issuer_ids_with_benefits_available,
+          FORM_EVENT_SUGGESTION_FOR_CARD_WITH_BENEFIT_AVAILABLE_SHOWN_ONCE);
+      break;
+    }
+    case CardMetadataLoggingEvent::kSelected:
+      if (context.SelectedCardHasBenefitAvailable()) {
+        LogBenefitFormEventToIssuerHistogram(
+            context.selected_issuer_id,
+            FORM_EVENT_SUGGESTION_FOR_SERVER_CARD_WITH_BENEFIT_AVAILABLE_SELECTED_ONCE);
+      }
+      LogBenefitFormEventForAllIssuersWithBenefitAvailable(
+          context.instrument_ids_to_issuer_ids_with_benefits_available,
+          FORM_EVENT_SUGGESTION_FOR_SERVER_CARD_SELECTED_AFTER_CARD_WITH_BENEFIT_AVAILABLE_SHOWN_ONCE);
+      break;
+    case CardMetadataLoggingEvent::kFilled:
+      if (context.SelectedCardHasBenefitAvailable()) {
+        LogBenefitFormEventToIssuerHistogram(
+            context.selected_issuer_id,
+            FORM_EVENT_SUGGESTION_FOR_SERVER_CARD_WITH_BENEFIT_AVAILABLE_FILLED_ONCE);
+      }
+      LogBenefitFormEventForAllIssuersWithBenefitAvailable(
+          context.instrument_ids_to_issuer_ids_with_benefits_available,
+          FORM_EVENT_SUGGESTION_FOR_SERVER_CARD_FILLED_AFTER_CARD_WITH_BENEFIT_AVAILABLE_SHOWN_ONCE);
+      break;
+    case CardMetadataLoggingEvent::kSubmitted:
+      if (context.SelectedCardHasBenefitAvailable()) {
+        LogBenefitFormEventToIssuerHistogram(
+            context.selected_issuer_id,
+            FORM_EVENT_SUGGESTION_FOR_SERVER_CARD_WITH_BENEFIT_AVAILABLE_SUBMITTED_ONCE);
+      }
+      LogBenefitFormEventForAllIssuersWithBenefitAvailable(
+          context.instrument_ids_to_issuer_ids_with_benefits_available,
+          FORM_EVENT_SUGGESTION_FOR_SERVER_CARD_SUBMITTED_AFTER_CARD_WITH_BENEFIT_AVAILABLE_SHOWN_ONCE);
+      break;
+    case CardMetadataLoggingEvent::kWillSubmit:
+      // Currently do not log kWillSubmit events for benefits.
+      break;
+  }
+}
+
 void LogAcceptanceLatency(base::TimeDelta latency,
                           const CardMetadataLoggingContext& suggestion_context,
                           const CreditCard& selected_card) {
@@ -226,6 +307,37 @@ void LogAcceptanceLatency(base::TimeDelta latency,
                           std::vector<CreditCard>{selected_card})),
                       ".", issuer_or_network_suffix}),
         latency);
+  }
+}
+
+void LogIsCreditCardBenefitsEnabledAtStartup(bool enabled) {
+  base::UmaHistogramBoolean(
+      "Autofill.PaymentMethods.CardBenefitsIsEnabled.Startup", enabled);
+}
+
+void LogBenefitFormEventToIssuerHistogram(const std::string& issuer_id,
+                                          FormEvent event) {
+  base::UmaHistogramEnumeration(
+      base::StrCat({"Autofill.FormEvents.CreditCard."
+                    "WithBenefits.",
+                    GetCardIssuerIdOrNetworkSuffix(issuer_id)}),
+      event, NUM_FORM_EVENTS);
+}
+
+void LogBenefitFormEventForAllIssuersWithBenefitAvailable(
+    const base::flat_map<int64_t, std::string>&
+        instrument_ids_to_issuer_ids_with_benefits_available,
+    FormEvent event) {
+  // `issuers_shown` holds all credit card issuers that were shown with
+  // benefits available to the user and logged for the `event`.
+  std::unordered_set<std::string> issuers_shown;
+
+  for (const auto& [instrument_id, issuer_id] :
+       instrument_ids_to_issuer_ids_with_benefits_available) {
+    if (!issuers_shown.contains(issuer_id)) {
+      LogBenefitFormEventToIssuerHistogram(issuer_id, event);
+      issuers_shown.insert(issuer_id);
+    }
   }
 }
 

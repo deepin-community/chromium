@@ -28,6 +28,7 @@
 #include "src/tint/lang/wgsl/reader/parser/parser.h"
 
 #include <limits>
+#include <utility>
 
 #include "src/tint/lang/core/attribute.h"
 #include "src/tint/lang/core/type/depth_texture.h"
@@ -36,7 +37,6 @@
 #include "src/tint/lang/core/type/sampled_texture.h"
 #include "src/tint/lang/core/type/texture_dimension.h"
 #include "src/tint/lang/wgsl/ast/assignment_statement.h"
-#include "src/tint/lang/wgsl/ast/bitcast_expression.h"
 #include "src/tint/lang/wgsl/ast/break_if_statement.h"
 #include "src/tint/lang/wgsl/ast/break_statement.h"
 #include "src/tint/lang/wgsl/ast/call_statement.h"
@@ -45,12 +45,14 @@
 #include "src/tint/lang/wgsl/ast/id_attribute.h"
 #include "src/tint/lang/wgsl/ast/if_statement.h"
 #include "src/tint/lang/wgsl/ast/increment_decrement_statement.h"
+#include "src/tint/lang/wgsl/ast/input_attachment_index_attribute.h"
 #include "src/tint/lang/wgsl/ast/invariant_attribute.h"
 #include "src/tint/lang/wgsl/ast/loop_statement.h"
 #include "src/tint/lang/wgsl/ast/return_statement.h"
 #include "src/tint/lang/wgsl/ast/stage_attribute.h"
 #include "src/tint/lang/wgsl/ast/switch_statement.h"
 #include "src/tint/lang/wgsl/ast/unary_op_expression.h"
+#include "src/tint/lang/wgsl/ast/var.h"
 #include "src/tint/lang/wgsl/ast/variable_decl_statement.h"
 #include "src/tint/lang/wgsl/ast/workgroup_attribute.h"
 #include "src/tint/lang/wgsl/reader/parser/classify_template_args.h"
@@ -106,14 +108,14 @@ bool is_reserved(const Token& t) {
            s == "macro_rules" || s == "match" || s == "mediump" || s == "meta" || s == "mod" ||
            s == "module" || s == "move" || s == "mut" || s == "mutable" || s == "namespace" ||
            s == "new" || s == "nil" || s == "noexcept" || s == "noinline" ||
-           s == "nointerpolation" || s == "noperspective" || s == "null" || s == "nullptr" ||
-           s == "of" || s == "operator" || s == "package" || s == "packoffset" ||
-           s == "partition" || s == "pass" || s == "patch" || s == "pixelfragment" ||
-           s == "precise" || s == "precision" || s == "premerge" || s == "priv" ||
-           s == "protected" || s == "pub" || s == "public" || s == "readonly" || s == "ref" ||
-           s == "regardless" || s == "register" || s == "reinterpret_cast" || s == "require" ||
-           s == "resource" || s == "restrict" || s == "self" || s == "set" || s == "shared" ||
-           s == "sizeof" || s == "smooth" || s == "snorm" || s == "static" ||
+           s == "nointerpolation" || s == "non_coherent" || s == "noncoherent" ||
+           s == "noperspective" || s == "null" || s == "nullptr" || s == "of" || s == "operator" ||
+           s == "package" || s == "packoffset" || s == "partition" || s == "pass" || s == "patch" ||
+           s == "pixelfragment" || s == "precise" || s == "precision" || s == "premerge" ||
+           s == "priv" || s == "protected" || s == "pub" || s == "public" || s == "readonly" ||
+           s == "ref" || s == "regardless" || s == "register" || s == "reinterpret_cast" ||
+           s == "require" || s == "resource" || s == "restrict" || s == "self" || s == "set" ||
+           s == "shared" || s == "sizeof" || s == "smooth" || s == "snorm" || s == "static" ||
            s == "static_assert" || s == "static_cast" || s == "std" || s == "subroutine" ||
            s == "super" || s == "target" || s == "template" || s == "this" || s == "thread_local" ||
            s == "throw" || s == "trait" || s == "try" || s == "type" || s == "typedef" ||
@@ -243,22 +245,27 @@ Parser::Failure::Errored Parser::AddError(const Token& t, std::string_view err) 
 
 Parser::Failure::Errored Parser::AddError(const Source& source, std::string_view err) {
     if (silence_diags_ == 0) {
-        builder_.Diagnostics().AddError(diag::System::Reader, err, source);
+        builder_.Diagnostics().AddError(source) << err;
+    }
+    return Failure::kErrored;
+}
+
+Parser::Failure::Errored Parser::AddError(const Source& source, StyledText&& err) {
+    if (silence_diags_ == 0) {
+        builder_.Diagnostics().AddError(source) << std::move(err);
     }
     return Failure::kErrored;
 }
 
 void Parser::AddNote(const Source& source, std::string_view err) {
     if (silence_diags_ == 0) {
-        builder_.Diagnostics().AddNote(diag::System::Reader, err, source);
+        builder_.Diagnostics().AddNote(source) << err;
     }
 }
 
 void Parser::deprecated(const Source& source, std::string_view msg) {
     if (silence_diags_ == 0) {
-        builder_.Diagnostics().AddWarning(diag::System::Reader,
-                                          "use of deprecated language feature: " + std::string(msg),
-                                          source);
+        builder_.Diagnostics().AddWarning(source) << "use of deprecated language feature: " << msg;
     }
 }
 
@@ -302,13 +309,13 @@ bool Parser::peek_is(Token::Type tok, size_t idx) {
 }
 
 void Parser::split_token(Token::Type lhs, Token::Type rhs) {
-    if (TINT_UNLIKELY(next_token_idx_ == 0)) {
+    if (DAWN_UNLIKELY(next_token_idx_ == 0)) {
         TINT_ICE() << "attempt to update placeholder at beginning of tokens";
     }
-    if (TINT_UNLIKELY(next_token_idx_ >= tokens_.size())) {
+    if (DAWN_UNLIKELY(next_token_idx_ >= tokens_.size())) {
         TINT_ICE() << "attempt to update placeholder past end of tokens";
     }
-    if (TINT_UNLIKELY(!tokens_[next_token_idx_].IsPlaceholder())) {
+    if (DAWN_UNLIKELY(!tokens_[next_token_idx_].IsPlaceholder())) {
         TINT_ICE() << "attempt to update non-placeholder token";
     }
     tokens_[next_token_idx_ - 1].SetType(lhs);
@@ -661,6 +668,7 @@ Maybe<Void> Parser::global_decl() {
 // global_variable_decl
 //  : variable_attribute_list* variable_decl (EQUAL expression)?
 Maybe<const ast::Variable*> Parser::global_variable_decl(AttributeList& attrs) {
+    MultiTokenSource decl_source(this);
     auto decl = variable_decl();
     if (decl.errored) {
         return Failure::kErrored;
@@ -683,7 +691,7 @@ Maybe<const ast::Variable*> Parser::global_variable_decl(AttributeList& attrs) {
 
     TINT_DEFER(attrs.Clear());
 
-    return builder_.create<ast::Var>(decl->source,                // source
+    return builder_.create<ast::Var>(decl_source(),               // source
                                      builder_.Ident(decl->name),  // symbol
                                      decl->type,                  // type
                                      decl->address_space,         // address space
@@ -700,6 +708,7 @@ Maybe<const ast::Variable*> Parser::global_variable_decl(AttributeList& attrs) {
 Maybe<const ast::Variable*> Parser::global_constant_decl(AttributeList& attrs) {
     bool is_overridable = false;
     const char* use = nullptr;
+    MultiTokenSource decl_source(this);
     Source source;
     if (match(Token::Type::kConst)) {
         use = "'const' declaration";
@@ -741,17 +750,17 @@ Maybe<const ast::Variable*> Parser::global_constant_decl(AttributeList& attrs) {
 
     TINT_DEFER(attrs.Clear());
     if (is_overridable) {
-        return builder_.Override(decl->name->source,  // source
-                                 decl->name,          // symbol
-                                 decl->type,          // type
-                                 initializer,         // initializer
-                                 std::move(attrs));   // attributes
+        return builder_.Override(decl_source(),      // source
+                                 decl->name,         // symbol
+                                 decl->type,         // type
+                                 initializer,        // initializer
+                                 std::move(attrs));  // attributes
     }
-    return builder_.GlobalConst(decl->name->source,  // source
-                                decl->name,          // symbol
-                                decl->type,          // type
-                                initializer,         // initializer
-                                std::move(attrs));   // attributes
+    return builder_.GlobalConst(decl_source(),      // source
+                                decl->name,         // symbol
+                                decl->type,         // type
+                                initializer,        // initializer
+                                std::move(attrs));  // attributes
 }
 
 // variable_decl
@@ -823,7 +832,7 @@ Expect<Parser::TypedIdentifier> Parser::expect_ident_with_type_specifier(std::st
 }
 
 // variable_qualifier
-//   : _template_args_start expression (COMMA expression)? _template_args_end
+//   : _template_args_start expression (COMMA expression)? COMMA? _template_args_end
 Maybe<Parser::VariableQualifier> Parser::variable_qualifier() {
     if (!peek_is(Token::Type::kTemplateArgsLeft) && !peek_is(Token::Type::kLessThan)) {
         // Note: kLessThan will give a sensible error at expect_template_arg_block()
@@ -836,11 +845,14 @@ Maybe<Parser::VariableQualifier> Parser::variable_qualifier() {
         if (address_space.errored) {
             return Failure::kErrored;
         }
-        if (match(Token::Type::kComma)) {
+        // The first expression in this condition also matches trailing comma.
+        if (match(Token::Type::kComma) && !peek().Is(Token::Type::kTemplateArgsRight)) {
             auto access = expect_expression("'var' access mode");
             if (access.errored) {
                 return Failure::kErrored;
             }
+            // Allow for trailing comma.
+            match(Token::Type::kComma);
             return VariableQualifier{address_space.value, access.value};
         }
         return VariableQualifier{address_space.value};
@@ -928,7 +940,7 @@ Expect<ENUM> Parser::expect_enum(std::string_view name,
     }
 
     /// Create a sensible error message
-    StringStream err;
+    StyledText err;
     err << "expected " << name;
 
     if (!use.empty()) {
@@ -952,7 +964,7 @@ Expect<ENUM> Parser::expect_enum(std::string_view name,
     }
 
     synchronized_ = false;
-    return AddError(t.source(), err.str());
+    return AddError(t.source(), std::move(err));
 }
 
 Expect<ast::Type> Parser::expect_type(std::string_view use) {
@@ -969,7 +981,7 @@ Expect<ast::Type> Parser::expect_type(std::string_view use) {
 // struct_decl
 //   : STRUCT IDENT struct_body_decl
 Maybe<const ast::Struct*> Parser::struct_decl() {
-    auto& t = peek();
+    MultiTokenSource source(this);
 
     if (!match(Token::Type::kStruct)) {
         return Failure::kNoMatch;
@@ -985,7 +997,7 @@ Maybe<const ast::Struct*> Parser::struct_decl() {
         return Failure::kErrored;
     }
 
-    return builder_.Structure(t.source(), name.value, std::move(body.value));
+    return builder_.Structure(source(), name.value, std::move(body.value));
 }
 
 // struct_body_decl
@@ -1433,17 +1445,12 @@ Maybe<const ast::ReturnStatement*> Parser::return_statement() {
         return Failure::kNoMatch;
     }
 
-    if (peek_is(Token::Type::kSemicolon)) {
-        return builder_.Return(source, nullptr);
-    }
-
     auto expr = expression();
     if (expr.errored) {
         return Failure::kErrored;
     }
 
-    // TODO(bclayton): Check matched?
-    return builder_.Return(source, expr.value);
+    return expr.matched ? builder_.Return(source, expr.value) : builder_.Return(source);
 }
 
 // variable_statement
@@ -2057,32 +2064,13 @@ Maybe<const ast::BlockStatement*> Parser::continuing_statement() {
 }
 
 // primary_expression
-//   : BITCAST LESS_THAN type_specifier GREATER_THAN paren_expression
-//   | const_literal
+//   : const_literal
 //   | IDENT argument_expression_list?
 //   | paren_expression
 //
 // Note, PAREN_LEFT ( expression ( COMMA expression ) * COMMA? )? PAREN_RIGHT is replaced
 // with `argument_expression_list`.
 Maybe<const ast::Expression*> Parser::primary_expression() {
-    auto& t = peek();
-
-    if (match(Token::Type::kBitcast)) {
-        const char* use = "bitcast expression";
-
-        auto type = expect_template_arg_block(use, [&] { return expect_type(use); });
-        if (type.errored) {
-            return Failure::kErrored;
-        }
-
-        auto params = expect_paren_expression();
-        if (params.errored) {
-            return Failure::kErrored;
-        }
-
-        return builder_.Bitcast(t.source(), type.value, params.value);
-    }
-
     auto lit = const_literal();
     if (lit.errored) {
         return Failure::kErrored;
@@ -2091,6 +2079,7 @@ Maybe<const ast::Expression*> Parser::primary_expression() {
         return lit.value;
     }
 
+    auto& t = peek();
     if (t.IsIdentifier()) {
         MultiTokenSource source(this);
         next();
@@ -3052,6 +3041,50 @@ Maybe<const ast::Attribute*> Parser::attribute() {
             break;
     }
 
+    // builtin_attr :
+    //   '@' 'builtin' '(' builtin_value_name ',' ? ')'
+    if (attr.value == core::Attribute::kBuiltin) {
+        return expect_paren_block(
+            "builtin attribute", [&]() -> Expect<const ast::BuiltinAttribute*> {
+                auto name = expect_enum("builtin value name", core::ParseBuiltinValue,
+                                        core::kBuiltinValueStrings);
+                if (name.errored) {
+                    return Failure::kErrored;
+                }
+                match(Token::Type::kComma);
+
+                return builder_.Builtin(t.source(), name.value);
+            });
+    }
+
+    // interpolate_attr :
+    //   '@' 'interpolate' '(' interpolate_type_name ',' ? ')'
+    // | '@' 'interpolate' '(' interpolate_type_name ',' interpolate_sampling_name ',' ? ')'
+    if (attr.value == core::Attribute::kInterpolate) {
+        return expect_paren_block(
+            "interpolate attribute", [&]() -> Expect<const ast::InterpolateAttribute*> {
+                auto type_name =
+                    expect_enum("interpolation type name", core::ParseInterpolationType,
+                                core::kInterpolationTypeStrings);
+                if (type_name.errored) {
+                    return Failure::kErrored;
+                }
+                if (!match(Token::Type::kComma) || peek().Is(Token::Type::kParenRight)) {
+                    return builder_.Interpolate(t.source(), type_name.value);
+                }
+
+                auto sampling_name =
+                    expect_enum("interpolation sampling name", core::ParseInterpolationSampling,
+                                core::kInterpolationSamplingStrings);
+                if (sampling_name.errored) {
+                    return Failure::kErrored;
+                }
+                match(Token::Type::kComma);
+
+                return builder_.Interpolate(t.source(), type_name.value, sampling_name.value);
+            });
+    }
+
     Vector<const ast::Expression*, 2> args;
 
     // Handle no parameter items which should have no parens
@@ -3103,8 +3136,6 @@ Maybe<const ast::Attribute*> Parser::attribute() {
             return create<ast::BindingAttribute>(t.source(), args[0]);
         case core::Attribute::kBlendSrc:
             return create<ast::BlendSrcAttribute>(t.source(), args[0]);
-        case core::Attribute::kBuiltin:
-            return create<ast::BuiltinAttribute>(t.source(), args[0]);
         case core::Attribute::kColor:
             return create<ast::ColorAttribute>(t.source(), args[0]);
         case core::Attribute::kCompute:
@@ -3115,9 +3146,8 @@ Maybe<const ast::Attribute*> Parser::attribute() {
             return create<ast::GroupAttribute>(t.source(), args[0]);
         case core::Attribute::kId:
             return create<ast::IdAttribute>(t.source(), args[0]);
-        case core::Attribute::kInterpolate:
-            return create<ast::InterpolateAttribute>(t.source(), args[0],
-                                                     args.Length() == 2 ? args[1] : nullptr);
+        case core::Attribute::kInputAttachmentIndex:
+            return create<ast::InputAttachmentIndexAttribute>(t.source(), args[0]);
         case core::Attribute::kInvariant:
             return create<ast::InvariantAttribute>(t.source());
         case core::Attribute::kLocation:
@@ -3439,7 +3469,7 @@ T Parser::sync(Token::Type tok, F&& body) {
     auto result = body();
     --parse_depth_;
 
-    if (TINT_UNLIKELY(sync_tokens_.back() != tok)) {
+    if (DAWN_UNLIKELY(sync_tokens_.back() != tok)) {
         TINT_ICE() << "sync_tokens is out of sync";
     }
     sync_tokens_.pop_back();

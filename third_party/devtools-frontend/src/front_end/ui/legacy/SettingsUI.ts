@@ -31,13 +31,14 @@
 import * as Common from '../../core/common/common.js';
 import * as Host from '../../core/host/host.js';
 import * as i18n from '../../core/i18n/i18n.js';
+import * as Platform from '../../core/platform/platform.js';
 import * as Settings from '../components/settings/settings.js';
 import * as VisualLogging from '../visual_logging/visual_logging.js';
 
 import * as ARIAUtils from './ARIAUtils.js';
 import {InspectorView} from './InspectorView.js';
 import {Tooltip} from './Tooltip.js';
-import {CheckboxLabel} from './UIUtils.js';
+import {CheckboxLabel, createOption} from './UIUtils.js';
 
 const UIStrings = {
   /**
@@ -51,26 +52,17 @@ const UIStrings = {
 };
 const str_ = i18n.i18n.registerUIStrings('ui/legacy/SettingsUI.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
-export const createSettingCheckbox = function(
-    name: string, setting: Common.Settings.Setting<boolean>, omitParagraphElement?: boolean,
-    tooltip?: string): Element {
+
+export function createSettingCheckbox(
+    name: Common.UIString.LocalizedString, setting: Common.Settings.Setting<boolean>, tooltip?: string): CheckboxLabel {
   const label = CheckboxLabel.create(name, undefined, undefined, setting.name);
+  label.checkboxElement.name = name;
+  bindCheckbox(label.checkboxElement, setting);
   if (tooltip) {
     Tooltip.install(label, tooltip);
   }
-
-  const input = label.checkboxElement;
-  input.name = name;
-  bindCheckbox(input, setting);
-
-  if (omitParagraphElement) {
-    return label;
-  }
-
-  const p = document.createElement('p');
-  p.appendChild(label);
-  return p;
-};
+  return label;
+}
 
 const createSettingSelect = function(
     name: string, options: Common.Settings.SimpleSettingOption[], requiresReload: boolean|null,
@@ -79,7 +71,7 @@ const createSettingSelect = function(
   const settingSelectElement = container.createChild('p');
   settingSelectElement.classList.add('settings-select');
   const label = settingSelectElement.createChild('label');
-  const select = (settingSelectElement.createChild('select', 'chrome-select') as HTMLSelectElement);
+  const select = settingSelectElement.createChild('select');
   label.textContent = name;
   if (subtitle) {
     container.classList.add('chrome-select-label');
@@ -90,13 +82,13 @@ const createSettingSelect = function(
 
   for (const option of options) {
     if (option.text && typeof option.value === 'string') {
-      select.add(new Option(option.text, option.value));
+      select.add(createOption(option.text, option.value, Platform.StringUtilities.toKebabCase(option.value)));
     }
   }
 
   let reloadWarning: HTMLElement|(Element | null) = (null as Element | null);
   if (requiresReload) {
-    reloadWarning = container.createChild('span', 'reload-warning hidden');
+    reloadWarning = container.createChild('p', 'reload-warning hidden');
     reloadWarning.textContent = i18nString(UIStrings.srequiresReload);
     ARIAUtils.markAsAlert(reloadWarning);
   }
@@ -185,7 +177,9 @@ export const createControlForSetting = function(
         setting: setting as Common.Settings.Setting<boolean>,
       };
       component.onchange = () => {
-        InspectorView.instance().displayReloadRequiredWarning(i18nString(UIStrings.oneOrMoreSettingsHaveChanged));
+        if (setting.reloadRequired()) {
+          InspectorView.instance().displayReloadRequiredWarning(i18nString(UIStrings.oneOrMoreSettingsHaveChanged));
+        }
       };
       return component;
     }

@@ -234,7 +234,6 @@ void NinePieceImageGrid::SetDrawInfoCorner(NinePieceDrawInfo& draw_info,
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 
@@ -314,7 +313,6 @@ void NinePieceImageGrid::SetDrawInfoEdge(NinePieceDrawInfo& draw_info,
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 

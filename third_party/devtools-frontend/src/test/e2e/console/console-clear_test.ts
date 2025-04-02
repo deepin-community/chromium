@@ -5,7 +5,6 @@
 import {assert} from 'chai';
 
 import {$$, click, getBrowserAndPages, step, waitFor} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   CONSOLE_TAB_SELECTOR,
   focusConsolePrompt,
@@ -13,7 +12,7 @@ import {
   typeIntoConsoleAndWaitForResult,
 } from '../helpers/console-helpers.js';
 
-describe('The Console Tab', async function() {
+describe('The Console Tab', function() {
   it('is cleared via the console.clear() method', async () => {
     const {frontend, target} = getBrowserAndPages();
     await click(CONSOLE_TAB_SELECTOR);
@@ -59,10 +58,10 @@ describe('The Console Tab', async function() {
 
     // Check that the sidebar is also cleared.
     await click('[aria-label="Show console sidebar"]');
-    const sideBar = await waitFor('div[slot="insertion-point-sidebar"]');
+    const sideBar = await waitFor('div[slot="sidebar"]');
     const entries = await $$('li', sideBar);
     const entriesText = await Promise.all(entries.map(e => e.evaluate(e => e.textContent)));
-    assert.deepStrictEqual(entriesText, [
+    assert.deepEqual(entriesText, [
       '1 message',
       '<other>1',
       '1 user message',

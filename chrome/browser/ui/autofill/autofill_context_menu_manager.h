@@ -7,18 +7,23 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/types/strong_alias.h"
-#include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/core/common/unique_ids.h"
-#include "components/renderer_context_menu/render_view_context_menu_base.h"
 #include "components/renderer_context_menu/render_view_context_menu_observer.h"
 #include "content/public/browser/context_menu_params.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/menus/simple_menu_model.h"
+
+class RenderViewContextMenuBase;
+
+namespace password_manager {
+class ContentPasswordManagerDriver;
+}  // namespace password_manager
 
 namespace autofill {
 
-class AutofillField;
-class BrowserAutofillManager;
-class PersonalDataManager;
+class AutofillAiDelegate;
+class AutofillDriver;
+class AutofillManager;
+class ContentAutofillDriver;
 
 // `AutofillContextMenuManager` is responsible for adding/executing Autofill
 // related context menu items. `RenderViewContextMenu` is intended to own and
@@ -33,11 +38,7 @@ class AutofillContextMenuManager : public RenderViewContextMenuObserver {
   // it's initialization.
   using CommandId = base::StrongAlias<class CommandIdTag, int>;
 
-  // Returns true if the given id is one generated for autofill context menu.
-  static bool IsAutofillCustomCommandId(CommandId command_id);
-
-  AutofillContextMenuManager(PersonalDataManager* personal_data_manager,
-                             RenderViewContextMenuBase* delegate,
+  AutofillContextMenuManager(RenderViewContextMenuBase* delegate,
                              ui::SimpleMenuModel* menu_model);
   ~AutofillContextMenuManager() override;
   AutofillContextMenuManager(const AutofillContextMenuManager&) = delete;
@@ -61,54 +62,75 @@ class AutofillContextMenuManager : public RenderViewContextMenuObserver {
   }
 
  private:
+  // Conditionally adds the feedback manual fallback item if Autofill is
+  // available for the field.
+  void MaybeAddAutofillFeedbackItem();
+
+  // Conditionally adds the item to trigger filling with Autofill AI.
+  void MaybeAddAutofillAiItem();
+
+  // Conditionally adds the address, payments and / or passwords Autofill manual
+  // fallbacks to the context menu model depending on whether there's data to
+  // suggest.
+  void MaybeAddAutofillManualFallbackItems();
+
+  // Checks if the plus address context menu entry can be shown for the
+  // currently focused field.
+  bool ShouldAddPlusAddressManualFallbackItem(
+      ContentAutofillDriver& autofill_driver);
+
+  // Returns if the item to trigger Autofill AI should be added.
+  bool ShouldAddAutofillAiItem(AutofillAiDelegate* delegate, const GURL& url);
+
+  // Checks if the currently focused field is a password field and whether
+  // password filling is enabled.
+  bool ShouldAddPasswordsManualFallbackItem(
+      password_manager::ContentPasswordManagerDriver& password_manager_driver);
+
+  // Adds the passwords manual fallback context menu entries.
+  //
+  // The entries are displayed in the following order:
+  // - "Select password" iff the user has passwords saved. This entry triggers
+  // password suggestions.
+  // - "Suggest password..." iff the user can generate passwords for the current
+  // field.
+  // - "Use passkey from another device" iff the field suppors passkeys.
+  // - "Import passwords" iff the user does not have password saves. This entry
+  // opens chrome://password-manager.
+  //
+  // Not all 4 entries have to be displayed. If an entry does not meet its
+  // criterion to be displayed, the entry will be skipped.
+  void AddPasswordsManualFallbackItems(
+      password_manager::ContentPasswordManagerDriver& password_manager_driver);
+
+  // Out of all password entries, this method is only interested in the "select
+  // password" entry, because the rest of them don't trigger suggestions and are
+  // recorded by default separately (outside `AutofillContextMenuManager`).
+  void LogSelectPasswordManualFallbackContextMenuEntryShown(
+      password_manager::ContentPasswordManagerDriver& password_manager_drivern);
+
+  void LogSelectPasswordManualFallbackContextMenuEntryAccepted();
+
+  // Triggers the filling with Autofill AI data.
+  void ExecuteAutofillAiCommand(const LocalFrameToken& frame_token,
+                                ContentAutofillDriver& autofill_driver);
+
   // Triggers the feedback flow for Autofill command.
   void ExecuteAutofillFeedbackCommand(const LocalFrameToken& frame_token,
                                       AutofillManager& manager);
 
-  // Conditionally adds the address and / or payments Autofill manual fallbacks
-  // to the context menu model depending on whether there's data to suggest
-  // and corresponding feature flags are enabled.
-  void MaybeAddAutofillManualFallbackItems(ContentAutofillDriver& driver);
+  // Triggers Plus Address suggestions on the field that the context menu was
+  // opened on.
+  void ExecuteFallbackForPlusAddressesCommand(AutofillDriver& driver);
 
-  // Checks if the manual fallback context menu entry can be shown for the
-  // currently focused field.
-  bool ShouldAddAddressManualFallbackItem(ContentAutofillDriver& driver);
+  // Triggers passwords suggestions on the field that the context menu was
+  // opened on.
+  void ExecuteFallbackForSelectPasswordCommand(AutofillDriver& driver);
 
-  // Checks if the currently focused field has unrecognized autocomplete but is
-  // classified and can be filled with user address data.
-  bool ShouldAddAddressManualFallbackForAutocompleteUnrecognized(
-      ContentAutofillDriver& driver);
+  // Marks the last added menu item as a new feature, depending on the response
+  // from the `UserEducationService`.
+  void MaybeMarkLastItemAsNewFeature(const base::Feature& feature);
 
-  // Emits metrics about showing the manual fallback context menu entries to the
-  // user.
-  // `address_option_shown` specifies whether address manual fallback was
-  // available, same for `payments_option_shown`.
-  void LogManualFallbackContextMenuEntryShown(ContentAutofillDriver& driver,
-                                              bool address_option_shown,
-                                              bool payments_option_shown);
-
-  // Emits metrics about accepting the manual fallback context menu entries
-  // shown to the user. `filling_product` defines which manual fallback option
-  // was accepted.
-  void LogManualFallbackContextMenuEntryAccepted(
-      BrowserAutofillManager& manager,
-      const FillingProduct filling_product);
-
-  // Triggers Autofill address suggestions on the field that the context menu
-  // was opened on.
-  void ExecuteFallbackForAddressesCommand(AutofillManager& manager);
-
-  // Triggers Autofill payments suggestions on the field that the context menu
-  // was opened on.
-  void ExecuteFallbackForPaymentsCommand(AutofillManager& manager);
-
-  // Gets the `AutofillField` described by the `params_` from the `manager`.
-  // The `frame_token` is used to map from the `params_` renderer id to a global
-  // id.
-  AutofillField* GetAutofillField(AutofillManager& manager,
-                                  const LocalFrameToken& frame_token) const;
-
-  const raw_ptr<PersonalDataManager> personal_data_manager_;
   const raw_ptr<ui::SimpleMenuModel> menu_model_;
   const raw_ptr<RenderViewContextMenuBase> delegate_;
   content::ContextMenuParams params_;

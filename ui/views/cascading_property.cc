@@ -33,8 +33,7 @@ class CascadingColorProviderColor final : public CascadingProperty<SkColor> {
 }  // namespace
 
 DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(CascadingProperty<SkColor>,
-                                   kCascadingBackgroundColor,
-                                   nullptr)
+                                   kCascadingBackgroundColor)
 
 void SetCascadingColorProviderColor(
     views::View* view,
@@ -56,14 +55,10 @@ SkColor GetCascadingAccentColor(View* view) {
   const SkColor default_color =
       view->GetColorProvider()->GetColor(ui::kColorFocusableBorderFocused);
   const SkColor background_color = GetCascadingBackgroundColor(view);
-  return features::IsChromeRefresh2023()
-             ? color_utils::BlendForMinContrast(
-                   default_color, background_color, std::nullopt,
-                   color_utils::kMinimumVisibleContrastRatio)
-                   .color
-             : color_utils::PickGoogleColor(
-                   default_color, background_color,
-                   color_utils::kMinimumVisibleContrastRatio);
+  return color_utils::BlendForMinContrast(
+             default_color, background_color, std::nullopt,
+             color_utils::kMinimumVisibleContrastRatio)
+      .color;
 }
 
 }  // namespace views

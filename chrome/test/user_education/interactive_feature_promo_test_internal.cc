@@ -11,6 +11,7 @@
 #include "base/containers/contains.h"
 #include "base/containers/map_util.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/time/time.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
@@ -23,10 +24,10 @@
 #include "components/feature_engagement/public/tracker.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/user_education/common/feature_promo_controller.h"
-#include "components/user_education/common/feature_promo_data.h"
+#include "components/user_education/common/feature_promo/feature_promo_controller.h"
+#include "components/user_education/common/user_education_data.h"
 #include "components/user_education/common/user_education_features.h"
-#include "components/user_education/test/feature_promo_session_test_util.h"
+#include "components/user_education/test/user_education_session_test_util.h"
 #include "content/public/browser/browser_context.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -35,13 +36,16 @@ namespace internal {
 
 namespace {
 
-base::Time CalculateNewTime(base::Time now,
-                            InteractiveFeaturePromoTestCommon::NewTime time) {
+std::optional<base::Time> CalculateNewTime(
+    base::Time now,
+    InteractiveFeaturePromoTestCommon::NewTime time) {
+  if (std::holds_alternative<std::nullopt_t>(time)) {
+    return std::nullopt;
+  }
   if (const auto* const rel_time = std::get_if<base::TimeDelta>(&time)) {
     return now + *rel_time;
-  } else {
-    return std::get<base::Time>(time);
   }
+  return std::get<base::Time>(time);
 }
 
 }  // namespace
@@ -101,14 +105,14 @@ void InteractiveFeaturePromoTestPrivate::AdvanceTime(NewTime new_time) {
   }
 }
 
-void InteractiveFeaturePromoTestPrivate::UpdateIdleState(NewTime time,
-                                                         bool screen_locked) {
+void InteractiveFeaturePromoTestPrivate::SetLastActive(NewTime time) {
   CHECK(test_time_.has_value());
   const auto last_active_time =
       CalculateNewTime(test_time_.value_or(base::Time::Now()), time);
   for (auto& [profile, data] : profile_data_) {
     if (data.test_util) {
-      data.test_util->UpdateIdleState(last_active_time, screen_locked);
+      data.test_util->UpdateLastActiveTime(last_active_time,
+                                           last_active_time.has_value());
     }
   }
 }
@@ -165,8 +169,24 @@ InteractiveFeaturePromoTestPrivate::CreateMockTracker(
   // Allow an unlimited number of calls to these methods.
   EXPECT_CALL(*mock_tracker, IsInitialized)
       .WillRepeatedly(testing::Return(true));
+  EXPECT_CALL(*mock_tracker, AddOnInitializedCallback)
+      .WillRepeatedly(
+          [](feature_engagement::Tracker::OnInitializedCallback cb) {
+            base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+                FROM_HERE,
+                base::BindOnce(
+                    [](feature_engagement::Tracker::OnInitializedCallback cb) {
+                      std::move(cb).Run(true);
+                    },
+                    std::move(cb)));
+          });
   EXPECT_CALL(*mock_tracker, WouldTriggerHelpUI)
       .WillRepeatedly(testing::Return(true));
+#if !BUILDFLAG(IS_ANDROID)
+  EXPECT_CALL(*mock_tracker, ListEvents)
+      .WillRepeatedly(
+          testing::Return(feature_engagement::Tracker::EventList()));
+#endif
 
   // Because some features are enabled by default, ensure that anything other
   // than the specific feature being tested is rejected.
@@ -196,15 +216,9 @@ InteractiveFeaturePromoTestPrivate::CreateUserEducationService(
     auto* profile_data = base::FindOrNull(ptr->profile_data_, profile);
     CHECK(profile_data);
 
-    user_education::FeaturePromoSessionData session_data;
+    user_education::UserEducationSessionData session_data;
     base::Time now = ptr->test_time_.value_or(base::Time::Now());
     switch (ptr->initial_session_state_) {
-      case InitialSessionState::kIdle:
-        session_data.most_recent_active_time =
-            now -
-            (user_education::features::GetTimeToIdle() + base::Minutes(5));
-        session_data.start_time = session_data.most_recent_active_time;
-        break;
       case InitialSessionState::kInsideGracePeriod:
         session_data.start_time =
             now - user_education::features::GetSessionStartGracePeriod() / 2;
@@ -219,9 +233,9 @@ InteractiveFeaturePromoTestPrivate::CreateUserEducationService(
     }
 
     profile_data->test_util =
-        std::make_unique<user_education::test::FeaturePromoSessionTestUtil>(
-            service->feature_promo_session_manager(), session_data,
-            user_education::FeaturePromoPolicyData(), ptr->test_time_);
+        std::make_unique<user_education::test::UserEducationSessionTestUtil>(
+            service->user_education_session_manager(), session_data,
+            user_education::FeaturePromoPolicyData(), now, ptr->test_time_);
   }
 
   return service;

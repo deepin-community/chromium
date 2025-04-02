@@ -178,12 +178,13 @@ class ASH_EXPORT PillButton : public views::LabelButton {
   ~PillButton() override;
 
   // views::LabelButton:
-  gfx::Size CalculatePreferredSize() const override;
-  int GetHeightForWidth(int width) const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   gfx::Insets GetInsets() const override;
   void UpdateBackgroundColor() override;
   views::PropertyEffects UpdateStyleToIndicateDefaultStatus() override;
-  std::u16string GetTooltipText(const gfx::Point& p) const override;
+  void SetText(const std::u16string& text) override;
+  void OnSetTooltipText(const std::u16string& tooltip_text) override;
 
   // Sets the button's background color, text's color or icon's color. Note, do
   // this only when the button wants to have different colors from the default
@@ -208,6 +209,9 @@ class ASH_EXPORT PillButton : public views::LabelButton {
   // background which is performance consuming so only use it as needed.
   void SetEnableBackgroundBlur(bool enable);
 
+  void SetTextWithStringId(int message_id);
+  void SetUseLabelAsDefaultTooltip(bool use_label_as_default_tooltip);
+
  private:
   // Initializes the button layout, focus ring and background according to the
   // button type.
@@ -219,6 +223,8 @@ class ASH_EXPORT PillButton : public views::LabelButton {
   // Returns the spacing on the side where the icon locates. The value is set
   // smaller to make the spacing on two sides visually look the same.
   int GetHorizontalSpacingWithIcon() const;
+
+  void UpdateTooltipText();
 
   Type type_;
   const raw_ptr<const gfx::VectorIcon> icon_;
@@ -238,6 +244,13 @@ class ASH_EXPORT PillButton : public views::LabelButton {
   bool enable_background_blur_ = false;
   std::unique_ptr<BlurredBackgroundShield> blurred_background_;
 
+  // Indicates if we are going to use the label contents for tooltip as default.
+  bool use_label_as_default_tooltip_ = true;
+
+  // When the tooltip becomes equal to Label's Text, this variable holds the
+  // original value of the tooltip text if the Label's Text was not used.
+  std::u16string original_tooltip_text_;
+
   // Called to update background color when the button is enabled/disabled.
   base::CallbackListSubscription enabled_changed_subscription_;
 };
@@ -251,6 +264,8 @@ VIEW_BUILDER_PROPERTY(const SkColor, IconColor)
 VIEW_BUILDER_PROPERTY(ui::ColorId, IconColorId)
 VIEW_BUILDER_PROPERTY(PillButton::Type, PillButtonType)
 VIEW_BUILDER_PROPERTY(bool, EnableBackgroundBlur)
+VIEW_BUILDER_PROPERTY(int, TextWithStringId)
+VIEW_BUILDER_PROPERTY(bool, UseLabelAsDefaultTooltip)
 END_VIEW_BUILDER
 
 }  // namespace ash

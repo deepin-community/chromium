@@ -85,18 +85,20 @@ bool OnDeviceModelService::PreSandboxInit() {
   };
   std::vector<dawn::native::Adapter> adapters =
       instance->EnumerateAdapters(&adapter_options);
-  for (auto& adapter : adapters) {
-    wgpu::AdapterProperties props;
-    adapter.GetProperties(&props);
-    if (props.adapterType == wgpu::AdapterType::IntegratedGPU ||
-        props.adapterType == wgpu::AdapterType::DiscreteGPU) {
+  for (auto& nativeAdapter : adapters) {
+    wgpu::Adapter adapter = wgpu::Adapter(nativeAdapter.Get());
+    wgpu::AdapterInfo info;
+    adapter.GetInfo(&info);
+    if (info.adapterType == wgpu::AdapterType::IntegratedGPU ||
+        info.adapterType == wgpu::AdapterType::DiscreteGPU) {
       const wgpu::DeviceDescriptor descriptor;
-      wgpu::Device device{adapter.CreateDevice(&descriptor)};
-      device.Destroy();
+      wgpu::Device device{nativeAdapter.CreateDevice(&descriptor)};
+      if (device) {
+        device.Destroy();
+      }
     }
   }
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-
   return true;
 }
 
@@ -113,5 +115,10 @@ void OnDeviceModelService::AddSandboxLinuxOptions(
   }
 }
 #endif
+
+// static
+bool OnDeviceModelService::Shutdown() {
+  return true;
+}
 
 }  // namespace on_device_model

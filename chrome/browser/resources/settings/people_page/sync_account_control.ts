@@ -12,27 +12,26 @@ import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import '//resources/cr_elements/icons.html.js';
 import '//resources/cr_elements/cr_shared_style.css.js';
 import '//resources/cr_elements/cr_shared_vars.css.js';
-import '//resources/polymer/v3_0/iron-icon/iron-icon.js';
+import '//resources/cr_elements/cr_icon/cr_icon.js';
 import '/shared/settings/people_page/profile_info_browser_proxy.js';
 import '../icons.html.js';
-import 'chrome://resources/cr_components/settings_prefs/prefs.js';
+import '/shared/settings/prefs/prefs.js';
 import '../settings_shared.css.js';
 
 import type {CrButtonElement} from '//resources/cr_elements/cr_button/cr_button.js';
 import {WebUiListenerMixin} from '//resources/cr_elements/web_ui_listener_mixin.js';
-import {assert} from '//resources/js/assert.js';
+import {assert, assertNotReached} from '//resources/js/assert.js';
 import type {DomRepeatEvent} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import type {StoredAccount, SyncBrowserProxy, SyncStatus} from '/shared/settings/people_page/sync_browser_proxy.js';
-import {StatusAction, SyncBrowserProxyImpl} from '/shared/settings/people_page/sync_browser_proxy.js';
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
+import {SignedInState, StatusAction, SyncBrowserProxyImpl} from '/shared/settings/people_page/sync_browser_proxy.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 
 import {loadTimeData} from '../i18n_setup.js';
 import {Router} from '../router.js';
 
 import {getTemplate} from './sync_account_control.html.js';
 
-export const MAX_SIGNIN_PROMO_IMPRESSION: number = 10;
 
 export interface SettingsSyncAccountControlElement {
   $: {
@@ -81,24 +80,24 @@ export class SettingsSyncAccountControlElement extends
       promoSecondaryLabelWithNoAccount: String,
 
       /**
-       * Proxy variable for syncStatus.signedIn to shield observer from being
-       * triggered multiple times whenever syncStatus changes.
+       * Proxy variable for syncStatus.signedInState to shield observer from
+       * being triggered multiple times whenever syncStatus changes.
        */
-      signedIn_: {
+      syncing_: {
         type: Boolean,
-        computed: 'computeSignedIn_(syncStatus.signedIn)',
-        observer: 'onSignedInChanged_',
+        computed: 'isSyncing_(syncStatus.signedInState)',
+        observer: 'onSyncChanged_',
       },
 
       storedAccounts_: Object,
 
-      shownAccount_: Object,
-
-      showingPromo: {
-        type: Boolean,
-        value: false,
-        reflectToAttribute: true,
+      profileAvatarURL_: {
+        type: String,
+        value: null,
+        observer: 'handleUpdateAvatar_',
       },
+
+      shownAccount_: Object,
 
       // This property should be set by the parent only and should not change
       // after the element is created.
@@ -127,7 +126,7 @@ export class SettingsSyncAccountControlElement extends
         type: Boolean,
         value: false,
         computed: 'computeShouldShowAvatarRow_(storedAccounts_, syncStatus,' +
-            'storedAccounts_.length, syncStatus.signedIn)',
+            'storedAccounts_.length, syncStatus.signedInState)',
         observer: 'onShouldShowAvatarRowChange_',
       },
 
@@ -156,10 +155,10 @@ export class SettingsSyncAccountControlElement extends
   promoLabelWithNoAccount: string;
   promoSecondaryLabelWithAccount: string;
   promoSecondaryLabelWithNoAccount: string;
-  private signedIn_: boolean;
+  private syncing_: boolean;
   private storedAccounts_: StoredAccount[];
+  private profileAvatarURL_: string;
   private shownAccount_: StoredAccount|null;
-  showingPromo: boolean;
   embeddedInSubpage: boolean;
   hideButtons: boolean;
   hideBanner: boolean;
@@ -174,39 +173,31 @@ export class SettingsSyncAccountControlElement extends
 
     this.syncBrowserProxy_.getStoredAccounts().then(
         this.handleStoredAccounts_.bind(this));
+
+    this.syncBrowserProxy_.getProfileAvatar().then(
+        this.handleUpdateAvatar_.bind(this));
+
     this.addWebUiListener(
         'stored-accounts-updated', this.handleStoredAccounts_.bind(this));
+    this.addWebUiListener(
+        'profile-avatar-changed', this.handleUpdateAvatar_.bind(this));
   }
 
   /**
    * Records Signin_Impression_FromSettings user action.
    */
   private recordImpressionUserActions_() {
-    assert(!this.syncStatus.signedIn);
+    assert(!this.isSyncing_());
 
     chrome.metricsPrivate.recordUserAction('Signin_Impression_FromSettings');
   }
 
-  private computeSignedIn_(): boolean {
-    return !!this.syncStatus && !!this.syncStatus.signedIn;
-  }
-
-  private onSignedInChanged_() {
+  private onSyncChanged_() {
     if (this.embeddedInSubpage) {
-      this.showingPromo = true;
       return;
     }
 
-    if (!this.showingPromo && !this.syncStatus.signedIn &&
-        this.syncBrowserProxy_.getPromoImpressionCount() <
-            MAX_SIGNIN_PROMO_IMPRESSION) {
-      this.showingPromo = true;
-      this.syncBrowserProxy_.incrementPromoImpressionCount();
-    } else {
-      // Turn off the promo if the user is signed in.
-      this.showingPromo = false;
-    }
-    if (!this.syncStatus.signedIn && this.shownAccount_ !== undefined) {
+    if (!this.isSyncing_() && this.shownAccount_ !== undefined) {
       this.recordImpressionUserActions_();
     }
   }
@@ -227,20 +218,109 @@ export class SettingsSyncAccountControlElement extends
   }
 
   private getAccountLabel_(
-      signedInLabel: string, syncingLabel: string, account: string): string {
+      signedInLabel: string, syncingLabel: string, email: string): string {
+    // When in sign in paused, only show the email address.
+    if (this.syncStatus.signedInState === SignedInState.SIGNED_IN_PAUSED) {
+      return email;
+    }
+
     if (this.syncStatus.firstSetupInProgress) {
-      return this.syncStatus.statusText || account;
+      return this.syncStatus.statusText || email;
     }
 
-    if (this.syncStatus.signedIn && !this.syncStatus.hasError &&
+    if (this.isSyncing_() && !this.syncStatus.hasError &&
         !this.syncStatus.disabled) {
-      return loadTimeData.substituteString(syncingLabel, account);
+      return loadTimeData.substituteString(syncingLabel, email);
     }
 
-    return (this.shownAccount_ && this.shownAccount_!.isPrimaryAccount) ?
-        loadTimeData.substituteString(signedInLabel, account) :
-        account;
+    return (this.shownAccount_! && this.shownAccount_!!.isPrimaryAccount) ?
+        loadTimeData.substituteString(signedInLabel, email) :
+        email;
   }
+
+  // Determines whether the subtitle should show account specific information or
+  // not. This matters because showing account specific information needs to be
+  // trimmed using ellipsis for potentially long texts, whereas fixed
+  // information needs to be fully displayed regardless of the length.
+  private shouldHideSubtitleWithAccountInfoText_() {
+    if (!loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled')) {
+      return false;
+    }
+
+    if (this.hideButtons) {
+      // When buttons are hidden, only show basic account information. Avoid
+      // showing the full subtitle because it references the buttons.
+      return false;
+    }
+
+    if (this.syncStatus.signedInState === SignedInState.SIGNED_IN_PAUSED) {
+      return true;
+    }
+
+    if (this.syncStatus && this.syncStatus.hasError &&
+        this.syncStatus.statusText) {
+      return true;
+    }
+
+    if (this.syncStatus.signedInState === SignedInState.WEB_ONLY_SIGNED_IN) {
+      return true;
+    }
+
+    return false;
+  }
+
+
+  private getAvatarSubtitleLabel_(
+      accountAwareRowSubtitle: string, pendingStateSubtitle: string,
+      email: string): string {
+    if (!loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled')) {
+      return '';
+    }
+
+    if (this.syncStatus.signedInState === SignedInState.WEB_ONLY_SIGNED_IN) {
+      return loadTimeData.substituteString(accountAwareRowSubtitle, email);
+    }
+
+    if (this.syncStatus.signedInState === SignedInState.SIGNED_IN_PAUSED) {
+      return loadTimeData.substituteString(pendingStateSubtitle, email);
+    }
+
+    if (this.syncStatus &&
+        this.syncStatus.hasError && this.syncStatus.statusText) {
+      if (this.syncStatus.statusAction === StatusAction.ENTER_PASSPHRASE) {
+        return loadTimeData.substituteString(this.syncStatus.statusText, email);
+      }
+
+      return this.syncStatus.statusText;
+    }
+    return '';
+  }
+
+  private getAccountAwareSigninButtonLabel_(
+      accountAwareSigninButtonLabel: string, givenName: string): string {
+    return loadTimeData.substituteString(
+        accountAwareSigninButtonLabel, givenName);
+  }
+
+  private getTurnOnSyncLabel_(peopleSignIn: string, turnOnSync: string):
+      string {
+    return loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled') ?
+        turnOnSync :
+        peopleSignIn;
+  }
+
+
+  private getProfileImageSrc_(image: string|null, profileAvatarURL: string):
+      string {
+    if (loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled') &&
+        (this.syncStatus.signedInState === SignedInState.WEB_ONLY_SIGNED_IN)) {
+      return profileAvatarURL;
+    }
+
+    // image can be undefined if the account has not set an avatar photo.
+    return image || 'chrome://theme/IDR_PROFILE_AVATAR_PLACEHOLDER_LARGE';
+  }
+
 
   private getAccountImageSrc_(image: string|null): string {
     // image can be undefined if the account has not set an avatar photo.
@@ -284,7 +364,18 @@ export class SettingsSyncAccountControlElement extends
   private getAvatarRowTitle_(
       accountName: string, syncErrorLabel: string,
       syncPasswordsOnlyErrorLabel: string, authErrorLabel: string,
-      disabledLabel: string): string {
+      disabledLabel: string, webOnlySignedInAccountRowTitle: string): string {
+    if (loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled') &&
+        (this.syncStatus.signedInState === SignedInState.WEB_ONLY_SIGNED_IN)) {
+      return webOnlySignedInAccountRowTitle;
+    }
+
+    if (loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled') &&
+        this.syncStatus && this.syncStatus.hasError &&
+        this.syncStatus.statusText) {
+      return accountName;
+    }
+
     if (this.syncStatus.disabled) {
       return disabledLabel;
     }
@@ -305,6 +396,19 @@ export class SettingsSyncAccountControlElement extends
   }
 
   /**
+   * Determines if the signout button should be hidden.
+   */
+  private shouldHideSignoutButton_(): boolean {
+    if (this.hideButtons ||
+        !loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled')) {
+      return true;
+    }
+
+    return this.syncStatus.signedInState !== SignedInState.SIGNED_IN ||
+        this.syncStatus.statusAction !== StatusAction.NO_ACTION;
+  }
+
+  /**
    * Determines if the sync button should be disabled in response to
    * either a first setup flow or chrome sign-in being disabled.
    */
@@ -316,83 +420,188 @@ export class SettingsSyncAccountControlElement extends
         !this.getPref('signin.allowed_on_next_startup').value;
   }
 
+  private getSignInLabel_(
+      peopleSignIn: string, peopleSignInNoAccountAwareness: string): string {
+    return loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled') ?
+        peopleSignInNoAccountAwareness :
+        peopleSignIn;
+  }
+
   /**
    * Determines whether the banner should be hidden, in the case where the user
    * has sync enabled or if the property to hide the banner was explicitly set.
    */
   private shouldHideBanner_(): boolean {
-    return this.hideBanner || (!!this.syncStatus && !!this.syncStatus.signedIn);
+    if (this.hideBanner) {
+      return true;
+    }
+
+    if (!loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled')) {
+      return !!this.syncStatus && this.isSyncing_();
+    }
+
+    if (this.syncStatus && this.syncStatus.hasError &&
+        this.syncStatus.statusText) {
+      return true;
+    }
+
+    switch (this.syncStatus.signedInState) {
+      case SignedInState.SIGNED_IN:
+      case SignedInState.SIGNED_OUT:
+      case SignedInState.WEB_ONLY_SIGNED_IN:
+        return false;
+      case SignedInState.SYNCING:
+      case SignedInState.SIGNED_IN_PAUSED:
+        return true;
+    }
+
+    assertNotReached('Invalid SignedInState');
   }
 
   /**
    * Determines whether the sync button should be hidden, in the case where the
-   * user has sync enabled or if the property to hide the banner was explicitly
-   * set.
+   * user has sync enabled, is in sign in paused, or if the property to hide
+   * the banner was explicitly set.
    */
   private shouldHideSyncButton_(): boolean {
+    if (loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled') &&
+        this.syncStatus.signedInState === SignedInState.WEB_ONLY_SIGNED_IN) {
+      return true;
+    }
+
+    if (loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled') &&
+        this.syncStatus.statusAction !== StatusAction.NO_ACTION) {
+      return true;
+    }
+
+
     return this.hideButtons ||
-        (!!this.syncStatus && !!this.syncStatus.signedIn);
+        (!!this.syncStatus &&
+         (this.isSyncing_() ||
+          this.syncStatus.signedInState === SignedInState.SIGNED_IN_PAUSED));
   }
 
   private shouldShowTurnOffButton_(): boolean {
-    // <if expr="chromeos_ash">
-    if (this.syncStatus.domain) {
-      // Chrome OS cannot delete the user's profile like other platforms, so
-      // hide the turn off sync button for enterprise users who are not
-      // allowed to sign out.
+    if (this.hideButtons) {
       return false;
     }
-    // </if>
 
-    return !this.hideButtons && !this.showSetupButtons_ &&
-        !!this.syncStatus.signedIn;
+    if (loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled') &&
+        this.syncStatus.statusAction !== StatusAction.NO_ACTION) {
+      return true;
+    }
+
+    return !this.showSetupButtons_ && this.isSyncing_();
+  }
+
+  private getTurnOffSyncLabel_(turnOffSync: string): string {
+    if (loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled') &&
+        this.syncStatus.hasError && this.syncStatus.secondaryButtonActionText &&
+        this.isSyncing_()) {
+      return this.syncStatus.secondaryButtonActionText;
+    }
+
+    if (this.syncStatus.statusAction !== StatusAction.NO_ACTION &&
+        this.syncStatus.secondaryButtonActionText) {
+      return this.syncStatus.secondaryButtonActionText;
+    }
+    return turnOffSync;
+  }
+
+  private getSigninPausedLabel_(peopleSignOut: string, removeAccount: string):
+      string {
+    if (loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled')) {
+      return removeAccount;
+    }
+
+    return peopleSignOut;
   }
 
   private shouldShowErrorActionButton_(): boolean {
+    if (this.hideButtons) {
+      return false;
+    }
+
     if (this.embeddedInSubpage &&
         this.syncStatus.statusAction === StatusAction.ENTER_PASSPHRASE) {
       // In a subpage the passphrase button is not required.
       return false;
     }
-    return !this.hideButtons && !this.showSetupButtons_ &&
-        !!this.syncStatus.signedIn && !!this.syncStatus.hasError &&
+
+    if (loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled') &&
+        this.syncStatus.statusAction !== StatusAction.NO_ACTION) {
+      return true;
+    }
+
+    return !this.showSetupButtons_ && this.isSyncing_() &&
+        !!this.syncStatus.hasError &&
         this.syncStatus.statusAction !== StatusAction.NO_ACTION;
   }
 
+  private shouldShowAccountAwareSigninButton_(): boolean {
+    // Only show the button when user is in sync paused state
+    return !this.hideButtons &&
+        loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled') &&
+        this.syncStatus.signedInState === SignedInState.WEB_ONLY_SIGNED_IN;
+  }
+
+
   private shouldAllowAccountSwitch_(): boolean {
-    // <if expr="chromeos_lacros">
-    if (!loadTimeData.getBoolean('isSecondaryUser')) {
-      // Sync account can't be changed in the main profile, it is always the
-      // device account.
+    if (this.hideButtons) {
       return false;
     }
-    // </if>
-    return !this.syncStatus.signedIn && !this.hideButtons &&
-        (!loadTimeData.getBoolean('turnOffSyncAllowedForManagedProfiles') ||
-         !this.syncStatus.domain);
+
+    if (this.syncStatus.domain) {
+      return false;
+    }
+
+    switch (this.syncStatus.signedInState) {
+      case SignedInState.SIGNED_OUT:
+      case SignedInState.WEB_ONLY_SIGNED_IN:
+        return true;
+      case SignedInState.SIGNED_IN_PAUSED:
+      case SignedInState.SYNCING:
+        return false;
+      case SignedInState.SIGNED_IN:
+        return !loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled');
+    }
+
+    assertNotReached('Invalid SignedInState');
   }
 
   private handleStoredAccounts_(accounts: StoredAccount[]) {
     this.storedAccounts_ = accounts;
   }
 
+  private handleUpdateAvatar_(profileAvatarURL: string) {
+    this.profileAvatarURL_ = profileAvatarURL;
+  }
+
   private computeShouldShowAvatarRow_(): boolean {
     if (this.storedAccounts_ === undefined || this.syncStatus === undefined) {
       return false;
     }
+    if (loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled') &&
+        this.syncStatus.signedInState === SignedInState.WEB_ONLY_SIGNED_IN) {
+      return true;
+    }
 
-    return this.syncStatus.signedIn || this.storedAccounts_.length > 0;
+    return (this.isSyncing_() || this.storedAccounts_.length > 0) &&
+        this.syncStatus.signedInState !== SignedInState.WEB_ONLY_SIGNED_IN;
   }
+
+  private shouldHideSignoutDropdownButton_(): boolean {
+    return loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled');
+  }
+
 
   private onErrorButtonClick_() {
     const router = Router.getInstance();
     const routes = router.getRoutes();
     switch (this.syncStatus.statusAction) {
-      // <if expr="not chromeos_ash">
       case StatusAction.REAUTHENTICATE:
         this.syncBrowserProxy_.startSignIn();
         break;
-      // </if>
       case StatusAction.UPGRADE_CLIENT:
         router.navigateTo(routes.ABOUT);
         break;
@@ -400,6 +609,12 @@ export class SettingsSyncAccountControlElement extends
         this.syncBrowserProxy_.startKeyRetrieval();
         break;
       case StatusAction.ENTER_PASSPHRASE:
+        if (loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled')) {
+          this.syncBrowserProxy_.showSyncPassphraseDialog();
+        } else {
+          router.navigateTo(routes.SYNC);
+        }
+        break;
       case StatusAction.CONFIRM_SYNC_SETTINGS:
       default:
         router.navigateTo(routes.SYNC);
@@ -407,13 +622,7 @@ export class SettingsSyncAccountControlElement extends
   }
 
   private onSigninClick_() {
-    // <if expr="not chromeos_ash">
     this.syncBrowserProxy_.startSignIn();
-    // </if>
-    // <if expr="chromeos_ash">
-    // Chrome OS is always signed-in, so just turn on sync.
-    this.syncBrowserProxy_.turnOnSync();
-    // </if>
     // Need to close here since one menu item also triggers this function.
     const actionMenu = this.shadowRoot!.querySelector('cr-action-menu');
     if (actionMenu) {
@@ -421,12 +630,23 @@ export class SettingsSyncAccountControlElement extends
     }
   }
 
-  // <if expr="not chromeos_ash">
   private onSignoutClick_() {
     this.syncBrowserProxy_.signOut(false /* deleteProfile */);
-    this.shadowRoot!.querySelector('cr-action-menu')!.close();
+
+    const actionMenu = this.shadowRoot!.querySelector('cr-action-menu');
+    if (actionMenu) {
+      actionMenu.close();
+    }
   }
-  // </if>
+
+
+  private onDropdownClose_() {
+    const menuAnchor =
+        this.shadowRoot!.querySelector<HTMLElement>('#dropdown-arrow');
+    assert(menuAnchor);
+    menuAnchor.setAttribute('aria-expanded', 'false');
+  }
+
 
   private onSyncButtonClick_() {
     assert(this.shownAccount_);
@@ -440,6 +660,11 @@ export class SettingsSyncAccountControlElement extends
 
   private onTurnOffButtonClick_() {
     /* This will route to people_page's disconnect dialog. */
+    if (loadTimeData.getBoolean('isImprovedSettingsUIOnDesktopEnabled') &&
+        !this.isSyncing_() &&
+        this.syncStatus.statusAction !== StatusAction.NO_ACTION) {
+      this.onSignoutClick_();
+    }
     const router = Router.getInstance();
     router.navigateTo(router.getRoutes().SIGN_OUT);
   }
@@ -451,6 +676,7 @@ export class SettingsSyncAccountControlElement extends
         this.shadowRoot!.querySelector<HTMLElement>('#dropdown-arrow');
     assert(anchor);
     actionMenu.showAt(anchor);
+    anchor.setAttribute('aria-expanded', 'true');
   }
 
   private onShouldShowAvatarRowChange_() {
@@ -472,7 +698,7 @@ export class SettingsSyncAccountControlElement extends
       return;
     }
 
-    if (this.syncStatus.signedIn) {
+    if (this.isSyncing_()) {
       for (let i = 0; i < this.storedAccounts_.length; i++) {
         if (this.storedAccounts_[i].email ===
             this.syncStatus.signedInUsername) {
@@ -514,6 +740,15 @@ export class SettingsSyncAccountControlElement extends
   private onSetupConfirm_() {
     this.dispatchEvent(new CustomEvent(
         'sync-setup-done', {bubbles: true, composed: true, detail: true}));
+  }
+
+  private shouldShowSigninPausedButtons_() {
+    return !this.hideButtons && !!this.syncStatus &&
+        this.syncStatus.signedInState === SignedInState.SIGNED_IN_PAUSED;
+  }
+
+  private isSyncing_(): boolean {
+    return this.syncStatus.signedInState === SignedInState.SYNCING;
   }
 }
 

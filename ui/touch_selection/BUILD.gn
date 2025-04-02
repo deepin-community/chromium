@@ -63,6 +63,12 @@ component("touch_selection") {
       "touch_selection_magnifier_aura.h",
     ]
   }
+
+  if (use_blink) {
+    sources += [ "touch_editing_controller.h" ]
+
+    deps += [ "//ui/menus" ]
+  }
 }
 
 static_library("test_support") {
@@ -102,7 +108,7 @@ test("ui_touch_selection_unittests") {
     "//ui/gfx:test_support",
   ]
 
-  data_deps = [ "//third_party/mesa_headers" ]
+  data_deps = [ "//third_party/angle:includes" ]
 
   if (use_aura) {
     deps += [ "//ui/compositor:compositor" ]

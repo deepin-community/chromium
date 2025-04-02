@@ -7,6 +7,7 @@
 
 #include <optional>
 
+#include "base/component_export.h"
 #include "third_party/abseil-cpp/absl/types/variant.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/color_space.h"
@@ -14,14 +15,14 @@
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/rrect_f.h"
 #include "ui/gfx/geometry/transform.h"
-#include "ui/gfx/gfx_export.h"
 #include "ui/gfx/hdr_metadata.h"
 #include "ui/gfx/overlay_priority_hint.h"
 #include "ui/gfx/overlay_transform.h"
+#include "ui/gfx/overlay_type.h"
 
 namespace gfx {
 
-struct GFX_EXPORT OverlayPlaneData {
+struct COMPONENT_EXPORT(GFX) OverlayPlaneData {
   OverlayPlaneData();
   OverlayPlaneData(
       int z_order,
@@ -37,7 +38,9 @@ struct GFX_EXPORT OverlayPlaneData {
       const std::optional<HDRMetadata>& hdr_metadata,
       std::optional<SkColor4f> color = std::nullopt,
       bool is_solid_color = false,
-      std::optional<Rect> clip_rect = std::nullopt);
+      bool is_root_overlay = false,
+      std::optional<Rect> clip_rect = std::nullopt,
+      gfx::OverlayType overlay_type = gfx::OverlayType::kSimple);
   ~OverlayPlaneData();
 
   OverlayPlaneData(const OverlayPlaneData& other);
@@ -87,10 +90,15 @@ struct GFX_EXPORT OverlayPlaneData {
   std::optional<SkColor4f> color;
 
   // Set if this is a solid color quad.
-  bool is_solid_color;
+  bool is_solid_color = false;
+
+  bool is_root_overlay = false;
 
   // Optional clip rect for this overlay.
   std::optional<gfx::Rect> clip_rect;
+
+  // Specifies the type of this overlay based on a strategy used to propose it.
+  gfx::OverlayType overlay_type = gfx::OverlayType::kSimple;
 };
 
 }  // namespace gfx

@@ -44,7 +44,6 @@ CSSPositionAxisListInterpolationType::ConvertPositionAxisCSSValue(
       return InterpolationValue(InterpolableLength::CreatePercent(50));
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 

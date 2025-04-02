@@ -7,13 +7,13 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "media/base/crc_16.h"
 #include "media/base/media_export.h"
@@ -44,7 +44,7 @@ namespace media {
 using StatusCodeType = uint16_t;
 
 // This is the type that TypedStatusTraits::Group should be.
-using StatusGroupType = base::StringPiece;
+using StatusGroupType = std::string_view;
 
 // This is the type that a status will get serialized into for UKM purposes.
 using UKMPackedType = uint64_t;
@@ -135,6 +135,7 @@ struct MEDIA_EXPORT StatusData {
 NAME_DETECTOR(HasOkCode, kOk);
 NAME_DETECTOR(HasPackExtraData, PackExtraData);
 NAME_DETECTOR(HasSetDefaultOk, OkEnumValue);
+NAME_DETECTOR(HasEnumValueSerializer, ReadableCodeName);
 
 #undef NAME_DETECTOR
 
@@ -144,6 +145,7 @@ struct StatusTraitsHelper {
   static constexpr bool has_ok = HasOkCode<typename T::Codes>::as_enum_value;
   static constexpr bool has_default = HasSetDefaultOk<T>::as_method;
   static constexpr bool has_pack = HasPackExtraData<T>::as_method;
+  static constexpr bool has_code_repr = HasEnumValueSerializer<T>::as_method;
 
   // If T defines OkEnumValue(), then return it. Otherwise, return an
   // T::Codes::kOk if that's defined, or std::nullopt if its not.
@@ -166,6 +168,17 @@ struct StatusTraitsHelper {
     } else {
       return 0;
     }
+  }
+
+  static constexpr std::string GetMessage(std::string_view message,
+                                          T::Codes code) {
+    if (!message.empty()) {
+      return std::string(message);
+    }
+    if constexpr (has_code_repr) {
+      return T::ReadableCodeName(code);
+    }
+    return "";
   }
 };
 
@@ -243,7 +256,7 @@ class MEDIA_EXPORT TypedStatus {
               const base::Location& location = base::Location::Current())
       : TypedStatus(code, "", location) {}
 
-  TypedStatus(std::tuple<Codes, base::StringPiece> pack,
+  TypedStatus(std::tuple<Codes, std::string_view> pack,
               const base::Location& location = base::Location::Current())
       : TypedStatus(std::get<0>(pack), std::get<1>(pack), location) {}
 
@@ -270,7 +283,7 @@ class MEDIA_EXPORT TypedStatus {
       typename = std::enable_if<std::is_pointer_v<decltype(&_T::OnCreateFrom)>>>
   TypedStatus(
       Codes code,
-      base::StringPiece message,
+      std::string_view message,
       const typename internal::SecondArgType<decltype(_T::OnCreateFrom)>::Type&
           data,
       const base::Location& location = base::Location::Current())
@@ -293,7 +306,7 @@ class MEDIA_EXPORT TypedStatus {
   // Used to allow returning {TypedStatus::Codes::kValue, "message", cause}
   template <typename CausalStatusType>
   TypedStatus(Codes code,
-              base::StringPiece message,
+              std::string_view message,
               TypedStatus<CausalStatusType>&& cause,
               const base::Location& location = base::Location::Current())
       : TypedStatus(code, message, location) {
@@ -309,7 +322,7 @@ class MEDIA_EXPORT TypedStatus {
   // Also used to allow returning {TypedStatus::Codes::kValue, "message"}
   // implicitly as a typed status.
   TypedStatus(Codes code,
-              base::StringPiece message,
+              std::string_view message,
               const base::Location& location = base::Location::Current()) {
     // Note that |message| would be dropped when code is the default value,
     // so DCHECK that it is not set.
@@ -319,7 +332,7 @@ class MEDIA_EXPORT TypedStatus {
     }
     data_ = std::make_unique<internal::StatusData>(
         Traits::Group(), static_cast<StatusCodeType>(code),
-        std::string(message), 0);
+        internal::StatusTraitsHelper<Traits>::GetMessage(message, code), 0);
     data_->AddLocation(location);
   }
 
@@ -561,7 +574,7 @@ class MEDIA_EXPORT TypedStatus {
     ReturnType MapValue(
         FnType&& lambda,
         typename ConvertTo::Codes on_error,
-        base::StringPiece message = "",
+        std::string_view message = "",
         base::Location location = base::Location::Current()) && {
       CHECK(error_ || value_);
       if (!has_value()) {
@@ -605,8 +618,11 @@ class MEDIA_EXPORT TypedStatus {
   template <typename StatusEnum, typename DataView>
   friend struct mojo::StructTraits;
 
-  // Allow media-serialization
-  friend struct internal::MediaSerializer<TypedStatus<T>>;
+  // Allow media log to access the internals to generate debug info for users.
+  friend class MediaLog;
+
+  // Allow dumping TypedStatus<T> to string for debugging in tests.
+  friend struct internal::MediaSerializerDebug<TypedStatus<T>>;
 
   // Allow AddCause.
   template <typename StatusEnum>

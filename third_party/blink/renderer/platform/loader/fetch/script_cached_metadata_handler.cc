@@ -2,23 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "third_party/blink/renderer/platform/loader/fetch/script_cached_metadata_handler.h"
 
 #include "base/metrics/histogram_macros.h"
 #include "third_party/blink/renderer/platform/crypto.h"
-#include "third_party/blink/renderer/platform/loader/fetch/cached_metadata.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 
 namespace blink {
-
-namespace {
-
-void RecordState(StateOnGet state) {
-  UMA_HISTOGRAM_ENUMERATION("Memory.Renderer.BlinkCachedMetadataGetResult",
-                            state);
-}
-
-}  // namespace
 
 ScriptCachedMetadataHandler::ScriptCachedMetadataHandler(
     const WTF::TextEncoding& encoding,
@@ -34,8 +29,7 @@ void ScriptCachedMetadataHandler::Trace(Visitor* visitor) const {
 void ScriptCachedMetadataHandler::SetCachedMetadata(
     CodeCacheHost* code_cache_host,
     uint32_t data_type_id,
-    const uint8_t* data,
-    size_t size) {
+    base::span<const uint8_t> data) {
   DCHECK(!cached_metadata_);
   // Having been discarded once, the further attempts to overwrite the
   // CachedMetadata are ignored. This behavior is necessary to avoid clearing
@@ -44,9 +38,8 @@ void ScriptCachedMetadataHandler::SetCachedMetadata(
   // cache.
   if (cached_metadata_discarded_)
     return;
-  cached_metadata_ = CachedMetadata::Create(data_type_id, data, size);
-  if (!disable_send_to_platform_for_testing_)
-    CommitToPersistentStorage(code_cache_host);
+  cached_metadata_ = CachedMetadata::Create(data_type_id, data);
+  CommitToPersistentStorage(code_cache_host);
 }
 
 void ScriptCachedMetadataHandler::ClearCachedMetadata(
@@ -68,16 +61,9 @@ void ScriptCachedMetadataHandler::ClearCachedMetadata(
 scoped_refptr<CachedMetadata> ScriptCachedMetadataHandler::GetCachedMetadata(
     uint32_t data_type_id,
     GetCachedMetadataBehavior behavior) const {
-  if (!cached_metadata_) {
-    RecordState(cached_metadata_discarded_ ? StateOnGet::kWasDiscarded
-                                           : StateOnGet::kWasNeverPresent);
+  if (!cached_metadata_ || cached_metadata_->DataTypeID() != data_type_id) {
     return nullptr;
   }
-  if (cached_metadata_->DataTypeID() != data_type_id) {
-    RecordState(StateOnGet::kDataTypeMismatch);
-    return nullptr;
-  }
-  RecordState(StateOnGet::kPresent);
   return cached_metadata_;
 }
 
@@ -87,11 +73,11 @@ void ScriptCachedMetadataHandler::SetSerializedCachedMetadata(
   // triggers, it indicates an efficiency problem which is most likely
   // unexpected in code designed to improve performance.
   DCHECK(!cached_metadata_);
-  cached_metadata_ = CachedMetadata::CreateFromSerializedData(std::move(data));
+  cached_metadata_ = CachedMetadata::CreateFromSerializedData(data);
 }
 
 String ScriptCachedMetadataHandler::Encoding() const {
-  return String(encoding_.GetName());
+  return encoding_.GetName();
 }
 
 bool ScriptCachedMetadataHandler::IsServedFromCacheStorage() const {
@@ -117,14 +103,16 @@ size_t ScriptCachedMetadataHandler::GetCodeCacheSize() const {
 void ScriptCachedMetadataHandler::CommitToPersistentStorage(
     CodeCacheHost* code_cache_host) {
   if (cached_metadata_) {
-    base::span<const uint8_t> serialized_data =
-        cached_metadata_->SerializedData();
-    sender_->Send(code_cache_host, serialized_data.data(),
-                  serialized_data.size());
+    sender_->Send(code_cache_host, cached_metadata_->SerializedData());
   } else {
-    sender_->Send(code_cache_host, nullptr, 0);
+    sender_->Send(code_cache_host, base::span<const uint8_t>());
   }
 }
+
+ScriptCachedMetadataHandlerWithHashing::ScriptCachedMetadataHandlerWithHashing(
+    const WTF::TextEncoding& encoding,
+    std::unique_ptr<CachedMetadataSender> sender)
+    : ScriptCachedMetadataHandler(encoding, std::move(sender)) {}
 
 void ScriptCachedMetadataHandlerWithHashing::Check(
     CodeCacheHost* code_cache_host,
@@ -169,7 +157,7 @@ void ScriptCachedMetadataHandlerWithHashing::SetSerializedCachedMetadata(
   // We only expect to receive cached metadata from the platform once. If this
   // triggers, it indicates an efficiency problem which is most likely
   // unexpected in code designed to improve performance.
-  DCHECK(!cached_metadata_);
+  DCHECK(!cached_metadata());
   DCHECK_EQ(hash_state_, kUninitialized);
 
   // The kChecked state guarantees that hash_ will never be updated again.
@@ -179,9 +167,13 @@ void ScriptCachedMetadataHandlerWithHashing::SetSerializedCachedMetadata(
   if (data.size() < sizeof(CachedMetadataHeaderWithHash)) {
     return;
   }
+  auto [header_bytes, payload_bytes] =
+      base::span(data).split_at(sizeof(CachedMetadataHeaderWithHash));
+
   // Ensure the marker matches, otherwise discard the data.
   const CachedMetadataHeaderWithHash* header =
-      reinterpret_cast<const CachedMetadataHeaderWithHash*>(data.data());
+      reinterpret_cast<const CachedMetadataHeaderWithHash*>(
+          header_bytes.data());
   if (header->marker != CachedMetadataHandler::kSingleEntryWithHashAndPadding) {
     return;
   }
@@ -189,9 +181,8 @@ void ScriptCachedMetadataHandlerWithHashing::SetSerializedCachedMetadata(
   // Split out the data into the hash and the CachedMetadata that follows.
   memcpy(hash_, header->hash, kSha256Bytes);
   hash_state_ = kDeserialized;
-  cached_metadata_ = CachedMetadata::CreateFromSerializedData(
-      data.data() + sizeof(CachedMetadataHeaderWithHash),
-      data.size() - sizeof(CachedMetadataHeaderWithHash));
+  set_cached_metadata(CachedMetadata::CreateFromSerializedData(
+      data, sizeof(CachedMetadataHeaderWithHash)));
 }
 
 scoped_refptr<CachedMetadata>
@@ -214,31 +205,26 @@ ScriptCachedMetadataHandlerWithHashing::GetCachedMetadata(
 
 void ScriptCachedMetadataHandlerWithHashing::CommitToPersistentStorage(
     CodeCacheHost* code_cache_host) {
-  Vector<uint8_t> serialized_data = GetSerializedCachedMetadata();
-  Sender()->Send(code_cache_host, serialized_data.data(),
-                 serialized_data.size());
+  sender()->Send(code_cache_host, GetSerializedCachedMetadata());
 }
 
 Vector<uint8_t>
 ScriptCachedMetadataHandlerWithHashing::GetSerializedCachedMetadata() const {
   Vector<uint8_t> serialized_data;
-  if (cached_metadata_ && hash_state_ == kChecked) {
+  if (cached_metadata() && hash_state_ == kChecked) {
     uint32_t marker = CachedMetadataHandler::kSingleEntryWithHashAndPadding;
     CHECK_EQ(serialized_data.size(),
              offsetof(CachedMetadataHeaderWithHash, marker));
-    serialized_data.Append(reinterpret_cast<uint8_t*>(&marker), sizeof(marker));
+    serialized_data.AppendSpan(base::byte_span_from_ref(marker));
     uint32_t padding = 0;
     CHECK_EQ(serialized_data.size(),
              offsetof(CachedMetadataHeaderWithHash, padding));
-    serialized_data.Append(reinterpret_cast<uint8_t*>(&padding),
-                           sizeof(padding));
+    serialized_data.AppendSpan(base::byte_span_from_ref(padding));
     CHECK_EQ(serialized_data.size(),
              offsetof(CachedMetadataHeaderWithHash, hash));
-    serialized_data.Append(hash_, kSha256Bytes);
+    serialized_data.AppendSpan(base::span(hash_));
     CHECK_EQ(serialized_data.size(), sizeof(CachedMetadataHeaderWithHash));
-    base::span<const uint8_t> data = cached_metadata_->SerializedData();
-    serialized_data.Append(data.data(),
-                           base::checked_cast<wtf_size_t>(data.size()));
+    serialized_data.AppendSpan(cached_metadata()->SerializedData());
   }
   return serialized_data;
 }

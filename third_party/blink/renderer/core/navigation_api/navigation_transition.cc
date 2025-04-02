@@ -11,9 +11,10 @@
 #include "third_party/blink/renderer/platform/heap/visitor.h"
 
 namespace blink {
-NavigationTransition::NavigationTransition(ExecutionContext* context,
-                                           const String& navigation_type,
-                                           NavigationHistoryEntry* from)
+NavigationTransition::NavigationTransition(
+    ExecutionContext* context,
+    V8NavigationType::Enum navigation_type,
+    NavigationHistoryEntry* from)
     : navigation_type_(navigation_type),
       from_(from),
       finished_(MakeGarbageCollected<FinishedProperty>(context)) {
@@ -22,7 +23,7 @@ NavigationTransition::NavigationTransition(ExecutionContext* context,
   finished_->MarkAsHandled();
 }
 
-ScriptPromiseTyped<IDLUndefined> NavigationTransition::finished(
+ScriptPromise<IDLUndefined> NavigationTransition::finished(
     ScriptState* script_state) {
   return finished_->Promise(script_state->World());
 }

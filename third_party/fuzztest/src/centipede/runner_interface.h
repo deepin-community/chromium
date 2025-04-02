@@ -21,11 +21,13 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "absl/base/nullability.h"
-#include "./centipede/defs.h"
 #include "./centipede/mutation_input.h"
+#include "./common/defs.h"
 
 // Typedefs for the libFuzzer API, https://llvm.org/docs/LibFuzzer.html
 using FuzzerTestOneInputCallback = int (*)(const uint8_t *data, size_t size);
@@ -81,6 +83,10 @@ extern "C" void CentipedeSetTimeoutPerInput(uint64_t timeout_per_input);
 // throughout the entire process life-time.
 extern "C" absl::Nullable<const char *> CentipedeGetRunnerFlags();
 
+// An overridable function to override `LLVMFuzzerMutate` behavior.
+extern "C" size_t CentipedeLLVMFuzzerMutateCallback(uint8_t *data, size_t size,
+                                                    size_t max_size);
+
 // Prepares to run a batch of test executions that ends with calling
 // `CentipedeEndExecutionBatch`.
 //
@@ -97,6 +103,9 @@ extern "C" void CentipedeEndExecutionBatch();
 extern "C" void CentipedePrepareProcessing();
 
 // Finalizes the processing of an input and stores the state internally.
+//
+// For tool integration, it can be called inside `RunnerCallbacks::Execute()` to
+// finalize the execution early before extra cleanups.
 extern "C" void CentipedeFinalizeProcessing();
 
 // Retrieves the execution results (including coverage information) after
@@ -110,6 +119,12 @@ extern "C" size_t CentipedeGetExecutionResult(uint8_t *data, size_t capacity);
 // the size of the saved data. It may be called after
 // CentipedeFinalizeProcessing().
 extern "C" size_t CentipedeGetCoverageData(uint8_t *data, size_t capacity);
+
+// Set the current execution result to the opaque memory `data` with `size`.
+// Such data is retrieved using `CentipedeGetExecutionResult`, possibly from
+// another process. When `data` is `nullptr`, will set the execution result to
+// "empty" with no features or metadata.
+extern "C" void CentipedeSetExecutionResult(const uint8_t *data, size_t size);
 
 namespace centipede {
 
@@ -125,6 +140,9 @@ class RunnerCallbacks {
   // Generates seed inputs by calling `seed_callback` for each input.
   // The default implementation generates a single-byte input {0}.
   virtual void GetSeeds(std::function<void(ByteSpan)> seed_callback);
+  // Returns the serialized configuration from the test target. The default
+  // implementation returns the empty string.
+  virtual std::string GetSerializedTargetConfig();
   // Generates at most `num_mutants` mutants by calling `new_mutant_callback`
   // for each mutant. Returns true on success, false otherwise.
   //
@@ -133,6 +151,11 @@ class RunnerCallbacks {
   virtual bool Mutate(const std::vector<MutationInputRef> &inputs,
                       size_t num_mutants,
                       std::function<void(ByteSpan)> new_mutant_callback) = 0;
+  // Registers a function to be called when a failure happens. If the
+  // implementation supports this functionality, it will call the function with
+  // a description of the failure. Otherwise, it will do nothing.
+  virtual void OnFailure(
+      std::function<void(std::string_view)> failure_description_callback);
   virtual ~RunnerCallbacks() = default;
 };
 

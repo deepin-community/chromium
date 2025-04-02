@@ -5,6 +5,7 @@
 #include "extensions/shell/browser/shell_content_browser_client.h"
 
 #include <stddef.h>
+
 #include <utility>
 
 #include "base/command_line.h"
@@ -43,6 +44,7 @@
 #include "extensions/browser/url_loader_factory_manager.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/manifest_handlers/sandboxed_page_info.h"
 #include "extensions/common/mojom/event_router.mojom.h"
 #include "extensions/common/mojom/guest_view.mojom.h"
 #include "extensions/common/mojom/renderer_host.mojom.h"
@@ -53,6 +55,7 @@
 #include "extensions/shell/browser/shell_navigation_ui_data.h"
 #include "extensions/shell/browser/shell_speech_recognition_manager_delegate.h"
 #include "extensions/shell/common/version.h"  // Generated file.
+#include "net/base/isolation_info.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "url/gurl.h"
@@ -110,7 +113,7 @@ ShellContentBrowserClient::CreateBrowserMainParts(bool is_integration_test) {
 void ShellContentBrowserClient::RenderProcessWillLaunch(
     content::RenderProcessHost* host) {
 #if BUILDFLAG(ENABLE_NACL)
-  int render_process_id = host->GetID();
+  int render_process_id = host->GetDeprecatedID();
   BrowserContext* browser_context = browser_main_parts_->browser_context();
 
   // PluginInfoMessageFilter is not required because app_shell does not have
@@ -125,9 +128,9 @@ bool ShellContentBrowserClient::ShouldUseProcessPerSite(
     content::BrowserContext* browser_context,
     const GURL& site_url) {
   // This ensures that all render views created for a single app will use the
-  // same render process (see content::SiteInstance::GetProcess). Otherwise the
-  // default behavior of ContentBrowserClient will lead to separate render
-  // processes for the background page and each app window view.
+  // same render process (see content::SiteInstance::GetOrCreateProcess).
+  // Otherwise the default behavior of ContentBrowserClient will lead to
+  // separate render processes for the background page and each app window view.
   return true;
 }
 
@@ -160,8 +163,12 @@ void ShellContentBrowserClient::SiteInstanceGotProcessAndSite(
   if (!extension)
     return;
 
+  if (site_instance->IsSandboxed()) {
+    return;
+  }
+
   ProcessMap::Get(browser_main_parts_->browser_context())
-      ->Insert(extension->id(), site_instance->GetProcess()->GetID());
+      ->Insert(extension->id(), site_instance->GetProcess()->GetDeprecatedID());
 }
 
 void ShellContentBrowserClient::AppendExtraCommandLineSwitches(
@@ -213,15 +220,16 @@ void ShellContentBrowserClient::ExposeInterfacesToRenderer(
     service_manager::BinderRegistry* registry,
     blink::AssociatedInterfaceRegistry* associated_registry,
     content::RenderProcessHost* render_process_host) {
-  associated_registry->AddInterface<mojom::RendererHost>(base::BindRepeating(
-      &RendererStartupHelper::BindForRenderer, render_process_host->GetID()));
+  associated_registry->AddInterface<mojom::RendererHost>(
+      base::BindRepeating(&RendererStartupHelper::BindForRenderer,
+                          render_process_host->GetDeprecatedID()));
 }
 
 void ShellContentBrowserClient::
     RegisterAssociatedInterfaceBindersForRenderFrameHost(
         content::RenderFrameHost& render_frame_host,
         blink::AssociatedInterfaceRegistry& associated_registry) {
-  int render_process_id = render_frame_host.GetProcess()->GetID();
+  int render_process_id = render_frame_host.GetProcess()->GetDeprecatedID();
   associated_registry.AddInterface<mojom::EventRouter>(
       base::BindRepeating(&EventRouter::BindForRenderer, render_process_id));
   associated_registry.AddInterface<mojom::RendererHost>(base::BindRepeating(
@@ -253,6 +261,11 @@ ShellContentBrowserClient::CreateThrottlesForNavigation(
     throttles.push_back(
         std::make_unique<ExtensionNavigationThrottle>(navigation_handle));
   }
+
+  if (auto throttle =
+          WebViewGuest::MaybeCreateNavigationThrottle(navigation_handle)) {
+    throttles.push_back(std::move(throttle));
+  }
   return throttles;
 }
 
@@ -262,18 +275,18 @@ ShellContentBrowserClient::GetNavigationUIData(
   return std::make_unique<ShellNavigationUIData>(navigation_handle);
 }
 
-void ShellContentBrowserClient::RegisterNonNetworkNavigationURLLoaderFactories(
-    int frame_tree_node_id,
-    NonNetworkURLLoaderFactoryMap* factories) {
-  DCHECK(factories);
-
-  content::WebContents* web_contents =
-      content::WebContents::FromFrameTreeNodeId(frame_tree_node_id);
-  factories->emplace(
-      extensions::kExtensionScheme,
-      extensions::CreateExtensionNavigationURLLoaderFactory(
-          web_contents->GetBrowserContext(),
-          !!extensions::WebViewGuest::FromWebContents(web_contents)));
+mojo::PendingRemote<network::mojom::URLLoaderFactory>
+ShellContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
+    const std::string& scheme,
+    content::FrameTreeNodeId frame_tree_node_id) {
+  if (scheme == extensions::kExtensionScheme) {
+    content::WebContents* web_contents =
+        content::WebContents::FromFrameTreeNodeId(frame_tree_node_id);
+    return extensions::CreateExtensionNavigationURLLoaderFactory(
+        web_contents->GetBrowserContext(),
+        !!extensions::WebViewGuest::FromFrameTreeNodeId(frame_tree_node_id));
+  }
+  return {};
 }
 
 void ShellContentBrowserClient::
@@ -320,6 +333,7 @@ void ShellContentBrowserClient::WillCreateURLLoaderFactory(
     int render_process_id,
     URLLoaderFactoryType type,
     const url::Origin& request_initiator,
+    const net::IsolationInfo& isolation_info,
     std::optional<int64_t> navigation_id,
     ukm::SourceIdObj ukm_source_id,
     network::URLLoaderFactoryBuilder& factory_builder,
@@ -343,7 +357,7 @@ void ShellContentBrowserClient::WillCreateURLLoaderFactory(
 bool ShellContentBrowserClient::HandleExternalProtocol(
     const GURL& url,
     content::WebContents::Getter web_contents_getter,
-    int frame_tree_node_id,
+    content::FrameTreeNodeId frame_tree_node_id,
     content::NavigationUIData* navigation_data,
     bool is_primary_main_frame,
     bool is_in_fenced_frame_tree,
@@ -352,6 +366,7 @@ bool ShellContentBrowserClient::HandleExternalProtocol(
     bool has_user_gesture,
     const std::optional<url::Origin>& initiating_origin,
     content::RenderFrameHost* initiator_document,
+    const net::IsolationInfo& isolation_info,
     mojo::PendingRemote<network::mojom::URLLoaderFactory>* out_factory) {
   return false;
 }

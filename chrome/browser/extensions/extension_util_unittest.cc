@@ -36,7 +36,7 @@ namespace extensions {
 
 namespace {
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 constexpr char kExtensionUpdateUrl[] =
     "https://clients2.google.com/service/update2/crx";  // URL of Chrome Web
                                                         // Store backend.
@@ -187,7 +187,20 @@ TEST_F(ExtensionUtilUnittest, HasIsolatedStorage) {
   EXPECT_FALSE(util::HasIsolatedStorage(*extension.get(), profile()));
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+TEST_F(ExtensionUtilUnittest, FixupLongExtensionName) {
+  const std::string long_extension_name =
+      "A very long extension name etc A very long extension name etc A very "
+      "long extension name etc A very long extension name etc";
+  std::u16string expected_fixup_extension_name =
+      u"A very long extension name etc A very long extension name etc A very "
+      u"long\u2026";
+
+  std::u16string fixup_extension_name =
+      util::GetFixupExtensionNameForUIDisplay(long_extension_name);
+  EXPECT_EQ(fixup_extension_name, expected_fixup_extension_name);
+}
+
+#if BUILDFLAG(IS_CHROMEOS)
 class ExtensionUtilWithSigninProfileUnittest : public ExtensionUtilUnittest {
  public:
   void SetUp() override {

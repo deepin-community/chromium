@@ -6,6 +6,8 @@
 
 #include <string_view>
 
+#include "base/metrics/histogram_shared_memory.h"
+#include "base/test/scoped_feature_list.h"
 #include "content/public/common/process_type.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -14,13 +16,14 @@ namespace content {
 namespace {
 
 using Config = base::HistogramSharedMemory::Config;
+using base::HistogramSharedMemory;
 
 struct ProcessTypeToOptionalConfig {
   int process_type;
   std::optional<Config> expected;
 
-  ProcessTypeToOptionalConfig(int type, absl::nullopt_t)
-      : process_type(type), expected(absl::nullopt) {}
+  ProcessTypeToOptionalConfig(int type, std::nullopt_t)
+      : process_type(type), expected(std::nullopt) {}
 
   ProcessTypeToOptionalConfig(int type, std::string_view name, size_t size)
       : process_type(type), expected(Config{type, name, size}) {}
@@ -30,6 +33,42 @@ using HistogramSharedMemoryConfigTest =
     testing::TestWithParam<ProcessTypeToOptionalConfig>;
 
 }  // namespace
+
+TEST(HistogramSharedMemoryConfigTest, PassOnCommandLineIsDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(base::kPassHistogramSharedMemoryOnLaunch);
+
+  EXPECT_FALSE(
+      HistogramSharedMemory::PassOnCommandLineIsEnabled(PROCESS_TYPE_RENDERER));
+  EXPECT_FALSE(
+      HistogramSharedMemory::PassOnCommandLineIsEnabled(PROCESS_TYPE_GPU));
+  EXPECT_FALSE(
+      HistogramSharedMemory::PassOnCommandLineIsEnabled(PROCESS_TYPE_UTILITY));
+}
+
+TEST(HistogramSharedMemoryConfigTest, PassOnCommandLineIsEnabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(base::kPassHistogramSharedMemoryOnLaunch);
+
+  EXPECT_TRUE(
+      HistogramSharedMemory::PassOnCommandLineIsEnabled(PROCESS_TYPE_RENDERER));
+
+#if BUILDFLAG(IS_CHROMEOS)
+  EXPECT_FALSE(
+      HistogramSharedMemory::PassOnCommandLineIsEnabled(PROCESS_TYPE_GPU));
+#else   // !BUILDFLAG(IS_CHROMEOS)
+  EXPECT_TRUE(
+      HistogramSharedMemory::PassOnCommandLineIsEnabled(PROCESS_TYPE_GPU));
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_ANDROID)
+  EXPECT_FALSE(
+      HistogramSharedMemory::PassOnCommandLineIsEnabled(PROCESS_TYPE_UTILITY));
+#else   // !BUILDFLAG(IS_ANDROID)
+  EXPECT_TRUE(
+      HistogramSharedMemory::PassOnCommandLineIsEnabled(PROCESS_TYPE_UTILITY));
+#endif  // !BUILDFLAG(IS_ANDROID)
+}
 
 TEST_P(HistogramSharedMemoryConfigTest, GetHistogramSharedMemoryConfig) {
   const auto& process_type = GetParam().process_type;

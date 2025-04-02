@@ -4,7 +4,10 @@
 
 #include "third_party/blink/renderer/modules/service_worker/web_service_worker_fetch_context_impl.h"
 
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+
+#include "base/metrics/histogram_functions.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_runner.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -16,6 +19,7 @@
 #include "third_party/blink/public/platform/url_loader_throttle_provider.h"
 #include "third_party/blink/public/platform/web_url_request_extra_data.h"
 #include "third_party/blink/public/platform/websocket_handshake_throttle_provider.h"
+#include "third_party/blink/renderer/platform/accept_languages_watcher.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/url_loader_factory.h"
 #include "third_party/blink/renderer/platform/loader/internet_disconnected_url_loader.h"
 
@@ -40,13 +44,17 @@ WebServiceWorkerFetchContext::Create(
     CrossVariantMojoReceiver<
         mojom::blink::SubresourceLoaderUpdaterInterfaceBase>
         pending_subresource_loader_updater,
-    const WebVector<WebString>& web_cors_exempt_header_list,
+    const std::vector<WebString>& web_cors_exempt_header_list,
     const bool is_third_party_context) {
+  base::UmaHistogramCounts100(
+      "ServiceWorker.CorsExemptHeaderListSize",
+      base::saturated_cast<int>(web_cors_exempt_header_list.size()));
+
   Vector<String> cors_exempt_header_list(
       base::checked_cast<wtf_size_t>(web_cors_exempt_header_list.size()));
-  base::ranges::transform(web_cors_exempt_header_list,
-                          cors_exempt_header_list.begin(),
-                          &WebString::operator WTF::String);
+  std::ranges::transform(web_cors_exempt_header_list,
+                         cors_exempt_header_list.begin(),
+                         &WebString::operator WTF::String);
   return base::MakeRefCounted<WebServiceWorkerFetchContextImpl>(
       renderer_preferences, KURL(worker_script_url.GetString()),
       std::move(pending_url_loader_factory),
@@ -144,7 +152,7 @@ URLLoaderFactory* WebServiceWorkerFetchContextImpl::GetScriptLoaderFactory() {
   return web_script_loader_factory_.get();
 }
 
-void WebServiceWorkerFetchContextImpl::WillSendRequest(WebURLRequest& request) {
+void WebServiceWorkerFetchContextImpl::FinalizeRequest(WebURLRequest& request) {
   if (renderer_preferences_.enable_do_not_track) {
     request.SetHttpHeaderField(WebString::FromUTF8(kDoNotTrackHeader), "1");
   }
@@ -159,7 +167,7 @@ void WebServiceWorkerFetchContextImpl::WillSendRequest(WebURLRequest& request) {
   }
 }
 
-WebVector<std::unique_ptr<URLLoaderThrottle>>
+std::vector<std::unique_ptr<URLLoaderThrottle>>
 WebServiceWorkerFetchContextImpl::CreateThrottles(
     const network::ResourceRequest& request) {
   const bool needs_to_skip_throttling =
@@ -220,9 +228,12 @@ void WebServiceWorkerFetchContextImpl::UpdateSubresourceLoaderFactories(
 
 void WebServiceWorkerFetchContextImpl::NotifyUpdate(
     const RendererPreferences& new_prefs) {
-  DCHECK(accept_languages_watcher_);
-  if (renderer_preferences_.accept_languages != new_prefs.accept_languages)
-    accept_languages_watcher_->NotifyUpdate();
+  // Reserving `watcher` on the stack ensures it is not GC'd within this scope.
+  auto* watcher = accept_languages_watcher_.Get();
+  if (watcher &&
+      renderer_preferences_.accept_languages != new_prefs.accept_languages) {
+    watcher->NotifyUpdate();
+  }
   renderer_preferences_ = new_prefs;
 }
 

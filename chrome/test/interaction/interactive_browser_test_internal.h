@@ -9,9 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
-#include "base/template_util.h"
 #include "base/values.h"
 #include "chrome/test/interaction/interaction_test_util_browser.h"
 #include "chrome/test/interaction/tracked_element_webcontents.h"
@@ -47,6 +45,12 @@ class InteractiveBrowserTestPrivate
       std::unique_ptr<WebContentsInteractionTestUtil>
           instrumented_web_contents);
 
+  bool IsInstrumentedWebContents(ui::ElementIdentifier element_id) const;
+
+  // Removes WebContents instrumentation; can allow for re-instrumentation using
+  // the same ID later. Returns whether `to_remove` was found and removed.
+  bool UninstrumentWebContents(ui::ElementIdentifier to_remove);
+
   static std::string DeepQueryToString(
       const WebContentsInteractionTestUtil::DeepQuery& deep_query);
 
@@ -56,6 +60,8 @@ class InteractiveBrowserTestPrivate
       ui::TrackedElement* el) const override;
   gfx::NativeWindow GetNativeWindowFromContext(
       ui::ElementContext context) const override;
+  std::string DebugDescribeContext(ui::ElementContext context) const override;
+  DebugTreeNode DebugDumpElement(const ui::TrackedElement* el) const override;
 
  private:
   friend InteractiveBrowserTestApi;

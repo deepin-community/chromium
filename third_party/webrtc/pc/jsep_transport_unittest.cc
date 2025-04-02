@@ -13,28 +13,47 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "api/candidate.h"
+#include "api/ice_transport_interface.h"
+#include "api/jsep.h"
+#include "api/make_ref_counted.h"
+#include "api/scoped_refptr.h"
+#include "call/payload_type_picker.h"
 #include "media/base/fake_rtp.h"
-#include "p2p/base/fake_dtls_transport.h"
 #include "p2p/base/fake_ice_transport.h"
+#include "p2p/base/ice_transport_internal.h"
 #include "p2p/base/p2p_constants.h"
 #include "p2p/base/packet_transport_internal.h"
+#include "p2p/base/transport_description.h"
+#include "p2p/dtls/dtls_transport_internal.h"
+#include "p2p/dtls/fake_dtls_transport.h"
+#include "pc/dtls_srtp_transport.h"
+#include "pc/rtp_transport.h"
+#include "pc/srtp_transport.h"
+#include "pc/transport_stats.h"
 #include "rtc_base/async_packet_socket.h"
 #include "rtc_base/buffer.h"
 #include "rtc_base/byte_order.h"
 #include "rtc_base/copy_on_write_buffer.h"
-#include "rtc_base/helpers.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/net_helper.h"
+#include "rtc_base/network/received_packet.h"
+#include "rtc_base/rtc_certificate.h"
 #include "rtc_base/socket_address.h"
 #include "rtc_base/ssl_certificate.h"
+#include "rtc_base/ssl_fingerprint.h"
 #include "rtc_base/ssl_identity.h"
+#include "rtc_base/ssl_stream_adapter.h"
 #include "rtc_base/third_party/sigslot/sigslot.h"
+#include "rtc_base/thread.h"
 #include "test/gtest.h"
 #include "test/scoped_key_value_config.h"
 
@@ -125,8 +144,8 @@ class JsepTransport2Test : public ::testing::Test, public sigslot::has_slots<> {
     std::unique_ptr<webrtc::RtpTransport> unencrypted_rtp_transport;
     std::unique_ptr<webrtc::SrtpTransport> sdes_transport;
     std::unique_ptr<webrtc::DtlsSrtpTransport> dtls_srtp_transport;
-        dtls_srtp_transport = CreateDtlsSrtpTransport(
-            rtp_dtls_transport.get(), rtcp_dtls_transport.get());
+    dtls_srtp_transport = CreateDtlsSrtpTransport(rtp_dtls_transport.get(),
+                                                  rtcp_dtls_transport.get());
 
     auto jsep_transport = std::make_unique<JsepTransport>(
         kTransportName, /*local_certificate=*/nullptr, std::move(ice),
@@ -134,7 +153,8 @@ class JsepTransport2Test : public ::testing::Test, public sigslot::has_slots<> {
         std::move(sdes_transport), std::move(dtls_srtp_transport),
         std::move(rtp_dtls_transport), std::move(rtcp_dtls_transport),
         /*sctp_transport=*/nullptr,
-        /*rtcp_mux_active_callback=*/[&]() { OnRtcpMuxActive(); });
+        /*rtcp_mux_active_callback=*/[&]() { OnRtcpMuxActive(); },
+        payload_type_picker_);
 
     signal_rtcp_mux_active_received_ = false;
     return jsep_transport;
@@ -178,6 +198,7 @@ class JsepTransport2Test : public ::testing::Test, public sigslot::has_slots<> {
   webrtc::SrtpTransport* sdes_transport_ = nullptr;
 
   webrtc::test::ScopedKeyValueConfig field_trials_;
+  webrtc::PayloadTypePicker payload_type_picker_;
 };
 
 // The parameterized tests cover both cases when RTCP mux is enable and
@@ -799,7 +820,7 @@ TEST_F(JsepTransport2Test, RemoteOfferWithCurrentNegotiatedDtlsRole) {
           .ok());
 
   // Sanity check that role was actually negotiated.
-  absl::optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
+  std::optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
   ASSERT_TRUE(role);
   EXPECT_EQ(rtc::SSL_CLIENT, *role);
 
@@ -844,7 +865,7 @@ TEST_F(JsepTransport2Test, RemoteOfferThatChangesNegotiatedDtlsRole) {
           .ok());
 
   // Sanity check that role was actually negotiated.
-  absl::optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
+  std::optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
   ASSERT_TRUE(role);
   EXPECT_EQ(rtc::SSL_CLIENT, *role);
 
@@ -895,7 +916,7 @@ TEST_F(JsepTransport2Test, RemoteOfferThatChangesFingerprintAndDtlsRole) {
           .ok());
 
   // Sanity check that role was actually negotiated.
-  absl::optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
+  std::optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
   ASSERT_TRUE(role);
   EXPECT_EQ(rtc::SSL_CLIENT, *role);
 
@@ -944,7 +965,7 @@ TEST_F(JsepTransport2Test, DtlsSetupWithLegacyAsAnswerer) {
           ->SetRemoteJsepTransportDescription(remote_desc, SdpType::kAnswer)
           .ok());
 
-  absl::optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
+  std::optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
   ASSERT_TRUE(role);
   // Since legacy answer omitted setup atribute, and we offered actpass, we
   // should act as passive (server).
@@ -1039,42 +1060,44 @@ class JsepTransport2HeaderExtensionTest
     auto fake_dtls2 =
         static_cast<FakeDtlsTransport*>(jsep_transport2_->rtp_dtls_transport());
 
-    fake_dtls1->fake_ice_transport()->SignalReadPacket.connect(
-        this, &JsepTransport2HeaderExtensionTest::OnReadPacket1);
-    fake_dtls2->fake_ice_transport()->SignalReadPacket.connect(
-        this, &JsepTransport2HeaderExtensionTest::OnReadPacket2);
+    fake_dtls1->fake_ice_transport()->RegisterReceivedPacketCallback(
+        this, [&](rtc::PacketTransportInternal* transport,
+                  const rtc::ReceivedPacket& packet) {
+          OnReadPacket1(transport, packet);
+        });
+    fake_dtls2->fake_ice_transport()->RegisterReceivedPacketCallback(
+        this, [&](rtc::PacketTransportInternal* transport,
+                  const rtc::ReceivedPacket& packet) {
+          OnReadPacket2(transport, packet);
+        });
 
-      auto cert1 = rtc::RTCCertificate::Create(
-          rtc::SSLIdentity::Create("session1", rtc::KT_DEFAULT));
-      jsep_transport1_->rtp_dtls_transport()->SetLocalCertificate(cert1);
-      auto cert2 = rtc::RTCCertificate::Create(
-          rtc::SSLIdentity::Create("session1", rtc::KT_DEFAULT));
-      jsep_transport2_->rtp_dtls_transport()->SetLocalCertificate(cert2);
+    auto cert1 = rtc::RTCCertificate::Create(
+        rtc::SSLIdentity::Create("session1", rtc::KT_DEFAULT));
+    jsep_transport1_->rtp_dtls_transport()->SetLocalCertificate(cert1);
+    auto cert2 = rtc::RTCCertificate::Create(
+        rtc::SSLIdentity::Create("session1", rtc::KT_DEFAULT));
+    jsep_transport2_->rtp_dtls_transport()->SetLocalCertificate(cert2);
   }
 
   void OnReadPacket1(rtc::PacketTransportInternal* transport,
-                     const char* data,
-                     size_t size,
-                     const int64_t& /* packet_time_us */,
-                     int flags) {
+                     const rtc::ReceivedPacket& packet) {
     RTC_LOG(LS_INFO) << "JsepTransport 1 Received a packet.";
     CompareHeaderExtensions(
         reinterpret_cast<const char*>(kPcmuFrameWithExtensions),
-        sizeof(kPcmuFrameWithExtensions), data, size, recv_encrypted_headers1_,
-        false);
+        sizeof(kPcmuFrameWithExtensions),
+        reinterpret_cast<const char*>(packet.payload().data()),
+        packet.payload().size(), recv_encrypted_headers1_, false);
     received_packet_count_++;
   }
 
   void OnReadPacket2(rtc::PacketTransportInternal* transport,
-                     const char* data,
-                     size_t size,
-                     const int64_t& /* packet_time_us */,
-                     int flags) {
+                     const rtc::ReceivedPacket& packet) {
     RTC_LOG(LS_INFO) << "JsepTransport 2 Received a packet.";
     CompareHeaderExtensions(
         reinterpret_cast<const char*>(kPcmuFrameWithExtensions),
-        sizeof(kPcmuFrameWithExtensions), data, size, recv_encrypted_headers2_,
-        false);
+        sizeof(kPcmuFrameWithExtensions),
+        reinterpret_cast<const char*>(packet.payload().data()),
+        packet.payload().size(), recv_encrypted_headers2_, false);
     received_packet_count_++;
   }
 

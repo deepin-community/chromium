@@ -22,7 +22,7 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/menu_runner.h"
@@ -80,7 +80,8 @@ class PartialTranslateBubbleView : public LocationBarBubbleDelegateView,
   bool ShouldShowWindowTitle() const override;
   void WindowClosing() override;
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnWidgetDestroying(views::Widget* widget) override;
 
   // ui::SimpleMenuModel::Delegate:

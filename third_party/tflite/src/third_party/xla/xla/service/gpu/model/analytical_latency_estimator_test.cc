@@ -32,7 +32,6 @@ limitations under the License.
 #include "xla/service/latency_hiding_scheduler.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/statusor.h"
 #include "xla/stream_executor/device_description.h"
 #include "tsl/platform/statusor.h"
 #include "tsl/platform/test.h"
@@ -97,12 +96,6 @@ class AnalyticalLatencyHidingSchedulerTest : public GpuCodegenTest {
         ->GetDeviceDescription()
         .cuda_compute_capability();
   }
-  HloCostAnalysis::ShapeSizeFunction ShapeSizeBytesFunction() const {
-    return [&](const Shape& shape) {
-      constexpr int64_t kPointerSize = 8;
-      return ShapeUtil::ByteSizeOf(shape, kPointerSize);
-    };
-  }
 };
 
 TEST_F(AnalyticalLatencyHidingSchedulerTest, TestAnalyticalLatencyEstimator) {
@@ -150,7 +143,8 @@ ENTRY entry {
   auto scheduler_config = GetDefaultSchedulerConfig();
   auto latency_estimator = std::make_unique<AnalyticalLatencyEstimator>(
       scheduler_config, std::make_unique<ApproximateLatencyEstimator>(),
-      dev_info, ShapeSizeBytesFunction(), hlo_module->entry_computation());
+      dev_info, HloCostAnalysis::DefaultShapeSize,
+      hlo_module->entry_computation());
   EXPECT_TRUE(RunScheduler(hlo_module.get(), scheduler_config,
                            std::move(latency_estimator))
                   .ok());

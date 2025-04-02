@@ -4,14 +4,15 @@
 
 #include "chrome/browser/ui/views/permissions/permission_prompt_bubble_base_view.h"
 
+#include <algorithm>
+#include <array>
+
 #include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
 #include "chrome/browser/download/download_permission_request.h"
 #include "chrome/browser/permissions/quiet_notification_permission_ui_config.h"
@@ -23,7 +24,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/permissions/chip_controller.h"
+#include "chrome/browser/ui/views/permissions/chip/chip_controller.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_bubble_base_view.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_chip.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
@@ -41,6 +42,7 @@
 #include "components/permissions/permission_util.h"
 #include "components/permissions/request_type.h"
 #include "components/permissions/test/mock_permission_request.h"
+#include "components/permissions/test/mock_permission_ui_selector.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_process_host_observer.h"
@@ -60,6 +62,7 @@
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/test/ax_event_counter.h"
 #include "ui/views/test/button_test_api.h"
+#include "url/gurl.h"
 
 // To run the pixel tests of this file run: browser_tests
 // --gtest_filter=BrowserUiTest.Invoke --test-launcher-interactive
@@ -68,41 +71,8 @@
 //
 // Check go/brapp-desktop-pixel-tests for more info.
 
-namespace {
-// Test implementation of PermissionUiSelector that always returns a canned
-// decision.
-class TestQuietNotificationPermissionUiSelector
-    : public permissions::PermissionUiSelector {
- public:
-  explicit TestQuietNotificationPermissionUiSelector(
-      const Decision& canned_decision)
-      : canned_decision_(canned_decision) {}
-  ~TestQuietNotificationPermissionUiSelector() override = default;
-
- protected:
-  // permissions::PermissionUiSelector:
-  void SelectUiToUse(permissions::PermissionRequest* request,
-                     DecisionMadeCallback callback) override {
-    std::move(callback).Run(canned_decision_);
-  }
-
-  bool IsPermissionRequestSupported(
-      permissions::RequestType request_type) override {
-    return request_type == permissions::RequestType::kNotifications;
-  }
-
- private:
-  Decision canned_decision_;
-};
-}  // namespace
-
 class PermissionPromptBubbleBaseViewBrowserTest : public DialogBrowserTest {
  public:
-  PermissionPromptBubbleBaseViewBrowserTest() {
-    feature_list_.InitWithFeatures(
-        {}, {permissions::features::kPermissionStorageAccessAPI});
-  }
-
   // DialogBrowserTest:
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
@@ -121,7 +91,7 @@ class PermissionPromptBubbleBaseViewBrowserTest : public DialogBrowserTest {
   void SetCannedUiDecision(std::optional<QuietUiReason> quiet_ui_reason,
                            std::optional<WarningReason> warning_reason) {
     GetTestApi().manager()->set_permission_ui_selector_for_testing(
-        std::make_unique<TestQuietNotificationPermissionUiSelector>(
+        std::make_unique<MockPermissionUiSelector>(
             permissions::PermissionUiSelector::Decision(quiet_ui_reason,
                                                         warning_reason)));
   }
@@ -133,7 +103,8 @@ class PermissionPromptBubbleBaseViewBrowserTest : public DialogBrowserTest {
     base::RunLoop().RunUntilIdle();
   }
 
-  static GURL GetTestUrl() { return GURL("https://example.com"); }
+  GURL GetTestUrl() { return test_url_; }
+  void SetTestUrl(GURL test_url) { test_url_ = test_url; }
 
   content::RenderFrameHost* GetActiveMainFrame() {
     return browser()
@@ -152,12 +123,13 @@ class PermissionPromptBubbleBaseViewBrowserTest : public DialogBrowserTest {
       ContentSettingImageModel::ImageType image_type) {
     LocationBarView* location_bar_view =
         BrowserView::GetBrowserViewForBrowser(browser())->GetLocationBarView();
-    return **base::ranges::find(
+    return **std::ranges::find(
         location_bar_view->GetContentSettingViewsForTest(), image_type,
         &ContentSettingImageView::GetType);
   }
 
   test::PermissionRequestManagerTestApi& GetTestApi() { return *test_api_; }
+  void SetEmbeddingOrigin(const GURL& origin) { embedding_origin_ = origin; }
 
  private:
   permissions::PermissionRequest* MakeRegisterProtocolHandlerRequest() {
@@ -175,27 +147,23 @@ class PermissionPromptBubbleBaseViewBrowserTest : public DialogBrowserTest {
 
   void AddRequestForContentSetting(const std::string& name) {
     constexpr const char* kMultipleName = "multiple";
-    constexpr struct {
+    struct NameType {
       const char* name;
       ContentSettingsType type;
-    } kNameToType[] = {
-        {"geolocation", ContentSettingsType::GEOLOCATION},
-        {"protected_media", ContentSettingsType::PROTECTED_MEDIA_IDENTIFIER},
-        {"notifications", ContentSettingsType::NOTIFICATIONS},
-        {"mic", ContentSettingsType::MEDIASTREAM_MIC},
-        {"camera", ContentSettingsType::MEDIASTREAM_CAMERA},
-        {"protocol_handlers", ContentSettingsType::PROTOCOL_HANDLERS},
-        {"midi", ContentSettingsType::MIDI_SYSEX},
-        {"storage_access", ContentSettingsType::STORAGE_ACCESS},
-        {"downloads", ContentSettingsType::AUTOMATIC_DOWNLOADS},
-        {kMultipleName, ContentSettingsType::DEFAULT}};
-    const auto* it = std::begin(kNameToType);
-    for (; it != std::end(kNameToType); ++it) {
-      if (name == it->name) {
-        break;
-      }
-    }
-    if (it == std::end(kNameToType)) {
+    };
+    static constexpr auto kNameToType = std::to_array<NameType>(
+        {{"geolocation", ContentSettingsType::GEOLOCATION},
+         {"protected_media", ContentSettingsType::PROTECTED_MEDIA_IDENTIFIER},
+         {"notifications", ContentSettingsType::NOTIFICATIONS},
+         {"mic", ContentSettingsType::MEDIASTREAM_MIC},
+         {"camera", ContentSettingsType::MEDIASTREAM_CAMERA},
+         {"protocol_handlers", ContentSettingsType::PROTOCOL_HANDLERS},
+         {"midi", ContentSettingsType::MIDI_SYSEX},
+         {"storage_access", ContentSettingsType::STORAGE_ACCESS},
+         {"downloads", ContentSettingsType::AUTOMATIC_DOWNLOADS},
+         {kMultipleName, ContentSettingsType::DEFAULT}});
+    const auto it = std::ranges::find(kNameToType, name, &NameType::name);
+    if (it == kNameToType.end()) {
       ADD_FAILURE() << "Unknown: " << name;
       return;
     }
@@ -208,8 +176,7 @@ class PermissionPromptBubbleBaseViewBrowserTest : public DialogBrowserTest {
     // fails. We need a fixed URL, so the Gold image used in the pixel test
     // always matches with the output of the test.
     if (it->type == ContentSettingsType::STORAGE_ACCESS) {
-      test_api_->manager()->set_embedding_origin_for_testing(
-          GURL("https://www.origin.test.com"));
+      test_api_->manager()->set_embedding_origin_for_testing(embedding_origin_);
     }
 
     switch (it->type) {
@@ -257,6 +224,8 @@ class PermissionPromptBubbleBaseViewBrowserTest : public DialogBrowserTest {
 
   base::test::ScopedFeatureList feature_list_;
   std::unique_ptr<test::PermissionRequestManagerTestApi> test_api_;
+  GURL embedding_origin_ = GURL("https://www.origin.test.com");
+  GURL test_url_ = GURL("https://example.com");
 };
 
 // Flaky on Mac: http://crbug.com/1502621
@@ -399,35 +368,8 @@ IN_PROC_BROWSER_TEST_F(PermissionPromptBubbleBaseViewBrowserTest,
   ShowAndVerifyUi();
 }
 
-// Test fixture to test the Storage Access prompt with the new Google UI.
-//
-// We have created a new test fixture for the new Google UI so we can have a
-// test for the new and old prompt UI and avoid adding unnecessary Gold images.
-// If were to add a new parameter to |PermissionPromptBubbleBaseViewBrowserTest|
-// to toggle the PermissionStorageAccessAPI, we would have to add extra Gold
-// images for each of the other eleven tests, even though this flag only affects
-// the Storage Access prompt.
-class StorageAccessEnabledPermissionPromptBubbleViewBrowserTest
-    : public PermissionPromptBubbleBaseViewBrowserTest {
- public:
-  StorageAccessEnabledPermissionPromptBubbleViewBrowserTest() {
-    feature_list_.InitWithFeatures(
-        {permissions::features::kPermissionStorageAccessAPI}, {});
-  }
-  base::test::ScopedFeatureList feature_list_;
-};
-
-// Host wants to access storage from the site in which it's embedded. Prompt
-// with new Google UI.
-IN_PROC_BROWSER_TEST_F(
-    StorageAccessEnabledPermissionPromptBubbleViewBrowserTest,
-    InvokeUi_storage_access) {
-  ShowAndVerifyUi();
-}
-
-IN_PROC_BROWSER_TEST_F(
-    StorageAccessEnabledPermissionPromptBubbleViewBrowserTest,
-    OpenHelpCenterLinkInNewTab) {
+IN_PROC_BROWSER_TEST_F(PermissionPromptBubbleBaseViewBrowserTest,
+                       OpenHelpCenterLinkInNewTab) {
   ShowUi("storage_access");
 
   // Get link widget from the prompt.
@@ -474,13 +416,13 @@ IN_PROC_BROWSER_TEST_F(PermissionPromptBubbleBaseViewBrowserTest,
   GetTestApi().manager()->Accept();
   base::RunLoop().RunUntilIdle();
 
-    histograms.ExpectBucketCount(
-        "Permissions.Prompt.Geolocation.LocationBarLeftChipAutoBubble.Action",
-        static_cast<int>(permissions::PermissionAction::GRANTED), 1);
-    histograms.ExpectTimeBucketCount(
-        "Permissions.Prompt.Geolocation.LocationBarLeftChipAutoBubble.Accepted."
-        "TimeToAction",
-        duration, 1);
+  histograms.ExpectBucketCount(
+      "Permissions.Prompt.Geolocation.LocationBarLeftChipAutoBubble.Action",
+      static_cast<int>(permissions::PermissionAction::GRANTED), 1);
+  histograms.ExpectTimeBucketCount(
+      "Permissions.Prompt.Geolocation.LocationBarLeftChipAutoBubble.Accepted."
+      "TimeToAction",
+      duration, 1);
 
   ShowUi("notifications");
 
@@ -495,14 +437,14 @@ IN_PROC_BROWSER_TEST_F(PermissionPromptBubbleBaseViewBrowserTest,
   GetTestApi().manager()->Accept();
   base::RunLoop().RunUntilIdle();
 
-    histograms.ExpectBucketCount(
-        "Permissions.Prompt.Notifications.LocationBarLeftChipAutoBubble.Action",
-        static_cast<int>(permissions::PermissionAction::GRANTED), 1);
-    histograms.ExpectTimeBucketCount(
-        "Permissions.Prompt.Notifications.LocationBarLeftChipAutoBubble."
-        "Accepted."
-        "TimeToAction",
-        duration, 1);
+  histograms.ExpectBucketCount(
+      "Permissions.Prompt.Notifications.LocationBarLeftChipAutoBubble.Action",
+      static_cast<int>(permissions::PermissionAction::GRANTED), 1);
+  histograms.ExpectTimeBucketCount(
+      "Permissions.Prompt.Notifications.LocationBarLeftChipAutoBubble."
+      "Accepted."
+      "TimeToAction",
+      duration, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(PermissionPromptBubbleBaseViewBrowserTest,
@@ -522,14 +464,14 @@ IN_PROC_BROWSER_TEST_F(PermissionPromptBubbleBaseViewBrowserTest,
   GetTestApi().manager()->AcceptThisTime();
   base::RunLoop().RunUntilIdle();
 
-    histograms.ExpectBucketCount(
-        "Permissions.Prompt.Geolocation.LocationBarLeftChipAutoBubble.Action",
-        static_cast<int>(permissions::PermissionAction::GRANTED_ONCE), 1);
-    histograms.ExpectTimeBucketCount(
-        "Permissions.Prompt.Geolocation.LocationBarLeftChipAutoBubble."
-        "AcceptedOnce."
-        "TimeToAction",
-        duration, 1);
+  histograms.ExpectBucketCount(
+      "Permissions.Prompt.Geolocation.LocationBarLeftChipAutoBubble.Action",
+      static_cast<int>(permissions::PermissionAction::GRANTED_ONCE), 1);
+  histograms.ExpectTimeBucketCount(
+      "Permissions.Prompt.Geolocation.LocationBarLeftChipAutoBubble."
+      "AcceptedOnce."
+      "TimeToAction",
+      duration, 1);
 
   ShowUi("notifications");
 
@@ -544,14 +486,14 @@ IN_PROC_BROWSER_TEST_F(PermissionPromptBubbleBaseViewBrowserTest,
   GetTestApi().manager()->AcceptThisTime();
   base::RunLoop().RunUntilIdle();
 
-    histograms.ExpectBucketCount(
-        "Permissions.Prompt.Notifications.LocationBarLeftChipAutoBubble.Action",
-        static_cast<int>(permissions::PermissionAction::GRANTED_ONCE), 1);
-    histograms.ExpectTimeBucketCount(
-        "Permissions.Prompt.Notifications.LocationBarLeftChipAutoBubble."
-        "AcceptedOnce."
-        "TimeToAction",
-        duration, 1);
+  histograms.ExpectBucketCount(
+      "Permissions.Prompt.Notifications.LocationBarLeftChipAutoBubble.Action",
+      static_cast<int>(permissions::PermissionAction::GRANTED_ONCE), 1);
+  histograms.ExpectTimeBucketCount(
+      "Permissions.Prompt.Notifications.LocationBarLeftChipAutoBubble."
+      "AcceptedOnce."
+      "TimeToAction",
+      duration, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(PermissionPromptBubbleBaseViewBrowserTest,
@@ -621,13 +563,24 @@ IN_PROC_BROWSER_TEST_F(PermissionPromptBubbleBaseViewBrowserTest,
                                QuietUiReason::kTriggeredDueToAbusiveContent}) {
     SetCannedUiDecision(reason, std::nullopt);
 
-    ShowUi("geolocation");
+    ShowUi("camera");
 
     EXPECT_EQ(GetTestApi()
                   .manager()
                   ->current_request_prompt_disposition_for_testing(),
               permissions::PermissionPromptDisposition::
                   LOCATION_BAR_LEFT_CHIP_AUTO_BUBBLE);
+
+    GetTestApi().manager()->Accept();
+    base::RunLoop().RunUntilIdle();
+
+    ShowUi("geolocation");
+
+    EXPECT_EQ(GetTestApi()
+                  .manager()
+                  ->current_request_prompt_disposition_for_testing(),
+              permissions::PermissionPromptDisposition::
+                  LOCATION_BAR_LEFT_QUIET_ABUSIVE_CHIP);
 
     GetTestApi().manager()->Accept();
     base::RunLoop().RunUntilIdle();
@@ -644,20 +597,108 @@ IN_PROC_BROWSER_TEST_F(PermissionPromptBubbleBaseViewBrowserTest,
   }
 }
 
-class OneTimePermissionPromptBubbleBaseViewBrowserTest
+class PermissionPromptBubbleBaseViewAllowAlwaysFirstBrowserTest
     : public PermissionPromptBubbleBaseViewBrowserTest {
  public:
-  OneTimePermissionPromptBubbleBaseViewBrowserTest() {
+  PermissionPromptBubbleBaseViewAllowAlwaysFirstBrowserTest() {
     scoped_feature_list_.InitAndEnableFeatureWithParameters(
         permissions::features::kOneTimePermission,
-        {{"OkButtonBehavesAsAllowAlways", "true"}});
+        {{"show_allow_always_as_first_button", "true"}});
   }
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(OneTimePermissionPromptBubbleBaseViewBrowserTest,
+IN_PROC_BROWSER_TEST_F(
+    PermissionPromptBubbleBaseViewAllowAlwaysFirstBrowserTest,
+    InvokeUi_geolocation) {
+  ShowAndVerifyUi();
+}
+
+class PermissionPromptBubbleBaseViewAllowWhileVisitingFirstBrowserTest
+    : public PermissionPromptBubbleBaseViewBrowserTest {
+ public:
+  PermissionPromptBubbleBaseViewAllowWhileVisitingFirstBrowserTest() {
+    scoped_feature_list_.InitAndEnableFeatureWithParameters(
+        permissions::features::kOneTimePermission,
+        {{"use_stronger_prompt_language", "true"},
+         {"use_while_visiting_language", "true"},
+         {"show_allow_always_as_first_button", "true"}});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(
+    PermissionPromptBubbleBaseViewAllowWhileVisitingFirstBrowserTest,
+    InvokeUi_geolocation) {
+  ShowAndVerifyUi();
+}
+
+class LongOriginPermissionPromptBubbleBaseViewBrowserTest
+    : public PermissionPromptBubbleBaseViewBrowserTest {
+ public:
+  void SetUpOnMainThread() override {
+    PermissionPromptBubbleBaseViewBrowserTest::SetUpOnMainThread();
+    SetOrigin(long_origin_);
+    SetTestUrl(long_origin_);
+  }
+
+  void SetOrigin(const GURL& origin) { GetTestApi().SetOrigin(origin); }
+
+  GURL long_origin_ = GURL(
+      "https://"
+      "example.example.example.example.example.example.example.example."
+      "example.example.example.example.example.example.example.example."
+      "example.example.example.example.example.example.example.example."
+      "example.example.example.example.example.example.example.example."
+      "example.example.example.examp");
+};
+
+IN_PROC_BROWSER_TEST_F(LongOriginPermissionPromptBubbleBaseViewBrowserTest,
                        InvokeUi_geolocation) {
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(LongOriginPermissionPromptBubbleBaseViewBrowserTest,
+                       InvokeUi_notifications) {
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(LongOriginPermissionPromptBubbleBaseViewBrowserTest,
+                       InvokeUi_mic) {
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(LongOriginPermissionPromptBubbleBaseViewBrowserTest,
+                       InvokeUi_camera) {
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(LongOriginPermissionPromptBubbleBaseViewBrowserTest,
+                       InvokeUi_protocol_handlers) {
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(LongOriginPermissionPromptBubbleBaseViewBrowserTest,
+                       InvokeUi_midi) {
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(LongOriginPermissionPromptBubbleBaseViewBrowserTest,
+                       InvokeUi_storage_access) {
+  SetEmbeddingOrigin(long_origin_);
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(LongOriginPermissionPromptBubbleBaseViewBrowserTest,
+                       InvokeUi_downloads) {
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(LongOriginPermissionPromptBubbleBaseViewBrowserTest,
+                       InvokeUi_multiple) {
   ShowAndVerifyUi();
 }

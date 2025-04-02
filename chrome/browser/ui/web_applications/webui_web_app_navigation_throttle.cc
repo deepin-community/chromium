@@ -46,7 +46,7 @@ WebUIWebAppNavigationThrottle::MaybeCreateThrottleFor(
     return nullptr;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Exclude system web apps.
   if (browser->app_controller()->system_app()) {
     return nullptr;
@@ -78,7 +78,8 @@ WebUIWebAppNavigationThrottle::WillStartRequest() {
     content::OpenURLParams params =
         content::OpenURLParams::FromNavigationHandle(navigation_handle());
     params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-    navigation_handle()->GetWebContents()->OpenURL(std::move(params));
+    navigation_handle()->GetWebContents()->OpenURL(
+        std::move(params), /*navigation_handle_callback=*/{});
     // Deactivate app window to foreground the browser with new tab.
     browser->window()->Deactivate();
     return content::NavigationThrottle::CANCEL_AND_IGNORE;

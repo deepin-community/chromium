@@ -14,15 +14,16 @@
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/not_fatal_until.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/trace_event/trace_event.h"
 #include "components/safe_browsing/content/common/visual_utils.h"
 #include "components/safe_browsing/content/renderer/phishing_classifier/features.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/client_model.pb.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "content/public/renderer/render_thread.h"
@@ -149,16 +150,24 @@ std::unique_ptr<tflite::task::vision::ImageEmbedder> CreateImageEmbedder(
   return std::move(*embedder);
 }
 
-std::string GetModelInput(const SkBitmap& bitmap, int width, int height) {
+std::string GetModelInput(const SkBitmap& bitmap,
+                          int width,
+                          int height,
+                          bool image_embedding = false) {
   TRACE_EVENT0("safe_browsing", "GetTfLiteModelInput");
   // Use the Rec. 2020 color space, in case the user input is wide-gamut.
   sk_sp<SkColorSpace> rec2020 = SkColorSpace::MakeRGB(
       {2.22222f, 0.909672f, 0.0903276f, 0.222222f, 0.0812429f, 0, 0},
       SkNamedGamut::kRec2020);
 
-  SkBitmap downsampled = skia::ImageOperations::Resize(
-      bitmap, skia::ImageOperations::RESIZE_GOOD, static_cast<int>(width),
-      static_cast<int>(height));
+  SkBitmap downsampled =
+      image_embedding && base::FeatureList::IsEnabled(kConditionalImageResize)
+          ? skia::ImageOperations::Resize(
+                bitmap, skia::ImageOperations::RESIZE_BEST,
+                static_cast<int>(width), static_cast<int>(height))
+          : skia::ImageOperations::Resize(
+                bitmap, skia::ImageOperations::RESIZE_GOOD,
+                static_cast<int>(width), static_cast<int>(height));
 
   if (downsampled.drawsNothing()) {
     return std::string();
@@ -287,7 +296,8 @@ void OnImageEmbedderCreated(
     std::unique_ptr<tflite::task::vision::ImageEmbedder> image_embedder,
     scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
     base::OnceCallback<void(ImageFeatureEmbedding)> callback) {
-  std::string model_input = GetModelInput(bitmap, input_width, input_height);
+  std::string model_input = GetModelInput(bitmap, input_width, input_height,
+                                          /*image_embedding=*/true);
   if (model_input.empty()) {
     callback_task_runner->PostTask(
         FROM_HERE,
@@ -303,11 +313,6 @@ void OnImageEmbedderCreated(
                      std::move(callback)));
 }
 #endif
-
-int* GetLiveScorerCount() {
-  static int count = 0;
-  return &count;
-}
 
 }  // namespace
 
@@ -372,14 +377,8 @@ double Scorer::LogOdds2Prob(const double log_odds) const {
   return odds / (odds + 1.0);
 }
 
-Scorer::Scorer() {
-  *GetLiveScorerCount() += 1;
-  base::UmaHistogramCounts1000("SBClientPhishing.LiveScorersAtCreation",
-                               *GetLiveScorerCount());
-}
-Scorer::~Scorer() {
-  *GetLiveScorerCount() -= 1;
-}
+Scorer::Scorer() = default;
+Scorer::~Scorer() = default;
 
 // static
 ScorerStorage* ScorerStorage::GetInstance() {
@@ -485,7 +484,7 @@ double Scorer::ComputeRuleScore(const flat::ClientSideModel_::Rule* rule,
   for (int32_t feature : *rule->feature()) {
     const flat::Hash* hash = flatbuffer_model_->hashes()->Get(feature);
 
-    if (!hash->data()) {
+    if (!hash || !hash->data()) {
       return 0.0;
     }
 

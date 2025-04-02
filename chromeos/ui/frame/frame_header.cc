@@ -4,18 +4,22 @@
 
 #include "chromeos/ui/frame/frame_header.h"
 
-#include "base/containers/cxx20_erase.h"
+#include <vector>
+
 #include "base/logging.h"  // DCHECK
 #include "chromeos/ui/frame/caption_buttons/frame_caption_button_container_view.h"
+#include "chromeos/ui/frame/caption_buttons/frame_center_button.h"
 #include "chromeos/ui/frame/frame_utils.h"
 #include "chromeos/ui/vector_icons/vector_icons.h"
 #include "ui/base/class_property.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/color/color_id.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/layer_tree_owner.h"
+#include "ui/compositor/layer_type.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_utils.h"
@@ -110,7 +114,9 @@ void FrameHeader::FrameAnimatorView::StartAnimation(base::TimeDelta duration) {
   old_layer->SetTransform(gfx::Transform());
   // Layer in maximized / fullscreen / snapped state is set to
   // opaque, which can prevent resterizing the new layer immediately.
-  old_layer->SetFillsBoundsOpaquely(false);
+  if (old_layer->type() != ui::LAYER_SOLID_COLOR) {
+    old_layer->SetFillsBoundsOpaquely(false);
+  }
 
   layer_owner_ = std::move(old_layer_owner);
 
@@ -158,7 +164,7 @@ void FrameHeader::FrameAnimatorView::LayerDestroyed(ui::Layer* layer) {
 }
 
 void FrameHeader::FrameAnimatorView::OnImplicitAnimationsCompleted() {
-  // TODO(crbug.com/1172694): Remove this DCHECK if this is indeed the cause.
+  // TODO(crbug.com/40054632): Remove this DCHECK if this is indeed the cause.
   DCHECK(layer_owner_);
   if (layer_owner_) {
     RemoveLayerFromRegions(layer_owner_->root());
@@ -192,8 +198,9 @@ views::View::Views FrameHeader::GetAdjustedChildrenInZOrder(
                                        ? frame_view->GetWidget()->client_view()
                                        : nullptr;
 
-  if (client_view && base::Erase(paint_order, client_view))
+  if (client_view && std::erase(paint_order, client_view)) {
     paint_order.insert(std::next(paint_order.begin(), 1), client_view);
+  }
 
   return paint_order;
 }
@@ -276,9 +283,10 @@ void FrameHeader::SetPaintAsActive(bool paint_as_active) {
   UpdateFrameColors();
 }
 
-void FrameHeader::OnShowStateChanged(ui::WindowShowState show_state) {
-  if (show_state == ui::SHOW_STATE_MINIMIZED)
+void FrameHeader::OnShowStateChanged(ui::mojom::WindowShowState show_state) {
+  if (show_state == ui::mojom::WindowShowState::kMinimized) {
     return;
+  }
 
   LayoutHeaderInternal();
 }
@@ -465,7 +473,7 @@ void FrameHeader::LayoutHeaderInternal() {
       views::GetCaptionButtonLayoutSize(GetButtonLayoutSize()));
 
   const gfx::Size caption_button_container_size =
-      caption_button_container()->GetPreferredSize();
+      caption_button_container()->GetPreferredSize({});
   caption_button_container()->SetBounds(
       view_->width() - caption_button_container_size.width(), 0,
       caption_button_container_size.width(),
@@ -475,7 +483,7 @@ void FrameHeader::LayoutHeaderInternal() {
 
   int origin = 0;
   if (back_button_) {
-    gfx::Size size = back_button_->GetPreferredSize();
+    gfx::Size size = back_button_->GetPreferredSize({});
     back_button_->SetBounds(0, 0, size.width(),
                             caption_button_container_size.height());
     origin = back_button_->bounds().right();
@@ -484,7 +492,7 @@ void FrameHeader::LayoutHeaderInternal() {
   if (left_header_view_) {
     // Vertically center the left header view (typically the window icon) with
     // respect to the caption button container.
-    const gfx::Size icon_size(left_header_view_->GetPreferredSize());
+    const gfx::Size icon_size(left_header_view_->GetPreferredSize({}));
     const int icon_offset_y = (GetHeaderHeight() - icon_size.height()) / 2;
     constexpr int kLeftViewXInset = 9;
     left_header_view_->SetBounds(kLeftViewXInset + origin, icon_offset_y,
@@ -494,7 +502,7 @@ void FrameHeader::LayoutHeaderInternal() {
 
   if (center_button_) {
     constexpr int kCenterButtonSpacing = 5;
-    const int full_width = center_button_->GetPreferredSize().width();
+    const int full_width = center_button_->GetPreferredSize({}).width();
     const int begin = std::max((view_->width() - full_width) / 2,
                                origin + kCenterButtonSpacing);
     const int end = std::max(

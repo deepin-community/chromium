@@ -2,12 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "net/test/cert_builder.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -15,12 +22,10 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "crypto/ec_private_key.h"
-#include "crypto/openssl_util.h"
 #include "crypto/rsa_private_key.h"
 #include "crypto/sha2.h"
 #include "net/cert/asn1_util.h"
@@ -78,9 +83,9 @@ std::string EcdsaWithSha1() {
   return std::string(std::begin(kDer), std::end(kDer));
 }
 
-// Adds bytes (specified as a StringPiece) to the given CBB.
+// Adds bytes (specified as a std::string_view) to the given CBB.
 // The argument ordering follows the boringssl CBB_* api style.
-bool CBBAddBytes(CBB* cbb, base::StringPiece bytes) {
+bool CBBAddBytes(CBB* cbb, std::string_view bytes) {
   return CBB_add_bytes(cbb, reinterpret_cast<const uint8_t*>(bytes.data()),
                        bytes.size());
 }
@@ -175,7 +180,7 @@ std::unique_ptr<CertBuilder> CertBuilder::FromStaticCert(CRYPTO_BUFFER* cert,
   // function as the |issuer| of another CertBuilder.
   builder->cert_ = bssl::UpRef(cert);
   builder->key_ = bssl::UpRef(key);
-  base::StringPiece subject_tlv;
+  std::string_view subject_tlv;
   CHECK(asn1::ExtractSubjectFromDERCert(
       x509_util::CryptoBufferAsStringPiece(cert), &subject_tlv));
   builder->subject_tlv_ = std::string(subject_tlv);
@@ -243,7 +248,7 @@ std::vector<std::unique_ptr<CertBuilder>> CertBuilder::CreateSimpleChain(
     parent_builder = builder.get();
     chain.push_back(std::move(builder));
   }
-  base::ranges::reverse(chain);
+  std::ranges::reverse(chain);
   return chain;
 }
 
@@ -271,7 +276,7 @@ CertBuilder::DefaultSignatureAlgorithmForKey(EVP_PKEY* key) {
 
 // static
 bool CertBuilder::SignData(bssl::SignatureAlgorithm signature_algorithm,
-                           base::StringPiece tbs_data,
+                           std::string_view tbs_data,
                            EVP_PKEY* key,
                            CBB* out_signature) {
   if (!key)
@@ -327,7 +332,7 @@ bool CertBuilder::SignData(bssl::SignatureAlgorithm signature_algorithm,
 
 // static
 bool CertBuilder::SignDataWithDigest(const EVP_MD* digest,
-                                     base::StringPiece tbs_data,
+                                     std::string_view tbs_data,
                                      EVP_PKEY* key,
                                      CBB* out_signature) {
   const uint8_t* tbs_bytes = reinterpret_cast<const uint8_t*>(tbs_data.data());
@@ -371,7 +376,7 @@ std::string CertBuilder::MakeRandomHexString(size_t num_bytes) {
 
 // static
 std::vector<uint8_t> CertBuilder::BuildNameWithCommonNameOfType(
-    base::StringPiece common_name,
+    std::string_view common_name,
     unsigned common_name_tag) {
   // See RFC 4519.
   static const uint8_t kCommonName[] = {0x55, 0x04, 0x03};
@@ -508,12 +513,33 @@ void CertBuilder::SetCaIssuersUrl(const GURL& url) {
 void CertBuilder::SetCaIssuersAndOCSPUrls(
     const std::vector<GURL>& ca_issuers_urls,
     const std::vector<GURL>& ocsp_urls) {
-  std::vector<std::pair<bssl::der::Input, GURL>> entries;
-  for (const auto& url : ca_issuers_urls)
-    entries.emplace_back(bssl::der::Input(bssl::kAdCaIssuersOid), url);
-  for (const auto& url : ocsp_urls)
-    entries.emplace_back(bssl::der::Input(bssl::kAdOcspOid), url);
+  std::vector<std::pair<bssl::der::Input, std::string_view>> entries;
+  for (const auto& url : ca_issuers_urls) {
+    entries.emplace_back(bssl::der::Input(bssl::kAdCaIssuersOid),
+                         url.possibly_invalid_spec());
+  }
+  for (const auto& url : ocsp_urls) {
+    entries.emplace_back(bssl::der::Input(bssl::kAdOcspOid),
+                         url.possibly_invalid_spec());
+  }
+  SetCaIssuersAndOCSPUrls(entries);
+}
 
+void CertBuilder::SetCaIssuersAndOCSPUrls(
+    const std::vector<std::string>& ca_issuers_urls,
+    const std::vector<std::string>& ocsp_urls) {
+  std::vector<std::pair<bssl::der::Input, std::string_view>> entries;
+  for (const auto& url : ca_issuers_urls) {
+    entries.emplace_back(bssl::der::Input(bssl::kAdCaIssuersOid), url);
+  }
+  for (const auto& url : ocsp_urls) {
+    entries.emplace_back(bssl::der::Input(bssl::kAdOcspOid), url);
+  }
+  SetCaIssuersAndOCSPUrls(entries);
+}
+
+void CertBuilder::SetCaIssuersAndOCSPUrls(
+    const std::vector<std::pair<bssl::der::Input, std::string_view>>& entries) {
   if (entries.empty()) {
     EraseExtension(bssl::der::Input(bssl::kAuthorityInfoAccessOid));
     return;
@@ -540,7 +566,7 @@ void CertBuilder::SetCaIssuersAndOCSPUrls(
     ASSERT_TRUE(CBBAddBytes(&access_method, entry.first.AsStringView()));
     ASSERT_TRUE(CBB_add_asn1(&access_description, &access_location,
                              CBS_ASN1_CONTEXT_SPECIFIC | 6));
-    ASSERT_TRUE(CBBAddBytes(&access_location, entry.second.spec()));
+    ASSERT_TRUE(CBBAddBytes(&access_location, entry.second));
     ASSERT_TRUE(CBB_flush(&aia));
   }
 
@@ -552,7 +578,20 @@ void CertBuilder::SetCrlDistributionPointUrl(const GURL& url) {
   SetCrlDistributionPointUrls({url});
 }
 
+void CertBuilder::SetCrlDistributionPointUrl(const std::string_view& url) {
+  SetCrlDistributionPointUrls(std::vector<std::string>{std::string(url)});
+}
+
 void CertBuilder::SetCrlDistributionPointUrls(const std::vector<GURL>& urls) {
+  std::vector<std::string> string_urls;
+  for (const auto& url : urls) {
+    string_urls.push_back(url.possibly_invalid_spec());
+  }
+  SetCrlDistributionPointUrls(string_urls);
+}
+
+void CertBuilder::SetCrlDistributionPointUrls(
+    const std::vector<std::string>& urls) {
   bssl::ScopedCBB cbb;
   ASSERT_TRUE(CBB_init(cbb.get(), 64));
   CBB dps, dp, dp_name, dp_fullname;
@@ -582,7 +621,7 @@ void CertBuilder::SetCrlDistributionPointUrls(const std::vector<GURL>& urls) {
     CBB dp_url;
     ASSERT_TRUE(
         CBB_add_asn1(&dp_fullname, &dp_url, CBS_ASN1_CONTEXT_SPECIFIC | 6));
-    ASSERT_TRUE(CBBAddBytes(&dp_url, url.spec()));
+    ASSERT_TRUE(CBBAddBytes(&dp_url, url));
     ASSERT_TRUE(CBB_flush(&dp_fullname));
   }
 
@@ -598,7 +637,7 @@ void CertBuilder::SetIssuerTLV(base::span<const uint8_t> issuer_tlv) {
   Invalidate();
 }
 
-void CertBuilder::SetSubjectCommonName(base::StringPiece common_name) {
+void CertBuilder::SetSubjectCommonName(std::string_view common_name) {
   SetSubjectTLV(
       BuildNameWithCommonNameOfType(common_name, CBS_ASN1_UTF8STRING));
   Invalidate();
@@ -609,7 +648,7 @@ void CertBuilder::SetSubjectTLV(base::span<const uint8_t> subject_tlv) {
   Invalidate();
 }
 
-void CertBuilder::SetSubjectAltName(base::StringPiece dns_name) {
+void CertBuilder::SetSubjectAltName(std::string_view dns_name) {
   SetSubjectAltNames({std::string(dns_name)}, {});
 }
 
@@ -919,19 +958,19 @@ void CertBuilder::SetSignatureAlgorithm(
 }
 
 void CertBuilder::SetSignatureAlgorithmTLV(
-    base::StringPiece signature_algorithm_tlv) {
+    std::string_view signature_algorithm_tlv) {
   SetOuterSignatureAlgorithmTLV(signature_algorithm_tlv);
   SetTBSSignatureAlgorithmTLV(signature_algorithm_tlv);
 }
 
 void CertBuilder::SetOuterSignatureAlgorithmTLV(
-    base::StringPiece signature_algorithm_tlv) {
+    std::string_view signature_algorithm_tlv) {
   outer_signature_algorithm_tlv_ = std::string(signature_algorithm_tlv);
   Invalidate();
 }
 
 void CertBuilder::SetTBSSignatureAlgorithmTLV(
-    base::StringPiece signature_algorithm_tlv) {
+    std::string_view signature_algorithm_tlv) {
   tbs_signature_algorithm_tlv_ = std::string(signature_algorithm_tlv);
   Invalidate();
 }
@@ -1083,7 +1122,6 @@ CertBuilder::CertBuilder(CRYPTO_BUFFER* orig_cert,
   if (!issuer_)
     issuer_ = this;
 
-  crypto::EnsureOpenSSLInit();
   if (orig_cert)
     InitFromCert(
         bssl::der::Input(x509_util::CryptoBufferAsStringPiece(orig_cert)));
@@ -1236,7 +1274,7 @@ void CertBuilder::InitFromCert(const bssl::der::Input& cert) {
   }
 }
 
-void CertBuilder::BuildTBSCertificate(base::StringPiece signature_algorithm_tlv,
+void CertBuilder::BuildTBSCertificate(std::string_view signature_algorithm_tlv,
                                       std::string* out) {
   bssl::ScopedCBB cbb;
   CBB tbs_cert, version, extensions_context, extensions;
@@ -1255,7 +1293,7 @@ void CertBuilder::BuildTBSCertificate(base::StringPiece signature_algorithm_tlv,
         ASSERT_TRUE(CBB_add_asn1_uint64(&version, 2));
         break;
       case bssl::CertificateVersion::V1:
-        NOTREACHED_NORETURN();
+        NOTREACHED();
     }
   }
   ASSERT_TRUE(CBB_add_asn1_uint64(&tbs_cert, GetSerialNumber()));

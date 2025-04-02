@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -18,6 +23,7 @@
 #include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
+#include "base/rand_util.h"
 #include "base/run_loop.h"
 #include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
@@ -26,12 +32,12 @@
 #include "base/test/bind.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/test_future.h"
 #include "base/test/thread_test_helper.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/services/storage/indexed_db/transactional_leveldb/transactional_leveldb_database.h"
 #include "components/services/storage/privileged/mojom/indexed_db_control.mojom-test-utils.h"
 #include "components/services/storage/privileged/mojom/indexed_db_control_test.mojom.h"
@@ -56,6 +62,7 @@
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/no_renderer_crashes_assertion.h"
 #include "content/shell/browser/shell.h"
+#include "content/test/content_browser_test_utils_internal.h"
 #include "net/base/net_errors.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
@@ -67,7 +74,6 @@
 #include "storage/browser/quota/quota_settings.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/common/switches.h"
-#include "third_party/leveldatabase/src/include/leveldb/status.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -76,7 +82,9 @@ using storage::QuotaManager;
 using storage::mojom::FailClass;
 using storage::mojom::FailMethod;
 
-namespace content {
+namespace content::indexed_db {
+
+namespace {
 
 // This browser test is aimed towards exercising the IndexedDB bindings and
 // the actual implementation that lives in the browser side.
@@ -104,7 +112,6 @@ class IndexedDBBrowserTest : public ContentBrowserTest {
     // Enable experimental web platform features to enable write access.
     command_line->AppendSwitch(
         switches::kEnableExperimentalWebPlatformFeatures);
-    ContentBrowserTest::SetUpCommandLine(command_line);
   }
 
   void TearDownOnMainThread() override { failure_injector_.reset(); }
@@ -156,10 +163,10 @@ class IndexedDBBrowserTest : public ContentBrowserTest {
   storage::mojom::IndexedDBControl& GetControl(Shell* browser = nullptr) {
     if (!browser)
       browser = shell();
-    StoragePartition* partition = browser->web_contents()
-                                      ->GetBrowserContext()
-                                      ->GetDefaultStoragePartition();
-    return partition->GetIndexedDBControl();
+    return browser->web_contents()
+        ->GetBrowserContext()
+        ->GetDefaultStoragePartition()
+        ->GetIndexedDBControl();
   }
 
   mojo::Remote<storage::mojom::IndexedDBControlTest> GetControlTest(
@@ -175,11 +182,11 @@ class IndexedDBBrowserTest : public ContentBrowserTest {
     if (!browser) {
       browser = shell();
     }
-    StoragePartition* partition = browser->web_contents()
-                                      ->GetBrowserContext()
-                                      ->GetDefaultStoragePartition();
-    auto& control = partition->GetIndexedDBControl();
-    control.BindTestInterface(std::move(receiver));
+    browser->web_contents()
+        ->GetBrowserContext()
+        ->GetDefaultStoragePartition()
+        ->GetIndexedDBControl()
+        .BindTestInterface(std::move(receiver));
   }
 
   void SetQuota(int per_host_quota_kilobytes) {
@@ -337,20 +344,27 @@ IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, KeyTypesTest) {
 IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, ObjectStoreTest) {
   base::HistogramTester tester;
 
-  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration.Open", 0);
+  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration2.Open", 0);
 
   // This test opens a database and does 3 adds and 3 gets in the versionchange
   // transaction (no readonly or readwrite transactions).
   SimpleTest(GetTestUrl("indexeddb", "object_store_test.html"));
   content::FetchHistogramsFromChildProcesses();
 
-  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration.Open", 1);
-  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration.ObjectStorePut",
+  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration2.Open", 1);
+  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration2.ObjectStorePut",
                           0);
-  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration.ObjectStoreAdd",
+  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration2.ObjectStoreAdd",
                           3);
-  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration.ObjectStoreGet",
+  // 2 of the adds succeed and one fails (due to the key already existing).
+  tester.ExpectBucketCount(
+      "WebCore.IndexedDB.RequestDispatchOutcome.ObjectStoreAdd", 1, 2);
+  tester.ExpectBucketCount(
+      "WebCore.IndexedDB.RequestDispatchOutcome.ObjectStoreAdd", 0, 1);
+  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration2.ObjectStoreGet",
                           3);
+  tester.ExpectBucketCount(
+      "WebCore.IndexedDB.RequestDispatchOutcome.ObjectStoreGet", 1, 3);
 
   tester.ExpectTotalCount("WebCore.IndexedDB.Transaction.ReadWrite.TimeQueued",
                           0);
@@ -370,13 +384,20 @@ IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, ObjectStoreTest) {
   SimpleTest(GetTestUrl("indexeddb", "transaction_get_test.html"));
   content::FetchHistogramsFromChildProcesses();
 
-  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration.Open", 2);
-  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration.ObjectStorePut",
+  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration2.Open", 2);
+  tester.ExpectBucketCount("WebCore.IndexedDB.RequestDispatchOutcome.Open", 1,
+                           2);
+  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration2.ObjectStorePut",
                           0);
-  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration.ObjectStoreAdd",
+  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration2.ObjectStoreAdd",
                           4);
-  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration.ObjectStoreGet",
+  // One more success than before.
+  tester.ExpectBucketCount(
+      "WebCore.IndexedDB.RequestDispatchOutcome.ObjectStoreAdd", 1, 3);
+  tester.ExpectTotalCount("WebCore.IndexedDB.RequestDuration2.ObjectStoreGet",
                           5);
+  tester.ExpectBucketCount(
+      "WebCore.IndexedDB.RequestDispatchOutcome.ObjectStoreGet", 1, 5);
 
   tester.ExpectTotalCount("WebCore.IndexedDB.Transaction.ReadWrite.TimeQueued",
                           0);
@@ -445,6 +466,53 @@ IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, Bug941965Test) {
              incognito_browser);
   ASSERT_TRUE(incognito_browser);
   incognito_browser->Close();
+}
+
+IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, SchedulingPriority) {
+  // This test page just opens a connection.
+  const GURL url = GetTestUrl("indexeddb", "simple_test.html");
+  NavigateToURLBlockUntilNavigationsComplete(shell(), url, 1);
+  auto control_test = GetControlTest();
+
+  // This test could use a TestFuture inside RunUntil, but Mac doesn't like that
+  // type of message loop nesting. Therefore the RunUntils below asynchronously
+  // update this variable using this closure, and the value returned, if any,
+  // will be checked on the next iteration of the RunUntil body.
+  std::optional<int> priority;
+  base::RepeatingCallback<void(std::optional<int>)> update_priority =
+      base::BindLambdaForTesting(
+          [&priority](std::optional<int> fetched_priority) {
+            priority = fetched_priority;
+          });
+
+  // Since the test page is foregrounded/visible, it should get a priority of
+  // 0.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    if (priority == 0) {
+      return true;
+    }
+    control_test->GetSchedulingPriorityForTesting(update_priority);
+    return false;
+  }));
+
+  // This part is just designed to flush out any pending
+  // `GetSchedulingPriorityForTesting()` calls. `control_test.FlushForTesting()`
+  // would be sufficient except that its implementation is also async.
+  base::test::TestFuture<std::optional<int>> future;
+  control_test->GetSchedulingPriorityForTesting(future.GetCallback());
+  EXPECT_TRUE(future.Wait());
+  priority.reset();
+
+  // Hide the page and wait for the update to come through.
+  shell()->web_contents()->UpdateWebContentsVisibility(Visibility::HIDDEN);
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    if (priority && *priority > 0) {
+      return true;
+    }
+    control_test->GetSchedulingPriorityForTesting(update_priority);
+    return false;
+  }));
 }
 
 IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, NegativeDBSchemaVersion) {
@@ -554,6 +622,15 @@ class IndexedDBBrowserTestWithGCExposed : public IndexedDBBrowserTest {
 IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTestWithGCExposed,
                        DatabaseCallbacksTest) {
   SimpleTest(GetTestUrl("indexeddb", "database_callbacks_first.html"));
+}
+
+IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTestWithGCExposed, Bug346955148Test) {
+  SimpleTest(GetTestUrl("indexeddb", "bug_346955148.html"));
+}
+
+// Regression test for crbug.com/392376370
+IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTestWithGCExposed, NestedBlob) {
+  SimpleTest(GetTestUrl("indexeddb", "nested_blob.html"));
 }
 
 struct BlobModificationTime {
@@ -765,9 +842,9 @@ IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, LevelDBLogFileTest) {
 
   {
     base::ScopedAllowBlockingForTesting allow_blocking;
-    int64_t size;
-    EXPECT_TRUE(base::GetFileSize(log_file_path, &size));
-    EXPECT_GT(size, 0);
+    std::optional<int64_t> size = base::GetFileSize(log_file_path);
+    ASSERT_TRUE(size.has_value());
+    EXPECT_GT(size.value(), 0);
   }
 }
 
@@ -818,6 +895,36 @@ IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, DeleteBucketDataDeletesBlobs) {
   EXPECT_EQ(0, RequestUsage());
 }
 
+// Regression test for crbug.com/330868483
+// In this test,
+//   1. the page reads a blob
+//   2. the backing store is force-closed
+//   3. the reference to the blob is GC'd
+//      . this disconnects the IndexedDBDataItemReader *after* the backing store
+//        is already reset
+//   4. the page reads the same blob, reusing the IndexedDBDataItemReader
+//   5. the blob reference is dropped and GC'd again
+//   6. don't crash
+IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTestWithGCExposed, ForceCloseWithBlob) {
+  const GURL kTestUrl = GetTestUrl("indexeddb", "write_and_read_blob.html");
+  SimpleTest(kTestUrl);
+  DeleteBucketData(
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(kTestUrl)));
+  std::ignore = EvalJs(shell(), "gc()");
+
+  // Run the test again, but don't reset the object stores first to make sure
+  // the same blob is read again.
+  std::ignore = EvalJs(shell(), "testThenGc()");
+  while (true) {
+    std::string result = shell()->web_contents()->GetLastCommittedURL().ref();
+    if (!result.empty()) {
+      EXPECT_EQ(result, "pass");
+      break;
+    }
+    base::RunLoop().RunUntilIdle();
+  }
+}
+
 IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, DeleteBucketDataIncognito) {
   const GURL test_url = GetTestUrl("indexeddb", "fill_up_5k.html");
   const blink::StorageKey kTestStorageKey =
@@ -836,17 +943,15 @@ IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, DeleteBucketDataIncognito) {
 IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, DiskFullOnCommit) {
   // Ignore several preceding transactions:
   // * The test calls deleteDatabase() which opens the backing store:
-  //   #1: IndexedDBTransaction::Commit - initial "versionchange" transaction
+  //   #1: Transaction::Commit - initial "versionchange" transaction
   // * Once the connection is opened, the test runs:
-  //   #2: IndexedDBTransaction::Commit - the test's "readwrite" transaction)
+  //   #2: Transaction::Commit - the test's "readwrite" transaction)
   const int instance_num = 2;
   const int call_num = 1;
   FailOperation(FailClass::LEVELDB_TRANSACTION, FailMethod::COMMIT_DISK_FULL,
                 instance_num, call_num);
   SimpleTest(GetTestUrl("indexeddb", "disk_full_on_commit.html"));
 }
-
-namespace {
 
 std::unique_ptr<net::test_server::HttpResponse> ServePath(
     std::string request_path) {
@@ -856,14 +961,15 @@ std::unique_ptr<net::test_server::HttpResponse> ServePath(
   http_response->set_code(net::HTTP_OK);
 
   std::string file_contents;
-  if (!base::ReadFileToString(resource_path, &file_contents))
+  if (!base::ReadFileToString(resource_path, &file_contents)) {
     NOTREACHED() << "could not read file " << resource_path;
+  }
   http_response->set_content(file_contents);
   return std::move(http_response);
 }
 
 #if !BUILDFLAG(IS_WIN)
-void CorruptIndexedDBDatabase(const base::FilePath& idb_data_path) {
+void CorruptDatabase(const base::FilePath& idb_data_path) {
   int num_files = 0;
   int num_errors = 0;
   const bool recursive = false;
@@ -872,8 +978,7 @@ void CorruptIndexedDBDatabase(const base::FilePath& idb_data_path) {
                                   base::FileEnumerator::FILES);
   for (base::FilePath idb_file = enumerator.Next(); !idb_file.empty();
        idb_file = enumerator.Next()) {
-    int64_t size(0);
-    GetFileSize(idb_file, &size);
+    int64_t size = base::GetFileSize(idb_file).value_or(0);
 
     if (idb_file.Extension() == FILE_PATH_LITERAL(".ldb")) {
       num_files++;
@@ -941,7 +1046,7 @@ std::unique_ptr<net::test_server::HttpResponse> CorruptDBRequestHandler(
           control_test->GetFilePathForTesting(
               bucket_locator,
               base::BindLambdaForTesting([&](const base::FilePath& path) {
-                CorruptIndexedDBDatabase(path);
+                CorruptDatabase(path);
                 loop.Quit();
               }));
         }));
@@ -951,7 +1056,9 @@ std::unique_ptr<net::test_server::HttpResponse> CorruptDBRequestHandler(
         std::make_unique<net::test_server::BasicHttpResponse>();
     http_response->set_code(net::HTTP_OK);
     return std::move(http_response);
-  } else if (request_path == "fail" && !request_query.empty()) {
+  }
+
+  if (request_path == "fail" && !request_query.empty()) {
     FailClass failure_class = FailClass::NOTHING;
     FailMethod failure_method = FailMethod::NOTHING;
     int instance_num = 1;
@@ -970,44 +1077,49 @@ std::unique_ptr<net::test_server::HttpResponse> CorruptDBRequestHandler(
 
       std::string value = base::UnescapeBinaryURLComponent(escaped_value);
 
-      if (key == "method")
+      if (key == "method") {
         fail_method = value;
-      else if (key == "class")
+      } else if (key == "class") {
         fail_class = value;
-      else if (key == "instNum")
+      } else if (key == "instNum") {
         instance_num = atoi(value.c_str());
-      else if (key == "callNum")
+      } else if (key == "callNum") {
         call_num = atoi(value.c_str());
-      else
+      } else {
         NOTREACHED() << "Unknown param: \"" << key << "\"";
+      }
     }
 
     if (fail_class == "LevelDBTransaction") {
       failure_class = FailClass::LEVELDB_TRANSACTION;
-      if (fail_method == "Get")
+      if (fail_method == "Get") {
         failure_method = FailMethod::GET;
-      else if (fail_method == "Commit")
+      } else if (fail_method == "Commit") {
         failure_method = FailMethod::COMMIT;
-      else
+      } else {
         NOTREACHED() << "Unknown method: \"" << fail_method << "\"";
+      }
     } else if (fail_class == "LevelDBIterator") {
       failure_class = FailClass::LEVELDB_ITERATOR;
-      if (fail_method == "Seek")
+      if (fail_method == "Seek") {
         failure_method = FailMethod::SEEK;
-      else
+      } else {
         NOTREACHED() << "Unknown method: \"" << fail_method << "\"";
+      }
     } else if (fail_class == "LevelDBDatabase") {
       failure_class = FailClass::LEVELDB_DATABASE;
-      if (fail_method == "Write")
+      if (fail_method == "Write") {
         failure_method = FailMethod::WRITE;
-      else
+      } else {
         NOTREACHED() << "Unknown method: \"" << fail_method << "\"";
+      }
     } else if (fail_class == "LevelDBDirectTransaction") {
       failure_class = FailClass::LEVELDB_DIRECT_TRANSACTION;
-      if (fail_method == "Get")
+      if (fail_method == "Get") {
         failure_method = FailMethod::GET;
-      else
+      } else {
         NOTREACHED() << "Unknown method: \"" << fail_method << "\"";
+      }
     } else {
       NOTREACHED() << "Unknown class: \"" << fail_class << "\"";
     }
@@ -1042,8 +1154,6 @@ std::unique_ptr<net::test_server::HttpResponse> StaticFileRequestHandler(
       request.relative_url.substr(std::string(s_indexeddb_test_prefix).size());
   return ServePath(request_path);
 }
-
-}  // namespace
 
 // See TODO in CorruptDBRequestHandler.  Windows does not support nested
 // message loops on the IO thread, so run this test on other platforms.
@@ -1132,6 +1242,42 @@ IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest,
   EXPECT_LT(after_deleting, kTestCompactBytes);
 }
 
+// Saves a File that
+//   a) has been sliced (avoids the fast-copy path)
+//   b) is over 32768 bytes
+// to IndexedDB.  Regression test for crbug.com/369670458
+// Unfortunately this can't use SimpleTest because it requires user activation,
+// which is provided by `ExecJs()`.
+IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, LargeSlicedFile) {
+  // Generate test file.
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::ScopedTempDir temp_dir;
+  base::FilePath file_path;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  ASSERT_TRUE(base::CreateTemporaryFileInDir(temp_dir.GetPath(), &file_path));
+  ASSERT_TRUE(base::WriteFile(file_path, base::RandBytesAsVector(102400)));
+
+  // Simulate user uploading the test file.
+  std::unique_ptr<FileChooserDelegate> delegate(
+      new FileChooserDelegate(file_path, base::DoNothing()));
+  shell()->web_contents()->SetDelegate(delegate.get());
+  ASSERT_TRUE(
+      NavigateToURL(shell(), GetTestUrl("indexeddb", "bug_369670458.html")));
+  TestNavigationObserver same_tab_observer(
+      shell()->web_contents(), 1, MessageLoopRunner::QuitMode::IMMEDIATE,
+      /*ignore_uncommitted_navigations=*/true);
+  EXPECT_TRUE(ExecJs(shell()->web_contents(),
+                     "document.getElementById('fileInput').click();"));
+  same_tab_observer.Wait();
+
+  // This part is copied from `SimpleTest()`.
+  std::string result = shell()->web_contents()->GetLastCommittedURL().ref();
+  if (result != "pass") {
+    std::string js_result = EvalJs(shell(), "getLog()").ExtractString();
+    FAIL() << "Failed: " << js_result;
+  }
+}
+
 // Complex multi-step (converted from pyauto) tests begin here.
 
 // Verify null key path persists after restarting browser.
@@ -1144,35 +1290,6 @@ IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, PRE_NullKeyPathPersistence) {
 IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, NullKeyPathPersistence) {
   NavigateAndWaitForTitle(shell(), "bug_90635.html", "#part2",
                           "pass - second run");
-}
-
-// Verify that a VERSION_CHANGE transaction is rolled back after a
-// renderer/browser crash
-IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest,
-                       PRE_PRE_VersionChangeCrashResilience) {
-  NavigateAndWaitForTitle(shell(), "version_change_crash.html", "#part1",
-                          "pass - part1 - complete");
-}
-
-IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, PRE_VersionChangeCrashResilience) {
-  NavigateAndWaitForTitle(shell(), "version_change_crash.html", "#part2",
-                          "pass - part2 - crash me");
-  // Previously this test would abruptly terminate the browser process
-  // to ensure that the version update was not partially committed,
-  // which was possible in the very early implementation (circa 2011).
-  // This test no longer abruptly terminates the process, but the
-  // commit scheme has changed so it's not plausible any more anyway.
-  // TODO(jsbell): Delete or rename the test.
-}
-
-// Fails to cleanup GPU processes on swarming.
-// http://crbug.com/552543
-// Flaky on TSAN: crbug.com/1061251
-// Flaky on mac, linux, cast, chromeos, lacros bots: crbug.com/1061251
-IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest,
-                       DISABLED_VersionChangeCrashResilience) {
-  NavigateAndWaitForTitle(shell(), "version_change_crash.html", "#part3",
-                          "pass - part3 - rolled back");
 }
 
 // Disable this test on Android due to failures. See crbug.com/427529 and
@@ -1218,6 +1335,60 @@ IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, ForceCloseEventTest) {
 
 IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, ShutdownWithRequests) {
   SimpleTest(GetTestUrl("indexeddb", "shutdown_with_requests.html"));
+}
+
+// Verifies that a "NotFound" DOMException is thrown on reading a large value
+// when the underlying blob file has been deleted but the record is not.
+IN_PROC_BROWSER_TEST_F(IndexedDBBrowserTest, LargeValueReadBlobMissing) {
+  base::HistogramTester histogram_tester;
+
+  // First write a large value that gets wrapped in a blob.
+  const GURL kTestUrl =
+      GetTestUrl("indexeddb", "write_and_read_large_value.html");
+  SimpleTest(kTestUrl);
+
+  // The following metric is logged in the renderer process, so force those
+  // metrics to be collected before checking `histogram_tester`.
+  content::FetchHistogramsFromChildProcesses();
+  histogram_tester.ExpectTotalCount("IndexedDB.WrappedBlobLoadTime", 1);
+
+  // Delete the blob file that got created.
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_OK_AND_ASSIGN(
+        const storage::BucketInfo bucket_info,
+        GetOrCreateBucket(storage::BucketInitParams::ForDefaultBucket(
+            blink::StorageKey::CreateFirstParty(
+                url::Origin::Create(kTestUrl)))));
+    base::FilePath blob_path =
+        PathForBlob(bucket_info.ToBucketLocator(), /*database_id=*/1,
+                    DatabaseMetaDataKey::kBlobNumberGeneratorInitialNumber);
+    ASSERT_TRUE(base::PathExists(blob_path));
+    ASSERT_TRUE(base::DeleteFile(blob_path));
+  }
+
+  // Now attempt to read the large value again and expect an error.
+  EvalJsResult result = EvalJs(shell(), "readData()");
+  EXPECT_THAT(
+      result.error,
+      testing::HasSubstr("NotReadableError: Data lost due to missing file. "
+                         "Affected record should be considered irrecoverable"));
+
+  // Verify that the right set of histograms were recorded.
+  content::FetchHistogramsFromChildProcesses();
+  const int kExpectedBucketCount = 1;
+  const int kFailureTypeBackendReadError = 3;  // From file_reader_loader.h.
+  const int kFileErrorCodeNotFoundErr = 1;     // From file_error.h.
+  histogram_tester.ExpectUniqueSample(
+      "Storage.Blob.FileReaderLoader.ReadError2", -net::ERR_FILE_NOT_FOUND,
+      kExpectedBucketCount);
+  histogram_tester.ExpectUniqueSample(
+      "Storage.Blob.FileReaderLoader.FailureType2",
+      kFailureTypeBackendReadError, kExpectedBucketCount);
+  histogram_tester.ExpectUniqueSample("IndexedDB.LargeValueReadError",
+                                      kFileErrorCodeNotFoundErr,
+                                      kExpectedBucketCount);
+  histogram_tester.ExpectTotalCount("IndexedDB.WrappedBlobLoadTime", 1);
 }
 
 // The blob key corruption test runs in a separate class to avoid corrupting
@@ -1298,4 +1469,5 @@ IN_PROC_BROWSER_TEST_P(IndexedDBIncognitoTest, BucketDurabilityOverride) {
 
 INSTANTIATE_TEST_SUITE_P(All, IndexedDBIncognitoTest, testing::Bool());
 
-}  // namespace content
+}  // namespace
+}  // namespace content::indexed_db

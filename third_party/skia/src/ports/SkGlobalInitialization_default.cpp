@@ -41,10 +41,6 @@
     #include "src/shaders/SkShaderBase.h"
     #include "src/shaders/gradients/SkGradientBaseShader.h"
 
-#ifdef SK_SUPPORT_LEGACY_DRAWLOOPER
-    #include "include/effects/SkLayerDrawLooper.h"
-#endif
-
     /**
      *  Register most effects for deserialization.
      *
@@ -55,7 +51,6 @@
     void SkFlattenable::PrivateInitializer::InitEffects() {
         // Shaders.
         SkRegisterBlendShaderFlattenable();
-        SkRegisterColor4ShaderFlattenable();
         SK_REGISTER_FLATTENABLE(SkColorFilterShader);
         SkRegisterColorShaderFlattenable();
         SkRegisterCoordClampShaderFlattenable();
@@ -99,9 +94,6 @@
         SkPathEffectBase::RegisterFlattenables();
 
         // Misc.
-#ifdef SK_SUPPORT_LEGACY_DRAWLOOPER
-        SK_REGISTER_FLATTENABLE(SkLayerDrawLooper);
-#endif
         SK_REGISTER_FLATTENABLE(SkRecordedDrawable);
     }
 

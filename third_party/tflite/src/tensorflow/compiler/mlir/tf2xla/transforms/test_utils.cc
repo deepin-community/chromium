@@ -15,8 +15,7 @@ limitations under the License.
 
 #include "tensorflow/compiler/mlir/tf2xla/transforms/test_utils.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "llvm/ADT/StringRef.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
@@ -35,7 +34,7 @@ using ::mlir::ModuleOp;
 using ::mlir::OwningOpRef;
 using ::tsl::StatusOr;
 
-StatusOr<OwningOpRef<ModuleOp>> GetMlirModuleFromString(
+absl::StatusOr<OwningOpRef<ModuleOp>> GetMlirModuleFromString(
     absl::string_view module_string, MLIRContext* context) {
   DialectRegistry mlir_registry;
   RegisterCommonToolingDialects(mlir_registry);

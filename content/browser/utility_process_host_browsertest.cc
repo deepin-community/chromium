@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "content/browser/utility_process_host.h"
 
 #include <string_view>
@@ -16,10 +21,12 @@
 #include "base/memory/writable_shared_memory_region.h"
 #include "base/notreached.h"
 #include "base/run_loop.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "content/browser/child_process_launcher.h"
+#include "content/browser/utility_sandbox_delegate.h"
+#include "content/common/features.h"
 #include "content/public/browser/browser_child_process_observer.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -42,6 +49,7 @@
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
+
 #include "sandbox/policy/mojom/sandbox.mojom.h"
 #include "sandbox/win/src/sandbox_types.h"
 #endif  // BUILDFLAG(IS_WIN)
@@ -51,13 +59,17 @@
 #include "content/public/common/zygote/zygote_handle.h"
 #endif
 
+#if BUILDFLAG(IS_MAC)
+#include "base/apple/mach_port_rendezvous.h"
+#endif
+
 namespace content {
 
 namespace {
 
 const char kTestProcessName[] = "test_process";
 
-constexpr base::StringPiece kTestMessage{"hello from shared memory"};
+constexpr std::string_view kTestMessage{"hello from shared memory"};
 
 }  // namespace
 
@@ -189,8 +201,8 @@ class UtilityProcessHostBrowserTest : public BrowserChildProcessObserver,
     auto mapping = region.Map();
     ASSERT_EQ(kTestMessage.size(), mapping.size());
     EXPECT_EQ(kTestMessage,
-              base::StringPiece(static_cast<const char*>(mapping.memory()),
-                                kTestMessage.size()));
+              std::string_view(static_cast<const char*>(mapping.memory()),
+                               kTestMessage.size()));
     ResetService();
     GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(done_closure_));
   }
@@ -224,12 +236,24 @@ class UtilityProcessHostBrowserTest : public BrowserChildProcessObserver,
       const ChildProcessData& data,
       const ChildProcessTerminationInfo& info) override {
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
 #if BUILDFLAG(IS_WIN)
+// See crbug.com/40861868#comment17. There are two implementations of the
+// DoCrashImmediately mojo interface, which causes official build to return
+// a different exit_code.
+#if defined(OFFICIAL_BUILD)
+    EXPECT_EQ(STATUS_STACK_BUFFER_OVERRUN, static_cast<DWORD>(info.exit_code));
+#else
     EXPECT_EQ(EXCEPTION_BREAKPOINT, static_cast<DWORD>(info.exit_code));
+#endif  // defined(OFFICIAL_BUILD)
 #elif BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     EXPECT_TRUE(WIFSIGNALED(info.exit_code));
+#if defined(OFFICIAL_BUILD)
     EXPECT_EQ(SIGTRAP, WTERMSIG(info.exit_code));
-#endif
+#else   // defined(OFFICIAL_BUILD)
+    EXPECT_EQ(SIGABRT, WTERMSIG(info.exit_code));
+#endif  // defined(OFFICIAL_BUILD)
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     EXPECT_EQ(kTestProcessName, data.metrics_name);
     EXPECT_EQ(false, has_crashed_);
     has_crashed_ = true;
@@ -267,9 +291,9 @@ IN_PROC_BROWSER_TEST_F(UtilityProcessHostBrowserTest, LaunchProcess) {
 
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
 
-// TODO(crbug.com/1407089): Re-enable this test on Android when
+// TODO(crbug.com/40253015): Re-enable this test on Android when
 // `files_to_preload` is actually fixed there.
-// TODO(crbug.com/1511497): Re-enable this test on ChromeOS.
+// TODO(crbug.com/41484083): Re-enable this test on ChromeOS.
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_FileDescriptorStore DISABLED_FileDescriptorStore
 #else
@@ -329,7 +353,7 @@ IN_PROC_BROWSER_TEST_F(UtilityProcessHostBrowserTest,
 
 // Disabled because it crashes on android-arm64-tests:
 // https://crbug.com/1358585.
-// TODO(crbug.com/1511497): Re-enable this test on ChromeOS.
+// TODO(crbug.com/41484083): Re-enable this test on ChromeOS.
 #if !(BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARM64))
 #if (BUILDFLAG(IS_LINUX) && defined(ARCH_CPU_X86_64)) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_LaunchProcessAndCrash DISABLED_LaunchProcessAndCrash
@@ -382,5 +406,34 @@ IN_PROC_BROWSER_TEST_F(UtilityProcessHostBrowserTest,
                      base::Unretained(this)));
 }
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_MAC)
+// Ensure that the network service launches and can establish Mojo IPC
+// connections when peer requirements are being enforced. Since browser tests
+// are run in an unsigned process this will exercise most of the mechanism, but
+// code signature validation will be skipped.
+class NetworkServiceProcessIdentityTest : public UtilityProcessHostBrowserTest {
+ public:
+  void SetUp() override {
+    scoped_feature_list_.InitWithFeatures(
+        {base::kMachPortRendezvousEnforcePeerRequirements,
+         features::kValidateNetworkServiceProcessIdentity},
+        {});
+    UtilityProcessHostBrowserTest::SetUp();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(NetworkServiceProcessIdentityTest, LaunchService) {
+  // The process requirement is applied to the network service based on its
+  // sandbox type.
+  host_->SetSandboxType(sandbox::mojom::Sandbox::kNetwork);
+  RunUtilityProcess(
+      base::BindOnce(&UtilityProcessHostBrowserTest::RunBasicPingPongTest,
+                     base::Unretained(this)));
+}
+#endif
 
 }  // namespace content

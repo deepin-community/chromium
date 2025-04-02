@@ -148,7 +148,6 @@ void BluetoothHidDetectorImpl::OnPropertiesUpdated(
     case kNotStarted:
       NOTREACHED() << "SystemPropertiesObserver should not be bound while in "
                       "state |kNotStarted|";
-      return;
     case kStarting:
       if (properties->system_state == BluetoothSystemState::kEnabled) {
         HID_LOG(EVENT)

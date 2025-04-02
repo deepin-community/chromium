@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "base/base64.h"
+#include "base/containers/to_value_list.h"
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -21,7 +22,6 @@
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/net_internals_resources.h"
 #include "chrome/grit/net_internals_resources_map.h"
@@ -43,14 +43,14 @@
 #include "net/base/schemeful_site.h"
 #include "net/dns/public/host_resolver_results.h"
 #include "net/dns/public/resolve_error_info.h"
-#include "net/extras/shared_dictionary/shared_dictionary_isolation_key.h"
 #include "net/extras/shared_dictionary/shared_dictionary_usage_info.h"
+#include "net/shared_dictionary/shared_dictionary_isolation_key.h"
 #include "services/network/public/cpp/request_destination.h"
 #include "services/network/public/mojom/clear_data_filter.mojom.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "services/network/public/mojom/host_resolver.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
-#include "ui/resources/grit/webui_resources.h"
+#include "ui/webui/webui_util.h"
 #include "url/origin.h"
 #include "url/scheme_host_port.h"
 
@@ -61,10 +61,8 @@ namespace {
 void CreateAndAddNetInternalsHTMLSource(Profile* profile) {
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       profile, chrome::kChromeUINetInternalsHost);
-  webui::SetupWebUIDataSource(
-      source,
-      base::make_span(kNetInternalsResources, kNetInternalsResourcesSize),
-      IDR_NET_INTERNALS_INDEX_HTML);
+  webui::SetupWebUIDataSource(source, kNetInternalsResources,
+                              IDR_NET_INTERNALS_INDEX_HTML);
   webui::EnableTrustedTypesCSP(source);
 }
 
@@ -73,11 +71,8 @@ void IgnoreBoolCallback(bool result) {}
 // This function converts std::vector<net::IPEndPoint> to base::Value::List.
 base::Value::List IPEndpointsToBaseList(
     const std::vector<net::IPEndPoint>& resolved_addresses) {
-  base::Value::List resolved_addresses_list;
-  for (const net::IPEndPoint& resolved_address : resolved_addresses) {
-    resolved_addresses_list.Append(resolved_address.ToStringWithoutPort());
-  }
-  return resolved_addresses_list;
+  return base::ToValueList(resolved_addresses,
+                           &net::IPEndPoint::ToStringWithoutPort);
 }
 
 // This function converts std::optional<net::HostResolverEndpointResults> to
@@ -481,7 +476,7 @@ void NetInternalsMessageHandler::OnResolveHostDone(
       IPEndpointsToBaseList(resolved_addresses->endpoints());
   result.Set("resolved_addresses", std::move(resolved_addresses_list));
 
-  // TODO(crbug.com/1416410): Rename `endpoint_results_with_metadata` in the
+  // TODO(crbug.com/40256843): Rename `endpoint_results_with_metadata` in the
   // Mojo API to `alternative_endpoints`, to match the terminology used in the
   // specification.
   base::Value::List alternative_endpoints_list =
@@ -518,6 +513,7 @@ void NetInternalsMessageHandler::OnGetSharedDictionaryInfoDone(
     dict.Set("match_dest", GetMatchDestList(item->match_dest));
     dict.Set("id", item->id);
     dict.Set("dictionary_url", item->dictionary_url.spec());
+    dict.Set("last_fetch_time", base::TimeFormatHTTP(item->last_fetch_time));
     dict.Set("response_time", base::TimeFormatHTTP(item->response_time));
     dict.Set("expiration", base::NumberToString(item->expiration.InSeconds()));
     dict.Set("last_used_time", base::TimeFormatHTTP(item->last_used_time));
@@ -557,7 +553,6 @@ NetInternalsMessageHandler::GetNetworkContext() {
 }
 
 }  // namespace
-
 
 ////////////////////////////////////////////////////////////////////////////////
 //

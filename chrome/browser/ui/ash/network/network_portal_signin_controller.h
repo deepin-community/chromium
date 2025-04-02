@@ -83,6 +83,8 @@ class NetworkPortalSigninController : public views::WidgetObserver,
 
  protected:
   friend class base::NoDestructor<NetworkPortalSigninController>;
+  friend class NetworkPortalSigninControllerTest;
+
   NetworkPortalSigninController();
 
   // Shows the signin UI in a dialog window using the 'signin' (login) profile.
@@ -96,6 +98,10 @@ class NetworkPortalSigninController : public views::WidgetObserver,
   // Shows the signin UI in browser tab using the specified profile. Overridden
   // in tests.
   virtual void ShowTab(Profile* profile, const GURL& url);
+
+  // Shows the signin UI in a browser tab using the active user profile.
+  // Overridden in tests.
+  virtual void ShowActiveProfileTab(const GURL& url);
 
   SigninMode GetSigninMode(NetworkState::PortalState portal_state) const;
 

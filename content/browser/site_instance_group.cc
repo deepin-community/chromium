@@ -4,6 +4,7 @@
 
 #include "content/browser/site_instance_group.h"
 
+#include "base/auto_reset.h"
 #include "base/observer_list.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/site_instance_impl.h"
@@ -74,8 +75,30 @@ void SiteInstanceGroup::IncrementActiveFrameCount() {
 void SiteInstanceGroup::DecrementActiveFrameCount() {
   if (--active_frame_count_ == 0) {
     base::AutoReset<bool> scope(&is_notifying_observers_, true);
-    for (auto& observer : observers_)
+    for (auto& observer : observers_) {
       observer.ActiveFrameCountIsZero(this);
+    }
+  }
+}
+
+void SiteInstanceGroup::IncrementKeepAliveCount() {
+  keep_alive_count_++;
+  auto* rphi = static_cast<RenderProcessHostImpl*>(process());
+  if (!rphi->AreRefCountsDisabled()) {
+    rphi->IncrementNavigationStateKeepAliveCount();
+  }
+}
+
+void SiteInstanceGroup::DecrementKeepAliveCount() {
+  if (--keep_alive_count_ == 0) {
+    base::AutoReset<bool> scope(&is_notifying_observers_, true);
+    for (auto& observer : observers_) {
+      observer.KeepAliveCountIsZero(this);
+    }
+  }
+  auto* rphi = static_cast<RenderProcessHostImpl*>(process());
+  if (!rphi->AreRefCountsDisabled()) {
+    rphi->DecrementNavigationStateKeepAliveCount();
   }
 }
 
@@ -89,7 +112,7 @@ bool SiteInstanceGroup::IsCoopRelatedSiteInstanceGroup(
 }
 
 void SiteInstanceGroup::RenderProcessHostDestroyed(RenderProcessHost* host) {
-  DCHECK_EQ(process_->GetID(), host->GetID());
+  DCHECK_EQ(process_->GetDeprecatedID(), host->GetDeprecatedID());
   process_->RemoveObserver(this);
 
   // Remove references to `this` from all SiteInstances in this group. That will

@@ -30,8 +30,8 @@
 
 #include <string>
 
+#include "absl/container/inlined_vector.h"
 #include "dawn/common/NSRef.h"
-#include "dawn/common/StackContainer.h"
 #include "dawn/native/dawn_platform.h"
 #include "dawn/native/metal/DeviceMTL.h"
 #include "dawn/native/metal/ShaderModuleMTL.h"
@@ -94,11 +94,11 @@ struct TextureBufferCopySplit {
         Extent3D copyExtent;
     };
 
-    StackVector<CopyInfo, kNumCommonTextureBufferCopyRegions> copies;
+    absl::InlinedVector<CopyInfo, kNumCommonTextureBufferCopyRegions> copies;
 
-    auto begin() const { return copies->begin(); }
-    auto end() const { return copies->end(); }
-    void push_back(const CopyInfo& copyInfo) { copies->push_back(copyInfo); }
+    auto begin() const { return copies.begin(); }
+    auto end() const { return copies.end(); }
+    void push_back(const CopyInfo& copyInfo) { copies.push_back(copyInfo); }
 };
 
 TextureBufferCopySplit ComputeTextureBufferCopySplit(const Texture* texture,
@@ -130,13 +130,10 @@ MaybeError EncodeMetalRenderPass(Device* device,
                                  EncodeInsideRenderPass encodeInside,
                                  BeginRenderPassCmd* renderPassCmd = nullptr);
 
-MTLStorageMode IOSurfaceStorageMode();
-
 id<MTLTexture> CreateTextureMtlForPlane(MTLTextureUsage mtlUsage,
                                         const Format& format,
                                         size_t plane,
                                         Device* device,
-                                        uint32_t sampleCount,
                                         IOSurfaceRef ioSurface);
 
 MaybeError EncodeEmptyMetalRenderPass(Device* device,
@@ -144,10 +141,8 @@ MaybeError EncodeEmptyMetalRenderPass(Device* device,
                                       MTLRenderPassDescriptor* mtlRenderPass,
                                       Extent3D size);
 
-bool SupportCounterSamplingAtCommandBoundary(id<MTLDevice> device)
-    API_AVAILABLE(macos(11.0), ios(14.0));
-bool SupportCounterSamplingAtStageBoundary(id<MTLDevice> device)
-    API_AVAILABLE(macos(11.0), ios(14.0));
+bool SupportCounterSamplingAtCommandBoundary(id<MTLDevice> device);
+bool SupportCounterSamplingAtStageBoundary(id<MTLDevice> device);
 
 }  // namespace dawn::native::metal
 

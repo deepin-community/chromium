@@ -14,7 +14,7 @@
 #include "third_party/blink/renderer/core/frame/web_frame_widget_impl.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/frame/web_remote_frame_impl.h"
-#include "third_party/blink/renderer/core/layout/intrinsic_sizing_info.h"
+#include "third_party/blink/renderer/core/layout/natural_sizing_info.h"
 #include "third_party/blink/renderer/core/timing/performance.h"
 
 namespace blink {
@@ -32,6 +32,7 @@ RemoteFrameOwner::RemoteFrameOwner(
       allow_payment_request_(frame_owner_properties.allow_payment_request),
       is_display_none_(frame_owner_properties.is_display_none),
       color_scheme_(frame_owner_properties.color_scheme),
+      preferred_color_scheme_(frame_owner_properties.preferred_color_scheme),
       needs_occlusion_tracking_(false) {}
 
 void RemoteFrameOwner::Trace(Visitor* visitor) const {
@@ -56,18 +57,21 @@ void RemoteFrameOwner::AddResourceTiming(
     mojom::blink::ResourceTimingInfoPtr info) {
   DCHECK(info);
   LocalFrame* frame = To<LocalFrame>(frame_.Get());
+  CHECK(!frame->IsProvisional());
   frame->GetLocalFrameHostRemote().ForwardResourceTimingToParent(
       std::move(info));
 }
 
 void RemoteFrameOwner::DispatchLoad() {
+  LocalFrame* frame = To<LocalFrame>(frame_.Get());
+  CHECK(!frame->IsProvisional());
   auto& local_frame_host = To<LocalFrame>(*frame_).GetLocalFrameHostRemote();
   local_frame_host.DispatchLoad();
 }
 
 void RemoteFrameOwner::IntrinsicSizingInfoChanged() {
   LocalFrame& local_frame = To<LocalFrame>(*frame_);
-  IntrinsicSizingInfo intrinsic_sizing_info;
+  NaturalSizingInfo intrinsic_sizing_info;
   bool result =
       local_frame.View()->GetIntrinsicSizingInfo(intrinsic_sizing_info);
   // By virtue of having been invoked, GetIntrinsicSizingInfo() should always

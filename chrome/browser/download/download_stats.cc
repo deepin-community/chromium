@@ -9,6 +9,7 @@
 #include "base/notreached.h"
 #include "build/build_config.h"
 #include "chrome/browser/download/download_ui_model.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/download/public/common/download_content.h"
 #include "components/profile_metrics/browser_profile_type.h"
 #include "components/safe_browsing/content/browser/download/download_stats.h"
@@ -19,7 +20,8 @@ void RecordDownloadSource(ChromeDownloadSource source) {
 }
 
 void MaybeRecordDangerousDownloadWarningShown(DownloadUIModel& model) {
-  if (!model.IsDangerous()) {
+  if (!model.IsDangerous() ||
+      model.GetState() == download::DownloadItem::DownloadState::CANCELLED) {
     return;
   }
   if (model.WasUIWarningShown()) {
@@ -47,8 +49,7 @@ void RecordDownloadOpen(ChromeDownloadOpenMethod open_method,
   download::DownloadContent download_content =
       download::DownloadContentFromMimeType(
           mime_type_string, /*record_content_subcategory=*/false);
-  base::UmaHistogramEnumeration("Download.Open.ContentType", download_content,
-                                download::DownloadContent::MAX);
+  base::UmaHistogramEnumeration("Download.Open.ContentType", download_content);
 }
 
 void RecordDatabaseAvailability(bool is_available) {
@@ -165,7 +166,8 @@ DownloadShelfContextMenuAction DownloadCommandToShelfAction(
     case DownloadCommands::Command::LEARN_MORE_DOWNLOAD_BLOCKED:
     case DownloadCommands::Command::OPEN_SAFE_BROWSING_SETTING:
     case DownloadCommands::Command::BYPASS_DEEP_SCANNING:
+    case DownloadCommands::Command::OPEN_WITH_MEDIA_APP:
+    case DownloadCommands::Command::EDIT_WITH_MEDIA_APP:
       NOTREACHED();
-      return DownloadShelfContextMenuAction::kNotReached;
   }
 }

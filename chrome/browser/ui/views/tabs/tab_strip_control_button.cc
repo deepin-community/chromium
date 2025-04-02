@@ -10,9 +10,9 @@
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/tabs/tab_strip_controller.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
+#include "chrome/common/chrome_features.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/vector_icon_types.h"
@@ -25,6 +25,9 @@
 using std::make_unique;
 
 namespace {
+constexpr int kTabstripComboButtonCornerRadius = 10;
+constexpr int kTabstripComboButtonFlatCornerRadius = 0;
+
 class ControlButtonHighlightPathGenerator
     : public views::HighlightPathGenerator {
  public:
@@ -56,46 +59,47 @@ class ControlButtonHighlightPathGenerator
 
 const int TabStripControlButton::kIconSize = 16;
 const gfx::Size TabStripControlButton::kButtonSize{28, 28};
-const gfx::VectorIcon kEmptyIcon;
 
 TabStripControlButton::TabStripControlButton(
     TabStripController* tab_strip_controller,
     PressedCallback callback,
     const gfx::VectorIcon& icon,
-    Edge flat_edge)
+    Edge fixed_flat_edge,
+    Edge animated_flat_edge)
     : TabStripControlButton(tab_strip_controller,
                             std::move(callback),
                             icon,
                             std::u16string(),
-                            flat_edge) {}
+                            fixed_flat_edge,
+                            animated_flat_edge) {}
 
 TabStripControlButton::TabStripControlButton(
     TabStripController* tab_strip_controller,
     PressedCallback callback,
     const std::u16string& text,
-    Edge flat_edge)
+    Edge fixed_flat_edge,
+    Edge animated_flat_edge)
     : TabStripControlButton(tab_strip_controller,
                             std::move(callback),
-                            kEmptyIcon,
+                            gfx::VectorIcon::EmptyIcon(),
                             text,
-                            flat_edge) {}
+                            fixed_flat_edge,
+                            animated_flat_edge) {}
 
 TabStripControlButton::TabStripControlButton(
     TabStripController* tab_strip_controller,
     PressedCallback callback,
     const gfx::VectorIcon& icon,
     const std::u16string& text,
-    Edge flat_edge)
+    Edge fixed_flat_edge,
+    Edge animated_flat_edge)
     : views::LabelButton(std::move(callback), text),
       icon_(icon),
-      flat_edge_(flat_edge),
+      fixed_flat_edge_(fixed_flat_edge),
+      animated_flat_edge_(animated_flat_edge),
       tab_strip_controller_(tab_strip_controller) {
   SetImageCentered(true);
   SetEventTargeter(std::make_unique<views::ViewTargeter>(this));
-
-  // By default control buttons in the tab strip should be non-transparent for
-  // the updated Chrome refresh UX.
-  paint_transparent_for_custom_image_theme_ = !features::IsChromeRefresh2023();
 
   foreground_frame_active_color_id_ = kColorTabForegroundInactiveFrameActive;
   foreground_frame_inactive_color_id_ =
@@ -111,9 +115,7 @@ TabStripControlButton::TabStripControlButton(
   SetFocusBehavior(FocusBehavior::ACCESSIBLE_ONLY);
 
   views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::ON);
-  if (features::IsChromeRefresh2023()) {
-    views::InkDrop::Get(this)->SetLayerRegion(views::LayerRegion::kAbove);
-  }
+  views::InkDrop::Get(this)->SetLayerRegion(views::LayerRegion::kAbove);
   views::HighlightPathGenerator::Install(
       this, std::make_unique<ControlButtonHighlightPathGenerator>(this));
   UpdateInkDrop();
@@ -187,22 +189,8 @@ void TabStripControlButton::UpdateInkDrop() {
     return;
   }
 
-  if (features::IsChromeRefresh2023()) {
-    CreateToolbarInkdropCallbacks(this, kColorTabStripControlButtonInkDrop,
-                                  kColorTabStripControlButtonInkDropRipple);
-  } else {
-    const bool frame_active =
-        (GetWidget() && GetWidget()->ShouldPaintAsActive());
-
-    // These values are also used in refresh by
-    // `kColorTabStripControlButtonInkDrop` and
-    // `kColorTabStripControlButtonInkDropRipple` in case of themes.
-    views::InkDrop::Get(this)->SetHighlightOpacity(0.16f);
-    views::InkDrop::Get(this)->SetVisibleOpacity(0.14f);
-    views::InkDrop::Get(this)->SetBaseColor(color_provider->GetColor(
-        frame_active ? kColorNewTabButtonInkDropFrameActive
-                     : kColorNewTabButtonInkDropFrameInactive));
-  }
+  CreateToolbarInkdropCallbacks(this, kColorTabStripControlButtonInkDrop,
+                                kColorTabStripControlButtonInkDropRipple);
 }
 
 void TabStripControlButton::UpdateColors() {
@@ -246,20 +234,28 @@ void TabStripControlButton::UpdateBackground() {
 }
 
 int TabStripControlButton::GetCornerRadius() const {
-  return TabStripControlButton::kButtonSize.width() / 2;
+  return features::IsTabstripComboButtonEnabled()
+             ? kTabstripComboButtonCornerRadius
+             : TabStripControlButton::kButtonSize.width() / 2;
 }
 
 int TabStripControlButton::GetFlatCornerRadius() const {
-  return 0;
+  return features::IsTabstripComboButtonEnabled()
+             ? kTabstripComboButtonFlatCornerRadius
+             : 0;
 }
 
 float TabStripControlButton::GetScaledCornerRadius(float initial_radius,
                                                    Edge edge) const {
   const int flat_corner_radius = GetFlatCornerRadius();
-  return flat_edge_ == edge
-             ? ((initial_radius - flat_corner_radius) * flat_edge_factor_) +
-                   flat_corner_radius
-             : initial_radius;
+  if (fixed_flat_edge_ == edge) {
+    return flat_corner_radius;
+  } else if (animated_flat_edge_ == edge) {
+    return ((initial_radius - flat_corner_radius) * flat_edge_factor_) +
+           flat_corner_radius;
+  } else {
+    return initial_radius;
+  }
 }
 
 void TabStripControlButton::AddedToWidget() {
@@ -306,7 +302,8 @@ bool TabStripControlButton::GetHitTestMask(SkPath* mask) const {
   return true;
 }
 
-gfx::Size TabStripControlButton::CalculatePreferredSize() const {
+gfx::Size TabStripControlButton::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   gfx::Size size = TabStripControlButton::kButtonSize;
   const auto insets = GetInsets();
   size.Enlarge(insets.width(), insets.height());
@@ -322,6 +319,11 @@ void TabStripControlButton::NotifyClick(const ui::Event& event) {
 void TabStripControlButton::SetFlatEdgeFactor(float factor) {
   flat_edge_factor_ = factor;
   UpdateBackground();
+  // The ink drop doesn't automatically pick up on rounded corner changes, so
+  // we need to manually notify it here.
+  // TODO(crbug.com/332937585): Clean up once this is no longer necessary or
+  // there is a better API for updating.
+  views::InkDrop::Get(this)->GetInkDrop()->HostSizeChanged(size());
 }
 
 void TabStripControlButton::AnimateToStateForTesting(

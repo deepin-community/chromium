@@ -2,27 +2,33 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/browser/media/router/discovery/discovery_network_list_win.h"
 
 #include <winsock2.h>
-#include <wrl/client.h>
 
-#include <windot11.h>  // NOLINT
-#include <wlanapi.h>   // NOLINT
+#include <windot11.h>
+#include <wlanapi.h>
+#include <wrl/client.h>
 
 #include <algorithm>
 #include <cstring>
-
 #include <utility>
 #include <vector>
 
 #include "base/check.h"
-
+#include "base/containers/heap_array.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/threading/scoped_thread_priority.h"
 #include "base/win/hstring_reference.h"
 #include "base/win/scoped_hstring.h"
+#include "base/win/win_util.h"
 #include "base/win/windows_version.h"
 #include "chrome/browser/media/router/discovery/discovery_network_list.h"
 
@@ -83,14 +89,19 @@ class WlanApi {
   const WlanFreeMemoryFunction wlan_free_memory;
 
   static std::unique_ptr<WlanApi> Create() {
-    static const wchar_t* kWlanDllPath = L"%WINDIR%\\system32\\wlanapi.dll";
-    wchar_t path[MAX_PATH] = {0};
-    ExpandEnvironmentStrings(kWlanDllPath, path, std::size(path));
+    static constexpr wchar_t kWlanDllPath[] =
+        L"%WINDIR%\\system32\\wlanapi.dll";
+    auto path = base::win::ExpandEnvironmentVariables(kWlanDllPath);
+    if (!path) {
+      return nullptr;
+    }
+
     HINSTANCE library =
-        LoadLibraryEx(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        LoadLibraryEx(path->c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!library) {
       return nullptr;
     }
+
     return base::WrapUnique(new WlanApi(library));
   }
 
@@ -289,9 +300,17 @@ HRESULT GetProfileNetworkAdapterId(
     WinrtConnectivity::IConnectionProfile* connection_profile,
     GUID* network_adapter_id) {
   ComPtr<WinrtConnectivity::INetworkAdapter> network_adapter;
-  HRESULT hr = connection_profile->get_NetworkAdapter(&network_adapter);
-  if (hr != S_OK) {
-    return hr;
+  {
+    // INetworkAdapter::get_NetworkAdapter() may load the module
+    // Windows.Networking.HostName.dll. Temporarily boost the priority of this
+    // background thread to avoid causing jank by blocking the UI thread from
+    // loading modules. For more details, see https://crbug.com/973868.
+    SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY_REPEATEDLY();
+
+    HRESULT hr = connection_profile->get_NetworkAdapter(&network_adapter);
+    if (hr != S_OK) {
+      return hr;
+    }
   }
   return network_adapter->get_NetworkAdapterId(network_adapter_id);
 }
@@ -330,19 +349,28 @@ HRESULT GetAllConnectionProfiles(
     uint32_t* out_connection_profiles_size) {
   ComPtr<WinrtConnectivity::INetworkInformationStatics>
       network_information_statics;
-  HRESULT hr =
-      GetWindowsOsApi().winrt_api.ro_get_activation_factory_callback.Run(
-          base::win::HStringReference(
-              RuntimeClass_Windows_Networking_Connectivity_NetworkInformation)
-              .Get(),
-          IID_PPV_ARGS(&network_information_statics));
-  if (hr != S_OK) {
-    return hr;
+  {
+    // RoGetActivationFactory() may load the Windows.Networking.Connectivity.dll
+    // module. Temporarily boost the priority of this background thread to avoid
+    // causing jank by blocking the UI thread from loading modules. For more
+    // details, see https://crbug.com/973868.
+    SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY_REPEATEDLY();
+
+    HRESULT hr =
+        GetWindowsOsApi().winrt_api.ro_get_activation_factory_callback.Run(
+            base::win::HStringReference(
+                RuntimeClass_Windows_Networking_Connectivity_NetworkInformation)
+                .Get(),
+            IID_PPV_ARGS(&network_information_statics));
+    if (hr != S_OK) {
+      return hr;
+    }
   }
 
   ComPtr<WinrtCollections::IVectorView<WinrtConnectivity::ConnectionProfile*>>
       connection_profiles;
-  hr = network_information_statics->GetConnectionProfiles(&connection_profiles);
+  HRESULT hr =
+      network_information_statics->GetConnectionProfiles(&connection_profiles);
   if (hr != S_OK) {
     return hr;
   }
@@ -435,15 +463,15 @@ std::vector<DiscoveryNetworkInfo> GetDiscoveryNetworkInfoList() {
   // will both require increasing the buffer size, there's no guarantee that
   // this won't happen; this is what the maximum retry count guards against.
   ULONG addresses_buffer_size = kGetAdaptersAddressesInitialBufferSize;
-  std::unique_ptr<char[]> addresses_buffer;
+  base::HeapArray<char> addresses_buffer;
   PIP_ADAPTER_ADDRESSES adapter_addresses = nullptr;
   ULONG result = ERROR_BUFFER_OVERFLOW;
   for (int i = 0;
        result == ERROR_BUFFER_OVERFLOW && i < kMaxGetAdaptersAddressTries;
        ++i) {
-    addresses_buffer.reset(new char[addresses_buffer_size]);
+    addresses_buffer = base::HeapArray<char>::Uninit(addresses_buffer_size);
     adapter_addresses =
-        reinterpret_cast<PIP_ADAPTER_ADDRESSES>(addresses_buffer.get());
+        reinterpret_cast<PIP_ADAPTER_ADDRESSES>(addresses_buffer.data());
     result =
         GetWindowsOsApi().ip_helper_api.get_adapters_addresses_callback.Run(
             AF_UNSPEC, kAddressFlags, nullptr, adapter_addresses,

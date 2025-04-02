@@ -6,7 +6,6 @@
 
 #include <string>
 
-#include "chrome/browser/ash/child_accounts/family_features.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/wizard_context.h"
 #include "chrome/browser/profiles/profile.h"
@@ -38,12 +37,14 @@ std::u16string GetActiveUserName() {
 // static
 std::string ParentalHandoffScreen::GetResultString(
     ParentalHandoffScreen::Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case ParentalHandoffScreen::Result::kDone:
       return "Done";
     case ParentalHandoffScreen::Result::kSkipped:
       return BaseScreen::kNotApplicable;
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 ParentalHandoffScreen::ParentalHandoffScreen(
@@ -57,8 +58,7 @@ ParentalHandoffScreen::ParentalHandoffScreen(
 ParentalHandoffScreen::~ParentalHandoffScreen() = default;
 
 bool ParentalHandoffScreen::MaybeSkip(WizardContext& context) {
-  if (context.skip_post_login_screens_for_tests ||
-      !IsFamilyLinkOobeHandoffEnabled()) {
+  if (context.skip_post_login_screens_for_tests) {
     exit_callback_.Run(Result::kSkipped);
     return true;
   }

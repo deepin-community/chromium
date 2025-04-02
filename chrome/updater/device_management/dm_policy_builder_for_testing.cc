@@ -4,25 +4,25 @@
 
 #include "chrome/updater/device_management/dm_policy_builder_for_testing.h"
 
-#include <stdint.h>
-
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 
+#include "base/containers/span.h"
+#include "base/logging.h"
 #include "base/time/time.h"
 #include "chrome/updater/protos/omaha_settings.pb.h"
-#include "chrome/updater/util/unit_test_util.h"
+#include "chrome/updater/test/unit_test_util.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "crypto/rsa_private_key.h"
 #include "crypto/signature_creator.h"
 
 namespace updater {
-
 namespace {
 
 // A test signing key raw bytes in DER-encoded PKCS8 format.
-const uint8_t kSigningKey1[] = {
+constexpr uint8_t kSigningKey1[] = {
     0x30, 0x82, 0x01, 0x55, 0x02, 0x01, 0x00, 0x30, 0x0d, 0x06, 0x09, 0x2a,
     0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00, 0x04, 0x82,
     0x01, 0x3f, 0x30, 0x82, 0x01, 0x3b, 0x02, 0x01, 0x00, 0x02, 0x41, 0x00,
@@ -55,7 +55,7 @@ const uint8_t kSigningKey1[] = {
 };
 
 // SHA256 signature of kSigningKey for "example.com" domain.
-const uint8_t kSigningKey1Signature[] = {
+constexpr uint8_t kSigningKey1Signature[] = {
     0x97, 0xEB, 0x13, 0xE6, 0x6C, 0xE2, 0x7A, 0x2F, 0xC6, 0x6E, 0x68, 0x8F,
     0xED, 0x5B, 0x51, 0x08, 0x27, 0xF0, 0xA5, 0x97, 0x20, 0xEE, 0xE2, 0x9B,
     0x5B, 0x63, 0xA5, 0x9C, 0xAE, 0x41, 0xFD, 0x34, 0xC4, 0x2E, 0xEB, 0x63,
@@ -81,7 +81,7 @@ const uint8_t kSigningKey1Signature[] = {
 };
 
 // Another (new) test signing key raw bytes in DER-encoded PKCS8 format.
-const uint8_t kSigningKey2[] = {
+constexpr uint8_t kSigningKey2[] = {
     0x30, 0x82, 0x01, 0x54, 0x02, 0x01, 0x00, 0x30, 0x0d, 0x06, 0x09, 0x2a,
     0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00, 0x04, 0x82,
     0x01, 0x3e, 0x30, 0x82, 0x01, 0x3a, 0x02, 0x01, 0x00, 0x02, 0x41, 0x00,
@@ -114,7 +114,7 @@ const uint8_t kSigningKey2[] = {
 };
 
 // SHA256 signature of kSigningKey2 for "example.com" domain.
-const uint8_t kSigningKey2Signature[] = {
+constexpr uint8_t kSigningKey2Signature[] = {
     0x70, 0xED, 0x27, 0x42, 0x34, 0x69, 0xB6, 0x47, 0x9E, 0x7C, 0xA0, 0xF0,
     0xE5, 0x0A, 0x49, 0x49, 0x00, 0xDA, 0xBC, 0x70, 0x01, 0xC5, 0x4B, 0xDB,
     0x47, 0xD5, 0xAF, 0xA1, 0xAD, 0xB7, 0xE4, 0xE1, 0xBD, 0x5A, 0x1C, 0x35,
@@ -144,15 +144,13 @@ const uint8_t kSigningKey2Signature[] = {
 std::unique_ptr<DMSigningKeyForTesting> GetTestKey1() {
   constexpr int kFakeKeyVersion = 5;
   return std::make_unique<DMSigningKeyForTesting>(
-      kSigningKey1, sizeof(kSigningKey1), kSigningKey1Signature,
-      sizeof(kSigningKey1Signature), kFakeKeyVersion, "example.com");
+      kSigningKey1, kSigningKey1Signature, kFakeKeyVersion, "example.com");
 }
 
 std::unique_ptr<DMSigningKeyForTesting> GetTestKey2() {
   constexpr int kFakeKeyVersion = 7;
   return std::make_unique<DMSigningKeyForTesting>(
-      kSigningKey2, sizeof(kSigningKey2), kSigningKey2Signature,
-      sizeof(kSigningKey2Signature), kFakeKeyVersion, "example.com");
+      kSigningKey2, kSigningKey2Signature, kFakeKeyVersion, "example.com");
 }
 
 std::unique_ptr<
@@ -216,15 +214,13 @@ GetDefaultTestingPolicyFetchDMResponse(
       "test-device-id", *GetDefaultTestingOmahaPolicyProto());
 }
 
-DMSigningKeyForTesting::DMSigningKeyForTesting(const uint8_t key_data[],
-                                               size_t key_data_length,
-                                               const uint8_t key_signature[],
-                                               size_t key_signature_length,
-                                               int key_version,
-                                               const std::string& domain)
-    : key_data_(key_data, key_data + key_data_length),
-      key_signature_(reinterpret_cast<const char*>(key_signature),
-                     key_signature_length),
+DMSigningKeyForTesting::DMSigningKeyForTesting(
+    base::span<const uint8_t> key_data,
+    base::span<const uint8_t> key_signature,
+    int key_version,
+    const std::string& domain)
+    : key_data_(key_data.begin(), key_data.end()),
+      key_signature_(key_signature.begin(), key_signature.end()),
       key_version_(key_version),
       key_signature_domain_(domain) {}
 
@@ -299,9 +295,11 @@ DMPolicyBuilderForTesting::CreateInstanceWithOptions(
 void DMPolicyBuilderForTesting::FillPolicyFetchResponseWithPayload(
     enterprise_management::PolicyFetchResponse* policy_response,
     const std::string& policy_type,
-    const std::string& policy_payload) const {
+    const std::string& policy_payload,
+    bool attach_new_public_key) const {
   const DMSigningKeyForTesting* signing_key = signing_key_.get();
-  if (new_signing_key_) {
+  if (new_signing_key_ && attach_new_public_key) {
+    VLOG(1) << "Attaching new public key for policy " << policy_type;
     signing_key = new_signing_key_.get();
 
     // Attach the new public key and its signature to the policy response.
@@ -313,6 +311,8 @@ void DMPolicyBuilderForTesting::FillPolicyFetchResponseWithPayload(
       if (signing_option_ == SigningOption::kTamperKeySignature) {
         *policy_response->mutable_new_public_key_signature() = "bad-key-sig";
       } else {
+        policy_response->set_policy_data_signature_type(
+            enterprise_management::PolicyFetchRequest::SHA256_RSA);
         signing_key_->SignData(
             policy_response->new_public_key(),
             policy_response->mutable_new_public_key_signature());
@@ -329,6 +329,8 @@ void DMPolicyBuilderForTesting::FillPolicyFetchResponseWithPayload(
     policy_response->set_new_public_key_verification_data_signature(
         new_signing_key_->GetPublicKeySignature());
   } else {
+    VLOG(1) << "Added policy [" << policy_type
+            << "] in response without a public key.";
     policy_response->clear_new_public_key();
     policy_response->clear_new_public_key_verification_data();
     policy_response->clear_new_public_key_verification_data_signature();
@@ -352,6 +354,8 @@ void DMPolicyBuilderForTesting::FillPolicyFetchResponseWithPayload(
   if (signing_option_ == SigningOption::kTamperDataSignature) {
     *policy_response->mutable_policy_data_signature() = "bad-data-sig";
   } else {
+    policy_response->set_policy_data_signature_type(
+        enterprise_management::PolicyFetchRequest::SHA256_RSA);
     signing_key->SignData(policy_response->policy_data(),
                           policy_response->mutable_policy_data_signature());
   }
@@ -362,7 +366,8 @@ std::string DMPolicyBuilderForTesting::GetResponseBlobForPolicyPayload(
     const std::string& policy_payload) const {
   enterprise_management::PolicyFetchResponse policy_response;
   FillPolicyFetchResponseWithPayload(&policy_response, policy_type,
-                                     policy_payload);
+                                     policy_payload,
+                                     /*attach_new_public_key=*/true);
   return policy_response.SerializeAsString();
 }
 
@@ -372,11 +377,21 @@ DMPolicyBuilderForTesting::BuildDMResponseForPolicies(
   auto dm_response =
       std::make_unique<::enterprise_management::DeviceManagementResponse>();
 
-  for (const auto& policy : policies) {
+  for (const auto& [policy_type, policy_data] : policies) {
     FillPolicyFetchResponseWithPayload(
-        dm_response->mutable_policy_response()->add_responses(), policy.first,
-        policy.second);
+        dm_response->mutable_policy_response()->add_responses(), policy_type,
+        policy_data,
+        /*attach_new_public_key=*/policy_type == "google/machine-level-omaha");
   }
+  return dm_response;
+}
+
+std::unique_ptr<::enterprise_management::DeviceManagementResponse>
+DMPolicyBuilderForTesting::BuildDMResponseWithError(
+    ::enterprise_management::DeviceManagementErrorDetail error) const {
+  auto dm_response =
+      std::make_unique<::enterprise_management::DeviceManagementResponse>();
+  dm_response->add_error_detail(error);
   return dm_response;
 }
 

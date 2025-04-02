@@ -18,11 +18,10 @@ import {
   waitForFunction,
   waitForMany,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {navigateToConsoleTab} from '../helpers/console-helpers.js';
 import {openSourcesPanel, RESUME_BUTTON} from '../helpers/sources-helpers.js';
 
-describe('The Console Tab', async () => {
+describe('The Console Tab', () => {
   it('context selector', async () => {
     await goToResource('console/context-selector.html');
     await navigateToConsoleTab();

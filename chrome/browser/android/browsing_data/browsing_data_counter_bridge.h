@@ -18,12 +18,11 @@ class BrowsingDataCounterBridge {
  public:
   // Creates a BrowsingDataCounterBridge for a certain browsing data type.
   // The |data_type| is a value of the enum BrowsingDataType.
-  BrowsingDataCounterBridge(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& jprofile,
-      jint data_type,
-      jint clear_browsing_data_tab);
+  BrowsingDataCounterBridge(JNIEnv* env,
+                            const base::android::JavaParamRef<jobject>& obj,
+                            Profile* profile,
+                            jint selected_time_period,
+                            jint data_type);
 
   BrowsingDataCounterBridge(const BrowsingDataCounterBridge&) = delete;
   BrowsingDataCounterBridge& operator=(const BrowsingDataCounterBridge&) =
@@ -31,7 +30,12 @@ class BrowsingDataCounterBridge {
 
   ~BrowsingDataCounterBridge();
 
-  // Called by the Java counterpart when it is getting garbage collected.
+  void SetSelectedTimePeriod(JNIEnv* env,
+                             const base::android::JavaParamRef<jobject>& obj,
+                             jint selected_time_period);
+
+  // Destroys the BrowsingDataCounterBridge object. This needs to be called
+  // on the java side when the object is not in use anymore.
   void Destroy(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
 
  private:
@@ -41,7 +45,6 @@ class BrowsingDataCounterBridge {
   base::android::ScopedJavaGlobalRef<jobject> jobject_;
   raw_ptr<Profile> profile_;
   std::unique_ptr<browsing_data::BrowsingDataCounter> counter_;
-  browsing_data::ClearBrowsingDataTab clear_browsing_data_tab_;
 };
 
-#endif // CHROME_BROWSER_ANDROID_BROWSING_DATA_BROWSING_DATA_COUNTER_BRIDGE_H_
+#endif  // CHROME_BROWSER_ANDROID_BROWSING_DATA_BROWSING_DATA_COUNTER_BRIDGE_H_

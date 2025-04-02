@@ -8,20 +8,21 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "base/time/time.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/interaction/interactive_test.h"
@@ -99,7 +100,7 @@ class InteractiveViewsTestApi : public ui::test::InteractiveTestApi {
   using ViewMatcher = base::RepeatingCallback<bool(const View*)>;
 
   // Specifies a View not relative to any particular other View.
-  using AbsoluteViewSpecifier = absl::variant<
+  using AbsoluteViewSpecifier = std::variant<
       // Specify a view that is known at the time the sequence is created. The
       // View must persist until the step executes.
       View*,
@@ -111,7 +112,7 @@ class InteractiveViewsTestApi : public ui::test::InteractiveTestApi {
       base::OnceCallback<View*()>>;
 
   // Specifies a view relative to its parent.
-  using ChildViewSpecifier = absl::variant<
+  using ChildViewSpecifier = std::variant<
       // The index of the child in the parent view. An out of bounds index will
       // generate an error.
       size_t,
@@ -134,25 +135,25 @@ class InteractiveViewsTestApi : public ui::test::InteractiveTestApi {
     requires ui::test::internal::HasSignature<C, R*(V*)>
   [[nodiscard]] static StepBuilder NameViewRelative(
       ElementSpecifier relative_to,
-      base::StringPiece name,
+      std::string_view name,
       C&& find_callback);
 
-  [[nodiscard]] static StepBuilder NameView(base::StringPiece name,
+  [[nodiscard]] static StepBuilder NameView(std::string_view name,
                                             AbsoluteViewSpecifier spec);
 
   [[nodiscard]] static StepBuilder NameChildView(ElementSpecifier parent,
-                                                 base::StringPiece name,
+                                                 std::string_view name,
                                                  ChildViewSpecifier spec);
 
   [[nodiscard]] static StepBuilder NameDescendantView(ElementSpecifier ancestor,
-                                                      base::StringPiece name,
+                                                      std::string_view name,
                                                       ViewMatcher matcher);
 
   // Names the `index` (0-indexed) child view of `parent` that is of type `V`.
   template <typename V>
     requires internal::IsView<V>
   [[nodiscard]] static StepBuilder NameChildViewByType(ElementSpecifier parent,
-                                                       base::StringPiece name,
+                                                       std::string_view name,
                                                        size_t index = 0);
 
   // Names the `index` (0-indexed) descendant view of `parent` in depth-first
@@ -161,7 +162,7 @@ class InteractiveViewsTestApi : public ui::test::InteractiveTestApi {
     requires internal::IsView<V>
   [[nodiscard]] static StepBuilder NameDescendantViewByType(
       ElementSpecifier ancestor,
-      base::StringPiece name,
+      std::string_view name,
       size_t index = 0);
 
   // As WithElement(), but `view` should resolve to a TrackedElementViews
@@ -300,7 +301,7 @@ class InteractiveViewsTestApi : public ui::test::InteractiveTestApi {
 
   // Specifies an absolute position for a mouse move or drag that does not need
   // a reference element.
-  using AbsolutePositionSpecifier = absl::variant<
+  using AbsolutePositionSpecifier = std::variant<
       // Use this specific position. This value is stored when the sequence is
       // created; use gfx::Point* if you want to capture a point during sequence
       // execution.
@@ -320,7 +321,7 @@ class InteractiveViewsTestApi : public ui::test::InteractiveTestApi {
 
   // Specifies how the target position of a mouse operation (in screen
   // coordinates) will be determined.
-  using RelativePositionSpecifier = absl::variant<
+  using RelativePositionSpecifier = std::variant<
       // Default to the centerpoint of the reference element, which should be a
       // views::View.
       CenterPoint,
@@ -329,12 +330,18 @@ class InteractiveViewsTestApi : public ui::test::InteractiveTestApi {
 
   // Move the mouse to the specified `position` in screen coordinates. The
   // `reference` element will be used based on how `position` is specified.
+  //
+  // This verb is only available in interactive test suites; see
+  // `RequireInteractiveTest()`.
   [[nodiscard]] StepBuilder MoveMouseTo(AbsolutePositionSpecifier position);
   [[nodiscard]] StepBuilder MoveMouseTo(
       ElementSpecifier reference,
       RelativePositionSpecifier position = CenterPoint());
 
   // Clicks mouse button `button` at the current cursor position.
+  //
+  // This verb is only available in interactive test suites; see
+  // `RequireInteractiveTest()`.
   [[nodiscard]] StepBuilder ClickMouse(
       ui_controls::MouseButton button = ui_controls::LEFT,
       bool release = true);
@@ -342,6 +349,9 @@ class InteractiveViewsTestApi : public ui::test::InteractiveTestApi {
   // Depresses the left mouse button at the current cursor position and drags to
   // the target `position`. The `reference` element will be used based on how
   // `position` is specified.
+  //
+  // This verb is only available in interactive test suites; see
+  // `RequireInteractiveTest()`.
   [[nodiscard]] StepBuilder DragMouseTo(AbsolutePositionSpecifier position,
                                         bool release = true);
   [[nodiscard]] StepBuilder DragMouseTo(
@@ -351,6 +361,9 @@ class InteractiveViewsTestApi : public ui::test::InteractiveTestApi {
 
   // Releases the specified mouse button. Use when you previously called
   // ClickMouse() or DragMouseTo() with `release` = false.
+  //
+  // This verb is only available in interactive test suites; see
+  // `RequireInteractiveTest()`.
   [[nodiscard]] StepBuilder ReleaseMouse(
       ui_controls::MouseButton button = ui_controls::LEFT);
 
@@ -437,7 +450,7 @@ class InteractiveViewsTestApi : public ui::test::InteractiveTestApi {
   }
 
   // Creates the follow-up step for a mouse action.
-  StepBuilder CreateMouseFollowUpStep(const base::StringPiece& description);
+  StepBuilder CreateMouseFollowUpStep(std::string_view description);
 
   base::WeakPtr<Widget> context_widget_;
 };
@@ -514,7 +527,7 @@ template <typename C, typename V, typename R>
   requires ui::test::internal::HasSignature<C, R*(V*)>
 ui::InteractionSequence::StepBuilder InteractiveViewsTestApi::NameViewRelative(
     ElementSpecifier relative_to,
-    base::StringPiece name,
+    std::string_view name,
     C&& find_callback) {
   StepBuilder builder;
   builder.SetDescription(
@@ -661,7 +674,7 @@ template <typename V>
   requires internal::IsView<V>
 ui::InteractionSequence::StepBuilder
 InteractiveViewsTestApi::NameChildViewByType(ElementSpecifier parent,
-                                             base::StringPiece name,
+                                             std::string_view name,
                                              size_t index) {
   return std::move(NameChildView(parent, name,
                                  base::BindRepeating(
@@ -685,7 +698,7 @@ template <typename V>
   requires internal::IsView<V>
 ui::InteractionSequence::StepBuilder
 InteractiveViewsTestApi::NameDescendantViewByType(ElementSpecifier ancestor,
-                                                  base::StringPiece name,
+                                                  std::string_view name,
                                                   size_t index) {
   return std::move(NameDescendantView(ancestor, name,
                                       base::BindRepeating(
@@ -777,8 +790,6 @@ InteractiveViewsTestApi::WaitForViewPropertyCallback(
       scoped_refptr<base::RefCountedData<base::CallbackListSubscription>>;
   RefCountedSubscription subscription =
       base::MakeRefCounted<RefCountedSubscription::element_type>();
-  const std::string format_string = base::StringPrintf(
-      "WaitForProperty( %%s, \"%s\" )", event_type.GetName().c_str());
 
   // The first step will check the property, and either immediately send the
   // event or install the observer that will send the event when the state
@@ -811,16 +822,17 @@ InteractiveViewsTestApi::WaitForViewPropertyCallback(
       subscription, property, add_listener, event_type,
       testing::Matcher<R>(std::forward<M>(matcher)));
 
-  return Steps(std::move(AfterShow(view, std::move(observe_property))
-                             .SetMustRemainVisible(true)
-                             .FormatDescription(format_string)),
-               std::move(AfterEvent(view, event_type, [subscription]() {
-                           // Need to reference subscription by value so that it
-                           // is not discarded until this step runs or the
-                           // sequence fails.
-                           subscription->data =
-                               base::CallbackListSubscription();
-                         }).FormatDescription(format_string)));
+  auto steps = Steps(std::move(AfterShow(view, std::move(observe_property))
+                                   .SetMustRemainVisible(true)),
+                     AfterEvent(view, event_type, [subscription]() {
+                       // Need to reference subscription by value so that it is
+                       // not discarded until this step runs or the sequence
+                       // fails.
+                       subscription->data = base::CallbackListSubscription();
+                     }));
+  AddDescriptionPrefix(
+      steps, base::StrCat({"WaitForProperty( ", event_type.GetName(), ", )"}));
+  return steps;
 }
 
 // Waits for a property named `Property` to have a value that matches `matcher`
@@ -902,5 +914,4 @@ ui::InteractionSequence::StepBuilder InteractiveViewsTestApi::PollViewProperty(
 }
 
 }  // namespace views::test
-
 #endif  // UI_VIEWS_INTERACTION_INTERACTIVE_VIEWS_TEST_H_

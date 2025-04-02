@@ -18,11 +18,13 @@ class CaptionBubbleContext;
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+// LINT.IfChange(CaptionBubbleErrorType)
 enum CaptionBubbleErrorType {
   kGeneric = 0,
   kMediaFoundationRendererUnsupported = 1,
   kMaxValue = kMediaFoundationRendererUnsupported
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/accessibility/enums.xml:CaptionBubbleErrorType)
 
 using OnErrorClickedCallback = base::RepeatingCallback<void()>;
 using OnDoNotShowAgainClickedCallback =
@@ -54,6 +56,10 @@ using OnCaptionBubbleClosedCallback =
 //
 class CaptionBubbleModel {
  public:
+  // TODO(crbug.com/378469298): Gate Boca strings and functions behind ChromeOS
+  // build flag.
+  static constexpr char kBocaWithTranslationSessionId[] = "BocaWithTranslation";
+
   using Id = base::IdTypeU64<CaptionBubbleModel>;
 
   CaptionBubbleModel(CaptionBubbleContext* context,
@@ -110,6 +116,10 @@ class CaptionBubbleModel {
   Id unique_id() const { return unique_id_; }
 
   void SetLanguage(const std::string& language_code);
+
+  bool CanUseLiveTranslate();
+
+  bool SkipPrefChangeOnClose();
 
  private:
   // Generates the next unique id.

@@ -5,6 +5,7 @@
 #include "chrome/browser/media/router/media_router_feature.h"
 
 #include <stdint.h>
+
 #include <string>
 #include <utility>
 
@@ -32,7 +33,7 @@
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/profiles/profile_types_ash.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
 #endif
 
 // NOTE: Consider separating out UI-only features that are not consumed by the
@@ -51,6 +52,15 @@ BASE_FEATURE(kAllowAllSitesToInitiateMirroring,
 BASE_FEATURE(kDialMediaRouteProvider,
              "DialMediaRouteProvider",
              base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kDelayMediaSinkDiscovery,
+             "DelayMediaSinkDiscovery",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kShowCastPermissionRejectedError,
+             "ShowCastPermissionRejectedError",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kCastMessageLogging,
+             "CastMessageLogging",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // TODO(crbug.com/1486680): Remove once stopping mirroring routes in the global
 // media controls is implemented on ChromeOS.
@@ -62,22 +72,17 @@ BASE_FEATURE(kFallbackToAudioTabMirroring,
              base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-BASE_FEATURE(kCastMirroringPlayoutDelay,
-             "CastMirroringPlayoutDelay",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-const base::FeatureParam<int> kCastMirroringPlayoutDelayMs{
-    &kCastMirroringPlayoutDelay, "cast_mirroring_playout_delay_ms", -1};
-
-// TODO(b/202294946): Remove when enabled by default after a few milestones.
-BASE_FEATURE(kGlobalMediaControlsCastStartStop,
-             "GlobalMediaControlsCastStartStop",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kCastSilentlyRemoveVcOnNavigation,
              "CastSilentlyRemoveVcOnNavigation",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_MAC)
+BASE_FEATURE(kUseNetworkFrameworkForLocalDiscovery,
+             "UseNetworkFrameworkForLocalDiscovery",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif
 
 namespace {
 const PrefService::Preference* GetMediaRouterPref(
@@ -107,14 +112,16 @@ void ClearMediaRouterStoredPrefsForTesting() {
 
 bool MediaRouterEnabled(content::BrowserContext* context) {
 #if !BUILDFLAG(IS_ANDROID)
-  if (!base::FeatureList::IsEnabled(kMediaRouter))
+  if (!base::FeatureList::IsEnabled(kMediaRouter)) {
     return false;
+  }
 #endif  // !BUILDFLAG(IS_ANDROID)
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   // TODO(crbug.com/1380828): Make the Media Router feature configurable via a
   // policy for non-user profiles, i.e. sign-in and lock screen profiles.
-  if (!IsUserProfile(Profile::FromBrowserContext(context)))
+  if (!ash::IsUserBrowserContext(context)) {
     return false;
+  }
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
   // If the Media Router was already enabled or disabled for |context|, then it
@@ -123,8 +130,9 @@ bool MediaRouterEnabled(content::BrowserContext* context) {
   base::flat_map<content::BrowserContext*, bool>& pref_values =
       GetStoredPrefValues();
   auto const it = pref_values.find(context);
-  if (it != pref_values.end())
+  if (it != pref_values.end()) {
     return it->second;
+  }
 
   // Check the enterprise policy.
   const PrefService::Preference* pref = GetMediaRouterPref(context);
@@ -141,6 +149,8 @@ bool MediaRouterEnabled(content::BrowserContext* context) {
 void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(prefs::kMediaRouterCastAllowAllIPs, false,
                                 PrefRegistry::PUBLIC);
+  registry->RegisterBooleanPref(prefs::kSuppressLocalDiscoveryPermissionError,
+                                false);
 }
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry) {
@@ -173,9 +183,9 @@ std::string GetReceiverIdHashToken(PrefService* pref_service) {
   std::string token =
       pref_service->GetString(prefs::kMediaRouterReceiverIdHashToken);
   if (token.empty()) {
-    crypto::RandBytes(base::WriteInto(&token, kHashTokenSize + 1),
-                      kHashTokenSize);
-    token = base::Base64Encode(token);
+    std::array<uint8_t, kHashTokenSize> rand_token;
+    crypto::RandBytes(rand_token);
+    token = base::Base64Encode(rand_token);
     pref_service->SetString(prefs::kMediaRouterReceiverIdHashToken, token);
   }
   return token;
@@ -185,16 +195,11 @@ bool DialMediaRouteProviderEnabled() {
   return base::FeatureList::IsEnabled(kDialMediaRouteProvider);
 }
 
-bool GlobalMediaControlsCastStartStopEnabled(content::BrowserContext* context) {
-  return base::FeatureList::IsEnabled(kGlobalMediaControlsCastStartStop) &&
-         MediaRouterEnabled(context);
-}
-
 std::optional<base::TimeDelta> GetCastMirroringPlayoutDelay() {
   std::optional<base::TimeDelta> target_playout_delay;
 
-  // First see if there is a command line switch for mirroring playout delay.
-  // Otherwise, check the relevant feature.
+  // The default playout delay can be overridden with the command line flag
+  // `cast-mirroring-target-playout-delay`.
   const base::CommandLine* cl = base::CommandLine::ForCurrentProcess();
   if (cl->HasSwitch(switches::kCastMirroringTargetPlayoutDelay)) {
     int switch_playout_delay = 0;
@@ -206,16 +211,12 @@ std::optional<base::TimeDelta> GetCastMirroringPlayoutDelay() {
     }
   }
 
-  if (!target_playout_delay.has_value() &&
-      base::FeatureList::IsEnabled(kCastMirroringPlayoutDelay) &&
-      IsValidMirroringPlayoutDelayMs(kCastMirroringPlayoutDelayMs.Get())) {
-    target_playout_delay =
-        base::Milliseconds(kCastMirroringPlayoutDelayMs.Get());
-  }
-
   return target_playout_delay;
 }
 
+bool IsCastMessageLoggingEnabled() {
+  return base::FeatureList::IsEnabled(kCastMessageLogging);
+}
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace media_router

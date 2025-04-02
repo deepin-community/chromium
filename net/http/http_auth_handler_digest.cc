@@ -2,16 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "net/http/http_auth_handler_digest.h"
 
 #include <string>
+#include <string_view>
 
 #include "base/hash/md5.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -157,12 +162,13 @@ HttpAuth::AuthorizationResult HttpAuthHandlerDigest::HandleAnotherChallengeImpl(
   // for the new challenge.
   std::string original_realm;
   while (parameters.GetNext()) {
-    if (base::EqualsCaseInsensitiveASCII(parameters.name_piece(), "stale")) {
-      if (base::EqualsCaseInsensitiveASCII(parameters.value_piece(), "true")) {
+    if (base::EqualsCaseInsensitiveASCII(parameters.name(), "stale")) {
+      if (base::EqualsCaseInsensitiveASCII(parameters.value(), "true")) {
         return HttpAuth::AUTHORIZATION_RESULT_STALE;
       }
-    } else if (base::EqualsCaseInsensitiveASCII(parameters.name_piece(),
-                                                "realm")) {
+    } else if (base::EqualsCaseInsensitiveASCII(parameters.name(), "realm")) {
+      // This has to be a copy, since value_piece() may point to an internal
+      // buffer of `parameters`.
       original_realm = parameters.value();
     }
   }
@@ -220,8 +226,7 @@ bool HttpAuthHandlerDigest::ParseChallenge(
   // Loop through all the properties.
   while (parameters.GetNext()) {
     // FAIL -- couldn't parse a property.
-    if (!ParseChallengeProperty(parameters.name_piece(),
-                                parameters.value_piece())) {
+    if (!ParseChallengeProperty(parameters.name(), parameters.value())) {
       return false;
     }
   }
@@ -239,8 +244,8 @@ bool HttpAuthHandlerDigest::ParseChallenge(
   return true;
 }
 
-bool HttpAuthHandlerDigest::ParseChallengeProperty(base::StringPiece name,
-                                                   base::StringPiece value) {
+bool HttpAuthHandlerDigest::ParseChallengeProperty(std::string_view name,
+                                                   std::string_view value) {
   if (base::EqualsCaseInsensitiveASCII(name, "realm")) {
     std::string realm;
     if (!ConvertToUtf8AndNormalize(value, kCharsetLatin1, &realm)) {
@@ -276,15 +281,10 @@ bool HttpAuthHandlerDigest::ParseChallengeProperty(base::StringPiece name,
   } else if (base::EqualsCaseInsensitiveASCII(name, "qop")) {
     // Parse the comma separated list of qops.
     // auth is the only supported qop, and all other values are ignored.
-    //
-    // TODO(https://crbug.com/820198): Remove this copy when
-    // HttpUtil::ValuesIterator can take a StringPiece.
-    std::string value_str(value);
-    HttpUtil::ValuesIterator qop_values(value_str.begin(), value_str.end(),
-                                        ',');
+    HttpUtil::ValuesIterator qop_values(value, /*delimiter=*/',');
     qop_ = QOP_UNSPECIFIED;
     while (qop_values.GetNext()) {
-      if (base::EqualsCaseInsensitiveASCII(qop_values.value_piece(), "auth")) {
+      if (base::EqualsCaseInsensitiveASCII(qop_values.value(), "auth")) {
         qop_ = QOP_AUTH;
         break;
       }
@@ -306,7 +306,6 @@ std::string HttpAuthHandlerDigest::QopToString(QualityOfProtection qop) {
       return "auth";
     default:
       NOTREACHED();
-      return std::string();
   }
 }
 
@@ -325,7 +324,6 @@ std::string HttpAuthHandlerDigest::AlgorithmToString(Algorithm algorithm) {
       return "SHA-256-sess";
     default:
       NOTREACHED();
-      return std::string();
   }
 }
 
@@ -364,10 +362,10 @@ class HttpAuthHandlerDigest::DigestContext {
         break;
     }
   }
-  void Update(base::StringPiece s) {
+  void Update(std::string_view s) {
     CHECK(EVP_DigestUpdate(md_ctx_.get(), s.data(), s.size()));
   }
-  void Update(std::initializer_list<base::StringPiece> sps) {
+  void Update(std::initializer_list<std::string_view> sps) {
     for (const auto sp : sps) {
       Update(sp);
     }

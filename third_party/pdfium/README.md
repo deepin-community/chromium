@@ -21,6 +21,14 @@ It is expected that there are still some places lurking in the code which will
 not function properly on big-endian architectures. Bugs and/or patches are
 welcome, however providing this support is **not** a priority at this time.
 
+### Compilers supported
+
+PDFium aims to be compliant with the [Chromium policy](https://chromium.googlesource.com/chromium/src/+/main/docs/toolchain_support.md#existing-toolchain-support).
+
+Currently this means Clang. Former MSVC users should consider using clang-cl
+if needed. Community-contributed patches for gcc will be allowed. No MSVC
+patches will be taken.
+
 #### Google employees
 
 Run: `download_from_google_storage --config` and follow the
@@ -93,7 +101,7 @@ pdf_is_standalone = true  # Set for a non-embedded build.
 is_component_build = false # Disable component build (Though it should work)
 ```
 
-For sample applications like `pdfium_test` to build, one must set
+For test applications like `pdfium_test` to build, one must set
 `pdf_is_standalone = true`.
 
 By default, the entire project builds with C++20.
@@ -110,11 +118,12 @@ use\_sysroot as indicated above.
 
 ## Building the code
 
-You can build the sample program by running: `ninja -C <directory> pdfium_test`
+You can build the standalone test program by running:
+`ninja -C <directory> pdfium_test`
 You can build the entire product (which includes a few unit tests) by running:
-`ninja -C <directory> pdfium_all`.
+`ninja -C <directory> pdfium_all`
 
-## Running the sample program
+## Running the standalone test program
 
 The pdfium\_test program supports reading, parsing, and rasterizing the pages of
 a .pdf file to .ppm or .png output image files (Windows supports two other

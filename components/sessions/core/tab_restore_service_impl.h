@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/gtest_prod_util.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/sessions/core/sessions_export.h"
 #include "components/sessions/core/tab_restore_service.h"
@@ -27,7 +28,7 @@ class SESSIONS_EXPORT TabRestoreServiceImpl : public TabRestoreService {
   // Does not take ownership of |time_factory|.
   TabRestoreServiceImpl(std::unique_ptr<TabRestoreServiceClient> client,
                         PrefService* pref_service,
-                        TimeFactory* time_factory);
+                        tab_restore::TimeFactory* time_factory);
 
   TabRestoreServiceImpl(const TabRestoreServiceImpl&) = delete;
   TabRestoreServiceImpl& operator=(const TabRestoreServiceImpl&) = delete;
@@ -50,7 +51,7 @@ class SESSIONS_EXPORT TabRestoreServiceImpl : public TabRestoreService {
   const Entries& entries() const override;
   std::vector<LiveTab*> RestoreMostRecentEntry(
       LiveTabContext* context) override;
-  void RemoveTabEntryById(SessionID id) override;
+  void RemoveEntryById(SessionID id) override;
   std::vector<LiveTab*> RestoreEntryById(
       LiveTabContext* context,
       SessionID id,
@@ -65,6 +66,8 @@ class SESSIONS_EXPORT TabRestoreServiceImpl : public TabRestoreService {
 
  private:
   friend class ::TabRestoreServiceImplTest;
+  FRIEND_TEST_ALL_PREFIXES(TabRestoreTest,
+                           RestoreGroupInBrowserThatDoesNotSupportGroups);
 
   class PersistenceDelegate;
   void UpdatePersistenceDelegate();

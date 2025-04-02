@@ -43,7 +43,6 @@ const char* NetworkError::ErrorReasonString(ErrorReason reason) {
       return kErrorReasonFrameError;
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 

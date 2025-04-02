@@ -72,13 +72,6 @@
 #include "components/policy/core/common/proxy_policy_provider.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chrome/browser/lacros/device_settings_lacros.h"
-#include "chromeos/crosapi/mojom/crosapi.mojom.h"
-#include "chromeos/startup/browser_params_proxy.h"
-#include "components/policy/core/common/policy_loader_lacros.h"
-#endif
-
 namespace policy {
 namespace {
 bool g_command_line_enabled_for_testing = false;
@@ -132,24 +125,8 @@ void ChromeBrowserPolicyConnector::Init(
 
 void ChromeBrowserPolicyConnector::OnBrowserStarted() {}
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-bool ChromeBrowserPolicyConnector::IsMainUserManaged() const {
-  return PolicyLoaderLacros::IsMainUserManaged();
-}
-
-crosapi::mojom::DeviceSettings*
-ChromeBrowserPolicyConnector::GetDeviceSettings() const {
-  return device_settings_->GetDeviceSettings();
-}
-#endif
-
 bool ChromeBrowserPolicyConnector::IsDeviceEnterpriseManaged() const {
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  return chromeos::BrowserParamsProxy::Get()->IsDeviceEnterprisedManaged();
-#else
   NOTREACHED() << "This method is only defined for ChromeOS";
-  return false;
-#endif
 }
 
 bool ChromeBrowserPolicyConnector::HasMachineLevelPolicies() {
@@ -280,9 +257,10 @@ void ChromeBrowserPolicyConnector::EnableCommandLineSupportForTesting() {
 
 base::flat_set<std::string>
 ChromeBrowserPolicyConnector::device_affiliation_ids() const {
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  return PolicyLoaderLacros::device_affiliation_ids();
-#elif !BUILDFLAG(IS_CHROMEOS_ASH)
+  if (!device_affiliation_ids_for_testing_.empty()) {
+    return device_affiliation_ids_for_testing_;
+  }
+#if !BUILDFLAG(IS_CHROMEOS_ASH)
   if (!machine_level_user_cloud_policy_manager_ ||
       !machine_level_user_cloud_policy_manager_->IsClientRegistered() ||
       !machine_level_user_cloud_policy_manager_->core() ||
@@ -297,7 +275,12 @@ ChromeBrowserPolicyConnector::device_affiliation_ids() const {
   return {ids.begin(), ids.end()};
 #else
   return {};
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
+#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+}
+
+void ChromeBrowserPolicyConnector::SetDeviceAffiliatedIdsForTesting(
+    const base::flat_set<std::string>& device_affiliation_ids) {
+  device_affiliation_ids_for_testing_ = device_affiliation_ids;
 }
 
 std::vector<std::unique_ptr<policy::ConfigurationPolicyProvider>>
@@ -314,20 +297,6 @@ ChromeBrowserPolicyConnector::CreatePolicyProviders() {
 #if !BUILDFLAG(IS_CHROMEOS)
   MaybeCreateCloudPolicyManager(&providers);
 #endif  // !BUILDFLAG(IS_CHROMEOS)
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  device_settings_ = std::make_unique<DeviceSettingsLacros>();
-  auto loader = std::make_unique<PolicyLoaderLacros>(
-      base::ThreadPool::CreateSequencedTaskRunner(
-          {base::MayBlock(), base::TaskPriority::BEST_EFFORT}),
-      PolicyPerProfileFilter::kFalse);
-  device_account_policy_loader_ = loader.get();
-  std::unique_ptr<AsyncPolicyProvider> ash_policy_provider =
-      std::make_unique<AsyncPolicyProvider>(GetSchemaRegistry(),
-                                            std::move(loader));
-  ash_policy_provider_ = ash_policy_provider.get();
-  providers.push_back(std::move(ash_policy_provider));
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 
   std::unique_ptr<CommandLinePolicyProvider> command_line_provider =
       CommandLinePolicyProvider::CreateIfAllowed(
@@ -361,6 +330,8 @@ ChromeBrowserPolicyConnector::CreatePlatformProvider() {
   // app's bundle ID actually is. All channels of Chrome should obey the same
   // policies.
   CFStringRef bundle_id = CFSTR("com.google.Chrome");
+#elif BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
+  CFStringRef bundle_id = CFSTR("com.google.ChromeForTesting");
 #else
   base::apple::ScopedCFTypeRef<CFStringRef> bundle_id_scoper =
       base::SysUTF8ToCFStringRef(base::apple::BaseBundleID());
@@ -373,19 +344,9 @@ ChromeBrowserPolicyConnector::CreatePlatformProvider() {
       std::make_unique<MacPreferences>(), bundle_id);
   return std::make_unique<AsyncPolicyProvider>(GetSchemaRegistry(),
                                                std::move(loader));
-#elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+#elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
   base::FilePath config_dir_path;
   if (base::PathService::Get(chrome::DIR_POLICY_FILES, &config_dir_path)) {
-#if BUILDFLAG(IS_CHROMEOS)
-    // If the folder containing the policy files doesn't exist, there's no need
-    // to have a provider for them. Note that in verified boot, the folder
-    // doesn't exist and there's no way for the user to create it.
-    // We don't do this for non-ChromeOS desktop platforms because there chrome
-    // should respect a local filesystem policy directory after it started.
-    if (!base::PathExists(config_dir_path)) {
-      return nullptr;
-    }
-#endif
     auto loader = std::make_unique<ConfigDirPolicyLoader>(
         base::ThreadPool::CreateSequencedTaskRunner(
             {base::MayBlock(), base::TaskPriority::BEST_EFFORT}),

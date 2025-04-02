@@ -7,6 +7,7 @@
 #include <optional>
 #include <string_view>
 
+#include "base/strings/to_string.h"
 #include "base/test/test_reg_util_win.h"
 #include "base/win/registry.h"
 #include "build/build_config.h"
@@ -205,11 +206,14 @@ TEST_F(AdditionalParametersTest, SetChannel) {
       {L"extended", /*has_arch=*/false},
       {L"extended-arch_x86", /*has_arch=*/true},
       {L"extended-arch_x64", /*has_arch=*/true},
+      {L"extended-arch_arm64", /*has_arch=*/true},
       {L"", /*has_arch=*/false},
       {L"stable-arch_x86", /*has_arch=*/true},
       {L"-arch_x86", /*has_arch=*/true},
       {L"-arch_x64", /*has_arch=*/true},
+      {L"-arch_arm64", /*has_arch=*/true},
       {L"x64-stable", /*has_arch=*/true},
+      {L"arm64-stable", /*has_arch=*/true},
       {L"1.1-beta", /*has_arch=*/false},
       {L"1.1-beta-arch_x86", /*has_arch=*/true},
       {L"1.1-beta-statsdef_0", /*has_arch=*/false},
@@ -248,7 +252,7 @@ TEST_F(AdditionalParametersTest, SetChannel) {
       SCOPED_TRACE(::testing::Message()
                    << "channel=" << static_cast<int>(channel.channel)
                    << " is_extended_stable_channel="
-                   << (channel.is_extended_stable_channel ? "true" : "false"));
+                   << base::ToString(channel.is_extended_stable_channel));
       AdditionalParameters ap;
       ap.SetChannel(channel.channel, channel.is_extended_stable_channel);
       if (channel.channel == version_info::Channel::STABLE &&
@@ -259,7 +263,7 @@ TEST_F(AdditionalParametersTest, SetChannel) {
 #elif defined(ARCH_CPU_X86)
           EXPECT_THAT(ap.value(), ::testing::StartsWith(L"stable-arch_x86"));
 #elif defined(ARCH_CPU_ARM64)
-          EXPECT_THAT(ap.value(), ::testing::StartsWith(L"stable-arch_arm64"));
+          EXPECT_THAT(ap.value(), ::testing::StartsWith(L"arm64-stable"));
 #else
 #error unsupported processor architecture.
 #endif

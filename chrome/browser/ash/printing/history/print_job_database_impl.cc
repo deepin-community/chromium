@@ -188,7 +188,6 @@ void PrintJobDatabaseImpl::OnInitialized(
     case leveldb_proto::Enums::InitStatus::kNotInitialized:
     case leveldb_proto::Enums::InitStatus::kCorrupt:
       NOTREACHED();
-      break;
   }
 }
 

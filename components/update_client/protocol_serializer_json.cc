@@ -26,8 +26,8 @@ std::string ProtocolSerializerJSON::Serialize(
   request_node.Set("dedup", "cr");
   request_node.Set("acceptformat", "crx3,puff");
   if (!request.additional_attributes.empty()) {
-    for (const auto& attr : request.additional_attributes) {
-      request_node.Set(attr.first, attr.second);
+    for (const auto& [name, value] : request.additional_attributes) {
+      request_node.Set(name, value);
     }
   }
   request_node.Set("sessionid", request.session_id);
@@ -119,14 +119,17 @@ std::string ProtocolSerializerJSON::Serialize(
     if (app.install_date != kDateUnknown) {
       app_node.Set("installdate", app.install_date);
     }
+    if (!app.install_id.empty()) {
+      app_node.Set("iid", app.install_id);
+    }
     if (!app.install_source.empty()) {
       app_node.Set("installsource", app.install_source);
     }
     if (!app.install_location.empty()) {
       app_node.Set("installedby", app.install_location);
     }
-    // TODO(crbug/1120685): Test that this is never sent to the server if the
-    // machine is not enterprise managed.
+    // TODO(crbug.com/40145897): Test that this is never sent to the server if
+    // the machine is not enterprise managed.
     if (!app.release_channel.empty()) {
       app_node.Set("release_channel", app.release_channel);
     }
@@ -153,8 +156,8 @@ std::string ProtocolSerializerJSON::Serialize(
       app_node.Set("disabled", std::move(disabled_nodes));
     }
 
-    for (const auto& attr : app.installer_attributes) {
-      app_node.Set(attr.first, attr.second);
+    for (const auto& [name, value] : app.installer_attributes) {
+      app_node.Set(name, value);
     }
 
     if (app.update_check) {

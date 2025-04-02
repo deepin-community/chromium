@@ -14,6 +14,7 @@
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "components/content_settings/core/browser/content_settings_info.h"
 #include "components/content_settings/core/browser/content_settings_origin_value_map.h"
@@ -38,6 +39,10 @@ struct PrefsForManagedContentSettingsMapEntry {
 
 constexpr PrefsForManagedContentSettingsMapEntry
     kPrefsForManagedContentSettingsMap[] = {
+        {prefs::kManagedAutomaticFullscreenAllowedForUrls,
+         ContentSettingsType::AUTOMATIC_FULLSCREEN, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedAutomaticFullscreenBlockedForUrls,
+         ContentSettingsType::AUTOMATIC_FULLSCREEN, CONTENT_SETTING_BLOCK},
         {prefs::kManagedCookiesAllowedForUrls, ContentSettingsType::COOKIES,
          CONTENT_SETTING_ALLOW},
         {prefs::kManagedCookiesBlockedForUrls, ContentSettingsType::COOKIES,
@@ -84,6 +89,10 @@ constexpr PrefsForManagedContentSettingsMapEntry
          ContentSettingsType::FILE_SYSTEM_WRITE_GUARD, CONTENT_SETTING_BLOCK},
         {prefs::kManagedLegacyCookieAccessAllowedForDomains,
          ContentSettingsType::LEGACY_COOKIE_ACCESS, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedDefaultLegacyCookieScope,
+         ContentSettingsType::LEGACY_COOKIE_SCOPE, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedLegacyCookieScopeForDomains,
+         ContentSettingsType::LEGACY_COOKIE_SCOPE, CONTENT_SETTING_ALLOW},
         {prefs::kManagedSerialAskForUrls, ContentSettingsType::SERIAL_GUARD,
          CONTENT_SETTING_ASK},
         {prefs::kManagedSerialBlockedForUrls, ContentSettingsType::SERIAL_GUARD,
@@ -98,6 +107,10 @@ constexpr PrefsForManagedContentSettingsMapEntry
          ContentSettingsType::JAVASCRIPT_JIT, CONTENT_SETTING_ALLOW},
         {prefs::kManagedJavaScriptJitBlockedForSites,
          ContentSettingsType::JAVASCRIPT_JIT, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedJavaScriptOptimizerAllowedForSites,
+         ContentSettingsType::JAVASCRIPT_OPTIMIZER, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedJavaScriptOptimizerBlockedForSites,
+         ContentSettingsType::JAVASCRIPT_OPTIMIZER, CONTENT_SETTING_BLOCK},
         {prefs::kManagedWebHidAskForUrls, ContentSettingsType::HID_GUARD,
          CONTENT_SETTING_ASK},
         {prefs::kManagedWebHidBlockedForUrls, ContentSettingsType::HID_GUARD,
@@ -117,9 +130,31 @@ constexpr PrefsForManagedContentSettingsMapEntry
          ContentSettingsType::WEB_PRINTING, CONTENT_SETTING_ALLOW},
         {prefs::kManagedWebPrintingBlockedForUrls,
          ContentSettingsType::WEB_PRINTING, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedDirectSocketsAllowedForUrls,
+         ContentSettingsType::DIRECT_SOCKETS, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedDirectSocketsBlockedForUrls,
+         ContentSettingsType::DIRECT_SOCKETS, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedDirectSocketsPrivateNetworkAccessAllowedForUrls,
+         ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS,
+         CONTENT_SETTING_ALLOW},
+        {prefs::kManagedDirectSocketsPrivateNetworkAccessBlockedForUrls,
+         ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS,
+         CONTENT_SETTING_BLOCK},
+#if BUILDFLAG(IS_CHROMEOS)
+        {prefs::kManagedSmartCardConnectAllowedForUrls,
+         ContentSettingsType::SMART_CARD_GUARD, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedSmartCardConnectBlockedForUrls,
+         ContentSettingsType::SMART_CARD_GUARD, CONTENT_SETTING_BLOCK},
+#endif
+        {prefs::kManagedControlledFrameAllowedForUrls,
+         ContentSettingsType::CONTROLLED_FRAME, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedControlledFrameBlockedForUrls,
+         ContentSettingsType::CONTROLLED_FRAME, CONTENT_SETTING_BLOCK},
 };
 
 constexpr const char* kManagedPrefs[] = {
+    prefs::kManagedAutomaticFullscreenAllowedForUrls,
+    prefs::kManagedAutomaticFullscreenBlockedForUrls,
     prefs::kManagedAutoSelectCertificateForUrls,
     prefs::kManagedClipboardAllowedForUrls,
     prefs::kManagedClipboardBlockedForUrls,
@@ -140,6 +175,8 @@ constexpr const char* kManagedPrefs[] = {
     prefs::kManagedJavaScriptBlockedForUrls,
     prefs::kManagedJavaScriptJitAllowedForSites,
     prefs::kManagedJavaScriptJitBlockedForSites,
+    prefs::kManagedJavaScriptOptimizerAllowedForSites,
+    prefs::kManagedJavaScriptOptimizerBlockedForSites,
     prefs::kManagedLegacyCookieAccessAllowedForDomains,
     prefs::kManagedNotificationsAllowedForUrls,
     prefs::kManagedNotificationsBlockedForUrls,
@@ -161,6 +198,16 @@ constexpr const char* kManagedPrefs[] = {
     prefs::kManagedThirdPartyStoragePartitioningBlockedForOrigins,
     prefs::kManagedWebPrintingAllowedForUrls,
     prefs::kManagedWebPrintingBlockedForUrls,
+    prefs::kManagedDirectSocketsAllowedForUrls,
+    prefs::kManagedDirectSocketsBlockedForUrls,
+    prefs::kManagedDirectSocketsPrivateNetworkAccessAllowedForUrls,
+    prefs::kManagedDirectSocketsPrivateNetworkAccessBlockedForUrls,
+#if BUILDFLAG(IS_CHROMEOS)
+    prefs::kManagedSmartCardConnectAllowedForUrls,
+    prefs::kManagedSmartCardConnectBlockedForUrls,
+#endif
+    prefs::kManagedControlledFrameAllowedForUrls,
+    prefs::kManagedControlledFrameBlockedForUrls,
 };
 
 // The following preferences are only used to indicate if a default content
@@ -188,11 +235,15 @@ constexpr const char* kManagedDefaultPrefs[] = {
     prefs::kManagedDefaultWebBluetoothGuardSetting,
     prefs::kManagedDefaultWebUsbGuardSetting,
     prefs::kManagedDefaultJavaScriptJitSetting,
+    prefs::kManagedDefaultJavaScriptOptimizerSetting,
     prefs::kManagedDefaultWebHidGuardSetting,
     prefs::kManagedDefaultWindowManagementSetting,
     prefs::kManagedDefaultLocalFontsSetting,
     prefs::kManagedDefaultThirdPartyStoragePartitioningSetting,
     prefs::kManagedDefaultWebPrintingSetting,
+    prefs::kManagedDefaultDirectSocketsSetting,
+    prefs::kManagedDefaultDirectSocketsPrivateNetworkAccessSetting,
+    prefs::kManagedDefaultControlledFrameSetting,
 };
 
 void ReportCookiesAllowedForUrlsUsage(
@@ -290,6 +341,8 @@ const PolicyProvider::PrefsForManagedDefaultMapEntry
          prefs::kManagedDefaultInsecurePrivateNetworkSetting},
         {ContentSettingsType::JAVASCRIPT_JIT,
          prefs::kManagedDefaultJavaScriptJitSetting},
+        {ContentSettingsType::JAVASCRIPT_OPTIMIZER,
+         prefs::kManagedDefaultJavaScriptOptimizerSetting},
         {ContentSettingsType::HID_GUARD,
          prefs::kManagedDefaultWebHidGuardSetting},
         {ContentSettingsType::WINDOW_MANAGEMENT,
@@ -300,6 +353,12 @@ const PolicyProvider::PrefsForManagedDefaultMapEntry
          prefs::kManagedDefaultThirdPartyStoragePartitioningSetting},
         {ContentSettingsType::WEB_PRINTING,
          prefs::kManagedDefaultWebPrintingSetting},
+        {ContentSettingsType::DIRECT_SOCKETS,
+         prefs::kManagedDefaultDirectSocketsSetting},
+        {ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS,
+         prefs::kManagedDefaultDirectSocketsPrivateNetworkAccessSetting},
+        {ContentSettingsType::CONTROLLED_FRAME,
+         prefs::kManagedDefaultControlledFrameSetting},
 };
 
 // static
@@ -315,6 +374,7 @@ void PolicyProvider::RegisterProfilePrefs(
 }
 
 PolicyProvider::PolicyProvider(PrefService* prefs) : prefs_(prefs) {
+  TRACE_EVENT_BEGIN("startup", "PolicyProvider::PolicyProvider");
   ReadManagedDefaultSettings();
   ReadManagedContentSettings(false);
 
@@ -328,6 +388,7 @@ PolicyProvider::PolicyProvider(PrefService* prefs) : prefs_(prefs) {
     pref_change_registrar_.Add(pref, callback);
 
   ReportCookiesAllowedForUrlsUsage(value_map_);
+  TRACE_EVENT_END("startup");
 }
 
 PolicyProvider::~PolicyProvider() {
@@ -373,7 +434,6 @@ void PolicyProvider::GetContentSettingsFromPreferences() {
 
     if (!pref->GetValue()->is_list()) {
       NOTREACHED() << "Could not read patterns from " << entry.pref_name;
-      return;
     }
 
     const base::Value::List& pattern_str_list = pref->GetValue()->GetList();
@@ -381,7 +441,6 @@ void PolicyProvider::GetContentSettingsFromPreferences() {
       if (!pattern_str_list[i].is_string()) {
         NOTREACHED() << "Could not read content settings pattern #" << i
                      << " from " << entry.pref_name;
-        continue;
       }
 
       const std::string& original_pattern_str = pattern_str_list[i].GetString();
@@ -395,6 +454,17 @@ void PolicyProvider::GetContentSettingsFromPreferences() {
                 << original_pattern_str;
         continue;
       }
+
+#if BUILDFLAG(IS_CHROMEOS)
+      if (entry.content_type == ContentSettingsType::SMART_CARD_GUARD &&
+          entry.setting == CONTENT_SETTING_ALLOW &&
+          !pattern_pair.first.MatchesSingleOrigin()) {
+        VLOG(1) << "Smart card reader access cannot be allowed by wildcard, "
+                   "skipping pattern "
+                << original_pattern_str;
+        continue;
+      }
+#endif
 
       DCHECK_NE(entry.content_type,
                 ContentSettingsType::AUTO_SELECT_CERTIFICATE);
@@ -436,7 +506,6 @@ void PolicyProvider::GetAutoSelectCertificateSettingsFromPreferences() {
 
   if (!pref->GetValue()->is_list()) {
     NOTREACHED();
-    return;
   }
 
   // Parse the list of pattern filter strings. A pattern filter string has
@@ -460,20 +529,19 @@ void PolicyProvider::GetAutoSelectCertificateSettingsFromPreferences() {
   for (const auto& pattern_filter_str : pref->GetValue()->GetList()) {
     if (!pattern_filter_str.is_string()) {
       NOTREACHED();
-      continue;
     }
 
-    std::optional<base::Value> pattern_filter = base::JSONReader::Read(
-        pattern_filter_str.GetString(), base::JSON_ALLOW_TRAILING_COMMAS);
-    if (!pattern_filter || !pattern_filter->is_dict()) {
+    std::optional<base::Value::Dict> pattern_filter =
+        base::JSONReader::ReadDict(pattern_filter_str.GetString(),
+                                   base::JSON_ALLOW_TRAILING_COMMAS);
+    if (!pattern_filter) {
       VLOG(1) << "Ignoring invalid certificate auto select setting. Reason:"
               << " Invalid JSON object: " << pattern_filter_str.GetString();
       continue;
     }
 
-    const base::Value::Dict& pattern_filter_dict = pattern_filter->GetDict();
-    const std::string* pattern = pattern_filter_dict.FindString("pattern");
-    const base::Value* filter = pattern_filter_dict.Find("filter");
+    const std::string* pattern = pattern_filter->FindString("pattern");
+    const base::Value* filter = pattern_filter->Find("filter");
     if (!pattern || !filter) {
       VLOG(1) << "Ignoring invalid certificate auto select setting. Reason:"
               << " Missing pattern or filter.";

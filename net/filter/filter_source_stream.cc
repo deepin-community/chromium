@@ -4,6 +4,7 @@
 
 #include "net/filter/filter_source_stream.h"
 
+#include <string_view>
 #include <utility>
 
 #include "base/check_op.h"
@@ -13,9 +14,10 @@
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_util.h"
-#include "components/miracle_parameter/common/public/miracle_parameter.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
+#include "net/base/trace_constants.h"
+#include "net/base/tracing.h"
 
 namespace net {
 
@@ -27,14 +29,7 @@ constexpr char kXGZip[] = "x-gzip";
 constexpr char kBrotli[] = "br";
 constexpr char kZstd[] = "zstd";
 
-BASE_FEATURE(kBufferSizeForFilterSourceStreamFeature,
-             "BufferSizeForFilterSourceStreamFeature",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-MIRACLE_PARAMETER_FOR_INT(GetBufferSizeForFilterSourceStream,
-                          kBufferSizeForFilterSourceStreamFeature,
-                          "BufferSizeForFilterSourceStream",
-                          32 * 1024)
+const size_t kBufferSize = 32 * 1024;
 
 }  // namespace
 
@@ -55,8 +50,7 @@ int FilterSourceStream::Read(IOBuffer* read_buffer,
 
   // Allocate a BlockBuffer during first Read().
   if (!input_buffer_) {
-    input_buffer_ = base::MakeRefCounted<IOBufferWithSize>(
-        GetBufferSizeForFilterSourceStream());
+    input_buffer_ = base::MakeRefCounted<IOBufferWithSize>(kBufferSize);
     // This is first Read(), start with reading data from |upstream_|.
     next_state_ = STATE_READ_DATA;
   } else {
@@ -86,10 +80,10 @@ bool FilterSourceStream::MayHaveMoreBytes() const {
 }
 
 FilterSourceStream::SourceType FilterSourceStream::ParseEncodingType(
-    const std::string& encoding) {
+    std::string_view encoding) {
   std::string lower_encoding = base::ToLowerASCII(encoding);
   static constexpr auto kEncodingMap =
-      base::MakeFixedFlatMap<base::StringPiece, SourceType>({
+      base::MakeFixedFlatMap<std::string_view, SourceType>({
           {"", TYPE_NONE},
           {kBrotli, TYPE_BROTLI},
           {kDeflate, TYPE_DEFLATE},
@@ -97,7 +91,7 @@ FilterSourceStream::SourceType FilterSourceStream::ParseEncodingType(
           {kXGZip, TYPE_GZIP},
           {kZstd, TYPE_ZSTD},
       });
-  auto* encoding_type = kEncodingMap.find(lower_encoding);
+  auto encoding_type = kEncodingMap.find(lower_encoding);
   if (encoding_type == kEncodingMap.end()) {
     return TYPE_UNKNOWN;
   }
@@ -124,8 +118,6 @@ int FilterSourceStream::DoLoop(int result) {
         break;
       default:
         NOTREACHED() << "bad state: " << state;
-        rv = ERR_UNEXPECTED;
-        break;
     }
   } while (rv != ERR_IO_PENDING && next_state_ != STATE_NONE);
   return rv;
@@ -139,10 +131,9 @@ int FilterSourceStream::DoReadData() {
 
   next_state_ = STATE_READ_DATA_COMPLETE;
   // Use base::Unretained here is safe because |this| owns |upstream_|.
-  int rv =
-      upstream_->Read(input_buffer_.get(), GetBufferSizeForFilterSourceStream(),
-                      base::BindOnce(&FilterSourceStream::OnIOComplete,
-                                     base::Unretained(this)));
+  int rv = upstream_->Read(input_buffer_.get(), kBufferSize,
+                           base::BindOnce(&FilterSourceStream::OnIOComplete,
+                                          base::Unretained(this)));
 
   return rv;
 }
@@ -165,17 +156,23 @@ int FilterSourceStream::DoFilterData() {
   DCHECK(drainable_input_buffer_);
 
   size_t consumed_bytes = 0;
+  const int bytes_remaining = drainable_input_buffer_->BytesRemaining();
+  TRACE_EVENT_BEGIN2(NetTracingCategory(), "FilterSourceStream::FilterData",
+                     "remaining", bytes_remaining, "upstream_end_reached",
+                     upstream_end_reached_);
   base::expected<size_t, Error> bytes_output = FilterData(
       output_buffer_.get(), output_buffer_size_, drainable_input_buffer_.get(),
-      drainable_input_buffer_->BytesRemaining(), &consumed_bytes,
-      upstream_end_reached_);
+      bytes_remaining, &consumed_bytes, upstream_end_reached_);
+  TRACE_EVENT_END2(NetTracingCategory(), "FilterSourceStream::FilterData",
+                   "consumed_bytes", consumed_bytes, "output_or_error",
+                   bytes_output.has_value()
+                       ? base::checked_cast<int>(bytes_output.value())
+                       : bytes_output.error());
 
-  const auto bytes_remaining =
-      base::checked_cast<size_t>(drainable_input_buffer_->BytesRemaining());
   if (bytes_output.has_value() && bytes_output.value() == 0) {
-    DCHECK_EQ(consumed_bytes, bytes_remaining);
+    DCHECK_EQ(consumed_bytes, base::checked_cast<size_t>(bytes_remaining));
   } else {
-    DCHECK_LE(consumed_bytes, bytes_remaining);
+    DCHECK_LE(consumed_bytes, base::checked_cast<size_t>(bytes_remaining));
   }
   // FilterData() is not allowed to return ERR_IO_PENDING.
   if (!bytes_output.has_value())

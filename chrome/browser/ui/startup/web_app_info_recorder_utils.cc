@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -18,7 +19,6 @@
 #include "base/json/json_string_value_serializer.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -37,8 +37,7 @@
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 
-namespace chrome {
-namespace startup {
+namespace chrome::startup {
 
 namespace {
 
@@ -130,7 +129,7 @@ void GetWebApps::SerializeAndScheduleWrite(const base::Value& output_info) {
          base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
         base::BindOnce(
             base::IgnoreResult(&base::ImportantFileWriter::WriteFileAtomically),
-            output_file_, std::move(output_info_str), base::StringPiece()));
+            output_file_, std::move(output_info_str), std::string_view()));
   }
 }
 
@@ -158,8 +157,9 @@ base::Value GetWebApps::GetInstalledWebApps() {
 base::Value GetWebApps::GetOpenWebApps() {
   base::flat_map<std::string, base::Value::List> open_apps;
   for (Browser* browser : *BrowserList::GetInstance()) {
-    if (browser->type() != Browser::Type::TYPE_APP)
+    if (browser->type() != Browser::Type::TYPE_APP) {
       continue;
+    }
     std::string app_profile_base_name =
         browser->profile()->GetBaseName().AsUTF8Unsafe();
     if (!profile_base_name_.empty() &&
@@ -214,5 +214,4 @@ void WriteWebAppsToFile(const base::FilePath& output_file,
   GetWebApps::Start(output_file, profile_base_name);
 }
 
-}  // namespace startup
-}  // namespace chrome
+}  // namespace chrome::startup

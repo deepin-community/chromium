@@ -8,6 +8,11 @@
 // correct rate.  We always pass in a very large destination buffer with the
 // expectation that FillBuffer() will fill as much as it can but no more.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/filters/audio_renderer_algorithm.h"
 
 #include <stddef.h>
@@ -197,8 +202,9 @@ class AudioRendererAlgorithmTest : public testing::Test {
   bool VerifyAudioData(AudioBus* bus, int offset, int frames, float value) {
     for (int ch = 0; ch < bus->channels(); ++ch) {
       for (int i = offset; i < offset + frames; ++i) {
-        if (bus->channel(ch)[i] != value)
+        if (bus->channel(ch)[i] != value) {
           return false;
+        }
       }
     }
     return true;
@@ -269,7 +275,10 @@ class AudioRendererAlgorithmTest : public testing::Test {
       // if at very first buffer-fill only one frame is written, that is zero
       // which might cause exception in CheckFakeData().
       if (!first_fill_buffer || frames_written > 1)
-        ASSERT_FALSE(AudioDataIsMuted(bus.get(), frames_written, dest_offset));
+        if (!bus->is_bitstream_format()) {
+          ASSERT_FALSE(
+              AudioDataIsMuted(bus.get(), frames_written, dest_offset));
+        }
       first_fill_buffer = false;
       frames_remaining -= frames_written;
 
@@ -859,7 +868,7 @@ TEST_F(AudioRendererAlgorithmTest, WsolaSpeedup) {
 
 TEST_F(AudioRendererAlgorithmTest, FillBufferOffset) {
   Initialize();
-  // Pad the queue capacity so fill requests for all rates bellow can be fully
+  // Pad the queue capacity so fill requests for all rates below can be fully
   // satisfied.
   algorithm_.IncreasePlaybackThreshold();
 
@@ -1124,7 +1133,7 @@ TEST_F(AudioRendererAlgorithmTest, ClampLatencyHint) {
 
   const base::TimeDelta kDefaultMax = base::Seconds(3);
   // Verify "full" and "adequate" thresholds increased, but to a known max well
-  // bellow the hinted value.
+  // below the hinted value.
   EXPECT_GT(algorithm_.QueueCapacity(), default_capacity);
   FillAlgorithmQueueUntilAdequate();
   EXPECT_EQ(BufferedTime(), kDefaultMax);

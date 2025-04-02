@@ -27,6 +27,7 @@
 #include "chrome/browser/ash/policy/remote_commands/crd/crd_logging.h"
 #include "chrome/browser/ash/policy/remote_commands/crd/crd_remote_command_utils.h"
 #include "chrome/browser/ash/policy/remote_commands/crd/crd_uma_logger.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/device_identity/device_oauth2_token_service.h"
 #include "chrome/browser/device_identity/device_oauth2_token_service_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -58,6 +59,10 @@ const char kCrdSessionTypeFieldName[] = "crdSessionType";
 
 // The admin's email address.
 const char kAdminEmailFieldName[] = "adminEmail";
+
+// True if CRD should show a confirmation dialog to the user to allow them
+// to confirm/reject the admin session.
+const char kShowConfirmationDialogFieldName[] = "showConfirmationDialog";
 
 // Result payload fields:
 
@@ -209,16 +214,11 @@ bool DeviceCommandStartCrdSessionJob::ParseCommandPayload(
 
   admin_email_ = FindString(root_dict, kAdminEmailFieldName);
 
+  show_confirmation_dialog_ =
+      root_dict.FindBool(kShowConfirmationDialogFieldName);
+
   curtain_local_user_session_ =
       (crd_session_type == CrdSessionType::REMOTE_ACCESS_SESSION);
-
-  if (curtain_local_user_session_ &&
-      !base::FeatureList::IsEnabled(
-          remoting::features::kEnableCrdAdminRemoteAccess)) {
-    LOG(WARNING) << "Rejecting CRD session type as CRD remote access feature "
-                    "is not enabled";
-    return false;
-  }
 
   return true;
 }
@@ -238,6 +238,14 @@ void DeviceCommandStartCrdSessionJob::RunImpl(
   if (!UserTypeSupportsCrd()) {
     return FinishWithError(
         ExtendedStartCrdSessionResultCode::kFailureUnsupportedUserType, "");
+  }
+
+  if (curtain_local_user_session_ && !IsRemoteAccessAllowedByPolicy(CHECK_DEREF(
+                                         g_browser_process->local_state()))) {
+    LOG(ERROR) << "Rejecting CRD session type as CRD remote access is disabled "
+                  "by device policy.";
+    return FinishWithError(
+        ExtendedStartCrdSessionResultCode::kFailureDisabledByPolicy, "");
   }
 
   if (!IsDeviceIdle()) {
@@ -370,11 +378,16 @@ bool DeviceCommandStartCrdSessionJob::IsDeviceIdle() const {
 }
 
 bool DeviceCommandStartCrdSessionJob::ShouldShowConfirmationDialog() const {
+  if (show_confirmation_dialog_.has_value()) {
+    return show_confirmation_dialog_.value();
+  }
   switch (GetCurrentUserSessionType()) {
     case UserSessionType::AUTO_LAUNCHED_KIOSK_SESSION:
     case UserSessionType::MANUALLY_LAUNCHED_KIOSK_SESSION:
-    case UserSessionType::NO_SESSION:
       return false;
+
+    case UserSessionType::NO_SESSION:
+      return GetCrdSessionType() == CrdSessionType::REMOTE_SUPPORT_SESSION;
 
     case UserSessionType::AFFILIATED_USER_SESSION:
     case UserSessionType::MANAGED_GUEST_SESSION:
@@ -384,7 +397,6 @@ bool DeviceCommandStartCrdSessionJob::ShouldShowConfirmationDialog() const {
 
     case UserSessionType::USER_SESSION_TYPE_UNKNOWN:
       NOTREACHED();
-      return true;
   }
 }
 
@@ -410,13 +422,14 @@ bool DeviceCommandStartCrdSessionJob::ShouldTerminateUponInput() const {
       return !acked_user_presence_;
 
     case UserSessionType::NO_SESSION:
+      return GetCrdSessionType() != CrdSessionType::REMOTE_SUPPORT_SESSION;
+
     case UserSessionType::UNAFFILIATED_USER_SESSION:
     case UserSessionType::GUEST_SESSION:
       return true;
 
     case UserSessionType::USER_SESSION_TYPE_UNKNOWN:
       NOTREACHED();
-      return true;
   }
 }
 

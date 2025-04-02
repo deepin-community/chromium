@@ -9,8 +9,8 @@
 // to an address space. The code below creates VMOs for each memory allocations
 // and maps them to the default address space of the current process.
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_FUCHSIA_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_FUCHSIA_H_
+#ifndef PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_FUCHSIA_H_
+#define PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_FUCHSIA_H_
 
 #include <fidl/fuchsia.kernel/cpp/fidl.h>
 #include <lib/component/incoming/cpp/protocol.h>
@@ -27,8 +27,6 @@
 #include "partition_alloc/partition_alloc_check.h"
 
 namespace partition_alloc::internal {
-
-namespace {
 
 zx::resource GetVmexResource() {
   auto vmex_resource_client =
@@ -84,6 +82,7 @@ zx_vm_option_t PageAccessibilityToZxVmOptions(
     case PageAccessibilityConfiguration::kReadExecuteProtected:
     case PageAccessibilityConfiguration::kReadExecute:
       return ZX_VM_PERM_READ | ZX_VM_PERM_EXECUTE;
+    case PageAccessibilityConfiguration::kReadWriteExecuteProtected:
     case PageAccessibilityConfiguration::kReadWriteExecute:
       return ZX_VM_PERM_READ | ZX_VM_PERM_WRITE | ZX_VM_PERM_EXECUTE;
     case PageAccessibilityConfiguration::kInaccessible:
@@ -92,8 +91,6 @@ zx_vm_option_t PageAccessibilityToZxVmOptions(
   };
   PA_NOTREACHED();
 }
-
-}  // namespace
 
 // zx_vmar_map() will fail if the VMO cannot be mapped at |vmar_offset|, i.e.
 // |hint| is not advisory.
@@ -209,6 +206,10 @@ void DiscardSystemPagesInternal(uint64_t address, size_t length) {
   PA_ZX_CHECK(status == ZX_OK, status);
 }
 
+bool SealSystemPagesInternal(uint64_t address, size_t length) {
+  return false;
+}
+
 void DecommitSystemPagesInternal(
     uint64_t address,
     size_t length,
@@ -265,4 +266,4 @@ bool TryRecommitSystemPagesInternal(
 
 }  // namespace partition_alloc::internal
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_FUCHSIA_H_
+#endif  // PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_FUCHSIA_H_

@@ -5,6 +5,7 @@
 #include "components/component_updater/installer_policies/tpcd_metadata_component_installer_policy.h"
 
 #include <optional>
+#include <string>
 
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
@@ -18,7 +19,7 @@
 #include "base/version.h"
 #include "components/component_updater/component_updater_service.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
-#include "components/tpcd/metadata/parser.h"
+#include "components/tpcd/metadata/browser/parser.h"
 #include "net/base/features.h"
 
 using component_updater::ComponentUpdateService;
@@ -98,7 +99,7 @@ void TpcdMetadataComponentInstallerPolicy::ComponentReady(
         base::BindOnce(&ReadComponentFromDisk, GetComponentPath(install_dir)),
         base::BindOnce(
             [](OnTpcdMetadataComponentReadyCallback on_component_ready_callback,
-               const std::optional<std::string>& maybe_contents) {
+               std::optional<std::string> maybe_contents) {
               if (maybe_contents.has_value()) {
                 on_component_ready_callback.Run(maybe_contents.value());
               }
@@ -107,7 +108,7 @@ void TpcdMetadataComponentInstallerPolicy::ComponentReady(
   }
 }
 
-void WriteMetrics(TpcdMetadataInstallationResult result) {
+void WriteMetrics(tpcd::metadata::InstallationResult result) {
   base::UmaHistogramEnumeration(
       "Navigation.TpcdMitigations.MetadataInstallationResult", result);
 }
@@ -117,44 +118,29 @@ bool TpcdMetadataComponentInstallerPolicy::VerifyInstallation(
     const base::Value::Dict& manifest,
     const base::FilePath& install_dir) const {
   if (!base::PathExists(GetComponentPath(install_dir))) {
-    WriteMetrics(TpcdMetadataInstallationResult::kMissingMetadataFile);
+    WriteMetrics(tpcd::metadata::InstallationResult::kMissingMetadataFile);
     return false;
   }
 
   std::string contents;
   if (!base::ReadFileToString(GetComponentPath(install_dir), &contents)) {
-    WriteMetrics(TpcdMetadataInstallationResult::kReadingMetadataFileFailed);
+    WriteMetrics(
+        tpcd::metadata::InstallationResult::kReadingMetadataFileFailed);
     return false;
   }
 
   tpcd::metadata::Metadata metadata;
   if (!metadata.ParseFromString(contents)) {
-    WriteMetrics(TpcdMetadataInstallationResult::kParsingToProtoFailed);
+    WriteMetrics(tpcd::metadata::InstallationResult::kParsingToProtoFailed);
     return false;
   }
 
-  for (const tpcd::metadata::MetadataEntry& me : metadata.metadata_entries()) {
-    if (!me.has_primary_pattern_spec() ||
-        !ContentSettingsPattern::FromString(me.primary_pattern_spec())
-             .IsValid()) {
-      WriteMetrics(TpcdMetadataInstallationResult::kErroneousSpec);
-      return false;
-    }
-
-    if (!me.has_secondary_pattern_spec() ||
-        !ContentSettingsPattern::FromString(me.secondary_pattern_spec())
-             .IsValid()) {
-      WriteMetrics(TpcdMetadataInstallationResult::kErroneousSpec);
-      return false;
-    }
-
-    if (!me.has_source()) {
-      WriteMetrics(TpcdMetadataInstallationResult::kErroneousSource);
-      return false;
-    }
+  if (!tpcd::metadata::Parser::IsValidMetadata(metadata,
+                                               base::BindOnce(WriteMetrics))) {
+    return false;
   }
 
-  WriteMetrics(TpcdMetadataInstallationResult::kSuccessful);
+  WriteMetrics(tpcd::metadata::InstallationResult::kSuccessful);
   return true;
 }
 

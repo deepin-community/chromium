@@ -126,7 +126,6 @@ bool BluetoothDeviceCast::IsGattConnected() const {
 
 bool BluetoothDeviceCast::IsConnectable() const {
   NOTREACHED() << "This is only called on ChromeOS";
-  return true;
 }
 
 bool BluetoothDeviceCast::IsConnecting() const {

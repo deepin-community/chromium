@@ -17,7 +17,7 @@
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "remoting/base/logging.h"
-#include "third_party/libei/include/libei.h"
+#include "third_party/libei/cipd/include/libei-1.0/libei.h"
 #include "third_party/webrtc/modules/portal/portal_request_response.h"
 #include "third_party/webrtc/modules/portal/scoped_glib.h"
 #include "third_party/webrtc/modules/portal/xdg_desktop_portal_utils.h"
@@ -27,13 +27,12 @@ namespace remoting::xdg_portal {
 using webrtc::Scoped;
 
 namespace {
-// TODO(crbug/1291247): See if these can be pulled from a common place.
+// TODO(crbug.com/40212673): See if these can be pulled from a common place.
 constexpr int BUTTON_LEFT_KEYCODE = 272;
 constexpr int BUTTON_RIGHT_KEYCODE = 273;
 constexpr int BUTTON_MIDDLE_KEYCODE = 274;
 constexpr int BUTTON_FORWARD_KEYCODE = 277;
 constexpr int BUTTON_BACK_KEYCODE = 278;
-constexpr int BTN_UNKNOWN = -1;
 
 // See:
 // https://libinput.pages.freedesktop.org/libei/api/group__libei.html#gaf2ec4b04f6b3c706bad0f1cae66bea34
@@ -53,7 +52,6 @@ int EvdevCodeToMouseButton(int code) {
       return BTN_FORWARD;
     default:
       NOTREACHED() << "Undefined code: " << code;
-      return BTN_UNKNOWN;
   }
 }
 
@@ -125,8 +123,8 @@ void RemoteDesktopPortalInjector::InjectMouseButton(int code, bool pressed) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (use_ei_) {
     if (ei_pointer_enabled_) {
-      ei_device_pointer_button(ei_pointer_, EvdevCodeToMouseButton(code),
-                               pressed);
+      ei_device_button_button(ei_pointer_, EvdevCodeToMouseButton(code),
+                              pressed);
       ei_device_frame(ei_pointer_, ei_now(ei_));
     } else {
       // Non-ei injection is blocked by portal when EI has been enabled
@@ -155,13 +153,13 @@ void RemoteDesktopPortalInjector::InjectMouseScroll(int axis, int steps) {
   if (use_ei_) {
     if (ei_absolute_pointer_enabled_) {
       if (axis == ScrollType::VERTICAL_SCROLL) {
-        ei_device_pointer_scroll_discrete(ei_absolute_pointer_, 0,
-                                          steps * EI_SCROLL_FACTOR);
+        ei_device_scroll_discrete(ei_absolute_pointer_, 0,
+                                  steps * EI_SCROLL_FACTOR);
       } else {
-        ei_device_pointer_scroll_discrete(ei_absolute_pointer_,
-                                          steps * EI_SCROLL_FACTOR, 0);
+        ei_device_scroll_discrete(ei_absolute_pointer_,
+                                  steps * EI_SCROLL_FACTOR, 0);
       }
-      ei_device_pointer_scroll_stop(ei_absolute_pointer_, true, true);
+      ei_device_scroll_stop(ei_absolute_pointer_, true, true);
       ei_device_frame(ei_absolute_pointer_, ei_now(ei_));
     } else {
       LOG(ERROR) << "Unable to scroll mouse since EI pointer is disabled";
@@ -378,9 +376,10 @@ void RemoteDesktopPortalInjector::OnEiSeatAddedEvent(struct ei_event* event) {
   ei_seat_ = ei_seat_ref(ei_event_get_seat(event));
   HOST_LOG << "EI seat added: " << ei_seat_get_name(ei_seat_);
 
-  ei_seat_bind_capability(ei_seat_, EI_DEVICE_CAP_POINTER);
-  ei_seat_bind_capability(ei_seat_, EI_DEVICE_CAP_KEYBOARD);
-  ei_seat_bind_capability(ei_seat_, EI_DEVICE_CAP_POINTER_ABSOLUTE);
+  ei_seat_bind_capabilities(
+      ei_seat_, EI_DEVICE_CAP_POINTER, EI_DEVICE_CAP_KEYBOARD,
+      EI_DEVICE_CAP_POINTER_ABSOLUTE, EI_DEVICE_CAP_BUTTON,
+      EI_DEVICE_CAP_SCROLL, nullptr);
 }
 
 void RemoteDesktopPortalInjector::OnEiSeatRemovedEvent(struct ei_event* event) {
@@ -537,9 +536,9 @@ void RemoteDesktopPortalInjector::HandleEiEvent(struct ei_event* event) {
     case EI_EVENT_DEVICE_STOP_EMULATING:
     case EI_EVENT_POINTER_MOTION:
     case EI_EVENT_POINTER_MOTION_ABSOLUTE:
-    case EI_EVENT_POINTER_BUTTON:
-    case EI_EVENT_POINTER_SCROLL:
-    case EI_EVENT_POINTER_SCROLL_DISCRETE:
+    case EI_EVENT_BUTTON_BUTTON:
+    case EI_EVENT_SCROLL_DELTA:
+    case EI_EVENT_SCROLL_DISCRETE:
     case EI_EVENT_KEYBOARD_KEY:
       break;
     default:

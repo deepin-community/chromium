@@ -29,9 +29,7 @@ class MockHoldingSpaceClient : public HoldingSpaceClient {
               (override));
   MOCK_METHOD(void,
               CopyImageToClipboard,
-              (const HoldingSpaceItem& item,
-               holding_space_metrics::EventSource event_source,
-               SuccessCallback callback),
+              (const HoldingSpaceItem& item, SuccessCallback callback),
               (override));
   MOCK_METHOD(base::FilePath,
               CrackFileSystemUrl,
@@ -43,33 +41,29 @@ class MockHoldingSpaceClient : public HoldingSpaceClient {
   MOCK_METHOD(void,
               OpenItems,
               (const std::vector<const HoldingSpaceItem*>& items,
-               holding_space_metrics::EventSource event_source,
                SuccessCallback callback),
               (override));
   MOCK_METHOD(void,
               PinFiles,
-              (const std::vector<base::FilePath>& file_paths,
-               holding_space_metrics::EventSource event_source),
+              (const std::vector<base::FilePath>& file_paths),
               (override));
+  MOCK_METHOD(void, RefreshSuggestions, (), (override));
   MOCK_METHOD(void,
-              RemoveFileSuggestions,
+              RemoveSuggestions,
               (const std::vector<base::FilePath>& absolute_file_paths),
               (override));
   MOCK_METHOD(void,
               PinItems,
-              (const std::vector<const HoldingSpaceItem*>& items,
-               holding_space_metrics::EventSource event_source),
+              (const std::vector<const HoldingSpaceItem*>& items),
               (override));
   MOCK_METHOD(void,
               ShowItemInFolder,
               (const HoldingSpaceItem& item,
-               holding_space_metrics::EventSource event_source,
                SuccessCallback callback),
               (override));
   MOCK_METHOD(void,
               UnpinItems,
-              (const std::vector<const HoldingSpaceItem*>& items,
-               holding_space_metrics::EventSource event_source),
+              (const std::vector<const HoldingSpaceItem*>& items),
               (override));
 };
 

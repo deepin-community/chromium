@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 
 #include "base/files/scoped_temp_dir.h"
@@ -30,16 +31,17 @@ struct TestCaseItem {
   const char16_t* title;
 };
 
-const TestCaseItem kTestCase1[] = {{"http://foo1.com/", u"Foo1"}};
-const TestCaseItem kTestCase2[] = {
+const auto kTestCase1 =
+    std::to_array<TestCaseItem>({{"http://foo1.com/", u"Foo1"}});
+const auto kTestCase2 = std::to_array<TestCaseItem>({
     {"http://foo1.com/", u"Foo1"},
     {"http://foo2.com/", u"Foo2"},
-};
-const TestCaseItem kTestCase3[] = {
+});
+const auto kTestCase3 = std::to_array<TestCaseItem>({
     {"http://foo1.com/", u"Foo1"},
     {"http://foo2.com/", u"Foo2"},
     {"http://foo3.com/", u"Foo3"},
-};
+});
 const TestCaseItem kTestCaseMax[] = {
     {"http://foo1.com/", u"Foo1"}, {"http://foo2.com/", u"Foo2"},
     {"http://foo3.com/", u"Foo3"}, {"http://foo4.com/", u"Foo4"},
@@ -479,7 +481,7 @@ TEST_F(CustomLinksManagerImplTest, ShouldDeleteMostVisitedOnHistoryDeletion) {
   // Delete a specific Most Visited link.
   EXPECT_CALL(callback, Run());
   static_cast<history::HistoryServiceObserver*>(custom_links_.get())
-      ->OnURLsDeleted(
+      ->OnHistoryDeletions(
           history_service_.get(),
           history::DeletionInfo(history::DeletionTimeRange::Invalid(),
                                 /*expired=*/false,
@@ -507,7 +509,7 @@ TEST_F(CustomLinksManagerImplTest,
   // Delete all Most Visited links.
   EXPECT_CALL(callback, Run());
   static_cast<history::HistoryServiceObserver*>(custom_links_.get())
-      ->OnURLsDeleted(
+      ->OnHistoryDeletions(
           history_service_.get(),
           history::DeletionInfo(history::DeletionTimeRange::AllTime(),
                                 /*expired=*/false, history::URLRows(),
@@ -536,7 +538,7 @@ TEST_F(CustomLinksManagerImplTest, ShouldDeleteOnHistoryDeletionAfterShutdown) {
   // Delete all Most Visited links.
   EXPECT_CALL(callback, Run());
   static_cast<history::HistoryServiceObserver*>(custom_links_.get())
-      ->OnURLsDeleted(
+      ->OnHistoryDeletions(
           history_service_.get(),
           history::DeletionInfo(history::DeletionTimeRange::AllTime(),
                                 /*expired=*/false, history::URLRows(),
@@ -565,18 +567,19 @@ TEST_F(CustomLinksManagerImplTest, ShouldNotDeleteCustomLinkOnHistoryDeletion) {
 
   // Try to delete the added link. This should fail and not modify the list.
   static_cast<history::HistoryServiceObserver*>(custom_links_.get())
-      ->OnURLsDeleted(history_service_.get(),
-                      history::DeletionInfo(
-                          history::DeletionTimeRange::Invalid(),
-                          /*expired=*/false, {history::URLRow(GURL(kTestUrl))},
-                          /*favicon_urls=*/std::set<GURL>(),
-                          /*restrict_urls=*/std::nullopt));
+      ->OnHistoryDeletions(
+          history_service_.get(),
+          history::DeletionInfo(history::DeletionTimeRange::Invalid(),
+                                /*expired=*/false,
+                                {history::URLRow(GURL(kTestUrl))},
+                                /*favicon_urls=*/std::set<GURL>(),
+                                /*restrict_urls=*/std::nullopt));
   EXPECT_EQ(links_after_add, custom_links_->GetLinks());
 
   // Delete all Most Visited links.
   EXPECT_CALL(callback, Run());
   static_cast<history::HistoryServiceObserver*>(custom_links_.get())
-      ->OnURLsDeleted(
+      ->OnHistoryDeletions(
           history_service_.get(),
           history::DeletionInfo(history::DeletionTimeRange::AllTime(),
                                 /*expired=*/false, history::URLRows(),
@@ -601,14 +604,14 @@ TEST_F(CustomLinksManagerImplTest, ShouldIgnoreHistoryExpiredDeletions) {
 
   EXPECT_CALL(callback, Run()).Times(0);
   static_cast<history::HistoryServiceObserver*>(custom_links_.get())
-      ->OnURLsDeleted(
+      ->OnHistoryDeletions(
           history_service_.get(),
           history::DeletionInfo(history::DeletionTimeRange::AllTime(),
                                 /*expired=*/true, history::URLRows(),
                                 /*favicon_urls=*/std::set<GURL>(),
                                 /*restrict_urls=*/std::nullopt));
   static_cast<history::HistoryServiceObserver*>(custom_links_.get())
-      ->OnURLsDeleted(
+      ->OnHistoryDeletions(
           // /*history_service=*/nullptr,
           history_service_.get(),
           history::DeletionInfo(history::DeletionTimeRange::Invalid(),
@@ -635,8 +638,8 @@ TEST_F(CustomLinksManagerImplTest, ShouldIgnoreEmptyHistoryDeletions) {
 
   EXPECT_CALL(callback, Run()).Times(0);
   static_cast<history::HistoryServiceObserver*>(custom_links_.get())
-      ->OnURLsDeleted(history_service_.get(),
-                      history::DeletionInfo::ForUrls({}, {}));
+      ->OnHistoryDeletions(history_service_.get(),
+                           history::DeletionInfo::ForUrls({}, {}));
 
   EXPECT_EQ(initial_links, custom_links_->GetLinks());
 
@@ -662,8 +665,8 @@ TEST_F(CustomLinksManagerImplTest, ShouldNotUndoAfterHistoryDeletion) {
   // Try an empty history deletion. This should do nothing.
   EXPECT_CALL(callback, Run()).Times(0);
   static_cast<history::HistoryServiceObserver*>(custom_links_.get())
-      ->OnURLsDeleted(history_service_.get(),
-                      history::DeletionInfo::ForUrls({}, {}));
+      ->OnHistoryDeletions(history_service_.get(),
+                           history::DeletionInfo::ForUrls({}, {}));
   EXPECT_EQ(links_after_add, custom_links_->GetLinks());
 
   // Try to undo. This should fail and not modify the list.

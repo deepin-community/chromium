@@ -10,6 +10,7 @@
 #include "components/autofill/core/common/password_form_fill_data.h"
 #include "components/autofill/ios/browser/autofill_util.h"
 #import "components/autofill/ios/common/javascript_feature_util.h"
+#import "components/autofill/ios/form_util/autofill_renderer_id_java_script_feature.h"
 #import "components/autofill/ios/form_util/form_util_java_script_feature.h"
 #include "components/password_manager/ios/account_select_fill_data.h"
 #include "components/password_manager/ios/password_manager_tab_helper.h"
@@ -95,9 +96,12 @@ PasswordManagerJavaScriptFeature::PasswordManagerJavaScriptFeature()
               FeatureScript::InjectionTime::kDocumentStart,
               FeatureScript::TargetFrames::kAllFrames,
               FeatureScript::ReinjectionBehavior::kInjectOncePerWindow)},
-          {web::java_script_features::GetCommonJavaScriptFeature(),
-           web::java_script_features::GetMessageJavaScriptFeature(),
-           autofill::FormUtilJavaScriptFeature::GetInstance()}) {}
+          {
+              web::java_script_features::GetCommonJavaScriptFeature(),
+              web::java_script_features::GetMessageJavaScriptFeature(),
+              autofill::FormUtilJavaScriptFeature::GetInstance(),
+              autofill::AutofillRendererIDJavaScriptFeature::GetInstance(),
+          }) {}
 
 PasswordManagerJavaScriptFeature::~PasswordManagerJavaScriptFeature() = default;
 
@@ -128,7 +132,7 @@ void PasswordManagerJavaScriptFeature::FillPasswordForm(
     BOOL fill_username,
     const std::string& username,
     const std::string& password,
-    base::OnceCallback<void(BOOL)> callback) {
+    base::OnceCallback<void(const base::Value*)> callback) {
   DCHECK(!callback.is_null());
 
   base::Value::Dict form_value = SerializeFillData(fill_data, fill_username);
@@ -137,7 +141,7 @@ void PasswordManagerJavaScriptFeature::FillPasswordForm(
                              .Append(std::move(form_value))
                              .Append(username)
                              .Append(password),
-                         CreateBoolCallback(std::move(callback)),
+                         std::move(callback),
                          base::Seconds(kJavaScriptExecutionTimeoutInSeconds));
 }
 

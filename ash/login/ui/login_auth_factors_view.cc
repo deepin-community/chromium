@@ -4,6 +4,8 @@
 
 #include "ash/login/ui/login_auth_factors_view.h"
 
+#include <algorithm>
+
 #include "ash/login/resources/grit/login_resources.h"
 #include "ash/login/ui/animated_auth_factors_label_wrapper.h"
 #include "ash/login/ui/arrow_button_view.h"
@@ -15,7 +17,6 @@
 #include "ash/style/dark_light_mode_controller_impl.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "base/time/time.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -29,6 +30,7 @@
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/label.h"
@@ -157,7 +159,7 @@ std::unique_ptr<lottie::Animation> GetCheckmarkAnimation(
 
   std::unique_ptr<lottie::Animation> animation =
       std::make_unique<lottie::Animation>(
-          cc::SkottieWrapper::CreateSerializable(lottie_data.value()),
+          cc::SkottieWrapper::UnsafeCreateSerializable(lottie_data.value()),
           std::move(color_map));
 
   animation->SetPlaybackSpeed(kCheckmarkAnimationPlaybackSpeed);
@@ -243,7 +245,7 @@ LoginAuthFactorsView::LoginAuthFactorsView(
           kArrowButtonSizeDp));
   arrow_button_->SetInstallFocusRingOnFocus(true);
   views::InstallCircleHighlightPathGenerator(arrow_button_);
-  arrow_button_->SetAccessibleName(
+  arrow_button_->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_AUTH_FACTOR_LABEL_CLICK_TO_ENTER));
 
   arrow_nudge_animation_ =
@@ -263,9 +265,7 @@ LoginAuthFactorsView::LoginAuthFactorsView(
   label_wrapper_->SetProperty(
       views::kMarginsKey,
       gfx::Insets::TLBR(kSpacingBetweenIconsAndLabelDp, 0, 0, 0));
-  if (chromeos::features::IsJellyEnabled()) {
-    label_wrapper_->label()->SetEnabledColorId(cros_tokens::kCrosSysOnSurface);
-  }
+  label_wrapper_->label()->SetEnabledColorId(cros_tokens::kCrosSysOnSurface);
 }
 
 LoginAuthFactorsView::~LoginAuthFactorsView() = default;
@@ -396,7 +396,7 @@ void LoginAuthFactorsView::UpdateState() {
       // their password.
       ShowReadyAndDisabledAuthFactors();
 
-      num_factors_in_error_background_state = base::ranges::count(
+      num_factors_in_error_background_state = std::ranges::count(
           auth_factors_, PrioritizedAuthFactorViewState::kErrorBackground,
           [](const auto& factor) {
             return GetPrioritizedAuthFactorViewState(*factor);
@@ -413,7 +413,6 @@ void LoginAuthFactorsView::UpdateState() {
       return;
     case PrioritizedAuthFactorViewState::kUnavailable:
       NOTREACHED();
-      return;
   }
 }
 
@@ -475,7 +474,6 @@ int LoginAuthFactorsView::GetReadyLabelId() const {
   if (ready_factor_count == 0u) {
     LOG(ERROR) << "GetReadyLabelId() called without any ready auth factors.";
     NOTREACHED();
-    return GetDefaultLabelId();
   }
 
   if (ready_factor_count == 1u) {
@@ -489,7 +487,6 @@ int LoginAuthFactorsView::GetReadyLabelId() const {
   }
 
   NOTREACHED();
-  return GetDefaultLabelId();
 }
 
 int LoginAuthFactorsView::GetDefaultLabelId() const {
@@ -499,8 +496,11 @@ int LoginAuthFactorsView::GetDefaultLabelId() const {
 }
 
 // views::View:
-gfx::Size LoginAuthFactorsView::CalculatePreferredSize() const {
-  gfx::Size size = views::View::CalculatePreferredSize();
+gfx::Size LoginAuthFactorsView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  views::SizeBounds content_available_size(available_size);
+  content_available_size.set_width(kAuthFactorsViewWidthDp);
+  gfx::Size size = views::View::CalculatePreferredSize(content_available_size);
   size.set_width(kAuthFactorsViewWidthDp);
   return size;
 }
@@ -536,9 +536,9 @@ void LoginAuthFactorsView::ArrowButtonPressed(const ui::Event& event) {
 
 void LoginAuthFactorsView::RelayArrowButtonPressed() {
   if (arrow_button_) {
-    ArrowButtonPressed(ui::MouseEvent(ui::ET_MOUSE_PRESSED, gfx::Point(),
-                                      gfx::Point(), base::TimeTicks::Now(), 0,
-                                      0));
+    ArrowButtonPressed(ui::MouseEvent(ui::EventType::kMousePressed,
+                                      gfx::Point(), gfx::Point(),
+                                      base::TimeTicks::Now(), 0, 0));
   }
 }
 

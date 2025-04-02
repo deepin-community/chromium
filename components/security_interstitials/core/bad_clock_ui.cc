@@ -93,8 +93,9 @@ void BadClockUI::HandleCommand(SecurityInterstitialCommand command) {
           security_interstitials::MetricsHelper::SHOW_ADVANCED);
       break;
     case CMD_OPEN_DATE_SETTINGS:
-      if (!controller_->CanLaunchDateAndTimeSettings())
+      if (!controller_->CanLaunchDateAndTimeSettings()) {
         NOTREACHED() << "This platform does not support date settings";
+      }
       controller_->metrics_helper()->RecordUserInteraction(
           security_interstitials::MetricsHelper::OPEN_TIME_SETTINGS);
       controller_->LaunchDateAndTimeSettings();
@@ -120,7 +121,6 @@ void BadClockUI::HandleCommand(SecurityInterstitialCommand command) {
     case CMD_REQUEST_SITE_ACCESS_PERMISSION:
       // Not supported by the bad clock error page.
       NOTREACHED() << "Unsupported command: " << command;
-      break;
     case CMD_ERROR:
     case CMD_TEXT_FOUND:
     case CMD_TEXT_NOT_FOUND:

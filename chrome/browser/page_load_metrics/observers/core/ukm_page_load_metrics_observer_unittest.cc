@@ -77,7 +77,6 @@ using UserInteractionLatenciesPtr =
 using UserInteractionLatencies =
     page_load_metrics::mojom::UserInteractionLatencies;
 using UserInteractionLatency = page_load_metrics::mojom::UserInteractionLatency;
-using UserInteractionType = page_load_metrics::mojom::UserInteractionType;
 
 namespace {
 
@@ -116,7 +115,7 @@ class UkmPageLoadMetricsObserverTest
   void RegisterObservers(page_load_metrics::PageLoadTracker* tracker) override {
     std::unique_ptr<UkmPageLoadMetricsObserver> observer =
         std::make_unique<UkmPageLoadMetricsObserver>(
-            &mock_network_quality_provider_);
+            &mock_network_quality_provider_, IsIncognito());
     observer_ = observer.get();
     tracker->AddObserver(std::move(observer));
   }
@@ -152,14 +151,19 @@ class UkmPageLoadMetricsObserverTest
     HistoryClustersTabHelper::CreateForWebContents(web_contents());
   }
 
+  virtual bool IsIncognito() { return false; }
+
   TestingProfile::TestingFactories GetTestingFactories() const override {
     return {
-        {BookmarkModelFactory::GetInstance(),
-         BookmarkModelFactory::GetDefaultFactory()},
-        {HistoryServiceFactory::GetInstance(),
-         HistoryServiceFactory::GetDefaultFactory()},
-        {TemplateURLServiceFactory::GetInstance(),
-         base::BindRepeating(&TemplateURLServiceFactory::BuildInstanceFor)}};
+        TestingProfile::TestingFactory{
+            BookmarkModelFactory::GetInstance(),
+            BookmarkModelFactory::GetDefaultFactory()},
+        TestingProfile::TestingFactory{
+            HistoryServiceFactory::GetInstance(),
+            HistoryServiceFactory::GetDefaultFactory()},
+        TestingProfile::TestingFactory{
+            TemplateURLServiceFactory::GetInstance(),
+            base::BindRepeating(&TemplateURLServiceFactory::BuildInstanceFor)}};
   }
 
   MockNetworkQualityProvider& mock_network_quality_provider() {
@@ -466,6 +470,37 @@ TEST_F(UkmPageLoadMetricsObserverTest, LargestImagePaint) {
 
   TestLCP(600, LargestContentTextOrImage::kImage, true /* test_main_frame */,
           30 /* image_bpp = "8.0 - 9.0" */, net::RequestPriority::MEDIUM);
+}
+
+TEST_F(UkmPageLoadMetricsObserverTest, LargestImagePaintCrossOrigin) {
+  page_load_metrics::mojom::PageLoadTiming timing;
+  page_load_metrics::InitPageLoadTimingForTest(&timing);
+  timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
+  timing.paint_timing->largest_contentful_paint->largest_image_paint =
+      base::Milliseconds(600);
+  timing.paint_timing->largest_contentful_paint->largest_image_paint_size = 50u;
+  timing.paint_timing->largest_contentful_paint->image_bpp = 8.5;
+  timing.paint_timing->largest_contentful_paint->type =
+      blink::LargestContentfulPaintTypeToUKMFlags(
+          blink::LargestContentfulPaintType::kImage |
+          blink::LargestContentfulPaintType::kCrossOrigin);
+  timing.paint_timing->largest_contentful_paint->image_request_priority_valid =
+      true;
+  timing.paint_timing->largest_contentful_paint->image_request_priority_value =
+      net::RequestPriority::MEDIUM;
+  PopulateExperimentalLCP(timing.paint_timing);
+  PopulateRequiredTimingFields(&timing);
+
+  NavigateAndCommit(GURL(kTestUrl1));
+  tester()->SimulateTimingUpdate(timing);
+
+  // Simulate closing the tab.
+  DeleteContents();
+
+  TestLCP(600, LargestContentTextOrImage::kImage, true /* test_main_frame */,
+          30 /* image_bpp = "8.0 - 9.0" */, net::RequestPriority::MEDIUM,
+          blink::LargestContentfulPaintType::kImage |
+              blink::LargestContentfulPaintType::kCrossOrigin);
 }
 
 TEST_F(UkmPageLoadMetricsObserverTest, LargestImagePaintVideo) {
@@ -871,7 +906,7 @@ TEST_F(UkmPageLoadMetricsObserverTest, LargestTextPaint) {
 }
 
 TEST_F(UkmPageLoadMetricsObserverTest, LargestContentfulPaint_Trace) {
-  // TODO(https://crbug.com/1266001): Improve unit tests support for tracing.
+  // TODO(crbug.com/40801822): Improve unit tests support for tracing.
   // In particular, the initialization call below is most likely too narrow /
   // doesn't take care of everything that is needed.  In the future we might
   // need to 1) initialize tracing from a better place (maybe
@@ -1282,14 +1317,11 @@ TEST_F(UkmPageLoadMetricsObserverTest, NormalizedUserInteractionLatencies) {
 
   base::TimeTicks current_time = base::TimeTicks::Now();
   max_event_durations.emplace_back(UserInteractionLatency::New(
-      base::Milliseconds(50), UserInteractionType::kKeyboard, 1,
-      current_time + base::Milliseconds(1000)));
+      base::Milliseconds(50), 1, current_time + base::Milliseconds(1000)));
   max_event_durations.emplace_back(UserInteractionLatency::New(
-      base::Milliseconds(100), UserInteractionType::kTapOrClick, 2,
-      current_time + base::Milliseconds(2000)));
+      base::Milliseconds(100), 2, current_time + base::Milliseconds(2000)));
   max_event_durations.emplace_back(UserInteractionLatency::New(
-      base::Milliseconds(150), UserInteractionType::kDrag, 3,
-      current_time + base::Milliseconds(3000)));
+      base::Milliseconds(150), 3, current_time + base::Milliseconds(3000)));
 
   tester()->SimulateInputTimingUpdate(input_timing);
 
@@ -1333,8 +1365,7 @@ TEST_F(UkmPageLoadMetricsObserverTest,
       input_timing.max_event_durations->get_user_interaction_latencies();
 
   max_event_durations.emplace_back(UserInteractionLatency::New(
-      base::Milliseconds(50), UserInteractionType::kKeyboard, 0,
-      base::TimeTicks::Now()));
+      base::Milliseconds(50), 0, base::TimeTicks::Now()));
 
   tester()->SimulateInputTimingUpdate(input_timing);
 
@@ -1819,10 +1850,15 @@ TEST_F(UkmPageLoadMetricsObserverTest, LayoutInstability) {
   EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
                   "PageLoad.LayoutInstability.CumulativeShiftScore"),
               testing::ElementsAre(base::Bucket(25, 1)));
-  EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
-                  "PageLoad.LayoutInstability.MaxCumulativeShiftScore."
-                  "SessionWindow.Gap1000ms.Max5000ms"),
-              testing::ElementsAre(base::Bucket(25, 1)));
+  EXPECT_THAT(
+      tester()->histogram_tester().GetAllSamples(
+          internal::
+              kHistogramLayoutInstabilityMaxCumulativeShiftScoreSessionWindowGap1000msMax5000ms2),
+      testing::ElementsAre(base::Bucket(24000, 1)));
+  tester()->histogram_tester().ExpectTotalCount(
+      internal::
+          kHistogramLayoutInstabilityMaxCumulativeShiftScoreSessionWindowGap1000msMax5000ms2Incognito,
+      0);
 }
 
 TEST_F(UkmPageLoadMetricsObserverTest, SoftNavigationCount) {
@@ -1948,10 +1984,15 @@ TEST_F(UkmPageLoadMetricsObserverTest,
   EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
                   "PageLoad.LayoutInstability.CumulativeShiftScore"),
               testing::ElementsAre(base::Bucket(25, 1)));
-  EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
-                  "PageLoad.LayoutInstability.MaxCumulativeShiftScore."
-                  "SessionWindow.Gap1000ms.Max5000ms"),
-              testing::ElementsAre(base::Bucket(25, 1)));
+  EXPECT_THAT(
+      tester()->histogram_tester().GetAllSamples(
+          internal::
+              kHistogramLayoutInstabilityMaxCumulativeShiftScoreSessionWindowGap1000msMax5000ms2),
+      testing::ElementsAre(base::Bucket(24000, 1)));
+  tester()->histogram_tester().ExpectTotalCount(
+      internal::
+          kHistogramLayoutInstabilityMaxCumulativeShiftScoreSessionWindowGap1000msMax5000ms2Incognito,
+      0);
   EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
                   "PageLoad.LayoutInstability."
                   "CumulativeShiftScoreAtFirstOnHidden"),
@@ -1959,7 +2000,7 @@ TEST_F(UkmPageLoadMetricsObserverTest,
   // The layout shift score was originally 1, after multiplying 10000, it
   // should fit into the bucket of value 9130, with a histogram of maximum
   // value of 24000.
-  const base::HistogramBase::Sample max_cls = 9130;
+  const base::HistogramBase::Sample32 max_cls = 9130;
   EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
                   "PageLoad.LayoutInstability."
                   "MaxCumulativeShiftScoreAtFirstOnHidden.SessionWindow."
@@ -2015,7 +2056,7 @@ TEST_F(UkmPageLoadMetricsObserverTest,
   // The layout shift score was originally 1, after multiplying 10000, it
   // should fit into the bucket of value 9130, with a histogram of maximum
   // value of 24000.
-  const base::HistogramBase::Sample max_cls = 9130;
+  const base::HistogramBase::Sample32 max_cls = 9130;
   EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
                   "PageLoad.LayoutInstability."
                   "MaxCumulativeShiftScoreAtFirstOnHidden.SessionWindow."
@@ -2652,8 +2693,9 @@ class TestOfflinePreviewsUkmPageLoadMetricsObserver
     : public UkmPageLoadMetricsObserver {
  public:
   explicit TestOfflinePreviewsUkmPageLoadMetricsObserver(
-      MockNetworkQualityProvider* network_quality_provider)
-      : UkmPageLoadMetricsObserver(network_quality_provider) {}
+      MockNetworkQualityProvider* network_quality_provider,
+      bool is_incognito)
+      : UkmPageLoadMetricsObserver(network_quality_provider, is_incognito) {}
 
   ~TestOfflinePreviewsUkmPageLoadMetricsObserver() override = default;
 
@@ -2671,7 +2713,7 @@ class OfflinePreviewsUKMPageLoadMetricsObserverTest
   void RegisterObservers(page_load_metrics::PageLoadTracker* tracker) override {
     tracker->AddObserver(
         std::make_unique<TestOfflinePreviewsUkmPageLoadMetricsObserver>(
-            &mock_network_quality_provider()));
+            &mock_network_quality_provider(), false));
   }
 };
 
@@ -2949,13 +2991,12 @@ TEST_F(UkmPageLoadMetricsObserverTest, TestRefreshRateThrottled) {
   TestingPrefServiceSimple local_state;
   performance_manager::user_tuning::prefs::RegisterLocalStatePrefs(
       local_state.registry());
-  local_state.SetInteger(
-      performance_manager::user_tuning::prefs::kBatterySaverModeState,
-      static_cast<int>(performance_manager::user_tuning::prefs::
-                           BatterySaverModeState::kEnabled));
   performance_manager::user_tuning::TestUserPerformanceTuningManagerEnvironment
       uptm_environment;
   uptm_environment.SetUp(&local_state);
+  performance_manager::user_tuning::
+      TestUserPerformanceTuningManagerEnvironment::SetBatterySaverMode(
+          &local_state, true);
 
   NavigateAndCommit(GURL(kTestUrl1));
 
@@ -2977,7 +3018,6 @@ TEST_F(UkmPageLoadMetricsObserverTest, TestRefreshRateThrottled) {
 // The following tests are ensure that Page Load metrics are recorded in a
 // trace. Currently enabled only for platforms where USE_PERFETTO_CLIENT_LIBRARY
 // is true (Android, Linux) as test infra (TestTraceProcessor) requires it.
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
 class TracingWebContentsObserver : public content::WebContentsObserver {
  public:
   explicit TracingWebContentsObserver(content::WebContents* contents)
@@ -3070,4 +3110,45 @@ TEST_F(UkmPageLoadMetricsObserverTest, TestTracingUserTimingMetrics) {
                                      std::vector<std::string>{
                                          base::NumberToString(navigation_id)}));
 }
-#endif
+
+class UkmPageLoadMetricsObserverIncognitoTest
+    : public UkmPageLoadMetricsObserverTest {
+  bool IsIncognito() override { return true; }
+};
+
+TEST_F(UkmPageLoadMetricsObserverIncognitoTest, LayoutInstabilityIncognito) {
+  NavigateAndCommit(GURL(kTestUrl1));
+  base::TimeTicks current_time = base::TimeTicks::Now();
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data(1.0, 1.0, {});
+  render_data.new_layout_shifts.emplace_back(
+      page_load_metrics::mojom::LayoutShift::New(
+          current_time - base::Milliseconds(4000), 0.5));
+  render_data.new_layout_shifts.emplace_back(
+      page_load_metrics::mojom::LayoutShift::New(
+          current_time - base::Milliseconds(3500), 0.5));
+
+  tester()->SimulateRenderDataUpdate(render_data);
+
+  // Simulate hiding the tab (the report should include shifts after hide).
+  web_contents()->WasHidden();
+
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data_2(1.5, 0.0, {});
+  render_data_2.new_layout_shifts.emplace_back(
+      page_load_metrics::mojom::LayoutShift::New(
+          current_time - base::Milliseconds(2500), 1.5));
+  tester()->SimulateRenderDataUpdate(render_data_2);
+
+  // Simulate closing the tab.
+  DeleteContents();
+
+  EXPECT_THAT(
+      tester()->histogram_tester().GetAllSamples(
+          internal::
+              kHistogramLayoutInstabilityMaxCumulativeShiftScoreSessionWindowGap1000msMax5000ms2),
+      testing::ElementsAre(base::Bucket(24000, 1)));
+  EXPECT_THAT(
+      tester()->histogram_tester().GetAllSamples(
+          internal::
+              kHistogramLayoutInstabilityMaxCumulativeShiftScoreSessionWindowGap1000msMax5000ms2Incognito),
+      testing::ElementsAre(base::Bucket(24000, 1)));
+}

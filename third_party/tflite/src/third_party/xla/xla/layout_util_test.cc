@@ -19,11 +19,11 @@ limitations under the License.
 #include <vector>
 
 #include "absl/types/span.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/testlib/test_helpers.h"
 #include "xla/layout.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/test.h"
-#include "xla/test_helpers.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/logging.h"  // IWYU pragma: keep
@@ -591,6 +591,28 @@ TEST_F(LayoutUtilTest, HasCustomElementSizeInBits) {
       ->mutable_layout()
       ->set_element_size_in_bits(32);
   EXPECT_TRUE(LayoutUtil::HasCustomElementSizeInBits(shape));
+}
+
+TEST_F(LayoutUtilTest, MaxSplitSize) {
+  Shape shape = ShapeUtil::MakeShape(F32, {150, 200, 100});
+  *shape.mutable_layout() = LayoutUtil::MakeLayout({0, 1, 2})
+                                .add_split_configs(SplitConfig(0, {30}))
+                                .add_split_configs(SplitConfig(1, {40, 130}));
+
+  EXPECT_EQ(LayoutUtil::MaxSplitSize(shape, 0), 150);
+  EXPECT_EQ(LayoutUtil::MaxSplitSize(shape, 1), 90);
+  EXPECT_EQ(LayoutUtil::MaxSplitSize(shape, 2), 70);
+}
+
+TEST_F(LayoutUtilTest, MaxElementsInPerSplit) {
+  Shape shape = ShapeUtil::MakeShape(F32, {150, 200, 100});
+  *shape.mutable_layout() = LayoutUtil::MakeLayout({0, 1, 2});
+  EXPECT_EQ(LayoutUtil::MaxElementsInPerSplit(shape), 150 * 200 * 100);
+
+  *shape.mutable_layout() = LayoutUtil::MakeLayout({0, 1, 2})
+                                .add_split_configs(SplitConfig(0, {30}))
+                                .add_split_configs(SplitConfig(1, {40, 130}));
+  EXPECT_EQ(LayoutUtil::MaxElementsInPerSplit(shape), 150 * 90 * 70);
 }
 
 }  // namespace

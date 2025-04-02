@@ -15,4 +15,18 @@ WebViewPermissionHelperDelegate::WebViewPermissionHelperDelegate(
 WebViewPermissionHelperDelegate::~WebViewPermissionHelperDelegate() {
 }
 
+bool WebViewPermissionHelperDelegate::
+    CheckMediaAccessPermissionForControlledFrame(
+        content::RenderFrameHost* render_frame_host,
+        const url::Origin& security_origin,
+        blink::mojom::MediaStreamType type) {
+  return false;
+}
+
+bool WebViewPermissionHelperDelegate::
+    ForwardEmbeddedMediaPermissionChecksAsEmbedder(
+        const url::Origin& embedder_origin) {
+  return false;
+}
+
 }  // namespace extensions

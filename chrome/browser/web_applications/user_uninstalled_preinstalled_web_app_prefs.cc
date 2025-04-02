@@ -9,10 +9,10 @@
 
 #include "base/containers/contains.h"
 #include "base/metrics/user_metrics.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
+#include "chrome/browser/web_applications/web_app_management_type.h"
 #include "content/public/browser/browser_thread.h"
 
 namespace web_app {
@@ -201,5 +201,11 @@ bool UserUninstalledPreinstalledWebAppPrefs::AppIdContainsAllUrls(
   }
   return true;
 }
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+void UserUninstalledPreinstalledWebAppPrefs::ClearAllApps() {
+  pref_service_->ClearPref(prefs::kUserUninstalledPreinstalledWebAppPref);
+}
+#endif
 
 }  // namespace web_app

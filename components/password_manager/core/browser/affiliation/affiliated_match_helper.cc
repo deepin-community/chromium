@@ -10,6 +10,7 @@
 
 #include "base/barrier_callback.h"
 #include "base/barrier_closure.h"
+#include "base/not_fatal_until.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/affiliations/core/browser/affiliation_service.h"
 #include "components/password_manager/core/browser/password_form.h"
@@ -126,9 +127,8 @@ void AffiliatedMatchHelper::GetAffiliatedAndGroupedRealms(
   FacetURI facet_uri(
       FacetURI::FromPotentiallyInvalidSpec(observed_form.signon_realm));
   affiliation_service_->GetAffiliationsAndBranding(
-      facet_uri, affiliations::AffiliationService::StrategyOnCacheMiss::FAIL,
-      base::BindOnce(&ProcessAffiliatedFacets, facet_uri)
-          .Then(barrier_callback));
+      facet_uri, base::BindOnce(&ProcessAffiliatedFacets, facet_uri)
+                     .Then(barrier_callback));
 
   affiliation_service_->GetGroupingInfo(
       {facet_uri}, base::BindOnce(&ProcessGroupedFacets, facet_uri)
@@ -158,7 +158,6 @@ void AffiliatedMatchHelper::InjectAffiliationAndBrandingInformation(
     // making it safe to use base::Unretained(form) below.
     affiliation_service_->GetAffiliationsAndBranding(
         FacetURI::FromPotentiallyInvalidSpec(form->signon_realm),
-        affiliations::AffiliationService::StrategyOnCacheMiss::FAIL,
         base::BindOnce(&AffiliatedMatchHelper::
                            CompleteInjectAffiliationAndBrandingInformation,
                        weak_ptr_factory_.GetWeakPtr(), base::Unretained(form),
@@ -208,9 +207,9 @@ void AffiliatedMatchHelper::CompleteInjectAffiliationAndBrandingInformation(
 
   // Inject branding information into the form (e.g. the Play Store name and
   // icon URL). We expect to always find a matching facet URI in the results.
-  auto facet = base::ranges::find(results, facet_uri, &Facet::uri);
+  auto facet = std::ranges::find(results, facet_uri, &Facet::uri);
 
-  DCHECK(facet != results.end());
+  CHECK(facet != results.end(), base::NotFatalUntil::M130);
   form->app_display_name = facet->branding_info.name;
   form->app_icon_url = facet->branding_info.icon_url;
 
@@ -218,7 +217,7 @@ void AffiliatedMatchHelper::CompleteInjectAffiliationAndBrandingInformation(
   // multiple web realms are available, this will always choose the first
   // available web realm for injection.
   auto affiliated_facet =
-      base::ranges::find_if(results, [](const Facet& affiliated_facet) {
+      std::ranges::find_if(results, [](const Facet& affiliated_facet) {
         return affiliated_facet.uri.IsValidWebFacetURI();
       });
   if (affiliated_facet != results.end()) {

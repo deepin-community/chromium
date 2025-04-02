@@ -85,14 +85,13 @@ class H264EncoderFixture : public ::testing::Test {
   H264EncoderFixture& operator=(const H264EncoderFixture&) = delete;
 
  protected:
-  void OnError() {
+  void OnError(const media::EncoderStatus& error_status) {
     DVLOG(4) << __func__ << " is called";
     on_error_called_ = true;
   }
 
   void EncodeFrame() {
     encoder_.StartFrameEncode(
-        CrossThreadBindRepeating(base::TimeTicks::Now),
         media::VideoFrame::CreateBlackFrame({kFrameWidth, kFrameHeight}),
         base::TimeTicks::Now());
   }
@@ -143,17 +142,15 @@ class H264EncoderFixture : public ::testing::Test {
 
   void OnEncodedVideo(
       const media::Muxer::VideoParameters& params,
-      std::string encoded_data,
-      std::string encoded_alpha,
+      scoped_refptr<media::DecoderBuffer> encoded_data,
       std::optional<media::VideoEncoder::CodecDescription> codec_description,
-      base::TimeTicks capture_timestamp,
-      bool is_key_frame) {}
+      base::TimeTicks capture_timestamp) {}
 
   test::TaskEnvironment task_environment_;
   const std::optional<media::VideoCodecProfile> profile_;
   const std::optional<uint8_t> level_;
   const uint32_t bitrate_;
-  raw_ptr<media::MockVideoEncoderMetricsProvider, ExperimentalRenderer>
+  raw_ptr<media::MockVideoEncoderMetricsProvider, DanglingUntriaged>
       mock_metrics_provider_;
   H264Encoder encoder_;
   bool on_error_called_ = false;
@@ -177,8 +174,7 @@ TEST_F(H264EncoderFixture, ErrorCallOnTooLargeFrame) {
                              /*hardware_video_encoder=*/false,
                              media::SVCScalabilityMode::kL1T1));
   EXPECT_CALL(*mock_metrics_provider_, MockSetError);
-  encoder_.StartFrameEncode(CrossThreadBindRepeating(base::TimeTicks::Now),
-                            frame, base::TimeTicks::Now());
+  encoder_.StartFrameEncode(frame, base::TimeTicks::Now());
   EXPECT_TRUE(on_error_called_);
 }
 

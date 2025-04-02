@@ -11,9 +11,9 @@
 #include <algorithm>
 #include <utility>
 
+#include "core/fxcrt/notreached.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
 #include "fxjs/xfa/cjx_object.h"
-#include "third_party/base/notreached.h"
-#include "third_party/base/numerics/safe_conversions.h"
 #include "xfa/fgas/graphics/cfgas_gegraphics.h"
 #include "xfa/fgas/graphics/cfgas_gepath.h"
 #include "xfa/fgas/graphics/cfgas_gepattern.h"
@@ -97,10 +97,10 @@ size_t CXFA_Box::CountEdges() {
 CXFA_Edge* CXFA_Box::GetEdgeIfExists(size_t nIndex) {
   if (nIndex == 0) {
     return JSObject()->GetOrCreateProperty<CXFA_Edge>(
-        pdfium::base::checked_cast<int32_t>(nIndex), XFA_Element::Edge);
+        pdfium::checked_cast<int32_t>(nIndex), XFA_Element::Edge);
   }
   return JSObject()->GetProperty<CXFA_Edge>(
-      pdfium::base::checked_cast<int32_t>(nIndex), XFA_Element::Edge);
+      pdfium::checked_cast<int32_t>(nIndex), XFA_Element::Edge);
 }
 
 std::vector<CXFA_Stroke*> CXFA_Box::GetStrokes() {
@@ -124,16 +124,15 @@ CXFA_Fill* CXFA_Box::GetOrCreateFillIfPossible() {
 }
 
 std::tuple<XFA_AttributeValue, bool, float> CXFA_Box::Get3DStyle() {
-  if (GetElementType() == XFA_Element::Arc)
+  if (GetElementType() == XFA_Element::Arc) {
     return {XFA_AttributeValue::Unknown, false, 0.0f};
+  }
 
   std::vector<CXFA_Stroke*> strokes = GetStrokesInternal(true);
-  CXFA_Stroke* stroke;
-  XFA_AttributeValue iType;
-
-  std::tie(iType, stroke) = Style3D(strokes);
-  if (iType == XFA_AttributeValue::Unknown)
+  auto [iType, stroke] = Style3D(strokes);
+  if (iType == XFA_AttributeValue::Unknown) {
     return {XFA_AttributeValue::Unknown, false, 0.0f};
+  }
 
   return {iType, stroke->IsVisible(), stroke->GetThickness()};
 }
@@ -207,7 +206,7 @@ void CXFA_Box::Draw(CFGAS_GEGraphics* pGS,
   } else if (type == XFA_Element::Rectangle || type == XFA_Element::Border) {
     ToRectangle(this)->Draw(strokes, pGS, rtWidget, matrix);
   } else {
-    NOTREACHED_NORETURN();
+    NOTREACHED();
   }
 }
 
@@ -237,7 +236,7 @@ void CXFA_Box::DrawFill(const std::vector<CXFA_Stroke*>& strokes,
   } else if (type == XFA_Element::Rectangle || type == XFA_Element::Border) {
     ToRectangle(this)->GetFillPath(strokes, rtWidget, &fillPath);
   } else {
-    NOTREACHED_NORETURN();
+    NOTREACHED();
   }
   fillPath.Close();
   fill->Draw(pGS, fillPath, rtWidget, matrix);
@@ -276,10 +275,7 @@ void CXFA_Box::StrokeArcOrRounded(CFGAS_GEGraphics* pGS,
   if (!edge || !edge->IsVisible())
     return;
 
-  bool bVisible;
-  float fThickness;
-  XFA_AttributeValue i3DType;
-  std::tie(i3DType, bVisible, fThickness) = Get3DStyle();
+  auto [i3DType, bVisible, fThickness] = Get3DStyle();
   bool lowered3d = false;
   if (i3DType != XFA_AttributeValue::Unknown) {
     if (bVisible && fThickness >= 0.001f)

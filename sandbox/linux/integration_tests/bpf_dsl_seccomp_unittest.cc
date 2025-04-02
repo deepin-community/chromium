@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -189,10 +194,8 @@ bool IsSyscallForTestHarness(int sysno) {
   if (sysno == kMMapNr || sysno == __NR_munmap ||
 #if !defined(__aarch64__)
       sysno == __NR_pipe ||
-#else
-      sysno == __NR_pipe2 ||
 #endif
-      sysno == __NR_sigaltstack) {
+      sysno == __NR_pipe2 || sysno == __NR_sigaltstack) {
     return true;
   }
 #endif
@@ -2131,7 +2134,7 @@ BPF_TEST_C(SandboxBPF, Pread64, TrapPread64Policy) {
   BPF_ASSERT(FullPwrite64(
       temp_file.fd(), kTestString, sizeof(kTestString), kLargeOffset));
 
-  char read_test_string[sizeof(kTestString)] = {0};
+  char read_test_string[sizeof(kTestString)] = {};
   BPF_ASSERT(FullPread64(temp_file.fd(),
                          read_test_string,
                          sizeof(read_test_string),

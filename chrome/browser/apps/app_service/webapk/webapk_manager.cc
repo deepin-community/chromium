@@ -6,8 +6,6 @@
 
 #include <optional>
 
-#include "ash/components/arc/mojom/app.mojom.h"
-#include "ash/components/arc/session/connection_holder.h"
 #include "base/check.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
@@ -24,6 +22,8 @@
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
+#include "chromeos/ash/experiences/arc/mojom/app.mojom.h"
+#include "chromeos/ash/experiences/arc/session/connection_holder.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "components/services/app_service/public/cpp/intent.h"
@@ -238,7 +238,7 @@ void WebApkManager::OnPackageRemoved(const std::string& package_name,
   // 2. The WebAPK was uninstalled through Android settings. In this case, the
   //    Chrome OS-side app will still be installed and eligible for a WebAPK.
 
-  // TODO(crbug.com/1200199): Remove the web app as well, if it is still
+  // TODO(crbug.com/40178176): Remove the web app as well, if it is still
   // installed and eligible, and WebAPKs are not disabled by policy.
   webapk_prefs::RemoveWebApkByPackageName(profile_, package_name);
 }

@@ -10,22 +10,26 @@
 
 #include "base/check_op.h"
 #include "base/containers/flat_set.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/location.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/no_destructor.h"
 #include "base/notreached.h"
-#include "base/task/lazy_thread_pool_task_runner.h"
+#include "base/task/delayed_task_handle.h"
 #include "base/task/sequenced_task_runner.h"
-#include "base/task/single_thread_task_runner_thread_mode.h"
 #include "base/task/task_traits.h"
+#include "base/time/time.h"
 #include "components/performance_manager/graph/frame_node_impl.h"
 #include "components/performance_manager/graph/page_node_impl.h"
 #include "components/performance_manager/graph/process_node_impl.h"
 #include "components/performance_manager/graph/system_node_impl.h"
 #include "components/performance_manager/graph/worker_node_impl.h"
-#include "components/performance_manager/public/features.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/web_contents.h"
+#include "url/origin.h"
 
 namespace performance_manager {
 
@@ -42,25 +46,113 @@ PerformanceManagerImpl* g_performance_manager = nullptr;
 // |g_performance_manager|. Should only be accessed on the main thread.
 bool g_pm_is_available = false;
 
-constexpr base::TaskPriority kPmTaskPriority = base::TaskPriority::USER_VISIBLE;
-
-// Task traits appropriate for the PM task runner.
-// NOTE: The PM task runner has to block shutdown as some of the tasks posted to
-// it should be guaranteed to run before shutdown (e.g. removing some entries
-// from the site data store).
-constexpr base::TaskTraits kPMTaskTraits = {
-    kPmTaskPriority, base::TaskShutdownBehavior::BLOCK_SHUTDOWN,
-    base::MayBlock()};
-
 // Builds a UI task runner with the appropriate traits for the PM.
-// TODO(crbug.com/1189677): The PM task runner has to block shutdown as some of
+// TODO(crbug.com/40755583): The PM task runner has to block shutdown as some of
 // the tasks posted to it should be guaranteed to run before shutdown (e.g.
 // removing some entries from the site data store). The UI thread ignores
 // MayBlock and TaskShutdownBehavior, so these tasks and any blocking tasks must
 // be found and migrated to a worker thread.
 scoped_refptr<base::SequencedTaskRunner> GetUITaskRunner() {
-  return content::GetUIThreadTaskRunner({kPmTaskPriority});
+  return content::GetUIThreadTaskRunner({base::TaskPriority::USER_VISIBLE});
 }
+
+// A `TaskRunner` which runs callbacks synchronously when they're posted with no
+// delay from the UI thread, or posts to the UI thread otherwise.
+//
+// Note: The UI thread `TaskRunner` is obtained from `GetUITaskRunner()` in each
+// method called, rather than being cached in a member, to ensure that the
+// correct `TaskRunner` is used across tests that run in the same process.
+// `GetUIThreadTaskRunner()` is not known to be costly.
+class TaskRunnerWithSynchronousRunOnUIThread
+    : public base::SequencedTaskRunner {
+ public:
+  static scoped_refptr<base::SequencedTaskRunner> GetInstance() {
+    static base::NoDestructor<scoped_refptr<base::SequencedTaskRunner>>
+        instance(
+            base::MakeRefCounted<TaskRunnerWithSynchronousRunOnUIThread>());
+    return *instance;
+  }
+
+  TaskRunnerWithSynchronousRunOnUIThread() = default;
+
+  bool PostDelayedTask(const base::Location& from_here,
+                       base::OnceClosure task,
+                       base::TimeDelta delay) override {
+    auto task_runner = GetUITaskRunner();
+    if (task_runner->RunsTasksInCurrentSequence() && delay.is_zero()) {
+      std::move(task).Run();
+      return true;
+    }
+    return task_runner->PostDelayedTask(from_here, std::move(task), delay);
+  }
+
+  bool PostNonNestableDelayedTask(const base::Location& from_here,
+                                  base::OnceClosure task,
+                                  base::TimeDelta delay) override {
+    auto task_runner = GetUITaskRunner();
+    if (task_runner->RunsTasksInCurrentSequence() && delay.is_zero()) {
+      std::move(task).Run();
+      return true;
+    }
+    return task_runner->PostNonNestableDelayedTask(from_here, std::move(task),
+                                                   delay);
+  }
+
+  base::DelayedTaskHandle PostCancelableDelayedTask(
+      base::subtle::PostDelayedTaskPassKey pass_key,
+      const base::Location& from_here,
+      base::OnceClosure task,
+      base::TimeDelta delay) override {
+    // There is no call to this method on the Performance Manager `TaskRunner`.
+    //
+    // All callers are annotated with `base::subtle::PostDelayedTaskPassKey`. In
+    // most cases, it's trivial to verify that they don't target this
+    // `TaskRunner`. To confirm that no calls are made via timers defined in
+    // base/timer/timer.cc, we manually verified that no `TaskRunner` obtained
+    // from `PerformanceManager(Impl)::GetTaskRunner()` is passed to
+    // `base::TimerBase::SetTaskRunner()`.
+    NOTREACHED();
+  }
+
+  base::DelayedTaskHandle PostCancelableDelayedTaskAt(
+      base::subtle::PostDelayedTaskPassKey pass_key,
+      const base::Location& from_here,
+      base::OnceClosure task,
+      base::TimeTicks delayed_run_time,
+      base::subtle::DelayPolicy delay_policy) override {
+    // There is no call to this method on the Performance Manager `TaskRunner`.
+    //
+    // See notes in `PostCancelableDelayedTask`.
+    NOTREACHED();
+  }
+
+  bool PostDelayedTaskAt(base::subtle::PostDelayedTaskPassKey pass_key,
+                         const base::Location& from_here,
+                         base::OnceClosure task,
+                         base::TimeTicks delayed_run_time,
+                         base::subtle::DelayPolicy delay_policy) override {
+    // There is no call to this method on the Performance Manager `TaskRunner`.
+    //
+    // See notes in `PostCancelableDelayedTask`.
+    NOTREACHED();
+  }
+
+  bool RunOrPostTask(base::subtle::RunOrPostTaskPassKey,
+                     const base::Location& from_here,
+                     base::OnceClosure task) override {
+    // There is no call to this method on the Performance Manager `TaskRunner`.
+    // The only call is in ipc/ipc_mojo_bootstrap.cc and it's trivial to verify
+    // that it doesn't target this `TaskRunner`.
+    NOTREACHED();
+  }
+
+  bool RunsTasksInCurrentSequence() const override {
+    return GetUITaskRunner()->RunsTasksInCurrentSequence();
+  }
+
+ private:
+  ~TaskRunnerWithSynchronousRunOnUIThread() override = default;
+};
 
 }  // namespace
 
@@ -72,11 +164,18 @@ bool PerformanceManager::IsAvailable() {
 PerformanceManagerImpl::~PerformanceManagerImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(g_performance_manager, this);
-  // TODO(https://crbug.com/966840): Move this to a TearDown function.
+  // TODO(crbug.com/40629049): Move this to a TearDown function.
   graph_.TearDown();
   g_performance_manager = nullptr;
   if (on_destroyed_callback_)
     std::move(on_destroyed_callback_).Run();
+}
+
+// static
+GraphImpl* PerformanceManagerImpl::GetGraphImpl() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK(g_pm_is_available);
+  return &g_performance_manager->graph_;
 }
 
 // static
@@ -105,17 +204,10 @@ std::unique_ptr<PerformanceManagerImpl> PerformanceManagerImpl::Create(
   std::unique_ptr<PerformanceManagerImpl> instance =
       base::WrapUnique(new PerformanceManagerImpl());
 
-  if (base::FeatureList::IsEnabled(features::kRunOnMainThread)) {
-    // Invoke `OnStartImpl()` synchronously instead of via a posted task, so
-    // that any call to `CallOnGraphImpl()` that follows can access
-    // `g_performance_manager->ui_task_runner_`.
-    instance->OnStartImpl(std::move(on_start));
-  } else {
-    GetTaskRunner()->PostTask(
-        FROM_HERE,
-        base::BindOnce(&PerformanceManagerImpl::OnStartImpl,
-                       base::Unretained(instance.get()), std::move(on_start)));
-  }
+  GetTaskRunner()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&PerformanceManagerImpl::OnStartImpl,
+                     base::Unretained(instance.get()), std::move(on_start)));
 
   return instance;
 }
@@ -137,43 +229,38 @@ std::unique_ptr<FrameNodeImpl> PerformanceManagerImpl::CreateFrameNode(
     int render_frame_id,
     const blink::LocalFrameToken& frame_token,
     content::BrowsingInstanceId browsing_instance_id,
-    content::SiteInstanceId site_instance_id,
-    bool is_current,
-    FrameNodeCreationCallback creation_callback) {
+    content::SiteInstanceGroupId site_instance_group_id,
+    bool is_current) {
   return CreateNodeImpl<FrameNodeImpl>(
-      std::move(creation_callback), process_node, page_node, parent_frame_node,
+      process_node, page_node, parent_frame_node,
       outer_document_for_fenced_frame, render_frame_id, frame_token,
-      browsing_instance_id, site_instance_id, is_current);
+      browsing_instance_id, site_instance_group_id, is_current);
 }
 
 // static
 std::unique_ptr<PageNodeImpl> PerformanceManagerImpl::CreatePageNode(
-    const WebContentsProxy& contents_proxy,
+    base::WeakPtr<content::WebContents> web_contents,
     const std::string& browser_context_id,
     const GURL& visible_url,
     PagePropertyFlags initial_property_flags,
-    base::TimeTicks visibility_change_time,
-    PageNode::PageState page_state) {
-  return CreateNodeImpl<PageNodeImpl>(base::OnceCallback<void(PageNodeImpl*)>(),
-                                      contents_proxy, browser_context_id,
-                                      visible_url, initial_property_flags,
-                                      visibility_change_time, page_state);
+    base::TimeTicks visibility_change_time) {
+  return CreateNodeImpl<PageNodeImpl>(
+      std::move(web_contents), browser_context_id, visible_url,
+      initial_property_flags, visibility_change_time);
 }
 
 // static
 std::unique_ptr<ProcessNodeImpl> PerformanceManagerImpl::CreateProcessNode(
     BrowserProcessNodeTag tag) {
-  return CreateNodeImpl<ProcessNodeImpl>(
-      base::OnceCallback<void(ProcessNodeImpl*)>(), tag);
+  return CreateNodeImpl<ProcessNodeImpl>(tag);
 }
 
 // static
 std::unique_ptr<ProcessNodeImpl> PerformanceManagerImpl::CreateProcessNode(
     RenderProcessHostProxy render_process_host_proxy,
     base::TaskPriority priority) {
-  return CreateNodeImpl<ProcessNodeImpl>(
-      base::OnceCallback<void(ProcessNodeImpl*)>(),
-      std::move(render_process_host_proxy), priority);
+  return CreateNodeImpl<ProcessNodeImpl>(std::move(render_process_host_proxy),
+                                         priority);
 }
 
 // static
@@ -181,8 +268,7 @@ std::unique_ptr<ProcessNodeImpl> PerformanceManagerImpl::CreateProcessNode(
     content::ProcessType process_type,
     BrowserChildProcessHostProxy browser_child_process_host_proxy) {
   return CreateNodeImpl<ProcessNodeImpl>(
-      base::OnceCallback<void(ProcessNodeImpl*)>(), process_type,
-      std::move(browser_child_process_host_proxy));
+      process_type, std::move(browser_child_process_host_proxy));
 }
 
 // static
@@ -190,10 +276,10 @@ std::unique_ptr<WorkerNodeImpl> PerformanceManagerImpl::CreateWorkerNode(
     const std::string& browser_context_id,
     WorkerNode::WorkerType worker_type,
     ProcessNodeImpl* process_node,
-    const blink::WorkerToken& worker_token) {
-  return CreateNodeImpl<WorkerNodeImpl>(
-      base::OnceCallback<void(WorkerNodeImpl*)>(), browser_context_id,
-      worker_type, process_node, worker_token);
+    const blink::WorkerToken& worker_token,
+    const url::Origin& origin) {
+  return CreateNodeImpl<WorkerNodeImpl>(browser_context_id, worker_type,
+                                        process_node, worker_token, origin);
 }
 
 // static
@@ -242,43 +328,12 @@ void PerformanceManagerImpl::SetOnDestroyedCallbackForTesting(
 
 PerformanceManagerImpl::PerformanceManagerImpl() {
   DETACH_FROM_SEQUENCE(sequence_checker_);
-  if (base::FeatureList::IsEnabled(features::kRunOnMainThread)) {
-    ui_task_runner_ = GetUITaskRunner();
-  }
 }
 
 // static
 scoped_refptr<base::SequencedTaskRunner>
 PerformanceManagerImpl::GetTaskRunner() {
-  if (base::FeatureList::IsEnabled(features::kRunOnMainThread)) {
-    CHECK(!base::FeatureList::IsEnabled(
-        features::kRunOnDedicatedThreadPoolThread));
-    // Used the cached runner, if available. This prevents doing repeated
-    // lookups.
-    if (g_performance_manager)
-      return g_performance_manager->ui_task_runner_;
-    // Our semantics are that this always returns a valid task runner as long
-    // as there is a task environment alive. We can't cache this in a local
-    // static variable because it will become invalid across test boundaries.
-    // Note that this doesn't result in a new task runner being created; it
-    // simply causes a table lookup to find the existing task runner with the
-    // appropriate type, which will be the same task runner that was cached by
-    // |g_performance_manager| while it was alive.
-    return GetUITaskRunner();
-  }
-  if (base::FeatureList::IsEnabled(features::kRunOnDedicatedThreadPoolThread)) {
-    CHECK(!base::FeatureList::IsEnabled(features::kRunOnMainThread));
-    // Use a dedicated thread so that all tasks on the PM sequence can be
-    // identified in traces.
-    static base::LazyThreadPoolSingleThreadTaskRunner task_runner =
-        LAZY_THREAD_POOL_SINGLE_THREAD_TASK_RUNNER_INITIALIZER(
-            kPMTaskTraits, base::SingleThreadTaskRunnerThreadMode::DEDICATED);
-    return task_runner.Get();
-  }
-  static base::LazyThreadPoolSequencedTaskRunner
-      performance_manager_task_runner =
-          LAZY_THREAD_POOL_SEQUENCED_TASK_RUNNER_INITIALIZER(kPMTaskTraits);
-  return performance_manager_task_runner.Get();
+  return TaskRunnerWithSynchronousRunOnUIThread::GetInstance();
 }
 
 PerformanceManagerImpl* PerformanceManagerImpl::GetInstance() {
@@ -286,33 +341,13 @@ PerformanceManagerImpl* PerformanceManagerImpl::GetInstance() {
   return g_performance_manager;
 }
 
-namespace {
-
-// Helper function for adding a node to a graph, and invoking a post-creation
-// callback immediately afterwards.
-template <typename NodeType>
-void AddNodeAndInvokeCreationCallback(
-    base::OnceCallback<void(NodeType*)> callback,
-    NodeType* node,
-    GraphImpl* graph) {
-  graph->AddNewNode(node);
-  if (callback)
-    std::move(callback).Run(node);
-}
-
-}  // namespace
-
 // static
 template <typename NodeType, typename... Args>
 std::unique_ptr<NodeType> PerformanceManagerImpl::CreateNodeImpl(
-    base::OnceCallback<void(NodeType*)> creation_callback,
     Args&&... constructor_args) {
   std::unique_ptr<NodeType> new_node =
       std::make_unique<NodeType>(std::forward<Args>(constructor_args)...);
-  CallOnGraphImpl(FROM_HERE,
-                  base::BindOnce(&AddNodeAndInvokeCreationCallback<NodeType>,
-                                 std::move(creation_callback),
-                                 base::Unretained(new_node.get())));
+  PerformanceManagerImpl::GetGraphImpl()->AddNewNode(new_node.get());
   return new_node;
 }
 
@@ -351,7 +386,7 @@ void PerformanceManagerImpl::BatchDeleteNodesImpl(
   base::flat_set<ProcessNodeImpl*> process_nodes;
 
   for (const auto& node : *nodes) {
-    switch (node->type()) {
+    switch (node->GetNodeType()) {
       case PageNodeImpl::Type(): {
         auto* page_node = PageNodeImpl::FromNodeBase(node.get());
 
@@ -378,11 +413,8 @@ void PerformanceManagerImpl::BatchDeleteNodesImpl(
         graph->RemoveNode(worker_node);
         break;
       }
-      case SystemNodeImpl::Type():
-      case NodeTypeEnum::kInvalidType:
-      default: {
+      case SystemNodeImpl::Type(): {
         NOTREACHED();
-        break;
       }
     }
   }
@@ -397,11 +429,6 @@ void PerformanceManagerImpl::BatchDeleteNodesImpl(
 void PerformanceManagerImpl::OnStartImpl(GraphImplCallback on_start) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!g_performance_manager);
-
-  if (base::FeatureList::IsEnabled(features::kRunOnDedicatedThreadPoolThread)) {
-    // This should be the first task that runs on the dedicated thread.
-    base::PlatformThread::SetName("Performance Manager");
-  }
 
   g_performance_manager = this;
   graph_.SetUp();

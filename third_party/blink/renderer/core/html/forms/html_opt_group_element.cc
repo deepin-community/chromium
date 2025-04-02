@@ -29,11 +29,14 @@
 #include "third_party/blink/renderer/core/dom/events/simulated_click_options.h"
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
+#include "third_party/blink/renderer/core/html/forms/html_legend_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_option_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
 #include "third_party/blink/renderer/core/html/html_slot_element.h"
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/core/keywords.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
@@ -47,12 +50,15 @@ bool CanAssignToOptGroupSlot(const Node& node) {
          node.HasTagName(html_names::kHrTag);
 }
 
+HTMLLegendElement* FirstChildLegend(const HTMLOptGroupElement& optgroup) {
+  return Traversal<HTMLLegendElement>::FirstChild(optgroup);
+}
+
 }  // namespace
 
 HTMLOptGroupElement::HTMLOptGroupElement(Document& document)
     : HTMLElement(html_names::kOptgroupTag, document) {
-  EnsureUserAgentShadowRoot().SetSlotAssignmentMode(
-      SlotAssignmentMode::kManual);
+  EnsureUserAgentShadowRoot(SlotAssignmentMode::kManual);
 }
 
 // An explicit empty destructor should be in html_opt_group_element.cc, because
@@ -78,10 +84,11 @@ void HTMLOptGroupElement::ParseAttribute(
   }
 }
 
-bool HTMLOptGroupElement::SupportsFocus(UpdateBehavior update_behavior) const {
+FocusableState HTMLOptGroupElement::SupportsFocus(
+    UpdateBehavior update_behavior) const {
   HTMLSelectElement* select = OwnerSelectElement();
   if (select && select->UsesMenuList())
-    return false;
+    return FocusableState::kNotFocusable;
   return HTMLElement::SupportsFocus(update_behavior);
 }
 
@@ -99,15 +106,24 @@ void HTMLOptGroupElement::ChildrenChanged(const ChildrenChange& change) {
   DCHECK_NE(change.type,
             ChildrenChangeType::kFinishedBuildingDocumentFragmentTree);
   if (change.type == ChildrenChangeType::kElementInserted) {
-    if (auto* option = DynamicTo<HTMLOptionElement>(change.sibling_changed))
+    if (auto* option = DynamicTo<HTMLOptionElement>(change.sibling_changed)) {
       select->OptionInserted(*option, option->Selected());
+    } else if (IsA<HTMLLegendElement>(change.sibling_changed)) {
+      UpdateGroupLabel();
+    }
   } else if (change.type == ChildrenChangeType::kElementRemoved) {
-    if (auto* option = DynamicTo<HTMLOptionElement>(change.sibling_changed))
+    if (auto* option = DynamicTo<HTMLOptionElement>(change.sibling_changed)) {
       select->OptionRemoved(*option);
+    } else if (IsA<HTMLLegendElement>(change.sibling_changed)) {
+      UpdateGroupLabel();
+    }
   } else if (change.type == ChildrenChangeType::kAllChildrenRemoved) {
     for (Node* node : change.removed_nodes) {
-      if (auto* option = DynamicTo<HTMLOptionElement>(node))
+      if (auto* option = DynamicTo<HTMLOptionElement>(node)) {
         select->OptionRemoved(*option);
+      } else if (IsA<HTMLLegendElement>(change.sibling_changed)) {
+        UpdateGroupLabel();
+      }
     }
   }
 }
@@ -118,10 +134,19 @@ bool HTMLOptGroupElement::ChildrenChangedAllChildrenRemovedNeedsList() const {
 
 Node::InsertionNotificationRequest HTMLOptGroupElement::InsertedInto(
     ContainerNode& insertion_point) {
+  customizable_select_rendering_ = false;
   HTMLElement::InsertedInto(insertion_point);
   if (HTMLSelectElement* select = OwnerSelectElement()) {
     if (&insertion_point == select)
       select->OptGroupInsertedOrRemoved(*this);
+    // TODO(crbug.com/1511354): This UsesMenuList check doesn't account for
+    // the case when the select's rendering is changed after insertion.
+    customizable_select_rendering_ =
+        RuntimeEnabledFeatures::CustomizableSelectEnabled() &&
+        select->UsesMenuList();
+  }
+  if (RuntimeEnabledFeatures::CustomizableSelectEnabled()) {
+    UpdateGroupLabel();
   }
   return kInsertionDone;
 }
@@ -135,6 +160,17 @@ void HTMLOptGroupElement::RemovedFrom(ContainerNode& insertion_point) {
 }
 
 String HTMLOptGroupElement::GroupLabelText() const {
+  String label_attribute_text = LabelAttributeText();
+  if (RuntimeEnabledFeatures::CustomizableSelectEnabled() &&
+      label_attribute_text.ContainsOnlyWhitespaceOrEmpty()) {
+    if (auto* legend = FirstChildLegend(*this)) {
+      return legend->textContent();
+    }
+  }
+  return label_attribute_text;
+}
+
+String HTMLOptGroupElement::LabelAttributeText() const {
   String item_text = FastGetAttribute(html_names::kLabelAttr);
 
   // In WinIE, leading and trailing whitespace is ignored in options and
@@ -147,7 +183,23 @@ String HTMLOptGroupElement::GroupLabelText() const {
 }
 
 HTMLSelectElement* HTMLOptGroupElement::OwnerSelectElement() const {
-  return DynamicTo<HTMLSelectElement>(parentNode());
+  if (RuntimeEnabledFeatures::SelectParserRelaxationEnabled()) {
+    // TODO(crbug.com/351990825): Cache the owner select ancestor on insertion
+    // rather than doing a tree traversal here every time OwnerSelectElement is
+    // called, which may be a lot.
+    for (Node& ancestor : NodeTraversal::AncestorsOf(*this)) {
+      if (IsA<HTMLOptGroupElement>(ancestor) ||
+          IsA<HTMLOptionElement>(ancestor)) {
+        return nullptr;
+      }
+      if (auto* select = DynamicTo<HTMLSelectElement>(ancestor)) {
+        return select;
+      }
+    }
+    return nullptr;
+  } else {
+    return DynamicTo<HTMLSelectElement>(parentNode());
+  }
 }
 
 String HTMLOptGroupElement::DefaultToolTip() const {
@@ -167,15 +219,10 @@ void HTMLOptGroupElement::AccessKeyAction(
 }
 
 void HTMLOptGroupElement::DidAddUserAgentShadowRoot(ShadowRoot& root) {
-  DEFINE_STATIC_LOCAL(AtomicString, label_padding, ("0 2px 1px 2px"));
-  DEFINE_STATIC_LOCAL(AtomicString, label_min_height, ("1.2em"));
-  auto* label = MakeGarbageCollected<HTMLDivElement>(GetDocument());
-  label->setAttribute(html_names::kRoleAttr, AtomicString("group"));
-  label->setAttribute(html_names::kAriaLabelAttr, AtomicString());
-  label->SetInlineStyleProperty(CSSPropertyID::kPadding, label_padding);
-  label->SetInlineStyleProperty(CSSPropertyID::kMinHeight, label_min_height);
-  label->SetIdAttribute(shadow_element_names::kIdOptGroupLabel);
-  root.AppendChild(label);
+  label_ = MakeGarbageCollected<HTMLDivElement>(GetDocument());
+  label_->setAttribute(html_names::kAriaHiddenAttr, keywords::kTrue);
+  label_->SetShadowPseudoId(shadow_element_names::kIdOptGroupLabel);
+  root.AppendChild(label_);
   opt_group_slot_ = MakeGarbageCollected<HTMLSlotElement>(GetDocument());
   root.AppendChild(opt_group_slot_);
 }
@@ -185,28 +232,37 @@ void HTMLOptGroupElement::ManuallyAssignSlots() {
   for (Node& child : NodeTraversal::ChildrenOf(*this)) {
     if (!child.IsSlotable())
       continue;
-    if (CanAssignToOptGroupSlot(child))
+    if (customizable_select_rendering_ || CanAssignToOptGroupSlot(child)) {
       opt_group_nodes.push_back(child);
+    }
   }
   opt_group_slot_->Assign(opt_group_nodes);
 }
 
 void HTMLOptGroupElement::UpdateGroupLabel() {
-  const String& label_text = GroupLabelText();
+  const String& label_text = LabelAttributeText();
   HTMLDivElement& label = OptGroupLabelElement();
   label.setTextContent(label_text);
   label.setAttribute(html_names::kAriaLabelAttr, AtomicString(label_text));
+  if (label_text.ContainsOnlyWhitespaceOrEmpty() || FirstChildLegend(*this)) {
+    if (customizable_select_rendering_) {
+      // If the author uses <legend> to label the <optgroup> instead of the
+      // label attribute, then we don't want extra space being taken up for the
+      // unused label attribute.
+      label.SetInlineStyleProperty(CSSPropertyID::kDisplay, "none");
+    }
+  } else {
+    label.RemoveInlineStyleProperty(CSSPropertyID::kDisplay);
+  }
 }
 
 HTMLDivElement& HTMLOptGroupElement::OptGroupLabelElement() const {
-  auto* element = UserAgentShadowRoot()->getElementById(
-      shadow_element_names::kIdOptGroupLabel);
-  CHECK(!element || IsA<HTMLDivElement>(element));
-  return *To<HTMLDivElement>(element);
+  return *label_;
 }
 
 void HTMLOptGroupElement::Trace(Visitor* visitor) const {
   visitor->Trace(opt_group_slot_);
+  visitor->Trace(label_);
   HTMLElement::Trace(visitor);
 }
 

@@ -8,7 +8,6 @@
 #include <memory>
 #include <optional>
 
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/common/base_telemetry_extension_api_guard_function.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/diagnostics/remote_diagnostics_service_strategy.h"
 #include "chromeos/crosapi/mojom/diagnostics_service.mojom.h"
@@ -40,10 +39,6 @@ class DiagnosticsApiFunctionBase : public DiagnosticsApiFunctionV1AndV2Base {
 
   mojo::Remote<crosapi::mojom::DiagnosticsService>& GetRemoteService();
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  bool IsCrosApiAvailable() override;
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
  private:
   std::unique_ptr<RemoteDiagnosticsServiceStrategy>
       remote_diagnostics_service_strategy_;
@@ -55,10 +50,6 @@ class DiagnosticsApiFunctionBaseV2 : public DiagnosticsApiFunctionV1AndV2Base {
 
  protected:
   ~DiagnosticsApiFunctionBaseV2() override = default;
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  bool IsCrosApiAvailable() override;
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 };
 
 /****************** DIAGNOSTICS API V1 ******************/
@@ -346,17 +337,6 @@ class OsDiagnosticsRunNvmeSelfTestRoutineFunction
   void RunIfAllowed() override;
 };
 
-class OsDiagnosticsRunNvmeWearLevelRoutineFunction
-    : public DiagnosticsApiRunRoutineFunctionBase {
-  DECLARE_EXTENSION_FUNCTION("os.diagnostics.runNvmeWearLevelRoutine",
-                             OS_DIAGNOSTICS_RUNNVMEWEARLEVELROUTINE)
- private:
-  ~OsDiagnosticsRunNvmeWearLevelRoutineFunction() override = default;
-
-  // BaseTelemetryExtensionApiGuardFunction:
-  void RunIfAllowed() override;
-};
-
 class OsDiagnosticsRunSensitiveSensorRoutineFunction
     : public DiagnosticsApiRunRoutineFunctionBase {
   DECLARE_EXTENSION_FUNCTION("os.diagnostics.runSensitiveSensorRoutine",
@@ -436,6 +416,16 @@ class OsDiagnosticsRunFanRoutineFunction
 
 /****************** DIAGNOSTICS API V2 ******************/
 
+class OsDiagnosticsCreateRoutineFunction : public DiagnosticsApiFunctionBaseV2 {
+  DECLARE_EXTENSION_FUNCTION("os.diagnostics.createRoutine",
+                             OS_DIAGNOSTICS_CREATEROUTINE)
+ private:
+  ~OsDiagnosticsCreateRoutineFunction() override = default;
+
+  // BaseTelemetryExtensionApiGuardFunction:
+  void RunIfAllowed() override;
+};
+
 class OsDiagnosticsCreateMemoryRoutineFunction
     : public DiagnosticsApiFunctionBaseV2 {
   DECLARE_EXTENSION_FUNCTION("os.diagnostics.createMemoryRoutine",
@@ -487,6 +477,30 @@ class OsDiagnosticsCancelRoutineFunction : public DiagnosticsApiFunctionBaseV2 {
 
   // BaseTelemetryExtensionApiGuardFunction:
   void RunIfAllowed() override;
+};
+
+class OsDiagnosticsReplyToRoutineInquiryFunction
+    : public DiagnosticsApiFunctionBaseV2 {
+  DECLARE_EXTENSION_FUNCTION("os.diagnostics.replyToRoutineInquiry",
+                             OS_DIAGNOSTICS_REPLYTOROUTINEINQUIRY)
+ private:
+  ~OsDiagnosticsReplyToRoutineInquiryFunction() override = default;
+
+  // BaseTelemetryExtensionApiGuardFunction:
+  void RunIfAllowed() override;
+};
+
+class OsDiagnosticsIsRoutineArgumentSupportedFunction
+    : public DiagnosticsApiFunctionBaseV2 {
+  DECLARE_EXTENSION_FUNCTION("os.diagnostics.isRoutineArgumentSupported",
+                             OS_DIAGNOSTICS_ISROUTINEARGUMENTSUPPORTED)
+ private:
+  ~OsDiagnosticsIsRoutineArgumentSupportedFunction() override = default;
+
+  // BaseTelemetryExtensionApiGuardFunction:
+  void RunIfAllowed() override;
+
+  void OnResult(crosapi::mojom::TelemetryExtensionSupportStatusPtr result);
 };
 
 class OsDiagnosticsIsMemoryRoutineArgumentSupportedFunction

@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -77,24 +78,22 @@ class FakeStorageChain : public DataLayerChain {
   // Implementation of DataLayerChain.
   SingleSearchResult SingleSearch(FilterOp, SqlValue, uint32_t) const override;
 
-  UniqueSearchResult UniqueSearch(FilterOp, SqlValue, uint32_t*) const override;
-
   SearchValidationResult ValidateSearchConstraints(FilterOp,
                                                    SqlValue) const override;
 
   RangeOrBitVector SearchValidated(FilterOp, SqlValue, Range) const override;
 
-  RangeOrBitVector IndexSearchValidated(FilterOp,
-                                        SqlValue,
-                                        Indices) const override;
+  void IndexSearchValidated(FilterOp, SqlValue, Indices&) const override;
 
-  Range OrderedIndexSearchValidated(FilterOp, SqlValue, Indices) const override;
+  void StableSort(Token* start, Token* end, SortDirection) const override;
 
-  void StableSort(SortToken* start,
-                  SortToken* end,
-                  SortDirection) const override;
+  void Distinct(Indices&) const override;
 
-  void Serialize(StorageProto*) const override;
+  std::optional<Token> MaxElement(Indices&) const override;
+
+  std::optional<Token> MinElement(Indices&) const override;
+
+  SqlValue Get_AvoidUsingBecauseSlow(uint32_t index) const override;
 
   uint32_t size() const override { return size_; }
 

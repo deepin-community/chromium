@@ -23,6 +23,8 @@
  */
 
 import type {VolumeInfo} from '../../background/js/volume_info.js';
+import {ICON_TYPES} from '../../foreground/js/constants.js';
+import {oneDriveFakeRootKey} from '../../state/ducks/volumes.js';
 
 import {isSameEntry} from './entry_utils.js';
 import {vmTypeToIconName} from './icon_util.js';
@@ -40,6 +42,10 @@ export type FileErrorCallback = (e: FileError) => void;
 export type FilesAppEntryCallback = (a: FilesAppEntry) => void;
 export type FileEntryCallback = (a: FileEntry) => void;
 export type FilesAppDirEntryCallback = (a: FilesAppDirEntry) => void;
+
+// Generalized entry and directory entry definitions.
+export type UniversalEntry = FilesAppEntry|Entry;
+export type UniversalDirectory = FilesAppDirEntry|DirectoryEntry;
 
 /**
  * FilesAppEntry represents a single Entry (file, folder or root) in the Files
@@ -552,6 +558,10 @@ export class EntryList extends FilesAppDirEntry {
     return false;
   }
 
+  removeAllChildren() {
+    this.children_ = [];
+  }
+
   override getNativeEntry() {
     return null;
   }
@@ -981,5 +991,28 @@ export class GuestOsPlaceholder extends FakeEntryImpl {
       return VolumeType.ANDROID_FILES;
     }
     return VolumeType.GUEST_OS;
+  }
+}
+
+/**
+ * OneDrivePlaceholder is used to represent OneDrive in the UI, before being
+ * mounted and set up.
+ */
+export class OneDrivePlaceholder extends FakeEntryImpl {
+  constructor(label: string) {
+    super(label, RootType.PROVIDED);
+  }
+
+  override get typeName() {
+    return 'OneDrivePlaceholder';
+  }
+
+  // eslint-disable-next-line @typescript-eslint/naming-convention
+  override toURL() {
+    return oneDriveFakeRootKey;
+  }
+
+  override get iconName(): string {
+    return ICON_TYPES.ODFS;
   }
 }

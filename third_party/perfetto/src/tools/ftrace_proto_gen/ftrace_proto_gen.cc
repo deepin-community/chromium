@@ -59,7 +59,7 @@ std::string EventNameToProtoFieldName(const std::string& group,
   // These groups have events where the name alone conflicts with an existing
   // proto:
   if (group == "sde" || group == "g2d" || group == "dpu" || group == "mali" ||
-      group == "lwis" || group == "samsung") {
+      group == "lwis" || group == "samsung" || group == "kgsl") {
     event_name = group + "_" + event_name;
   }
   return event_name;
@@ -167,6 +167,10 @@ void GenerateFtraceEventProto(const std::vector<FtraceEventName>& raw_eventlist,
     // generated code.
     if (i == 327) {
       *fout << "    GenericFtraceEvent generic = " << i << ";\n";
+      ++i;
+    }
+    if (i == 542) {
+      *fout << "    KprobeEvent kprobe_event = " << i << ";\n";
       ++i;
     }
   }

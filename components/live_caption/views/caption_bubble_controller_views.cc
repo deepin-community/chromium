@@ -10,8 +10,10 @@
 #include <unordered_map>
 
 #include "base/functional/bind.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/live_caption/caption_bubble_context.h"
+#include "components/live_caption/caption_bubble_settings.h"
 #include "components/live_caption/live_caption_controller.h"
 #include "components/live_caption/views/caption_bubble.h"
 #include "components/live_caption/views/caption_bubble_model.h"
@@ -24,37 +26,37 @@ namespace captions {
 
 // Static
 std::unique_ptr<CaptionBubbleController> CaptionBubbleController::Create(
-    PrefService* profile_prefs,
+    CaptionBubbleSettings* caption_bubble_settings,
     const std::string& application_locale) {
-  return std::make_unique<CaptionBubbleControllerViews>(profile_prefs,
+  return std::make_unique<CaptionBubbleControllerViews>(caption_bubble_settings,
                                                         application_locale);
 }
 
 CaptionBubbleControllerViews::CaptionBubbleControllerViews(
-    PrefService* profile_prefs,
+    CaptionBubbleSettings* caption_bubble_settings,
     const std::string& application_locale)
     : application_locale_(application_locale) {
   caption_bubble_ = new CaptionBubble(
-      profile_prefs, application_locale,
+      caption_bubble_settings, application_locale,
       base::BindOnce(&CaptionBubbleControllerViews::OnCaptionBubbleDestroyed,
                      base::Unretained(this)));
   caption_widget_ =
       views::BubbleDialogDelegateView::CreateBubble(caption_bubble_);
   caption_bubble_->SetCaptionBubbleStyle();
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
   speech::SodaInstaller* soda_installer = speech::SodaInstaller::GetInstance();
   if (soda_installer) {
     soda_installer->AddObserver(this);
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 CaptionBubbleControllerViews::~CaptionBubbleControllerViews() {
   if (caption_widget_)
     caption_widget_->CloseNow();
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
   speech::SodaInstaller* soda_installer = speech::SodaInstaller::GetInstance();
   // `soda_installer` is not guaranteed to be valid, since it's possible for
   // this class to out-live it. This means that this class cannot use
@@ -62,7 +64,7 @@ CaptionBubbleControllerViews::~CaptionBubbleControllerViews() {
   if (soda_installer) {
     soda_installer->RemoveObserver(this);
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 void CaptionBubbleControllerViews::OnCaptionBubbleDestroyed() {
@@ -78,14 +80,6 @@ bool CaptionBubbleControllerViews::OnTranscription(
   SetActiveModel(caption_bubble_context);
   if (active_model_->IsClosed())
     return false;
-
-  // If the caption bubble has no activity and it receives a final
-  // transcription, don't set text. The speech service sends a final
-  // transcription after several seconds of no audio. This prevents the bubble
-  // reappearing with a final transcription after it had disappeared due to no
-  // activity.
-  if (!caption_bubble_->HasActivity() && result.is_final)
-    return true;
 
   active_model_->SetPartialText(result.transcription);
   if (result.is_final)
@@ -271,7 +265,7 @@ void CaptionBubbleControllerViews::OnSodaProgress(
         IDS_LIVE_CAPTION_DOWNLOAD_PROGRESS,
         speech::GetLanguageDisplayName(speech::GetLanguageName(language_code),
                                        application_locale_),
-        base::UTF8ToUTF16(std::to_string(progress))));
+        base::UTF8ToUTF16(base::NumberToString(progress))));
   }
 }
 

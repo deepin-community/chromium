@@ -8,13 +8,14 @@
  * an editable.
  */
 import {AutomationUtil} from '/common/automation_util.js';
-import {CursorRange} from '/common/cursors/range.js';
+import type {CursorRange} from '/common/cursors/range.js';
 import {TestImportManager} from '/common/testing/test_import_manager.js';
 
 import {EarconId} from '../../common/earcon_id.js';
 import {SettingsManager} from '../../common/settings_manager.js';
 import {ChromeVox} from '../chromevox.js';
-import {ChromeVoxRange, ChromeVoxRangeObserver} from '../chromevox_range.js';
+import type {ChromeVoxRangeObserver} from '../chromevox_range.js';
+import {ChromeVoxRange} from '../chromevox_range.js';
 import {ChromeVoxState} from '../chromevox_state.js';
 import {ChromeVoxPrefs} from '../prefs.js';
 
@@ -95,11 +96,13 @@ export class SmartStickyMode implements ChromeVoxRangeObserver {
       // Save the sticky state for restoration later.
       this.didTurnOffStickyMode_ = true;
       ChromeVox.earcons.playEarcon(EarconId.SMART_STICKY_MODE_OFF);
-      ChromeVoxPrefs.instance.setAndAnnounceStickyPref(false);
+      // TODO(b/314203187): Not null asserted, check that this is correct.
+      ChromeVoxPrefs.instance!.setAndAnnounceStickyPref(false);
     } else if (this.didTurnOffStickyMode_) {
       // Restore the previous sticky mode state.
       ChromeVox.earcons.playEarcon(EarconId.SMART_STICKY_MODE_ON);
-      ChromeVoxPrefs.instance.setAndAnnounceStickyPref(true);
+      // TODO(b/314203187): Not null asserted, check that this is correct.
+      ChromeVoxPrefs.instance!.setAndAnnounceStickyPref(true);
       this.didTurnOffStickyMode_ = false;
     }
   }
@@ -155,7 +158,8 @@ export class SmartStickyMode implements ChromeVoxRangeObserver {
 
   /** Toggles basic stickyMode on or off. */
   toggle(): void {
-    ChromeVoxPrefs.instance.setAndAnnounceStickyPref(
+    // TODO(b/314203187): Not null asserted, check that this is correct.
+    ChromeVoxPrefs.instance!.setAndAnnounceStickyPref(
         !ChromeVoxPrefs.isStickyPrefOn);
 
     if (ChromeVoxRange.current) {

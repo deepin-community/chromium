@@ -31,8 +31,12 @@
 #include "src/codegen/arm/register-arm.h"
 #elif V8_TARGET_ARCH_ARM64
 #include "src/codegen/arm64/register-arm64.h"
+#elif V8_TARGET_ARCH_RISCV64
+#include "src/codegen/riscv/register-riscv.h"
 #elif V8_TARGET_ARCH_X64
 #include "src/codegen/x64/register-x64.h"
+#elif V8_TARGET_ARCH_S390X
+#include "src/codegen/s390/register-s390.h"
 #else
 #error "Maglev does not supported this architecture."
 #endif
@@ -153,7 +157,7 @@ bool IsLiveAtTarget(ValueNode* node, ControlNode* source, BasicBlock* target) {
   }
 
   // Drop all values on resumable loop headers.
-  if (target->has_state() && target->state()->is_resumable_loop()) return false;
+  if (target->is_loop() && target->state()->is_resumable_loop()) return false;
 
   // TODO(verwaest): This should be true but isn't because we don't yet
   // eliminate dead code.
@@ -163,33 +167,11 @@ bool IsLiveAtTarget(ValueNode* node, ControlNode* source, BasicBlock* target) {
   return node->live_range().end >= target->first_id();
 }
 
-// TODO(dmercadier): this function should never clear any registers, since dead
-// registers should always have been cleared:
-//  - Nodes without uses have their output registers cleared right after their
-//    allocation by `FreeRegistersUsedBy(node)`.
-//  - Once the last use of a Node has been processed, its register is freed (by
-//    UpdateUse, called from Assigned***Input, called by AssignInputs).
-// Thus, this function should DCHECK that all of the registers are live at
-// target, rather than clearing the ones that aren't.
-template <typename RegisterT>
-void ClearDeadFallthroughRegisters(RegisterFrameState<RegisterT>& registers,
-                                   ConditionalControlNode* control_node,
-                                   BasicBlock* target) {
-  RegListBase<RegisterT> list = registers.used();
-  while (list != registers.empty()) {
-    RegisterT reg = list.PopFirst();
-    ValueNode* node = registers.GetValue(reg);
-    if (!IsLiveAtTarget(node, control_node, target)) {
-      registers.FreeRegistersUsedBy(node);
-      // Update the registers we're visiting to avoid revisiting this node.
-      list.clear(registers.free());
-    }
-  }
-}
-
 bool IsDeadNodeToSkip(Node* node) {
-  return node->Is<ValueNode>() && node->Cast<ValueNode>()->has_no_more_uses() &&
-         !node->properties().is_required_when_unused();
+  if (!node->Is<ValueNode>()) return false;
+  ValueNode* value = node->Cast<ValueNode>();
+  return value->has_no_more_uses() &&
+         !value->properties().is_required_when_unused();
 }
 
 }  // namespace
@@ -299,37 +281,39 @@ void StraightForwardRegisterAllocator::ComputePostDominatingHoles() {
   // the block. Such a list of jumps terminates in return or jumploop.
   for (BasicBlock* block : base::Reversed(*graph_)) {
     ControlNode* control = block->control_node();
-    if (auto node = control->TryCast<UnconditionalControlNode>()) {
+    if (auto unconditional_control =
+            control->TryCast<UnconditionalControlNode>()) {
       // If the current control node is a jump, prepend it to the list of jumps
       // at the target.
-      control->set_next_post_dominating_hole(
-          NearestPostDominatingHole(node->target()->control_node()));
-    } else if (auto node = control->TryCast<BranchControlNode>()) {
+      control->set_next_post_dominating_hole(NearestPostDominatingHole(
+          unconditional_control->target()->control_node()));
+    } else if (auto branch = control->TryCast<BranchControlNode>()) {
       ControlNode* first =
-          NearestPostDominatingHole(node->if_true()->control_node());
+          NearestPostDominatingHole(branch->if_true()->control_node());
       ControlNode* second =
-          NearestPostDominatingHole(node->if_false()->control_node());
+          NearestPostDominatingHole(branch->if_false()->control_node());
       control->set_next_post_dominating_hole(
           HighestPostDominatingHole(first, second));
-    } else if (auto node = control->TryCast<Switch>()) {
-      int num_targets = node->size() + (node->has_fallthrough() ? 1 : 0);
+    } else if (auto switch_node = control->TryCast<Switch>()) {
+      int num_targets =
+          switch_node->size() + (switch_node->has_fallthrough() ? 1 : 0);
       if (num_targets == 1) {
         // If we have a single target, the next post dominating hole
         // is the same one as the target.
-        DCHECK(!node->has_fallthrough());
+        DCHECK(!switch_node->has_fallthrough());
         control->set_next_post_dominating_hole(NearestPostDominatingHole(
-            node->targets()[0].block_ptr()->control_node()));
+            switch_node->targets()[0].block_ptr()->control_node()));
         continue;
       }
       // Calculate the post dominating hole for each target.
       base::SmallVector<ControlNode*, 16> holes(num_targets);
-      for (int i = 0; i < node->size(); i++) {
+      for (int i = 0; i < switch_node->size(); i++) {
         holes[i] = NearestPostDominatingHole(
-            node->targets()[i].block_ptr()->control_node());
+            switch_node->targets()[i].block_ptr()->control_node());
       }
-      if (node->has_fallthrough()) {
-        holes[node->size()] =
-            NearestPostDominatingHole(node->fallthrough()->control_node());
+      if (switch_node->has_fallthrough()) {
+        holes[switch_node->size()] = NearestPostDominatingHole(
+            switch_node->fallthrough()->control_node());
       }
       control->set_next_post_dominating_hole(HighestPostDominatingHole(holes));
     }
@@ -389,6 +373,10 @@ void StraightForwardRegisterAllocator::AllocateRegisters() {
     constant->SetConstantLocation();
     USE(address);
   }
+  for (const auto& [ref, constant] : graph_->trusted_constants()) {
+    constant->SetConstantLocation();
+    USE(ref);
+  }
 
   for (block_it_ = graph_->begin(); block_it_ != graph_->end(); ++block_it_) {
     BasicBlock* block = *block_it_;
@@ -396,16 +384,11 @@ void StraightForwardRegisterAllocator::AllocateRegisters() {
 
     // Restore mergepoint state.
     if (block->has_state()) {
-      if (block->state()->is_exception_handler()) {
-        // Exceptions start from a blank state of register values.
-        ClearRegisterValues();
-      } else if (block->state()->is_resumable_loop() &&
-                 block->state()->predecessor_count() <= 1) {
-        // Loops that are only reachable through JumpLoop start from a blank
-        // state of register values.
-        // This should actually only support predecessor_count == 1, but we
-        // currently don't eliminate resumable loop headers (and subsequent code
-        // until the next resume) that end up being unreachable from JumpLoop.
+      if (block->state()->is_exception_handler() ||
+          block->state()->IsUnreachableByForwardEdge()) {
+        // Exceptions and loops only reachable from a JumpLoop (i.e., resumable
+        // loops with no fall-through edge) start with a blank state of register
+        // values.
         ClearRegisterValues();
       } else {
         InitializeRegisterValues(block->state()->register_state());
@@ -497,7 +480,7 @@ void StraightForwardRegisterAllocator::AllocateRegisters() {
           } else if (phi->owner().is_parameter() &&
                      phi->owner().is_receiver()) {
             // The receiver is a special case for a fairly silly reason:
-            // OptimizedFrame::Summarize requires the receiver (and the
+            // OptimizedJSFrame::Summarize requires the receiver (and the
             // function) to be in a stack slot, since its value must be
             // available even though we're not deoptimizing (and thus register
             // states are not available).
@@ -572,6 +555,7 @@ void StraightForwardRegisterAllocator::AllocateRegisters() {
       general_registers_.clear_blocked();
       double_registers_.clear_blocked();
     }
+    DCHECK(AllUsedRegistersLiveAt(block));
     VerifyRegisterState();
 
     node_it_ = block->nodes().begin();
@@ -744,7 +728,8 @@ void StraightForwardRegisterAllocator::AllocateNode(Node* node) {
     // spilled so they can properly be merged after the catch block.
     if (node->properties().can_throw()) {
       ExceptionHandlerInfo* info = node->exception_handler_info();
-      if (info->HasExceptionHandler() && !node->properties().is_call()) {
+      if (info->HasExceptionHandler() && !info->ShouldLazyDeopt() &&
+          !node->properties().is_call()) {
         BasicBlock* block = info->catch_block.block_ptr();
         auto spill = [&](auto reg, ValueNode* node) {
           if (node->live_range().end < block->first_id()) return;
@@ -964,6 +949,38 @@ void StraightForwardRegisterAllocator::InitializeBranchTargetPhis(
   }
 }
 
+#ifdef DEBUG
+
+bool StraightForwardRegisterAllocator::AllUsedRegistersLiveAt(
+    ConditionalControlNode* control_node, BasicBlock* target) {
+  auto ForAllRegisters = [&](const auto& registers) {
+    for (auto reg : registers.used()) {
+      if (!IsLiveAtTarget(registers.GetValue(reg), control_node, target)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  return ForAllRegisters(general_registers_) &&
+         ForAllRegisters(double_registers_);
+}
+
+bool StraightForwardRegisterAllocator::AllUsedRegistersLiveAt(
+    BasicBlock* target) {
+  auto ForAllRegisters = [&](const auto& registers) {
+    for (auto reg : registers.used()) {
+      if (registers.GetValue(reg)->live_range().end < target->first_id()) {
+        return false;
+      }
+    }
+    return true;
+  };
+  return ForAllRegisters(general_registers_) &&
+         ForAllRegisters(double_registers_);
+}
+
+#endif  // DEBUG
+
 void StraightForwardRegisterAllocator::InitializeConditionalBranchTarget(
     ConditionalControlNode* control_node, BasicBlock* target) {
   DCHECK(!target->has_phi());
@@ -976,12 +993,8 @@ void StraightForwardRegisterAllocator::InitializeConditionalBranchTarget(
     return InitializeEmptyBlockRegisterValues(control_node, target);
   }
 
-  // Clear dead fall-through registers.
   DCHECK_EQ(control_node->id() + 1, target->first_id());
-  ClearDeadFallthroughRegisters<Register>(general_registers_, control_node,
-                                          target);
-  ClearDeadFallthroughRegisters<DoubleRegister>(double_registers_, control_node,
-                                                target);
+  DCHECK(AllUsedRegistersLiveAt(control_node, target));
 }
 
 void StraightForwardRegisterAllocator::AllocateControlNode(ControlNode* node,
@@ -1158,7 +1171,7 @@ void StraightForwardRegisterAllocator::AddMoveBeforeCurrentNode(
           << PrintNodeLabel(graph_labeller(), node) << std::endl;
     }
     gap_move =
-        Node::New<ConstantGapMove>(compilation_info_->zone(), {}, node, target);
+        Node::New<ConstantGapMove>(compilation_info_->zone(), 0, node, target);
   } else {
     if (v8_flags.trace_maglev_regalloc) {
       printing_visitor_->os() << "  gap move: " << target << " ← "
@@ -1166,9 +1179,10 @@ void StraightForwardRegisterAllocator::AddMoveBeforeCurrentNode(
                               << source << std::endl;
     }
     gap_move =
-        Node::New<GapMove>(compilation_info_->zone(), {},
+        Node::New<GapMove>(compilation_info_->zone(), 0,
                            compiler::AllocatedOperand::cast(source), target);
   }
+  gap_move->InitTemporaries();
   if (compilation_info_->has_graph_labeller()) {
     graph_labeller()->RegisterNode(gap_move);
   }
@@ -1802,9 +1816,7 @@ compiler::AllocatedOperand StraightForwardRegisterAllocator::ForceAllocate(
     DCHECK(!registers.is_blocked(reg));
     DropRegisterValue(registers, reg);
   }
-#ifdef DEBUG
   DCHECK(!registers.free().has(reg));
-#endif
   registers.unblock(reg);
   registers.SetValue(reg, node);
   return compiler::AllocatedOperand(compiler::LocationOperand::REGISTER,
@@ -2008,18 +2020,6 @@ void StraightForwardRegisterAllocator::AssignArbitraryTemporaries(
   AssignArbitraryTemporaries(double_registers_, node);
 }
 
-namespace {
-template <typename RegisterT>
-void ClearRegisterState(RegisterFrameState<RegisterT>& registers) {
-  while (!registers.used().is_empty()) {
-    RegisterT reg = registers.used().first();
-    ValueNode* node = registers.GetValue(reg);
-    registers.FreeRegistersUsedBy(node);
-    DCHECK(!registers.used().has(reg));
-  }
-}
-}  // namespace
-
 template <typename Function>
 void StraightForwardRegisterAllocator::ForEachMergePointRegisterState(
     MergePointRegisterState& merge_point_state, Function&& f) {
@@ -2034,6 +2034,15 @@ void StraightForwardRegisterAllocator::ForEachMergePointRegisterState(
 }
 
 void StraightForwardRegisterAllocator::ClearRegisterValues() {
+  auto ClearRegisterState = [&](auto& registers) {
+    while (!registers.used().is_empty()) {
+      auto reg = registers.used().first();
+      ValueNode* node = registers.GetValue(reg);
+      registers.FreeRegistersUsedBy(node);
+      DCHECK(!registers.used().has(reg));
+    }
+  };
+
   ClearRegisterState(general_registers_);
   ClearRegisterState(double_registers_);
 
@@ -2141,12 +2150,12 @@ void StraightForwardRegisterAllocator::HoistLoopReloads(
     if (!registers.free().has(target_reg)) {
       target_reg = registers.free().first();
     }
-    compiler::AllocatedOperand target(compiler::LocationOperand::REGISTER,
-                                      node->GetMachineRepresentation(),
-                                      target_reg.code());
+    compiler::AllocatedOperand target_operand(
+        compiler::LocationOperand::REGISTER, node->GetMachineRepresentation(),
+        target_reg.code());
     registers.RemoveFromFree(target_reg);
     registers.SetValueWithoutBlocking(target_reg, node);
-    AddMoveBeforeCurrentNode(node, node->loadable_slot(), target);
+    AddMoveBeforeCurrentNode(node, node->loadable_slot(), target_operand);
   }
 }
 

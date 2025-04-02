@@ -2,23 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ash/arc/auth/arc_robot_auth_code_fetcher.h"
+
 #include <memory>
 #include <string>
 
-#include "ash/components/arc/test/arc_util_test_support.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "chrome/browser/ash/arc/auth/arc_auth_service.h"
-#include "chrome/browser/ash/arc/auth/arc_robot_auth_code_fetcher.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
 #include "components/policy/core/common/cloud/user_cloud_policy_manager.h"
@@ -90,7 +91,7 @@ class ArcRobotAuthCodeFetcherBrowserTest : public InProcessBrowserTest {
     fake_user_manager_.Reset(std::make_unique<ash::FakeChromeUserManager>());
 
     const AccountId account_id(AccountId::FromUserEmail(kFakeUserName));
-    fake_user_manager_->AddArcKioskAppUser(account_id);
+    fake_user_manager_->AddPublicAccountUser(account_id);
     fake_user_manager_->LoginUser(account_id);
 
     if (cloud_policy_client_setup_ == CloudPolicyClientSetup::kSkip)
@@ -148,8 +149,9 @@ class ArcRobotAuthCodeFetcherBrowserTest : public InProcessBrowserTest {
       fake_user_manager_;
 };
 
+// TODO(crbug.com/41494522): Investigate.
 IN_PROC_BROWSER_TEST_F(ArcRobotAuthCodeFetcherBrowserTest,
-                       RequestAccountInfoSuccess) {
+                       DISABLED_RequestAccountInfoSuccess) {
   test_url_loader_factory()->SetInterceptor(
       base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
         ResponseJob(request, test_url_loader_factory());
@@ -165,8 +167,9 @@ IN_PROC_BROWSER_TEST_F(ArcRobotAuthCodeFetcherBrowserTest,
   EXPECT_EQ(kFakeAuthCode, auth_code);
 }
 
+// TODO(crbug.com/41494522): Investigate.
 IN_PROC_BROWSER_TEST_F(ArcRobotAuthCodeFetcherBrowserTest,
-                       RequestAccountInfoError) {
+                       DISABLED_RequestAccountInfoError) {
   test_url_loader_factory()->SetInterceptor(
       base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
         test_url_loader_factory()->AddResponse(

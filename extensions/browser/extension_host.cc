@@ -9,10 +9,13 @@
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/no_destructor.h"
 #include "base/observer_list.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/timer/elapsed_timer.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "components/javascript_dialogs/app_modal_dialog_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/render_frame_host.h"
@@ -20,7 +23,6 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/input/native_web_keyboard_event.h"
 #include "extensions/browser/bad_message.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_error.h"
@@ -40,6 +42,10 @@
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/window_open_disposition.h"
+#include "ui/color/color_provider.h"
+#include "ui/color/color_provider_key.h"
+#include "ui/color/color_provider_source.h"
+#include "ui/color/color_provider_utils.h"
 
 using content::RenderProcessHost;
 using content::SiteInstance;
@@ -48,6 +54,39 @@ using content::WebContents;
 namespace extensions {
 
 namespace {
+
+// NoOpColorProviderSource does not generate any color provider changes for
+// the UI-less extension background page.
+class NoOpColorProviderSource : public ui::ColorProviderSource {
+ public:
+  NoOpColorProviderSource() = default;
+  NoOpColorProviderSource(const NoOpColorProviderSource&) = delete;
+  NoOpColorProviderSource& operator=(const NoOpColorProviderSource&) = delete;
+  ~NoOpColorProviderSource() override = default;
+
+  static NoOpColorProviderSource* Get() {
+    static base::NoDestructor<NoOpColorProviderSource> instance;
+    return instance.get();
+  }
+
+ private:
+  // ui::ColorProviderSource:
+  const ui::ColorProvider* GetColorProvider() const override {
+    return &color_provider_;
+  }
+
+  ui::RendererColorMap GetRendererColorMap(
+      ui::ColorProviderKey::ColorMode color_mode,
+      ui::ColorProviderKey::ForcedColors forced_colors) const override {
+    return ui::CreateRendererColorMap(color_provider_);
+  }
+
+  ui::ColorProviderKey GetColorProviderKey() const override {
+    return ui::ColorProviderKey();
+  }
+
+  ui::ColorProvider color_provider_;
+};
 
 // Emit all event dispatch time related metrics.
 void EmitDispatchTimeMetrics(const EventDispatchSource& dispatch_source,
@@ -92,18 +131,27 @@ void EmitDispatchTimeMetrics(const EventDispatchSource& dispatch_source,
 
 ExtensionHost::ExtensionHost(const Extension* extension,
                              SiteInstance* site_instance,
+                             content::BrowserContext* browser_context,
                              const GURL& url,
                              mojom::ViewType host_type)
     : delegate_(ExtensionsBrowserClient::Get()->CreateExtensionHostDelegate()),
       extension_(extension),
       extension_id_(extension->id()),
-      browser_context_(site_instance->GetBrowserContext()),
+      browser_context_(browser_context),
       initial_url_(url),
       extension_host_type_(host_type) {
   DCHECK(host_type == mojom::ViewType::kExtensionBackgroundPage ||
          host_type == mojom::ViewType::kOffscreenDocument ||
          host_type == mojom::ViewType::kExtensionPopup ||
          host_type == mojom::ViewType::kExtensionSidePanel);
+  // NOTE: `site_instance` may be null if the kRemoveRootSiteInstance feature
+  // is active. `WebContents::CreateParams` handles a null SiteInstance the
+  // same as if no SiteInstance argument were passed.
+  if (site_instance) {
+    // If a SiteInstance is passed, it must match the `browser_context`
+    // associated with the ExtensionHost.
+    CHECK_EQ(browser_context_, site_instance->GetBrowserContext());
+  }
   host_contents_ = WebContents::Create(
       WebContents::CreateParams(browser_context_, site_instance));
   host_contents_->SetOwnerLocationForDebug(FROM_HERE);
@@ -111,6 +159,10 @@ ExtensionHost::ExtensionHost(const Extension* extension,
   host_contents_->SetDelegate(this);
   SetViewType(host_contents_.get(), host_type);
   main_frame_host_ = host_contents_->GetPrimaryMainFrame();
+
+  if (host_type == mojom::ViewType::kExtensionBackgroundPage) {
+    host_contents_->SetColorProviderSource(NoOpColorProviderSource::Get());
+  }
 
   // Listen for when an extension is unloaded from the same profile, as it may
   // be the same extension that this points to.
@@ -221,7 +273,7 @@ void ExtensionHost::OnBackgroundEventDispatched(
     int event_id,
     EventDispatchSource dispatch_source,
     bool lazy_background_active_on_dispatch) {
-  // TODO(crbug.com/1441221): Make IsBackgroundPage() a real CHECK. It's
+  // TODO(crbug.com/40909770): Make IsBackgroundPage() a real CHECK. It's
   // effectively a DCHECK right now.
   CHECK(IsBackgroundPage());
   CHECK(BackgroundInfo::HasBackgroundPage(extension()));
@@ -375,7 +427,7 @@ void ExtensionHost::EmitLateAckedEventTask(int event_id) {
             ? "Extensions.Events.DidDispatchToAckSucceed.ExtensionPage"
             : "Extensions.Events.DidDispatchToAckSucceed."
               "ExtensionPersistentPage";
-    // TODO(crbug.com/1470045): Update this histogram once we have a way to
+    // TODO(crbug.com/40277737): Update this histogram once we have a way to
     // ack only for lazy background page events. Until then this could be
     // slightly inaccurate and not perfectly comparable to the service worker
     // version.
@@ -428,7 +480,7 @@ void ExtensionHost::OnEventAck(int event_id,
   // background page. Instead, here we rely on a signal from the renderer that
   // the event ran in the background page and only emit background-related
   // metrics if that's the case.
-  // TODO(crbug.com/1470045): Remove this condition once crbug.com/1470045
+  // TODO(crbug.com/40277737): Remove this condition once crbug.com/1470045
   // allows us to only ack for lazy background page events.
   if (event_has_listener_in_background_context) {
     EmitDispatchTimeMetrics(
@@ -475,10 +527,10 @@ void ExtensionHost::OnEventAck(int event_id,
 
 content::JavaScriptDialogManager* ExtensionHost::GetJavaScriptDialogManager(
     WebContents* source) {
-  return delegate_->GetJavaScriptDialogManager();
+  return javascript_dialogs::AppModalDialogManager::GetInstance();
 }
 
-void ExtensionHost::AddNewContents(
+content::WebContents* ExtensionHost::AddNewContents(
     WebContents* source,
     std::unique_ptr<WebContents> new_contents,
     const GURL& target_url,
@@ -504,13 +556,15 @@ void ExtensionHost::AddNewContents(
         delegate->AddNewContents(associated_contents, std::move(new_contents),
                                  target_url, disposition, window_features,
                                  user_gesture, was_blocked);
-        return;
+        return nullptr;
       }
     }
   }
 
   delegate_->CreateTab(std::move(new_contents), extension_id_, disposition,
                        window_features, user_gesture);
+
+  return nullptr;
 }
 
 void ExtensionHost::RenderFrameCreated(content::RenderFrameHost* frame_host) {
@@ -594,11 +648,11 @@ void ExtensionHost::RecordStopLoadingUMA() {
   CHECK(load_start_.get());
   if (extension_host_type_ == mojom::ViewType::kExtensionBackgroundPage) {
     if (extension_ && BackgroundInfo::HasLazyBackgroundPage(extension_)) {
-      UMA_HISTOGRAM_MEDIUM_TIMES("Extensions.EventPageLoadTime2",
-                                 load_start_->Elapsed());
+      DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES("Extensions.EventPageLoadTime2",
+                                            load_start_->Elapsed());
     } else {
-      UMA_HISTOGRAM_MEDIUM_TIMES("Extensions.BackgroundPageLoadTime2",
-                                 load_start_->Elapsed());
+      DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+          "Extensions.BackgroundPageLoadTime2", load_start_->Elapsed());
     }
   }
 }

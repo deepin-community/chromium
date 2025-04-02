@@ -175,26 +175,19 @@ const FieldTrialTestingExperimentParams array_kFieldTrialConfig_params_0[] = {
 const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_0[] = {
     {/*name=*/"Enabled",
      /*platforms=*/array_kFieldTrialConfig_platforms_0,
-     /*platforms_size=*/10,
      /*form_factors=*/{},
-     /*form_factors_size=*/0,
      /*is_low_end_device=*/std::nullopt,
      /*min_os_version=*/nullptr,
      /*params=*/array_kFieldTrialConfig_params_0,
-     /*params_size=*/1,
      /*enable_features=*/enable_features_0,
-     /*enable_features_size=*/1,
-     /*disable_features=*/nullptr,
-     /*disable_features_size=*/0,
+     /*disable_features=*/{},
      /*forcing_flag=*/nullptr,
-     /*override_ui_string=*/nullptr,
-     /*override_ui_string_size=*/0},
+     /*override_ui_string=*/{}},
 };
 
 const FieldTrialTestingStudy array_kFieldTrialConfig_studies[] = {
     {/*name=*/"UnitTest",
-     /*experiments=*/array_kFieldTrialConfig_experiments_0,
-     /*experiments_size=*/1},
+     /*experiments=*/array_kFieldTrialConfig_experiments_0},
 };
 
 }  // namespace
@@ -290,7 +283,7 @@ void WriteSeedData(PrefService* local_state,
 }
 
 bool FieldTrialListHasAllStudiesFrom(const SignedSeedData& seed_data) {
-  return base::ranges::all_of(seed_data.study_names, [](const char* study) {
+  return std::ranges::all_of(seed_data.study_names, [](const char* study) {
     return base::FieldTrialList::TrialExists(study);
   });
 }
@@ -301,9 +294,7 @@ void ResetVariations() {
 }
 
 const FieldTrialTestingConfig kTestingConfig = {
-    array_kFieldTrialConfig_studies,
-    1,
-};
+    array_kFieldTrialConfig_studies};
 
 std::unique_ptr<ClientFilterableState> CreateDummyClientFilterableState() {
   auto client_state = std::make_unique<ClientFilterableState>(
@@ -324,10 +315,12 @@ MockEntropyProviders::MockEntropyProviders(
     uint32_t low_entropy_domain)
     : EntropyProviders(results.high_entropy.has_value() ? "client_id" : "",
                        {0, low_entropy_domain},
-                       // Use a non-empty value for test coverage.
-                       "limited_entropy_randomization_source"),
+                       results.limited_entropy.has_value()
+                           ? "limited_entropy_randomization_source"
+                           : std::string_view()),
       low_provider_(results.low_entropy),
-      high_provider_(results.high_entropy.value_or(0)) {}
+      high_provider_(results.high_entropy.value_or(0)),
+      limited_provider_(results.limited_entropy.value_or(0)) {}
 
 MockEntropyProviders::~MockEntropyProviders() = default;
 
@@ -342,6 +335,12 @@ const base::FieldTrial::EntropyProvider& MockEntropyProviders::default_entropy()
     return high_provider_;
   }
   return low_provider_;
+}
+
+const base::FieldTrial::EntropyProvider& MockEntropyProviders::limited_entropy()
+    const {
+  CHECK(has_limited_entropy());
+  return limited_provider_;
 }
 
 std::string GZipAndB64EncodeToHexString(const VariationsSeed& seed) {
@@ -360,6 +359,34 @@ bool ContainsTrialName(const std::vector<ActiveGroupId>& active_group_ids,
     }
   }
   return false;
+}
+
+bool ContainsTrialAndGroupName(
+    const std::vector<ActiveGroupId>& active_group_ids,
+    std::string_view trial_name,
+    std::string_view group_name) {
+  auto hashed_trial_name = HashName(trial_name);
+  auto hashed_group_name = HashName(group_name);
+  for (const auto& trial : active_group_ids) {
+    if (trial.name == hashed_trial_name && trial.group == hashed_group_name) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void SetUpSeedFileTrial(std::string group_name) {
+  if (group_name.empty()) {
+    return;
+  }
+  base::MockEntropyProvider entropy_provider(0.9);
+  scoped_refptr<base::FieldTrial> trial(
+      base::FieldTrialList::FactoryGetFieldTrial(
+          kSeedFileTrial, /*total_probability=*/100, kDefaultGroup,
+          entropy_provider));
+
+  trial->AppendGroup(group_name, /*group_probability=*/100);
+  trial->SetForced();
 }
 
 }  // namespace variations

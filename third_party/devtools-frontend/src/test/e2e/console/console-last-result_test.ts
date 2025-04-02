@@ -5,7 +5,6 @@
 import {assert} from 'chai';
 
 import {getBrowserAndPages, step} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   focusConsolePrompt,
   navigateToConsoleTab,
@@ -14,7 +13,7 @@ import {
   typeIntoConsoleAndWaitForResult,
 } from '../helpers/console-helpers.js';
 
-describe('The Console Tab', async () => {
+describe('The Console Tab', () => {
   it('exposes the last evaluation using "$_"', async () => {
     const {frontend} = getBrowserAndPages();
 

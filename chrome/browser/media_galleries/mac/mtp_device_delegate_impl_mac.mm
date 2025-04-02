@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <memory>
 
+#include "base/files/safe_base_name.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "components/services/filesystem/public/mojom/types.mojom.h"
@@ -37,9 +38,8 @@ typedef MTPDeviceAsyncDelegate::ReadDirectorySuccessCallback
 // its delegate on the task runner with which it is created. All
 // interactions with it are done on the UI thread, but it may be
 // created/destroyed on another thread.
-class MTPDeviceDelegateImplMac::DeviceListener
-    : public storage_monitor::ImageCaptureDeviceListener,
-      public base::SupportsWeakPtr<DeviceListener> {
+class MTPDeviceDelegateImplMac::DeviceListener final
+    : public storage_monitor::ImageCaptureDeviceListener {
  public:
   DeviceListener(MTPDeviceDelegateImplMac* delegate)
       : delegate_(delegate) {}
@@ -66,11 +66,17 @@ class MTPDeviceDelegateImplMac::DeviceListener
   // to the delegate by the listener.
   virtual void ResetDelegate();
 
+  base::WeakPtr<storage_monitor::ImageCaptureDeviceListener> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
  private:
   ImageCaptureDevice* __strong camera_device_;
 
   // Weak pointer
   raw_ptr<MTPDeviceDelegateImplMac> delegate_;
+  base::WeakPtrFactory<storage_monitor::ImageCaptureDeviceListener>
+      weak_ptr_factory_{this};
 };
 
 void MTPDeviceDelegateImplMac::DeviceListener::OpenCameraSession(
@@ -457,9 +463,11 @@ void MTPDeviceDelegateImplMac::NotifyReadDir() {
 
       base::FilePath relative_path;
       read_path.AppendRelativePath(file_paths_[i], &relative_path);
+      auto name = base::SafeBaseName::Create(relative_path);
+      CHECK(name) << relative_path;
       base::File::Info info = file_info_[file_paths_[i].value()];
       entry_list.emplace_back(
-          std::move(relative_path),
+          *name, std::string(),
           info.is_directory ? filesystem::mojom::FsFileType::DIRECTORY
                             : filesystem::mojom::FsFileType::REGULAR_FILE);
     }

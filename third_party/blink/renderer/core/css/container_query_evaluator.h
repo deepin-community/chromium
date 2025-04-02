@@ -21,9 +21,10 @@ namespace blink {
 
 class ComputedStyle;
 class ContainerQuery;
-class ContainerQueryScrollSnapshot;
 class Element;
 class MatchResult;
+class ScrollStateQuerySnapshot;
+class SnappedQueryScrollSnapshot;
 class StyleRecalcContext;
 
 class CORE_EXPORT ContainerQueryEvaluator final
@@ -31,8 +32,8 @@ class CORE_EXPORT ContainerQueryEvaluator final
  public:
   explicit ContainerQueryEvaluator(Element& container);
 
-  // Look for a container query container in the shadow-including inclusive
-  // ancestor chain of 'starting_element'.
+  // Look for a container query container in the flat tree inclusive ancestor
+  // chain of 'starting_element'.
   static Element* FindContainer(Element* starting_element,
                                 const ContainerSelector&,
                                 const TreeScope* selector_tree_scope);
@@ -52,6 +53,14 @@ class CORE_EXPORT ContainerQueryEvaluator final
   std::optional<double> Height() const;
   void SetReferencedByUnit() { referenced_by_unit_ = true; }
   bool DependsOnStyle() const { return depends_on_style_; }
+  bool DependsOnStuck() const { return depends_on_stuck_; }
+  bool DependsOnSnapped() const { return depends_on_snapped_; }
+  bool DependsOnScrollable() const { return depends_on_scrollable_; }
+  bool DependsOnSize() const { return depends_on_size_; }
+  bool MayDependOnWritingDirection() const {
+    return DependsOnSize() || DependsOnStuck() || DependsOnSnapped() ||
+           DependsOnScrollable();
+  }
 
   enum class Change : uint8_t {
     // The update has no effect on the evaluation of queries associated with
@@ -73,35 +82,50 @@ class CORE_EXPORT ContainerQueryEvaluator final
   // unchanged otherwise).
   Change SizeContainerChanged(PhysicalSize, PhysicalAxes contained_axes);
 
-  // Re-evaluate the cached results and clear any results which are affected.
-  Change StyleContainerChanged();
+  // To be called during style recalc to make any necessary invalidation of
+  // container queries based on computed style changes on the container.
+  // style_changed is true if there is a diff between old_style and new_style.
+  StyleRecalcChange ApplyScrollStateAndStyleChanges(
+      const StyleRecalcChange& child_change,
+      const ComputedStyle& old_style,
+      const ComputedStyle& new_style,
+      bool style_changed);
 
-  // Update the ContainerValues for the evaluator if necessary based on the
-  // latest snapshot.
-  Change ApplyScrollSnapshot();
-
-  // Re-evaluate the cached results and clear any results which are affected by
-  // the ContainerStuckPhysical changes.
-  Change StickyContainerChanged(ContainerStuckPhysical stuck_horizontal,
-                                ContainerStuckPhysical stuck_vertical);
+  // Set the pending snapped state when updating scroll snapshots.
+  // ApplyScrollState() will set the snapped state from the pending snapped
+  // state during style recalc.
+  void SetPendingSnappedStateFromScrollSnapshot(
+      const SnappedQueryScrollSnapshot&);
 
   // We may need to update the internal CSSContainerValues of this evaluator
   // when e.g. the rem unit changes.
   void UpdateContainerValuesFromUnitChanges(StyleRecalcChange);
 
-  // If size container queries are expressed in font-relative units, the query
-  // evaluation may change even if the size of the container in pixels did not
-  // change. If the old and new style use different font properties, and there
-  // are existing queries that depend on font relative units, mark the
-  // evaluator as requiring size query re-evaluation even if the size does not
-  // change.
-  void MarkFontDirtyIfNeeded(const ComputedStyle& old_style,
-                             const ComputedStyle& new_style);
+  Element* ContainerElement() const;
 
   void Trace(Visitor*) const;
 
  private:
   friend class ContainerQueryEvaluatorTest;
+
+  // Reconstruct CSSContainerValues based on the current ComputedStyle stored on
+  // the container element, but otherwise keep other values the same.
+  void UpdateContainerValues();
+
+  // Re-evaluate the cached results and clear any results which are affected.
+  Change StyleContainerChanged();
+
+  // Update the ContainerValues for the evaluator if necessary based on the
+  // latest snapshots for stuck and snapped states.
+  Change ApplyScrollState();
+
+  // Re-evaluate results of size queries which may have changed for computed
+  // style changes like font and writing direction.
+  Change StyleAffectingSizeChanged();
+
+  // Re-evaluate results of scroll-state() queries which may have changed for
+  // computed style changes like writing direction.
+  Change StyleAffectingScrollStateChanged();
 
   // Update the CSSContainerValues with the new size and contained axes to be
   // used for queries.
@@ -111,7 +135,35 @@ class CORE_EXPORT ContainerQueryEvaluator final
   void UpdateContainerStuck(ContainerStuckPhysical stuck_horizontal,
                             ContainerStuckPhysical stuck_vertical);
 
-  enum ContainerType { kSizeContainer, kStyleContainer, kStickyContainer };
+  // Update the CSSContainerValues with the new stuck state.
+  void UpdateContainerSnapped(ContainerSnappedFlags snapped);
+
+  // Update the CSSContainerValues with the new overflowing state.
+  void UpdateContainerScrollable(ContainerScrollableFlags scrollable_horizontal,
+                                 ContainerScrollableFlags scrollable_vertical);
+
+  // Re-evaluate the cached results and clear any results which are affected by
+  // the ContainerStuckPhysical changes.
+  Change StickyContainerChanged(ContainerStuckPhysical stuck_horizontal,
+                                ContainerStuckPhysical stuck_vertical);
+
+  // Re-evaluate the cached results and clear any results which are affected by
+  // the snapped target changes.
+  Change SnapContainerChanged(ContainerSnappedFlags snapped);
+
+  // Re-evaluate the cached results and clear any results which are affected by
+  // the snapped target changes.
+  Change ScrollableContainerChanged(
+      ContainerScrollableFlags scrollable_horizontal,
+      ContainerScrollableFlags scrollable_vertical);
+
+  enum ContainerType {
+    kSizeContainer,
+    kStyleContainer,
+    kStickyContainer,
+    kSnapContainer,
+    kScrollableContainer,
+  };
   void ClearResults(Change change, ContainerType container_type);
 
   // Re-evaluate cached query results after a size change and return which
@@ -121,7 +173,18 @@ class CORE_EXPORT ContainerQueryEvaluator final
   // Re-evaluate cached query results after a style change and return which
   // elements need to be invalidated if necessary.
   Change ComputeStyleChange() const;
+
+  // Re-evaluate cached query results after a stuck state change and return
+  // which elements need to be invalidated if necessary.
   Change ComputeStickyChange() const;
+
+  // Re-evaluate cached query results after a snapped state change and return
+  // which elements need to be invalidated if necessary.
+  Change ComputeSnapChange() const;
+
+  // Re-evaluate cached query results after a overflowing state change and
+  // return which elements need to be invalidated if necessary.
+  Change ComputeOverflowChange() const;
 
   struct Result {
     // Main evaluation result.
@@ -148,15 +211,25 @@ class CORE_EXPORT ContainerQueryEvaluator final
   PhysicalAxes contained_axes_;
   ContainerStuckPhysical stuck_horizontal_ = ContainerStuckPhysical::kNo;
   ContainerStuckPhysical stuck_vertical_ = ContainerStuckPhysical::kNo;
+  ContainerSnappedFlags snapped_ =
+      static_cast<ContainerSnappedFlags>(ContainerSnapped::kNone);
+  ContainerSnappedFlags pending_snapped_ =
+      static_cast<ContainerSnappedFlags>(ContainerSnapped::kNone);
+  ContainerScrollableFlags scrollable_horizontal_ =
+      static_cast<ContainerScrollableFlags>(ContainerScrollable::kNone);
+  ContainerScrollableFlags scrollable_vertical_ =
+      static_cast<ContainerScrollableFlags>(ContainerScrollable::kNone);
   HeapHashMap<Member<const ContainerQuery>, Result> results_;
-  Member<ContainerQueryScrollSnapshot> snapshot_;
+  Member<ScrollStateQuerySnapshot> scroll_state_snapshot_;
   // The MediaQueryExpValue::UnitFlags of all queries evaluated against this
   // ContainerQueryEvaluator.
   unsigned unit_flags_ = 0;
   bool referenced_by_unit_ = false;
-  bool font_dirty_ = false;
   bool depends_on_style_ = false;
-  bool depends_on_state_ = false;
+  bool depends_on_stuck_ = false;
+  bool depends_on_snapped_ = false;
+  bool depends_on_scrollable_ = false;
+  bool depends_on_size_ = false;
 };
 
 }  // namespace blink

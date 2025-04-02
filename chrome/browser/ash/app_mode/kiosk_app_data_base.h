@@ -6,7 +6,6 @@
 #define CHROME_BROWSER_ASH_APP_MODE_KIOSK_APP_DATA_BASE_H_
 
 #include <memory>
-#include <optional>
 #include <string>
 
 #include "base/files/file_path.h"
@@ -40,7 +39,7 @@ class KioskAppDataBase {
   const gfx::ImageSkia& icon() const { return icon_; }
 
   // Clears locally cached data.
-  void ClearCache();
+  void ClearCache() const;
 
  protected:
   // Helper to save name and icon to provided dictionary.

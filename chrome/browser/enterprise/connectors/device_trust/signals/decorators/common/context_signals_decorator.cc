@@ -42,7 +42,6 @@ PasswordProtectionTrigger ConvertPasswordProtectionTrigger(
       return PasswordProtectionTrigger::kPhisingReuse;
     case safe_browsing::PASSWORD_PROTECTION_TRIGGER_MAX:
       NOTREACHED();
-      return PasswordProtectionTrigger::kUnset;
   }
 }
 

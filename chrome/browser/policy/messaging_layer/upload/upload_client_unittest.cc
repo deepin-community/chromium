@@ -4,6 +4,8 @@
 
 #include "chrome/browser/policy/messaging_layer/upload/upload_client.h"
 
+#include <list>
+#include <string>
 #include <tuple>
 
 #include "base/files/file_path.h"
@@ -27,6 +29,7 @@
 #include "components/reporting/util/status_macros.h"
 #include "components/reporting/util/test_support_callbacks.h"
 #include "content/public/test/browser_task_environment.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -42,6 +45,8 @@ namespace {
 using ::policy::MockCloudPolicyClient;
 using ::testing::_;
 using ::testing::AllOf;
+using ::testing::ContainerEq;
+using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::Gt;
 using ::testing::Invoke;
@@ -80,7 +85,7 @@ class UploadClientTest : public ::testing::TestWithParam<
     profile_ = std::make_unique<TestingProfile>(
         base::FilePath(FILE_PATH_LITERAL("/home/chronos/u-0123456789abcdef")));
     const AccountId account_id(AccountId::FromUserEmailGaiaId(
-        profile_->GetProfileUserName(), "12345"));
+        profile_->GetProfileUserName(), GaiaId("12345")));
     const user_manager::User* user =
         fake_user_manager->AddPublicAccountUser(account_id);
     fake_user_manager->UserLoggedIn(account_id, user->username_hash(),
@@ -113,6 +118,7 @@ class UploadClientTest : public ::testing::TestWithParam<
 };
 
 using TestEncryptionKeyAttached = MockFunction<void(SignedEncryptionInfo)>;
+using TestConfigFileAttached = MockFunction<void(ConfigFile)>;
 
 TEST_P(UploadClientTest, CreateUploadClientAndUploadRecords) {
   static constexpr int64_t kExpectedCallTimes = 10;
@@ -133,6 +139,7 @@ TEST_P(UploadClientTest, CreateUploadClientAndUploadRecords) {
   record->set_data(json_data);
   record->set_destination(Destination::UPLOAD_EVENTS);
 
+  std::list<int64_t> expected_cached_seq_ids;
   ScopedReservation total_reservation(0uL, memory_resource_);
   std::string serialized_record;
   wrapped_record.SerializeToString(&serialized_record);
@@ -142,7 +149,7 @@ TEST_P(UploadClientTest, CreateUploadClientAndUploadRecords) {
     encrypted_record.set_encrypted_wrapped_record(serialized_record);
     SequenceInformation* sequence_information =
         encrypted_record.mutable_sequence_information();
-    sequence_information->set_sequencing_id(static_cast<int64_t>(i));
+    sequence_information->set_sequencing_id(i);
     sequence_information->set_generation_id(kGenerationId);
 #if BUILDFLAG(IS_CHROMEOS)
     sequence_information->set_generation_guid(kGenerationGuid);
@@ -153,6 +160,7 @@ TEST_P(UploadClientTest, CreateUploadClientAndUploadRecords) {
     EXPECT_TRUE(record_reservation.reserved());
     total_reservation.HandOver(record_reservation);
     records.push_back(encrypted_record);
+    expected_cached_seq_ids.push_back(i);
   }
 
   StrictMock<TestEncryptionKeyAttached> encryption_key_attached;
@@ -167,7 +175,17 @@ TEST_P(UploadClientTest, CreateUploadClientAndUploadRecords) {
       base::BindRepeating(&TestEncryptionKeyAttached::Call,
                           base::Unretained(&encryption_key_attached));
 
-  ReportingServerConnector::TestEnvironment test_env;
+  StrictMock<TestConfigFileAttached> config_file_attached;
+  EXPECT_CALL(
+      config_file_attached,
+      Call(AllOf(Property(&ConfigFile::blocked_event_configs, Not(IsEmpty())),
+                 Property(&ConfigFile::version, Gt(4444)),
+                 Property(&ConfigFile::config_file_signature, Not(IsEmpty())))))
+      .Times(0);
+  auto config_file_attached_cb = base::BindRepeating(
+      &TestConfigFileAttached::Call, base::Unretained(&config_file_attached));
+
+  auto test_env = std::make_unique<ReportingServerConnector::TestEnvironment>();
 
   static constexpr char matched_record_template[] =
 #if BUILDFLAG(IS_CHROMEOS)
@@ -208,15 +226,19 @@ TEST_P(UploadClientTest, CreateUploadClientAndUploadRecords) {
   auto upload_client = std::move(upload_client_result.value());
   // config_file_version is set to 0 for testing. The default value is -1 and we
   // want to override it.
-  auto enqueue_result = upload_client->EnqueueUpload(
+  test::TestEvent<StatusOr<std::list<int64_t>>> enqueued_event;
+  upload_client->EnqueueUpload(
       need_encryption_key(), /*config_file_version=*/0, std::move(records),
-      std::move(total_reservation), upload_success_event.repeating_cb(),
-      encryption_key_attached_cb);
-  EXPECT_TRUE(enqueue_result.ok());
+      std::move(total_reservation), enqueued_event.cb(),
+      upload_success_event.repeating_cb(), encryption_key_attached_cb,
+      std::move(config_file_attached_cb));
+  const auto& enqueued_result = enqueued_event.result();
+  ASSERT_OK(enqueued_result) << enqueued_result.error();
+  EXPECT_THAT(enqueued_result.value(), ContainerEq(expected_cached_seq_ids));
   task_environment_.RunUntilIdle();
 
-  ASSERT_THAT(*test_env.url_loader_factory()->pending_requests(), SizeIs(1));
-  base::Value::Dict request_body = test_env.request_body(0);
+  ASSERT_THAT(*test_env->url_loader_factory()->pending_requests(), SizeIs(1));
+  base::Value::Dict request_body = test_env->request_body(0);
   EXPECT_THAT(request_body, AllOf(IsDataUploadRequestValid(),
                                   DoesRequestContainRecord(base::StringPrintf(
                                       matched_record_template, 0)),
@@ -243,7 +265,7 @@ TEST_P(UploadClientTest, CreateUploadClientAndUploadRecords) {
                       .SetForceConfirm(force_confirm())
                       .Build();
   ASSERT_OK(response) << response.error();
-  test_env.SimulateCustomResponseForRequest(0, std::move(*response));
+  test_env->SimulateCustomResponseForRequest(0, std::move(*response));
 
   auto upload_success_result = upload_success_event.result();
   EXPECT_THAT(std::get<0>(upload_success_result),

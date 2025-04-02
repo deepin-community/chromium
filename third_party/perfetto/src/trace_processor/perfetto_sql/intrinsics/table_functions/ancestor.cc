@@ -70,6 +70,10 @@ base::Status GetAncestors(
     // Update the loop variable by looking up the next parent_id.
     maybe_parent_id = ref.parent_id();
   }
+  // We traverse the tree in reverse id order. To ensure we meet the
+  // requirements of the extension vectors being sorted, ensure that we reverse
+  // the row numbers to be in id order.
+  std::reverse(row_numbers_accumulator.begin(), row_numbers_accumulator.end());
   return base::OkStatus();
 }
 
@@ -108,14 +112,17 @@ base::StatusOr<std::unique_ptr<Table>> Ancestor::ComputeTable(
     // Nothing matches a null id so return an empty table.
     switch (type_) {
       case Type::kSlice:
-        return tables::AncestorSliceTable::SelectAndExtendParent(
-            storage_->slice_table(), {}, {});
+        return std::unique_ptr<Table>(
+            tables::AncestorSliceTable::SelectAndExtendParent(
+                storage_->slice_table(), {}, {}));
       case Type::kStackProfileCallsite:
-        return tables::AncestorStackProfileCallsiteTable::SelectAndExtendParent(
-            storage_->stack_profile_callsite_table(), {}, {});
+        return std::unique_ptr<Table>(
+            tables::AncestorStackProfileCallsiteTable::SelectAndExtendParent(
+                storage_->stack_profile_callsite_table(), {}, {}));
       case Type::kSliceByStack:
-        return tables::AncestorSliceByStackTable::SelectAndExtendParent(
-            storage_->slice_table(), {}, {});
+        return std::unique_ptr<Table>(
+            tables::AncestorSliceByStackTable::SelectAndExtendParent(
+                storage_->slice_table(), {}, {}));
     }
     return base::OkStatus();
   }
@@ -138,8 +145,9 @@ base::StatusOr<std::unique_ptr<Table>> Ancestor::ComputeTable(
       // Find the all slice ids that have the stack id and find all the
       // ancestors of the slice ids.
       const auto& slice_table = storage_->slice_table();
-      auto it =
-          slice_table.FilterToIterator({slice_table.stack_id().eq(start_id)});
+      Query q;
+      q.constraints = {slice_table.stack_id().eq(start_id)};
+      auto it = slice_table.FilterToIterator(q);
       std::vector<tables::SliceTable::RowNumber> ancestors;
       for (; it; ++it) {
         RETURN_IF_ERROR(GetAncestors(slice_table, it.id(), ancestors));

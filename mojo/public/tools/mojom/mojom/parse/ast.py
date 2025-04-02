@@ -203,9 +203,27 @@ class Attribute(NodeBase):
 
 
 class AttributeList(NodeListBase):
-  """Represents a list attributes."""
+  """Represents a list of attributes."""
 
   _list_item_type = Attribute
+
+
+class AttributeValueOrList(NodeListBase):
+  """Represents a list of pipe delimited attribute values."""
+
+  def __str__(self):
+    return '|'.join(item.name for item in self)
+
+  _list_item_type = Name
+
+
+class AttributeValueAndList(NodeListBase):
+  """Represents a list of ampersand delimited attribute values."""
+
+  def __str__(self):
+    return '&'.join(item.name for item in self)
+
+  _list_item_type = Name
 
 
 class Const(Definition):
@@ -225,6 +243,11 @@ class Const(Definition):
            self.attribute_list == other.attribute_list and \
            self.typename == other.typename and \
            self.value == other.value
+
+  def __repr__(self):
+    return "Const(typename=%s, attribute_list=%s, value=%s)" % (
+        self.typename, self.attribute_list, self.value)
+
 
 
 class Enum(Definition):
@@ -303,7 +326,8 @@ class Import(NodeBase):
     assert isinstance(import_filename, str)
     super().__init__(**kwargs)
     self.attribute_list = attribute_list
-    # TODO(crbug.com/953884): Use pathlib once we're migrated fully to Python 3.
+    # TODO(crbug.com/40623602): Use pathlib once we're migrated fully to
+    # Python 3.
     self.import_filename = os.path.normpath(import_filename).replace('\\', '/')
 
   def __eq__(self, other):
@@ -389,8 +413,7 @@ class Map(Identifier):
   def __init__(self, key_type, value_type, **kwargs):
     assert isinstance(key_type, Identifier), f'Got {type(key_type)}'
     assert isinstance(value_type, Typename), f'Got {type(value_type)}'
-    super().__init__(value_type.identifier.id + '{' + key_type.id + '}',
-                     **kwargs)
+    super().__init__(f'{value_type}{{{key_type.id}}}', **kwargs)
     self.key_type = key_type
     self.value_type = value_type
 

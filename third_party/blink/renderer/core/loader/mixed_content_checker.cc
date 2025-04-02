@@ -32,7 +32,6 @@
 
 #include "base/containers/contains.h"
 #include "base/feature_list.h"
-#include "base/features.h"
 #include "base/metrics/field_trial_params.h"
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
@@ -168,7 +167,6 @@ const char* RequestContextName(mojom::blink::RequestContextType context) {
       return "XSLT";
   }
   NOTREACHED();
-  return "resource";
 }
 
 // Currently we have two slightly different versions, because
@@ -229,8 +227,7 @@ bool IsUrlPotentiallyTrustworthy(const KURL& url) {
   // This saves a copy of the url, which can be expensive for large data URLs.
   // TODO(crbug.com/1322100): Remove this logic once
   // network::IsUrlPotentiallyTrustworthy() doesn't copy the URL.
-  if (base::FeatureList::IsEnabled(base::features::kOptimizeDataUrls) &&
-      url.ProtocolIsData()) {
+  if (url.ProtocolIsData()) {
     DCHECK(network::IsUrlPotentiallyTrustworthy(GURL(url)));
     return true;
   }
@@ -243,6 +240,21 @@ static bool IsInsecureUrl(const KURL& url) {
   // |url| is mixed content if it is not a potentially trustworthy URL.
   // See https://w3c.github.io/webappsec-mixed-content/#should-block-response
   return !IsUrlPotentiallyTrustworthy(url);
+}
+
+// Records an UMA metric for mixed content on localhost, if `parent_origin` is
+// localhost.
+static void MaybeMeasureMixedContentOnLocalhost(
+    const SecurityOrigin* parent_origin,
+    const KURL& url,
+    const LocalFrame* source) {
+  if (!parent_origin->IsLocalhost()) {
+    return;
+  }
+  if (IsInsecureUrl(url)) {
+    UseCounter::Count(source->GetDocument(),
+                      WebFeature::kMixedContentOnLocalhost);
+  }
 }
 
 static void MeasureStricterVersionOfIsMixedContent(Frame& frame,
@@ -313,12 +325,18 @@ Frame* MixedContentChecker::InWhichFrameIsContentMixed(LocalFrame* frame,
   // Check the top frame first.
   Frame& top = frame->Tree().Top();
   MeasureStricterVersionOfIsMixedContent(top, url, frame);
-  if (IsMixedContent(top.GetSecurityContext()->GetSecurityOrigin(), url))
+  MaybeMeasureMixedContentOnLocalhost(
+      top.GetSecurityContext()->GetSecurityOrigin(), url, frame);
+  if (IsMixedContent(top.GetSecurityContext()->GetSecurityOrigin(), url)) {
     return &top;
+  }
 
   MeasureStricterVersionOfIsMixedContent(*frame, url, frame);
-  if (IsMixedContent(frame->GetSecurityContext()->GetSecurityOrigin(), url))
+  MaybeMeasureMixedContentOnLocalhost(
+      frame->GetSecurityContext()->GetSecurityOrigin(), url, frame);
+  if (IsMixedContent(frame->GetSecurityContext()->GetSecurityOrigin(), url)) {
     return frame;
+  }
 
   // No mixed content, no problem.
   return nullptr;
@@ -399,7 +417,6 @@ void MixedContentChecker::Count(
 
     default:
       NOTREACHED();
-      return;
   }
   UseCounter::Count(source->GetDocument(), feature);
 }
@@ -467,7 +484,8 @@ bool MixedContentChecker::ShouldBlockFetch(
   switch (context_type) {
     case mojom::blink::MixedContentContextType::kOptionallyBlockable:
 
-#if BUILDFLAG(IS_FUCHSIA) && BUILDFLAG(ENABLE_CAST_RECEIVER)
+#if (BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_LINUX)) && \
+    BUILDFLAG(ENABLE_CAST_RECEIVER)
       // Fuchsia WebEngine can be configured to allow loading Mixed Content from
       // an insecure IP address. This is a workaround to revert Fuchsia Cast
       // Receivers to the behavior before crrev.com/c/4032146.
@@ -476,7 +494,8 @@ bool MixedContentChecker::ShouldBlockFetch(
       allowed = !strict_mode;
 #else
       allowed = !strict_mode && !GURL(url).HostIsIPAddress();
-#endif  // BUILDFLAG(IS_FUCHSIA) && BUILDFLAG(ENABLE_CAST_RECEIVER)
+#endif  // (BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_LINUX)) &&
+        // BUILDFLAG(ENABLE_CAST_RECEIVER)
 
       if (allowed) {
         if (content_settings_client)
@@ -537,7 +556,6 @@ bool MixedContentChecker::ShouldBlockFetch(
       break;
     case mojom::blink::MixedContentContextType::kNotMixedContent:
       NOTREACHED();
-      break;
   };
 
   // Skip mixed content check for private and local targets.
@@ -549,9 +567,16 @@ bool MixedContentChecker::ShouldBlockFetch(
           network::features::kPrivateNetworkAccessPermissionPrompt) &&
       RuntimeEnabledFeatures::PrivateNetworkAccessPermissionPromptEnabled(
           frame->DomWindow())) {
-    if (target_address_space ==
-            network::mojom::blink::IPAddressSpace::kPrivate ||
-        target_address_space == network::mojom::blink::IPAddressSpace::kLocal) {
+    // TODO(crbug.com/323583084): Re-enable PNA permission prompt for documents
+    // fetched via service worker.
+    if (!frame->Loader()
+             .GetDocumentLoader()
+             ->GetResponse()
+             .WasFetchedViaServiceWorker() &&
+        (target_address_space ==
+             network::mojom::blink::IPAddressSpace::kPrivate ||
+         target_address_space ==
+             network::mojom::blink::IPAddressSpace::kLocal)) {
       UseCounter::Count(frame->GetDocument(),
                         WebFeature::kPrivateNetworkAccessPermissionPrompt);
       allowed = true;
@@ -1001,7 +1026,7 @@ void MixedContentChecker::UpgradeInsecureRequest(
           mojom::blink::RequestContextType::FORM ||
       (!url.Host().IsNull() &&
        fetch_client_settings_object->GetUpgradeInsecureNavigationsSet()
-           .Contains(url.Host().Impl()->GetHash()))) {
+           .Contains(url.Host().ToString().Impl()->GetHash()))) {
     if (!resource_request.IsAutomaticUpgrade()) {
       // These UseCounters are specific for UpgradeInsecureRequests, don't log
       // for autoupgrades.

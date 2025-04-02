@@ -47,8 +47,7 @@ bool TestTabStripModelDelegate::IsTabStripEditable() {
   return true;
 }
 
-void TestTabStripModelDelegate::DuplicateContentsAt(int index) {
-}
+void TestTabStripModelDelegate::DuplicateContentsAt(int index) {}
 
 void TestTabStripModelDelegate::MoveToExistingWindow(
     const std::vector<int>& indices,
@@ -71,6 +70,12 @@ std::optional<SessionID> TestTabStripModelDelegate::CreateHistoricalTab(
 }
 
 void TestTabStripModelDelegate::CreateHistoricalGroup(
+    const tab_groups::TabGroupId& group) {}
+
+void TestTabStripModelDelegate::GroupAdded(
+    const tab_groups::TabGroupId& group) {}
+
+void TestTabStripModelDelegate::WillCloseGroup(
     const tab_groups::TabGroupId& group) {}
 
 void TestTabStripModelDelegate::GroupCloseStopped(
@@ -102,15 +107,6 @@ bool TestTabStripModelDelegate::SupportsReadLater() {
   return true;
 }
 
-void TestTabStripModelDelegate::CacheWebContents(
-    const std::vector<std::unique_ptr<DetachedWebContents>>& web_contents) {}
-
-void TestTabStripModelDelegate::FollowSite(content::WebContents* web_contents) {
-}
-
-void TestTabStripModelDelegate::UnfollowSite(
-    content::WebContents* web_contents) {}
-
 bool TestTabStripModelDelegate::IsForWebApp() {
   return false;
 }
@@ -121,4 +117,25 @@ void TestTabStripModelDelegate::GoBack(content::WebContents* web_contents) {}
 
 bool TestTabStripModelDelegate::CanGoBack(content::WebContents* web_contents) {
   return false;
+}
+
+bool TestTabStripModelDelegate::IsNormalWindow() {
+  return true;
+}
+
+BrowserWindowInterface* TestTabStripModelDelegate::GetBrowserWindowInterface() {
+  return browser_window_interface_;
+}
+
+void TestTabStripModelDelegate::OnGroupsDestruction(
+    const std::vector<tab_groups::TabGroupId>& group_ids,
+    base::OnceCallback<void()> callback,
+    bool delete_groups) {
+  std::move(callback).Run();
+}
+
+void TestTabStripModelDelegate::OnRemovingAllTabsFromGroups(
+    const std::vector<tab_groups::TabGroupId>& group_ids,
+    base::OnceCallback<void()> callback) {
+  std::move(callback).Run();
 }

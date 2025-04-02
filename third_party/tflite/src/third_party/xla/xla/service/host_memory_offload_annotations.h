@@ -23,18 +23,18 @@ namespace host_memory_offload_annotations {
 
 // External annotations:
 inline const absl::string_view kDevicePlacement = "annotate_device_placement";
-inline const absl::string_view kMemoryTargetHost = "pinned_host";
-inline const absl::string_view kMemoryTargetDeviceTpu = "device";
-inline const absl::string_view kMemoryTargetDeviceGpu = "device";
+inline const absl::string_view kMemoryTargetPinnedHost = "pinned_host";
+inline const absl::string_view kMemoryTargetUnpinnedHost = "unpinned_host";
+inline const absl::string_view kMemoryTargetDevice = "device";
+inline const absl::string_view kMemoryTargetDeviceSram = "device_sram";
+inline const absl::string_view kMemoryTargetPinnedDevice = "pinned_device";
 
 // Internal annotations:
-// This are currently called PipelineForward/PipelineBackward, because they were
-// originally meant as a hook point for the collective-pipeliner.
-// They do more than just that though (identify memory movement direction), so
-// should be renamed to something related to memory movement.
-inline const absl::string_view kMoveToHostCustomCallTarget = "PipelineForward";
-inline const absl::string_view kMoveToDeviceCustomCallTarget =
-    "PipelineBackward";
+inline const absl::string_view kMoveToHostCustomCallTarget = "MoveToHost";
+inline const absl::string_view kMoveToDeviceCustomCallTarget = "MoveToDevice";
+inline const absl::string_view kPinToDeviceCustomCallTarget = "PinToDevice";
+inline const absl::string_view kPinToDeviceSramCustomCallTarget =
+    "PinToDeviceSram";
 
 }  // namespace host_memory_offload_annotations
 }  // namespace xla

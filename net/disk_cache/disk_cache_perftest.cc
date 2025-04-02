@@ -2,6 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
+#include "net/disk_cache/disk_cache.h"
+
+#include <array>
 #include <limits>
 #include <memory>
 #include <string>
@@ -32,7 +40,6 @@
 #include "net/disk_cache/backend_cleanup_tracker.h"
 #include "net/disk_cache/blockfile/backend_impl.h"
 #include "net/disk_cache/blockfile/block_files.h"
-#include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/disk_cache_test_base.h"
 #include "net/disk_cache/disk_cache_test_util.h"
 #include "net/disk_cache/simple/simple_backend_impl.h"
@@ -154,8 +161,8 @@ class WriteHandler {
                disk_cache::Backend* cache,
                net::CompletionOnceCallback final_callback)
       : test_(test), cache_(cache), final_callback_(std::move(final_callback)) {
-    CacheTestFillBuffer(headers_buffer_->data(), kHeadersSize, false);
-    CacheTestFillBuffer(body_buffer_->data(), kChunkSize, false);
+    CacheTestFillBuffer(headers_buffer_->span(), false);
+    CacheTestFillBuffer(body_buffer_->span(), false);
   }
 
   void Run();
@@ -509,7 +516,7 @@ void DiskCachePerfTest::CacheBackendPerformance(const std::string& story) {
 }
 
 #if BUILDFLAG(IS_FUCHSIA)
-// TODO(crbug.com/851083): Fix this test on Fuchsia and re-enable.
+// TODO(crbug.com/41393579): Fix this test on Fuchsia and re-enable.
 #define MAYBE_CacheBackendPerformance DISABLED_CacheBackendPerformance
 #else
 #define MAYBE_CacheBackendPerformance CacheBackendPerformance
@@ -519,7 +526,7 @@ TEST_F(DiskCachePerfTest, MAYBE_CacheBackendPerformance) {
 }
 
 #if BUILDFLAG(IS_FUCHSIA)
-// TODO(crbug.com/851083): Fix this test on Fuchsia and re-enable.
+// TODO(crbug.com/41393579): Fix this test on Fuchsia and re-enable.
 #define MAYBE_SimpleCacheBackendPerformance \
   DISABLED_SimpleCacheBackendPerformance
 #else
@@ -542,7 +549,7 @@ TEST_F(DiskCachePerfTest, BlockFilesPerformance) {
   ASSERT_TRUE(files.Init(true));
 
   const int kNumBlocks = 60000;
-  disk_cache::Addr address[kNumBlocks];
+  std::array<disk_cache::Addr, kNumBlocks> address;
 
   auto reporter = SetUpDiskCacheReporter("blockfile_cache");
   base::ElapsedTimer sequential_timer;
@@ -590,10 +597,10 @@ TEST_F(DiskCachePerfTest, SimpleCacheInitialReadPortion) {
   auto buffer1 = base::MakeRefCounted<net::IOBufferWithSize>(kHeadersSize);
   auto buffer2 = base::MakeRefCounted<net::IOBufferWithSize>(kBodySize);
 
-  CacheTestFillBuffer(buffer1->data(), kHeadersSize, false);
-  CacheTestFillBuffer(buffer2->data(), kBodySize, false);
+  CacheTestFillBuffer(buffer1->span(), false);
+  CacheTestFillBuffer(buffer2->span(), false);
 
-  disk_cache::Entry* cache_entry[kBatchSize];
+  std::array<disk_cache::Entry*, kBatchSize> cache_entry;
   for (int i = 0; i < kBatchSize; ++i) {
     TestEntryResultCompletionCallback cb_create;
     disk_cache::EntryResult result = cb_create.GetResult(cache_->CreateEntry(
@@ -658,7 +665,7 @@ TEST_F(DiskCachePerfTest, SimpleCacheInitialReadPortion) {
 }
 
 #if BUILDFLAG(IS_FUCHSIA)
-// TODO(crbug.com/1318120): Fix this test on Fuchsia and re-enable.
+// TODO(crbug.com/40222788): Fix this test on Fuchsia and re-enable.
 #define MAYBE_EvictionPerformance DISABLED_EvictionPerformance
 #else
 #define MAYBE_EvictionPerformance EvictionPerformance

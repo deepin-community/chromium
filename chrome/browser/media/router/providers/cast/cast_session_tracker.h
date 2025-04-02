@@ -47,7 +47,7 @@ class CastSessionTracker : public MediaSinkServiceBase::Observer,
   ~CastSessionTracker() override;
 
   // Must be called on UI thread.
-  // TODO(https://crbug.com/904016): The UI/IO thread split makes this class
+  // TODO(crbug.com/41425670): The UI/IO thread split makes this class
   // confusing to use.  If we can directly access CastMediaSinkServiceImpl
   // without going through DualMediaSinkService, then it will no longer be
   // necessary for this method to be run on UI thread.
@@ -90,6 +90,7 @@ class CastSessionTracker : public MediaSinkServiceBase::Observer,
   void OnAppMessage(int channel_id, const CastMessage& message) override;
   void OnInternalMessage(int channel_id,
                          const cast_channel::InternalMessage& message) override;
+  void OnMessageSent(int channel_id, const CastMessage& message) override;
 
   static void SetInstanceForTest(CastSessionTracker* session_tracker);
   void SetSessionForTest(const MediaSink::Id& sink_id,

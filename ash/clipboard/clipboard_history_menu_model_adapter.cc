@@ -4,6 +4,7 @@
 
 #include "ash/clipboard/clipboard_history_menu_model_adapter.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -15,7 +16,6 @@
 #include "ash/clipboard/views/clipboard_history_item_view.h"
 #include "ash/clipboard/views/clipboard_history_label.h"
 #include "ash/clipboard/views/clipboard_history_view_constants.h"
-#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/clipboard_history_controller.h"
 #include "ash/public/cpp/clipboard_image_model_factory.h"
 #include "ash/strings/grit/ash_strings.h"
@@ -25,18 +25,16 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/menu_model.h"
-#include "ui/base/models/simple_menu_model.h"
-#include "ui/base/ui_base_types.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
@@ -69,11 +67,6 @@ base::TimeDelta TimeSince(const base::Time& time) {
   return base::Time::Now() - time;
 }
 
-// Returns whether the clipboard history menu requires a header.
-bool IsHeaderRequired() {
-  return chromeos::features::IsClipboardHistoryRefreshEnabled();
-}
-
 // Returns whether the clipboard history menu requires a footer.
 bool IsFooterRequired(
     crosapi::mojom::ClipboardHistoryControllerShowSource show_source,
@@ -83,12 +76,6 @@ bool IsFooterRequired(
   using crosapi::mojom::ClipboardHistoryControllerShowSource;
   if (show_source == ClipboardHistoryControllerShowSource::kControlVLongpress) {
     return true;
-  }
-
-  // If the menu is not shown via Ctrl+V long press, footers require that the
-  // clipboard history refresh feature be enabled.
-  if (!chromeos::features::IsClipboardHistoryRefreshEnabled()) {
-    return false;
   }
 
   // A footer is required if the menu hasn't been shown in the past 60 days.
@@ -134,8 +121,6 @@ void InsertHeaderContent(views::MenuItemView* container) {
 void InsertFooterContentV2LabelStyledText(
     crosapi::mojom::ClipboardHistoryControllerShowSource show_source,
     views::StyledLabel* styled_label) {
-  CHECK(chromeos::features::IsClipboardHistoryRefreshEnabled());
-
   // Create text style.
   views::StyledLabel::RangeStyleInfo text_style;
   text_style.custom_font = Resolve(TypographyToken::kCrosAnnotation1);
@@ -196,8 +181,6 @@ void InsertFooterContentV2LabelStyledText(
 void InsertFooterContentV2(
     views::MenuItemView* container,
     crosapi::mojom::ClipboardHistoryControllerShowSource show_source) {
-  CHECK(chromeos::features::IsClipboardHistoryRefreshEnabled());
-
   // Cache `menu_padding`.
   const int menu_padding =
       views::MenuConfig::instance().vertical_touchable_menu_item_padding;
@@ -238,48 +221,6 @@ void InsertFooterContentV2(
                       ClipboardHistoryViews::kFooterContentV2ChildSpacing)
                   .CustomConfigure(base::BindOnce(
                       &InsertFooterContentV2LabelStyledText, show_source)))
-          .Build());
-}
-
-// TODO(http://b/267694412): Add pixel test.
-// Populates `container` with educational content to appear at the bottom of the
-// clipboard history menu.
-void InsertFooterContent(
-    views::MenuItemView* container,
-    crosapi::mojom::ClipboardHistoryControllerShowSource show_source) {
-  if (chromeos::features::IsClipboardHistoryRefreshEnabled()) {
-    InsertFooterContentV2(container, show_source);
-    return;
-  }
-
-  const int content_width =
-      clipboard_history_util::GetPreferredItemViewWidth() -
-      ClipboardHistoryViews::kContentsInsets.width();
-
-  // Introduce a layout view between `container` and the desired separator and
-  // label to circumvent `container` manually laying out its children.
-  container->AddChildView(
-      views::Builder<views::BoxLayoutView>()
-          .SetID(clipboard_history_util::kFooterContentViewID)
-          .SetOrientation(views::BoxLayout::Orientation::kVertical)
-          .AddChildren(
-              views::Builder<views::Separator>()
-                  .SetBorder(views::CreateEmptyBorder(
-                      ClipboardHistoryViews::kContentsInsets))
-                  .SetColorId(cros_tokens::kCrosSysSeparator)
-                  .SetOrientation(views::Separator::Orientation::kHorizontal)
-                  .SetPreferredLength(content_width),
-              views::Builder<views::Label>(
-                  bubble_utils::CreateLabel(
-                      TypographyToken::kCrosAnnotation1,
-                      l10n_util::GetStringUTF16(
-                          IDS_ASH_CLIPBOARD_HISTORY_CONTROL_V_LONGPRESS_FOOTER),
-                      cros_tokens::kCrosSysSecondary))
-                  .SetBorder(views::CreateEmptyBorder(
-                      ClipboardHistoryViews::kContentsInsets))
-                  .SetHorizontalAlignment(gfx::ALIGN_LEFT)
-                  .SetMultiLine(true)
-                  .SizeToFit(/*fixed_width=*/content_width))
           .Build());
 }
 
@@ -332,7 +273,7 @@ class ClipboardHistoryMenuModelAdapter::ScopedA11yIgnore {
     for (auto& item_view_command_id_pair :
          menu_model_adapter_->item_views_by_command_id_) {
       views::View* item_view = item_view_command_id_pair.second;
-      item_view->GetViewAccessibility().OverrideIsIgnored(ignore);
+      item_view->GetViewAccessibility().SetIsIgnored(ignore);
     }
   }
 
@@ -358,7 +299,7 @@ ClipboardHistoryMenuModelAdapter::~ClipboardHistoryMenuModelAdapter() = default;
 
 void ClipboardHistoryMenuModelAdapter::Run(
     const gfx::Rect& anchor_rect,
-    ui::MenuSourceType source_type,
+    ui::mojom::MenuSourceType source_type,
     crosapi::mojom::ClipboardHistoryControllerShowSource show_source,
     const std::optional<base::Time>& menu_last_time_shown,
     const std::optional<base::Time>& nudge_last_time_shown) {
@@ -382,12 +323,10 @@ void ClipboardHistoryMenuModelAdapter::Run(
       "Ash.ClipboardHistory.ContextMenu.NumberOfItemsShown", items.size());
 
   size_t index = 0u;
-  if (IsHeaderRequired()) {
-    // Add a placeholder non-interactive item that will contain the clipboard
-    // history menu's header.
-    model_->AddTitle(std::u16string());
-    header_index_ = index++;
-  }
+  // Add a placeholder non-interactive item that will contain the clipboard
+  // history menu's header.
+  model_->AddTitle(std::u16string());
+  header_index_ = index++;
 
   for (const auto& item : items) {
     model_->AddItem(command_id, std::u16string());
@@ -439,9 +378,10 @@ std::optional<int> ClipboardHistoryMenuModelAdapter::GetFirstMenuItemCommand() {
     return std::nullopt;
   }
 
-  return base::ranges::min(item_views_by_command_id_, /*comp=*/{},
-                           /*proj=*/[](const auto& kv) { return kv.first; })
-      .first;
+  return std::ranges::min_element(
+             item_views_by_command_id_, /*comp=*/{},
+             /*proj=*/[](const auto& kv) { return kv.first; })
+      ->first;
 }
 
 std::optional<int>
@@ -479,9 +419,9 @@ void ClipboardHistoryMenuModelAdapter::SelectMenuItemWithCommandId(
 
 void ClipboardHistoryMenuModelAdapter::SelectMenuItemHoveredByMouse() {
   // Find the menu item hovered by mouse.
-  auto iter = base::ranges::find_if(item_views_by_command_id_,
-                                    &views::View::IsMouseHovered,
-                                    &ItemViewsByCommandId::value_type::second);
+  auto iter = std::ranges::find_if(item_views_by_command_id_,
+                                   &views::View::IsMouseHovered,
+                                   &ItemViewsByCommandId::value_type::second);
 
   if (iter == item_views_by_command_id_.cend()) {
     // If no item is hovered by mouse, cancel the selection on the child menu
@@ -530,19 +470,20 @@ void ClipboardHistoryMenuModelAdapter::RemoveMenuItemWithCommandId(
       l10n_util::GetStringUTF16(IDS_CLIPBOARD_HISTORY_ITEM_DELETION));
 
   // Enable a11y announcement for the view to be deleted.
-  view_accessibility.OverrideIsIgnored(false);
+  view_accessibility.SetIsIgnored(false);
 
   // Disabling `item_view_to_delete` is more like implementation details.
   // So do not expose it to users.
-  view_accessibility.OverrideIsEnabled(true);
+  view_accessibility.SetIsEnabled(true);
 
-  // Specify `item_view_to_delete`'s position in the set. Without calling
-  // `OverridePosInSet()`, the menu's size after deletion may be announced.
+  // Specify `item_view_to_delete`'s position in the set. Without updating the
+  // position in set and set size, the menu's size after deletion may be
+  // announced.
   const int pos_in_set = std::distance(item_views_by_command_id_.begin(),
                                        item_view_to_delete_iter) +
                          1;
-  view_accessibility.OverridePosInSet(pos_in_set,
-                                      item_views_by_command_id_.size());
+  view_accessibility.SetPosInSet(pos_in_set);
+  view_accessibility.SetSetSize(item_views_by_command_id_.size());
 
   // Disable views to be removed in order to prevent them from handling
   // events.
@@ -692,8 +633,7 @@ void ClipboardHistoryMenuModelAdapter::RemoveItemView(int command_id) {
   model_->RemoveItemAt(model_->GetIndexOfCommandId(command_id).value());
   root_view_->RemoveMenuItem(root_view_->GetMenuItemByID(command_id));
   if (const auto first_item_command_id = GetFirstMenuItemCommand();
-      first_item_command_id &&
-      chromeos::features::IsClipboardHistoryRefreshEnabled()) {
+      first_item_command_id) {
     item_views_by_command_id_[*first_item_command_id]->ShowCtrlVLabel();
   }
   root_view_->ChildrenChanged();
@@ -720,7 +660,7 @@ views::MenuItemView* ClipboardHistoryMenuModelAdapter::AppendMenuItem(
 
   // Ignore `container` in accessibility events handling. Let `item_view`
   // handle.
-  container->GetViewAccessibility().OverrideIsIgnored(true);
+  container->GetViewAccessibility().SetIsIgnored(true);
 
   // Margins are managed by `ClipboardHistoryItemView`.
   container->set_vertical_margin(0);
@@ -730,15 +670,14 @@ views::MenuItemView* ClipboardHistoryMenuModelAdapter::AppendMenuItem(
     InsertHeaderContent(container);
   } else if (footer_index_ == index) {
     CHECK_EQ(model->GetTypeAt(index), ui::MenuModel::ItemType::TYPE_TITLE);
-    InsertFooterContent(container, menu_show_source_.value());
+    InsertFooterContentV2(container, menu_show_source_.value());
   } else {
     CHECK_EQ(model->GetTypeAt(index), ui::MenuModel::ItemType::TYPE_COMMAND);
     std::unique_ptr<ClipboardHistoryItemView> item_view =
         ClipboardHistoryItemView::CreateFromClipboardHistoryItem(
             GetItemFromCommandId(command_id).id(), clipboard_history_,
             container);
-    if (chromeos::features::IsClipboardHistoryRefreshEnabled() &&
-        command_id == clipboard_history_util::kFirstItemCommandId) {
+    if (command_id == clipboard_history_util::kFirstItemCommandId) {
       item_view->ShowCtrlVLabel();
     }
     item_views_by_command_id_.insert(

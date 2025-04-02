@@ -7,59 +7,45 @@
 #include <memory>
 #include <utility>
 
+#include "base/debug/crash_logging.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/gfx/presentation_feedback.h"
 #include "ui/gfx/swap_result.h"
 #include "ui/gl/dc_layer_tree.h"
 #include "ui/gl/direct_composition_support.h"
-#include "ui/gl/gl_surface_egl.h"
+#include "ui/gl/gl_features.h"
 #include "ui/gl/vsync_thread_win.h"
 
 namespace gl {
 
-DCompPresenter::PendingFrame::PendingFrame(
-    Microsoft::WRL::ComPtr<ID3D11Query> query,
-    PresentationCallback callback)
-    : query(std::move(query)), callback(std::move(callback)) {}
+DCompPresenter::PendingFrame::PendingFrame(PresentationCallback callback)
+    : callback(std::move(callback)) {}
 DCompPresenter::PendingFrame::PendingFrame(PendingFrame&& other) = default;
 DCompPresenter::PendingFrame::~PendingFrame() = default;
 DCompPresenter::PendingFrame& DCompPresenter::PendingFrame::operator=(
     PendingFrame&& other) = default;
 
-DCompPresenter::DCompPresenter(GLDisplayEGL* display, const Settings& settings)
+DCompPresenter::DCompPresenter(const Settings& settings)
     : task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
-      max_pending_frames_(settings.max_pending_frames),
       layer_tree_(std::make_unique<DCLayerTree>(
           settings.disable_nv12_dynamic_textures,
           settings.disable_vp_auto_hdr,
           settings.disable_vp_scaling,
           settings.disable_vp_super_resolution,
           settings.force_dcomp_triple_buffer_video_swap_chain,
-          settings.no_downscaled_overlay_promotion)) {}
+          settings.no_downscaled_overlay_promotion)),
+      use_gpu_vsync_(features::UseGpuVsync()) {
+  CHECK(DirectCompositionSupported());
+  d3d11_device_ = GetDirectCompositionD3D11Device();
+  child_window_.Initialize();
+  layer_tree_->Initialize(child_window_.window(), d3d11_device_);
+}
 
 DCompPresenter::~DCompPresenter() {
   Destroy();
-}
-
-bool DCompPresenter::Initialize() {
-  if (!DirectCompositionSupported()) {
-    DLOG(ERROR) << "Direct composition not supported";
-    return false;
-  }
-
-  d3d11_device_ = GetDirectCompositionD3D11Device();
-
-  child_window_.Initialize();
-
-  if (!layer_tree_->Initialize(window(), d3d11_device_)) {
-    return false;
-  }
-
-  return true;
 }
 
 void DCompPresenter::Destroy() {
@@ -90,7 +76,8 @@ bool DCompPresenter::Resize(const gfx::Size& size,
     return false;
   }
 
-  return child_window_.Resize(size);
+  child_window_.Resize(size);
+  return true;
 }
 
 gfx::VSyncProvider* DCompPresenter::GetVSyncProvider() {
@@ -105,9 +92,9 @@ void DCompPresenter::OnVSync(base::TimeTicks vsync_time,
                      weak_factory_.GetWeakPtr(), vsync_time, interval));
 }
 
-bool DCompPresenter::ScheduleDCLayer(
+void DCompPresenter::ScheduleDCLayer(
     std::unique_ptr<DCLayerOverlayParams> params) {
-  return layer_tree_->ScheduleDCLayer(std::move(params));
+  pending_overlays_.push_back(std::move(params));
 }
 
 void DCompPresenter::SetFrameRate(float frame_rate) {
@@ -125,11 +112,17 @@ void DCompPresenter::Present(SwapCompletionCallback completion_callback,
   TRACE_EVENT0("gpu", "DCompPresenter::Present");
 
   // Callback will be dequeued on next vsync.
-  EnqueuePendingFrame(std::move(presentation_callback),
-                      /*create_query=*/create_query_this_frame_);
-  create_query_this_frame_ = false;
+  EnqueuePendingFrame(std::move(presentation_callback));
 
-  if (!layer_tree_->CommitAndClearPendingOverlays(nullptr)) {
+  base::expected<void, CommitError> result =
+      layer_tree_->CommitAndClearPendingOverlays(std::move(pending_overlays_));
+  if (!result.has_value()) {
+    SCOPED_CRASH_KEY_NUMBER("gpu", "DCompPresenter.SWAP_FAILED.reason",
+                            static_cast<int>(result.error().reason));
+    SCOPED_CRASH_KEY_NUMBER("gpu", "DCompPresenter.SWAP_FAILED.hr?",
+                            static_cast<int>(result.error().hr.value_or(S_OK)));
+    base::debug::DumpWithoutCrashing();
+
     std::move(completion_callback)
         .Run(gfx::SwapCompletionResult(gfx::SwapResult::SWAP_FAILED));
     return;
@@ -137,19 +130,6 @@ void DCompPresenter::Present(SwapCompletionCallback completion_callback,
 
   std::move(completion_callback)
       .Run(gfx::SwapCompletionResult(gfx::SwapResult::SWAP_ACK));
-}
-
-bool DCompPresenter::SupportsProtectedVideo() const {
-  // TODO(magchen): Check the gpu driver date (or a function) which we know this
-  // new support is enabled.
-  return DirectCompositionOverlaysSupported();
-}
-
-bool DCompPresenter::SetDrawRectangle(const gfx::Rect& rect) {
-  // Do not create query for empty damage so that 3D engine is not used when
-  // only presenting video in overlay.
-  create_query_this_frame_ = !rect.IsEmpty();
-  return true;
 }
 
 bool DCompPresenter::SupportsViewporter() const {
@@ -222,16 +202,6 @@ void DCompPresenter::CheckPendingFrames() {
   d3d11_device_->GetImmediateContext(&context);
   while (!pending_frames_.empty()) {
     auto& frame = pending_frames_.front();
-    // Query isn't created if there was no damage for previous frame.
-    if (frame.query) {
-      HRESULT hr = context->GetData(frame.query.Get(), nullptr, 0,
-                                    D3D11_ASYNC_GETDATA_DONOTFLUSH);
-      // When the GPU completes execution past the event query, GetData() will
-      // return S_OK, and S_FALSE otherwise.  Do not use SUCCEEDED() because
-      // S_FALSE is also a success code.
-      if (hr != S_OK)
-        break;
-    }
     std::move(frame.callback)
         .Run(
             gfx::PresentationFeedback(last_vsync_time_, last_vsync_interval_,
@@ -240,29 +210,29 @@ void DCompPresenter::CheckPendingFrames() {
     pending_frames_.pop_front();
   }
 
-  StartOrStopVSyncThread();
+  if (use_gpu_vsync_) {
+    StartOrStopVSyncThread();
+  }
 }
 
-void DCompPresenter::EnqueuePendingFrame(PresentationCallback callback,
-                                         bool create_query) {
-  Microsoft::WRL::ComPtr<ID3D11Query> query;
-  if (create_query) {
-    D3D11_QUERY_DESC desc = {};
-    desc.Query = D3D11_QUERY_EVENT;
-    HRESULT hr = d3d11_device_->CreateQuery(&desc, &query);
-    if (SUCCEEDED(hr)) {
-      Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-      d3d11_device_->GetImmediateContext(&context);
-      context->End(query.Get());
-      context->Flush();
-    } else {
-      DLOG(ERROR) << "CreateQuery failed with error 0x" << std::hex << hr;
-    }
+void DCompPresenter::EnqueuePendingFrame(PresentationCallback callback) {
+  pending_frames_.emplace_back(std::move(callback));
+
+  if (use_gpu_vsync_) {
+    StartOrStopVSyncThread();
+  } else {
+    last_vsync_time_ = base::TimeTicks::Now();
+    last_vsync_interval_ = VSyncThreadWin::GetInstance()->GetVsyncInterval();
+    // Handle pending frames asynchronously to avoid reentrancy issues in the
+    // caller.
+    task_runner_->PostTask(FROM_HERE,
+                           base::BindOnce(&DCompPresenter::CheckPendingFrames,
+                                          weak_factory_.GetWeakPtr()));
   }
+}
 
-  pending_frames_.emplace_back(std::move(query), std::move(callback));
-
-  StartOrStopVSyncThread();
+HWND DCompPresenter::GetWindow() const {
+  return child_window_.window();
 }
 
 }  // namespace gl

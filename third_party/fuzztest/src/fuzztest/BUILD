@@ -37,6 +37,20 @@ config_setting(
 )
 ################################################################################
 
+################################################################################
+# Flag and setting to enable use of Riegeli
+################################################################################
+bool_flag(
+    name = "use_riegeli",
+    build_setting_default = True,
+)
+
+config_setting(
+    name = "disable_riegeli",
+    flag_values = {":use_riegeli": "False"},
+)
+################################################################################
+
 cc_library(
     name = "fuzztest",
     hdrs = ["fuzztest.h"],
@@ -57,6 +71,7 @@ cc_library(
 
 cc_library(
     name = "fuzztest_macros",
+    srcs = ["fuzztest_macros.cc"],
     hdrs = [
         "fuzztest_macros.h",
     ],
@@ -64,6 +79,22 @@ cc_library(
         ":io",
         ":registration",
         ":registry",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_test(
+    name = "fuzztest_macros_test",
+    srcs = ["fuzztest_macros_test.cc"],
+    deps = [
+        ":fuzztest_macros",
+        "@com_google_absl//absl/status",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -72,7 +103,6 @@ cc_library(
     testonly = 1,
     srcs = ["fuzztest_gtest_main.cc"],
     deps = [
-        "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/strings",
         "@com_google_fuzztest//fuzztest:init_fuzztest",
         "@com_google_googletest//:gtest",
@@ -89,9 +119,15 @@ cc_library(
         ":flag_name",
         ":googletest_adaptor",
         ":io",
+        ":logging",
         ":registry",
         ":runtime",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/flags:reflection",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
@@ -121,15 +157,16 @@ cc_library(
     deps = [
         ":domain_core",
         ":fuzztest",
+        ":fuzztest_macros",
         ":io",
-        ":llvm_fuzzer_main",
+        ":logging",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/random",
         "@com_google_absl//absl/random:bit_gen_ref",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:string_view",
-        "@com_googlesource_code_re2//:re2",
+        "@com_google_absl//absl/synchronization",
     ],
     alwayslink = True,
 )
@@ -173,33 +210,38 @@ cc_library(
     srcs = ["internal/centipede_adaptor.cc"],
     hdrs = ["internal/centipede_adaptor.h"],
     defines = ["FUZZTEST_USE_CENTIPEDE"],
-    linkopts = [
-        # Needed for linking the Centipede engine with the runner, due to
-        # the common source code built separately for the engine and runner.
-        "-Wl,--warn-backrefs-exclude=*/centipede/*",
-    ],
     deps = [
+        ":any",
         ":configuration",
-        ":coverage",
         ":domain_core",
         ":fixture_driver",
+        ":flag_name",
         ":logging",
         ":runtime",
+        ":table_of_recent_compares",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/log",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/random",
+        "@com_google_absl//absl/random:distributions",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@com_google_fuzztest//centipede:centipede_callbacks",
+        "@com_google_fuzztest//centipede:centipede_default_callbacks",
         "@com_google_fuzztest//centipede:centipede_interface",
         "@com_google_fuzztest//centipede:centipede_runner_no_main",
-        "@com_google_fuzztest//centipede:defs",
-        "@com_google_fuzztest//centipede:early_exit",
         "@com_google_fuzztest//centipede:environment",
+        "@com_google_fuzztest//centipede:mutation_input",
         "@com_google_fuzztest//centipede:runner_result",
         "@com_google_fuzztest//centipede:shared_memory_blob_sequence",
+        "@com_google_fuzztest//centipede:stop",
+        "@com_google_fuzztest//centipede:workdir",
+        "@com_google_fuzztest//common:defs",
     ],
 )
 
@@ -208,6 +250,7 @@ cc_library(
     srcs = ["internal/compatibility_mode.cc"],
     hdrs = ["internal/compatibility_mode.h"],
     deps = [
+        ":domain_core",
         ":fixture_driver",
         ":logging",
         ":runtime",
@@ -225,6 +268,32 @@ cc_library(
     srcs = ["internal/configuration.cc"],
     hdrs = ["internal/configuration.h"],
     deps = [
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+cc_test(
+    name = "configuration_test",
+    srcs = ["internal/configuration_test.cc"],
+    deps = [
+        ":configuration",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/time",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "corpus_database",
+    srcs = ["internal/corpus_database.cc"],
+    hdrs = ["internal/corpus_database.h"],
+    deps = [
+        ":configuration",
         ":io",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
@@ -241,6 +310,7 @@ cc_library(
         "//conditions:default": [],
     }),
     deps = [
+        ":domain_core",
         ":flag_name",
         ":logging",
         ":table_of_recent_compares",
@@ -271,11 +341,14 @@ cc_library(
         ":status",
         ":type_support",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/random",
         "@com_google_absl//absl/random:bit_gen_ref",
         "@com_google_absl//absl/random:distributions",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
@@ -294,16 +367,21 @@ cc_library(
         "internal/domains/bit_flag_combination_of_impl.h",
         "internal/domains/container_mutation_helpers.h",
         "internal/domains/container_of_impl.h",
+        "internal/domains/domain.h",
         "internal/domains/domain_base.h",
+        "internal/domains/domain_type_erasure.h",
         "internal/domains/element_of_impl.h",
         "internal/domains/filter_impl.h",
         "internal/domains/flat_map_impl.h",
         "internal/domains/in_range_impl.h",
         "internal/domains/map_impl.h",
+        "internal/domains/mutation_metadata.h",
         "internal/domains/one_of_impl.h",
         "internal/domains/optional_of_impl.h",
+        "internal/domains/overlap_of_impl.h",
         "internal/domains/serialization_helpers.h",
         "internal/domains/smart_pointer_of_impl.h",
+        "internal/domains/special_values.h",
         "internal/domains/unique_elements_container_of_impl.h",
         "internal/domains/value_mutation_helpers.h",
         "internal/domains/variant_of_impl.h",
@@ -312,9 +390,9 @@ cc_library(
     deps = [
         ":absl_helpers",
         ":any",
-        ":coverage",
         ":logging",
         ":meta",
+        ":printer",
         ":seed_seq",
         ":serialization",
         ":status",
@@ -322,6 +400,7 @@ cc_library(
         ":type_support",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/numeric:bits",
         "@com_google_absl//absl/numeric:int128",
         "@com_google_absl//absl/random",
@@ -343,9 +422,11 @@ cc_library(
         ":any",
         ":domain_core",
         ":logging",
+        ":meta",
+        ":printer",
         ":registration",
         ":type_support",
-        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/types:span",
     ],
@@ -378,10 +459,13 @@ cc_library(
     hdrs = ["internal/googletest_adaptor.h"],
     deps = [
         ":configuration",
+        ":corpus_database",
+        ":flag_name",
         ":io",
         ":registry",
         ":runtime",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest",
     ],
@@ -403,10 +487,19 @@ cc_library(
     hdrs = ["internal/io.h"],
     deps = [
         ":logging",
+        "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/hash",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/strings:string_view",
-    ],
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/types:span",
+        "@com_google_fuzztest//common:blob_file",
+        "@com_google_fuzztest//common:defs",
+        "@com_google_fuzztest//common:remote_file",
+    ] + select({
+        "//conditions:default": [],
+    }),
 )
 
 cc_test(
@@ -415,7 +508,12 @@ cc_test(
     deps = [
         ":fuzztest_core",
         ":io",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "@com_google_fuzztest//common:blob_file",
+        "@com_google_fuzztest//common:defs",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -425,7 +523,9 @@ cc_library(
     srcs = ["internal/logging.cc"],
     hdrs = ["internal/logging.h"],
     deps = [
+        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
     ],
 )
 
@@ -433,6 +533,15 @@ cc_library(
     name = "meta",
     hdrs = ["internal/meta.h"],
     deps = ["@com_google_absl//absl/numeric:int128"],
+)
+
+cc_library(
+    name = "printer",
+    hdrs = ["internal/printer.h"],
+    deps = [
+        ":meta",
+        "@com_google_absl//absl/strings:str_format",
+    ],
 )
 
 cc_library(
@@ -444,6 +553,9 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/random:bit_gen_ref",
         "@com_google_absl//absl/random:distributions",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_googlesource_code_re2//:re2",
     ],
@@ -455,8 +567,10 @@ cc_library(
     deps = [
         ":domain_core",
         ":meta",
+        ":printer",
         ":type_support",
         "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/types:span",
     ],
@@ -486,27 +600,32 @@ cc_library(
     hdrs = ["internal/runtime.h"],
     deps = [
         ":configuration",
+        ":corpus_database",
         ":coverage",
         ":domain_core",
         ":fixture_driver",
         ":flag_name",
         ":io",
         ":logging",
-        ":meta",
+        ":printer",
         ":registration",
         ":seed_seq",
         ":serialization",
-        ":type_support",
+        ":status",
         "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/functional:bind_front",
         "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/random",
         "@com_google_absl//absl/random:bit_gen_ref",
         "@com_google_absl//absl/random:distributions",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
+        "@com_google_fuzztest//common:bazel",
     ],
 )
 
@@ -514,9 +633,13 @@ cc_test(
     name = "runtime_test",
     srcs = ["internal/runtime_test.cc"],
     deps = [
+        ":configuration",
         ":domain_core",
+        ":flag_name",
         ":runtime",
         ":test_protobuf_cc_proto",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
         "@com_google_googletest//:gtest_main",
     ],
@@ -641,7 +764,9 @@ cc_library(
     deps = [
         ":absl_helpers",
         ":meta",
+        ":printer",
         "@com_google_absl//absl/debugging:symbolize",
+        "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/numeric:int128",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
@@ -654,6 +779,8 @@ cc_test(
     srcs = ["internal/type_support_test.cc"],
     deps = [
         ":domain",
+        ":meta",
+        ":printer",
         ":test_protobuf_cc_proto",
         ":type_support",
         "@com_google_absl//absl/numeric:int128",
@@ -661,5 +788,6 @@ cc_test(
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
         "@com_google_googletest//:gtest_main",
+        "@com_google_protobuf//:protobuf",
     ],
 )

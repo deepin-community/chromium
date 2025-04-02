@@ -39,16 +39,20 @@ import type * as Platform from '../../core/platform/platform.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import type * as Protocol from '../../generated/protocol.js';
 
+export interface BuildOptions {
+  sanitize: boolean;
+}
+
 export class Log {
   static pseudoWallTime(request: SDK.NetworkRequest.NetworkRequest, monotonicTime: number): Date {
     return new Date(request.pseudoWallTime(monotonicTime) * 1000);
   }
 
-  static async build(requests: SDK.NetworkRequest.NetworkRequest[]): Promise<LogDTO> {
+  static async build(requests: SDK.NetworkRequest.NetworkRequest[], options: BuildOptions): Promise<LogDTO> {
     const log = new Log();
     const entryPromises = [];
     for (const request of requests) {
-      entryPromises.push(Entry.build(request));
+      entryPromises.push(Entry.build(request, options));
     }
     const entries = await Promise.all(entryPromises);
     return {version: '1.2', creator: log.creator(), pages: log.buildPages(requests), entries};
@@ -106,14 +110,14 @@ export class Entry {
     return time === -1 ? -1 : time * 1000;
   }
 
-  static async build(request: SDK.NetworkRequest.NetworkRequest): Promise<EntryDTO> {
+  static async build(request: SDK.NetworkRequest.NetworkRequest, options: BuildOptions): Promise<EntryDTO> {
     const harEntry = new Entry(request);
     let ipAddress = harEntry.request.remoteAddress();
     const portPositionInString = ipAddress.lastIndexOf(':');
+    const connection = portPositionInString !== -1 ? ipAddress.substring(portPositionInString + 1) : undefined;
     if (portPositionInString !== -1) {
       ipAddress = ipAddress.substr(0, portPositionInString);
     }
-
     const timings = harEntry.buildTimings();
     let time = 0;
     // "ssl" is included in the connect field, so do not double count it.
@@ -142,22 +146,34 @@ export class Entry {
     }
 
     const entry: EntryDTO = {
+      _connectionId: undefined,
       _fromCache: undefined,
       _initiator: exportedInitiator,
       _priority: harEntry.request.priority(),
       _resourceType: harEntry.request.resourceType().name(),
       _webSocketMessages: undefined,
       cache: {},
-      connection: undefined,
+      connection,
       pageref: undefined,
       request: await harEntry.buildRequest(),
       response: harEntry.buildResponse(),
       // IPv6 address should not have square brackets per (https://tools.ietf.org/html/rfc2373#section-2.2).
       serverIPAddress: ipAddress.replace(/\[\]/g, ''),
       startedDateTime: Log.pseudoWallTime(harEntry.request, harEntry.request.issueTime()).toJSON(),
-      time: time,
-      timings: timings,
+      time,
+      timings,
     };
+
+    // Sanitize HAR to remove sensitive data.
+
+    if (options.sanitize) {
+      entry.response.cookies = [];
+      entry.response.headers =
+          entry.response.headers.filter(({name}) => !['set-cookie'].includes(name.toLocaleLowerCase()));
+      entry.request.cookies = [];
+      entry.request.headers =
+          entry.request.headers.filter(({name}) => !['authorization', 'cookie'].includes(name.toLocaleLowerCase()));
+    }
 
     // Chrome specific.
 
@@ -168,9 +184,9 @@ export class Entry {
     }
 
     if (harEntry.request.connectionId !== '0') {
-      entry.connection = harEntry.request.connectionId;
+      entry._connectionId = harEntry.request.connectionId;
     } else {
-      delete entry.connection;
+      delete entry._connectionId;
     }
 
     const page = SDK.PageLoad.PageLoad.forRequest(harEntry.request);
@@ -231,6 +247,9 @@ export class Entry {
       bodySize: this.responseBodySize,
       _transferSize: this.request.transferSize,
       _error: this.request.localizedFailDescription,
+      _fetchedViaServiceWorker: this.request.fetchedViaServiceWorker,
+      _responseCacheStorageCacheName: this.request.getResponseCacheStorageCacheName(),
+      _serviceWorkerResponseSource: this.request.serviceWorkerResponseSource(),
     };
   }
 
@@ -310,6 +329,12 @@ export class Entry {
         result.send = 0;
       }
       highestTime = Math.max(sendEnd, connectEnd, sslEnd, dnsEnd, blockedStart, 0);
+
+      // Custom fields for service worker timings.
+      result._workerStart = timing.workerStart;
+      result._workerReady = timing.workerReady;
+      result._workerFetchStart = timing.workerFetchStart;
+      result._workerRespondWithSettled = timing.workerRespondWithSettled;
     } else if (this.request.responseReceivedTime === -1) {
       // Means that we don't have any more details after blocked, so attribute all to blocked.
       result.blocked = Entry.toMilliseconds(this.request.endTime - issueTime);
@@ -369,11 +394,17 @@ export class Entry {
       httpOnly: cookie.httpOnly(),
       secure: cookie.secure(),
       sameSite: undefined,
+      partitionKey: undefined,
     };
     if (cookie.sameSite()) {
       c.sameSite = cookie.sameSite();
     } else {
       delete c.sameSite;
+    }
+    if (cookie.partitionKey()) {
+      c.partitionKey = cookie.partitionKey();
+    } else {
+      delete c.partitionKey;
     }
     return c;
   }
@@ -426,6 +457,12 @@ export interface Timing {
   // TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration
   // eslint-disable-next-line @typescript-eslint/naming-convention
   _blocked_proxy?: number;
+
+  // Custom fields for service workers.
+  _workerStart?: number;
+  _workerReady?: number;
+  _workerFetchStart?: number;
+  _workerRespondWithSettled?: number;
 }
 
 export interface Parameter {
@@ -445,7 +482,7 @@ export interface Request {
   method: string;
   url: Platform.DevToolsPath.UrlString;
   httpVersion: string;
-  headers: Object;
+  headers: {name: string, value: string, comment?: string}[];
   queryString: Parameter[];
   cookies: CookieDTO[];
   headersSize: number;
@@ -457,7 +494,7 @@ export interface Response {
   status: number;
   statusText: string;
   httpVersion: string;
-  headers: Object;
+  headers: {name: string, value: string, comment?: string}[];
   cookies: CookieDTO[];
   content: Content;
   redirectURL: string;
@@ -465,9 +502,13 @@ export interface Response {
   bodySize: number;
   _transferSize: number;
   _error: string|null;
+  _fetchedViaServiceWorker: boolean;
+  _responseCacheStorageCacheName: string|undefined;
+  _serviceWorkerResponseSource: Protocol.Network.ServiceWorkerResponseSource|undefined;
 }
 
 export interface EntryDTO {
+  _connectionId?: string;
   _fromCache?: string;
   _initiator: Protocol.Network.Initiator|null;
   _priority: Protocol.Network.ResourcePriority|null;
@@ -499,6 +540,7 @@ export interface CookieDTO {
   httpOnly: boolean;
   secure: boolean;
   sameSite?: Protocol.Network.CookieSameSite;
+  partitionKey?: Protocol.Network.CookiePartitionKey;
 }
 
 export interface Page {

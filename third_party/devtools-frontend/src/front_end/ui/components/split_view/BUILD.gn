@@ -4,17 +4,16 @@
 
 import("../../../../scripts/build/ninja/devtools_entrypoint.gni")
 import("../../../../scripts/build/ninja/devtools_module.gni")
+import("../../../../scripts/build/typescript/typescript.gni")
 import("../visibility.gni")
 
 devtools_module("split_view") {
   sources = [ "SplitView.ts" ]
   deps = [
     "../../../ui/components/helpers:bundle",
-    "../../../ui/lit-html:bundle",
+    "../../../ui/lit:bundle",
     "../../../ui/visual_logging:bundle",
   ]
-
-  visibility = [ "../../../../test/unittests/front_end/ui/components" ]
 }
 
 devtools_entrypoint("bundle") {
@@ -23,4 +22,15 @@ devtools_entrypoint("bundle") {
   deps = [ ":split_view" ]
 
   visibility = default_components_visibility
+}
+
+ts_library("unittests") {
+  testonly = true
+
+  sources = [ "SplitView.test.ts" ]
+
+  deps = [
+    ":bundle",
+    "../../../testing",
+  ]
 }

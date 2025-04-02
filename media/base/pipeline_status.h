@@ -67,8 +67,11 @@ enum PipelineStatusCodes : StatusCodeType {
   // The remote media component was disconnected unexpectedly, e.g. crash.
   PIPELINE_ERROR_DISCONNECTED = 24,
 
+  // Bitstream format conversion related errors.
+  DEMUXER_ERROR_BITSTREAM_CONVERSION_FAILED = 25,
+
   // Must be equal to the largest value ever logged.
-  PIPELINE_STATUS_MAX = PIPELINE_ERROR_DISCONNECTED,
+  PIPELINE_STATUS_MAX = DEMUXER_ERROR_BITSTREAM_CONVERSION_FAILED,
 };
 
 struct PipelineStatusTraits {
@@ -88,7 +91,7 @@ MEDIA_EXPORT std::string PipelineStatusToString(const PipelineStatus& status);
 MEDIA_EXPORT std::ostream& operator<<(std::ostream& out,
                                       const PipelineStatus& status);
 
-// TODO(crbug.com/1007799): Delete PipelineStatusCB once all callbacks are
+// TODO(crbug.com/40649615): Delete PipelineStatusCB once all callbacks are
 //                          converted to PipelineStatusCallback.
 using PipelineStatusCB = base::RepeatingCallback<void(PipelineStatus)>;
 using PipelineStatusCallback = base::OnceCallback<void(PipelineStatus)>;
@@ -154,7 +157,7 @@ MEDIA_EXPORT inline std::ostream& operator<<(
 // RendererClient.OnStatisticsUpdate() expects *_decoded*, *_dropped and
 // *memory_usage to be the delta since the last OnStatisticsUpdate() call.
 // WebMediaPlayerImpl expects them to be cumulation since playback start.
-// TODO(crbug.com/1275794): Make the meaning consistent.
+// TODO(crbug.com/40207229): Make the meaning consistent.
 struct MEDIA_EXPORT PipelineStatistics {
   PipelineStatistics();
   PipelineStatistics(const PipelineStatistics& other);

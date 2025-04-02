@@ -29,7 +29,17 @@ std::string& FakeAppForTesting() {
   return *value;
 }
 
-IntentPickerAppInfo AppInfoForAppUrl(NSURL* app_url) {
+NSImage* CreateRedIconForTesting() {
+  return [NSImage imageWithSize:NSMakeSize(16, 16)
+                        flipped:NO
+                 drawingHandler:^(NSRect rect) {
+                   [NSColor.redColor set];
+                   NSRectFill(rect);
+                   return YES;
+                 }];
+}
+
+IntentPickerAppInfo AppInfoForAppUrl(NSURL* app_url, int icon_size) {
   NSString* app_name = nil;
   if (![app_url getResourceValue:&app_name
                           forKey:NSURLLocalizedNameKey
@@ -37,24 +47,33 @@ IntentPickerAppInfo AppInfoForAppUrl(NSURL* app_url) {
     // This shouldn't happen but just in case.
     app_name = app_url.lastPathComponent;
   }
+
   NSImage* app_icon = nil;
   if (![app_url getResourceValue:&app_icon
                           forKey:NSURLEffectiveIconKey
                            error:nil]) {
-    // This shouldn't happen but just in case.
-    app_icon = [NSImage imageNamed:NSImageNameApplicationIcon];
+    // This shouldn't happen, but just in case. (Note that, despite its name,
+    // NSImageNameApplicationIcon is the icon of "this app". There is no
+    // constant for "generic app icon", only this string value. This value has
+    // been verified to exist from macOS 10.15 through macOS 14; see -[NSImage
+    // _systemImageNamed:].)
+    app_icon = [NSImage imageNamed:@"NSDefaultApplicationIcon"];
   }
-  app_icon.size = NSMakeSize(16, 16);
+  if (UseFakeAppForTesting()) {            // IN-TEST
+    app_icon = CreateRedIconForTesting();  // IN-TEST
+  }
 
-  return IntentPickerAppInfo{PickerEntryType::kMacOs,
-                             ui::ImageModel::FromImage(gfx::Image(app_icon)),
-                             base::SysNSStringToUTF8([app_url path]),
-                             base::SysNSStringToUTF8(app_name)};
+  app_icon.size = NSMakeSize(icon_size, icon_size);
+
+  return IntentPickerAppInfo{
+      PickerEntryType::kMacOs, ui::ImageModel::FromImage(gfx::Image(app_icon)),
+      base::SysNSStringToUTF8(app_url.path), base::SysNSStringToUTF8(app_name)};
 }
 
 }  // namespace
 
-std::optional<IntentPickerAppInfo> FindMacAppForUrl(const GURL& url) {
+std::optional<IntentPickerAppInfo> FindMacAppForUrl(const GURL& url,
+                                                    int icon_size) {
   if (UseFakeAppForTesting()) {
     std::string fake_app = FakeAppForTesting();  // IN-TEST
     if (fake_app.empty()) {
@@ -62,7 +81,7 @@ std::optional<IntentPickerAppInfo> FindMacAppForUrl(const GURL& url) {
     }
 
     return AppInfoForAppUrl(
-        [NSURL fileURLWithPath:base::SysUTF8ToNSString(fake_app)]);
+        [NSURL fileURLWithPath:base::SysUTF8ToNSString(fake_app)], icon_size);
   }
 
   NSURL* nsurl = net::NSURLWithGURL(url);
@@ -73,7 +92,7 @@ std::optional<IntentPickerAppInfo> FindMacAppForUrl(const GURL& url) {
   SFUniversalLink* link = [[SFUniversalLink alloc] initWithWebpageURL:nsurl];
 
   if (link) {
-    return AppInfoForAppUrl(link.applicationURL);
+    return AppInfoForAppUrl(link.applicationURL, icon_size);
   }
 
   return std::nullopt;

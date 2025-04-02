@@ -14,34 +14,6 @@ gn_args.config(
 )
 
 gn_args.config(
-    name = "also_build_ash_chrome",
-    args = {
-        "also_build_ash_chrome": True,
-    },
-)
-
-gn_args.config(
-    name = "also_build_lacros_chrome",
-    args = {
-        "also_build_lacros_chrome": True,
-    },
-)
-
-gn_args.config(
-    name = "also_build_lacros_chrome_for_architecture_amd64",
-    args = {
-        "also_build_lacros_chrome_for_architecture": "amd64",
-    },
-)
-
-gn_args.config(
-    name = "also_build_lacros_chrome_for_architecture_arm64",
-    args = {
-        "also_build_lacros_chrome_for_architecture": "arm64",
-    },
-)
-
-gn_args.config(
     name = "amd64-generic",
     args_file = "//build/args/chromeos/amd64-generic.gni",
 )
@@ -60,6 +32,14 @@ gn_args.config(
     name = "android",
     args = {
         "target_os": "android",
+    },
+)
+
+gn_args.config(
+    name = "android_asan",
+    args = {
+        "is_asan": True,
+        "default_min_sdk_version": 27,
     },
 )
 
@@ -88,6 +68,14 @@ gn_args.config(
     },
 )
 
+# For Android builds requiring is_desktop_android.
+gn_args.config(
+    name = "android_desktop",
+    args = {
+        "is_desktop_android": True,
+    },
+)
+
 # Representative GN args for Android developer builds.
 gn_args.config(
     name = "android_developer",
@@ -113,7 +101,7 @@ gn_args.config(
     },
 )
 
-# TODO(https://crbug.com/1020714): This is temporary. We'd like to run a
+# TODO(crbug.com/40105916): This is temporary. We'd like to run a
 # smoke test on android_binary_sizes to ensure coverage of proguard, at
 # which point we can merge this into android_fastbuild. Until then, only
 # disable proguard on a few bots to gather metrics on the effect on build
@@ -167,6 +155,11 @@ gn_args.config(
 )
 
 gn_args.config(
+    name = "arm64-generic-vm",
+    args_file = "//build/args/chromeos/arm64-generic-vm.gni",
+)
+
+gn_args.config(
     name = "arm64_host",
     args = {
         "test_host_cpu": "arm64",
@@ -209,16 +202,60 @@ gn_args.config(
 
 gn_args.config(
     name = "cast_android",
+    args_file = "//chromecast/build/args/config/android.gni",
+    configs = [
+        "cast_receiver",
+        "android",
+        "minimal_symbols",
+        "static",
+    ],
+)
+
+gn_args.config(
+    name = "cast_linux",
+    args_file = "//chromecast/build/args/config/linux.gni",
+    configs = [
+        "cast_receiver",
+        "linux",
+        "minimal_symbols",
+        "static",
+    ],
+)
+
+gn_args.config(
+    name = "cast_debug",
     args = {
-        "is_cast_android": True,
+        "cast_is_debug": True,
+    },
+    configs = [
+        "debug",
+        "dcheck_always_on",
+    ],
+)
+
+gn_args.config(
+    name = "cast_java_debug",
+    args = {
+        "is_java_debug": True,
     },
 )
 
 gn_args.config(
-    name = "cast_os",
+    name = "cast_java_release",
     args = {
-        "is_castos": True,
+        "is_java_debug": False,
     },
+)
+
+gn_args.config(
+    name = "cast_release",
+    args = {
+        "cast_is_debug": False,
+    },
+    configs = [
+        "dcheck_off",
+        "release",
+    ],
 )
 
 gn_args.config(
@@ -329,6 +366,9 @@ gn_args.config(
 
 gn_args.config(
     name = "chromeos_device",
+    configs = [
+        "chromeos",
+    ],
     args = {
         "is_chromeos_device": True,
     },
@@ -375,7 +415,7 @@ gn_args.config(
         "use_partition_alloc": False,
         "enable_reporting": True,
         "use_hashed_jni_names": True,
-        "default_min_sdk_version": 21,
+        "default_min_sdk_version": 23,
         "enable_base_tracing": False,
         "clang_use_default_sample_profile": False,
         "media_use_ffmpeg": False,
@@ -394,6 +434,7 @@ gn_args.config(
     args = {
         "clang_base_path": "//third_party/cronet_android_mainline_clang/linux-amd64",
         "clang_use_chrome_plugins": False,
+        "default_min_sdk_version": 29,
         # https://crbug.com/1481060
         "llvm_android_mainline": True,
     },
@@ -408,7 +449,6 @@ gn_args.config(
         "include_transport_security_state_preload_list": False,
         "is_cronet_build": True,
         "use_platform_icu_alternatives": True,
-        "enable_rust": False,
     },
 )
 
@@ -496,13 +536,27 @@ gn_args.config(
 )
 
 gn_args.config(
-    name = "enable_all_rust_features",
+    name = "enable_rust_mojo",
     args = {
-        "enable_all_rust_features": True,
+        "enable_rust_mojo": True,
     },
 )
 
-# TODO(https://crbug.com/1010584): Explicitly enable DirectX 12.
+gn_args.config(
+    name = "enable_rust_mojom_bindings",
+    args = {
+        "enable_rust_mojom_bindings": True,
+    },
+)
+
+gn_args.config(
+    name = "enable_rust_png",
+    args = {
+        "enable_rust_png": True,
+    },
+)
+
+# TODO(crbug.com/40101527): Explicitly enable DirectX 12.
 gn_args.config(
     name = "dx12vk",
     configs = [
@@ -518,6 +572,16 @@ gn_args.config(
     name = "enable_backup_ref_ptr_feature_flag",
     args = {
         "enable_backup_ref_ptr_feature_flag": True,
+    },
+)
+
+# Enables the instance tracer for BackupRefPtr. This provides more useful stack
+# traces when triggering the dangling pointer detector, but at the cost of some
+# runtime performance (last measured at ~10% in release builds).
+gn_args.config(
+    name = "enable_backup_ref_ptr_instance_tracer",
+    args = {
+        "enable_backup_ref_ptr_instance_tracer": True,
     },
 )
 
@@ -565,9 +629,23 @@ gn_args.config(
 )
 
 gn_args.config(
+    name = "enterprise_companion",
+    args = {
+        "enable_enterprise_companion": True,
+    },
+)
+
+gn_args.config(
     name = "extended_tracing",
     args = {
         "extended_tracing_enabled": True,
+    },
+)
+
+gn_args.config(
+    name = "no_fatal_linker_warnings",
+    args = {
+        "fatal_linker_warnings": False,
     },
 )
 
@@ -635,13 +713,6 @@ gn_args.config(
     name = "fuzzer",
     args = {
         "enable_ipc_fuzzer": True,
-    },
-)
-
-gn_args.config(
-    name = "goma",
-    args = {
-        "use_goma": True,
     },
 )
 
@@ -755,21 +826,21 @@ gn_args.config(
 )
 
 gn_args.config(
-    name = "lacros",
-    args = {
-        "target_os": "chromeos",
-        "chromeos_is_browser_only": True,
-    },
-)
-
-gn_args.config(
-    name = "lacros_on_linux",
-    args = {
-        "chromeos_is_browser_only": True,
-    },
+    name = "chromeos_on_linux",
     configs = [
         "chromeos",
     ],
+)
+
+# Do not use this for non-FYI builders.
+gn_args.config(
+    name = "libcxx_modules",
+    args = {
+        # TODO: crbug.com/351909443 - remove once performance of plugins is
+        # improved.
+        "clang_use_chrome_plugins": False,
+        "use_libcxx_modules": True,
+    },
 )
 
 gn_args.config(
@@ -780,12 +851,29 @@ gn_args.config(
 )
 
 gn_args.config(
+    name = "linux",
+    args = {
+        "target_os": "linux",
+    },
+)
+
+gn_args.config(
     name = "linux_wayland",
+    configs = [
+        "linux",
+    ],
     args = {
         "ozone_auto_platforms": False,
         "ozone_platform_wayland": True,
         "ozone_platform": "wayland",
         "use_bundled_weston": True,
+    },
+)
+
+gn_args.config(
+    name = "lld",
+    args = {
+        "use_lld": True,
     },
 )
 
@@ -879,13 +967,6 @@ gn_args.config(
 )
 
 gn_args.config(
-    name = "no_goma",
-    args = {
-        "use_goma": False,
-    },
-)
-
-gn_args.config(
     name = "no_lld",
     args = {
         "use_lld": False,
@@ -894,6 +975,13 @@ gn_args.config(
 
 gn_args.config(
     name = "no_reclient",
+    args = {
+        "use_reclient": False,
+    },
+)
+
+gn_args.config(
+    name = "no_remoteexec",
     args = {
         "use_remoteexec": False,
     },
@@ -917,6 +1005,11 @@ gn_args.config(
     name = "no_secondary_abi",
     args = {
         "skip_secondary_abi_for_cq": True,
+        # A chromium build with "skip_secondary_abi_for_cq" enabled in a
+        # checkout that has src-internal fails if enable_chrome_android_internal
+        # is not set to false.
+        # TODO(crbug.com/361540497): Can remove this when the build is fixed.
+        "enable_chrome_android_internal": False,
     },
 )
 
@@ -1009,13 +1102,6 @@ gn_args.config(
 )
 
 gn_args.config(
-    name = "perfetto",
-    args = {
-        "use_perfetto_client_library": True,
-    },
-)
-
-gn_args.config(
     name = "perfetto_zlib",
     args = {
         "enable_perfetto_zlib": True,
@@ -1033,19 +1119,10 @@ gn_args.config(
 )
 
 gn_args.config(
-    name = "reclient",
+    name = "remoteexec",
     args = {
         "use_remoteexec": True,
     },
-)
-
-gn_args.config(
-    name = "reclient_with_remoteexec_links",
-    args = {
-        "use_remoteexec_links": True,
-        "concurrent_links": 50,
-    },
-    configs = ["reclient"],
 )
 
 gn_args.config(
@@ -1110,6 +1187,13 @@ gn_args.config(
 )
 
 gn_args.config(
+    name = "save_lld_reproducers",
+    args = {
+        "save_reproducers_on_lld_crash": True,
+    },
+)
+
+gn_args.config(
     name = "skip_generate_fuzzer_owners",
     args = {
         "generate_fuzzer_owners": False,
@@ -1148,6 +1232,20 @@ gn_args.config(
     name = "strip_debug_info",
     args = {
         "strip_debug_info": True,
+    },
+)
+
+gn_args.config(
+    name = "system_headers_in_deps",
+    args = {
+        "system_headers_in_deps": True,
+    },
+)
+
+gn_args.config(
+    name = "full_mte",
+    args = {
+        "use_full_mte": True,
     },
 )
 
@@ -1322,6 +1420,13 @@ gn_args.config(
 )
 
 gn_args.config(
+    name = "v8_sandbox_testing",
+    args = {
+        "v8_enable_memory_corruption_api": True,
+    },
+)
+
+gn_args.config(
     name = "volteer",
     args_file = "//build/args/chromeos/volteer.gni",
 )
@@ -1359,6 +1464,13 @@ gn_args.config(
 )
 
 gn_args.config(
+    name = "win",
+    args = {
+        "target_os": "win",
+    },
+)
+
+gn_args.config(
     name = "win_cross",
     args = {
         "target_os": "win",
@@ -1383,4 +1495,11 @@ gn_args.config(
     name = "xctest",
     args = {"enable_run_ios_unittests_with_xctest": True},
     configs = ["ios"],
+)
+
+gn_args.config(
+    name = "high_end_fuzzer_targets",
+    args = {
+        "high_end_fuzzer_targets": True,
+    },
 )

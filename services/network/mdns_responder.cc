@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "services/network/mdns_responder.h"
 
 #include <algorithm>
@@ -12,15 +17,14 @@
 #include <string>
 #include <utility>
 
-#include "base/big_endian.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/not_fatal_until.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
 #include "base/strings/stringprintf.h"
-#include "base/sys_byteorder.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -594,7 +598,6 @@ class MdnsResponderManager::SocketHandler::ResponseScheduler {
         return RateLimitScheme::NO_LIMIT;
       case MdnsResponseSendOption::ResponseClass::UNSPECIFIED:
         NOTREACHED();
-        return RateLimitScheme::PER_RESPONSE;
     }
   }
   // Returns null if the computed delay exceeds kMaxScheduledDelay and the next
@@ -921,7 +924,7 @@ bool MdnsResponderManager::Send(scoped_refptr<net::IOBufferWithSize> buf,
 
 void MdnsResponderManager::OnMojoConnectionError(MdnsResponder* responder) {
   auto it = responders_.find(responder);
-  DCHECK(it != responders_.end());
+  CHECK(it != responders_.end(), base::NotFatalUntil::M130);
   responders_.erase(it);
 }
 
@@ -1001,7 +1004,7 @@ void MdnsResponderManager::OnSocketHandlerReadError(uint16_t socket_handler_id,
   // We should not remove the socket handler for a non-fatal error.
   DCHECK(IsFatalError(result));
   auto it = socket_handler_by_id_.find(socket_handler_id);
-  DCHECK(it != socket_handler_by_id_.end());
+  CHECK(it != socket_handler_by_id_.end(), base::NotFatalUntil::M130);
   // It is safe to remove the handler in error since the handler has exited the
   // read loop and is done with |OnRead|.
   socket_handler_by_id_.erase(it);

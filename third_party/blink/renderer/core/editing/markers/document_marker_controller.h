@@ -34,7 +34,6 @@
 #include "base/dcheck_is_on.h"
 #include "base/functional/function_ref.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/dom/synchronous_mutation_observer.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator.h"
 #include "third_party/blink/renderer/core/editing/markers/composition_marker.h"
@@ -49,13 +48,13 @@
 
 namespace blink {
 
+class Document;
 class DocumentMarkerList;
 class Highlight;
 class SuggestionMarkerProperties;
 
 class CORE_EXPORT DocumentMarkerController final
-    : public GarbageCollected<DocumentMarkerController>,
-      public SynchronousMutationObserver {
+    : public GarbageCollected<DocumentMarkerController> {
  public:
   explicit DocumentMarkerController(Document&);
   DocumentMarkerController(const DocumentMarkerController&) = delete;
@@ -102,8 +101,6 @@ class CORE_EXPORT DocumentMarkerController final
       const SuggestionMarker::SuggestionType& type);
   // Removes suggestion marker with |RemoveOnFinishComposing::kRemove|.
   void RemoveSuggestionMarkerInRangeOnFinish(const EphemeralRangeInFlatTree&);
-  void RepaintMarkers(
-      DocumentMarker::MarkerTypes = DocumentMarker::MarkerTypes::All());
   // Returns true if markers within a range are found.
   bool SetTextMatchMarkersActive(const EphemeralRange&, bool);
   // Returns true if markers within a range defined by a text node,
@@ -173,6 +170,10 @@ class CORE_EXPORT DocumentMarkerController final
   DocumentMarkerVector MarkersFor(
       const Text&,
       DocumentMarker::MarkerTypes = DocumentMarker::MarkerTypes::All()) const;
+  DocumentMarkerVector MarkersFor(const Text&,
+                                  DocumentMarker::MarkerType,
+                                  unsigned start_offset,
+                                  unsigned end_offset) const;
   DocumentMarkerVector Markers() const;
 
   // Apply a function to all the markers of a particular type. The
@@ -186,24 +187,22 @@ class CORE_EXPORT DocumentMarkerController final
   DocumentMarkerVector ComputeMarkersToPaint(const Text&) const;
   void MergeOverlappingMarkers(DocumentMarker::MarkerType);
 
+  bool HasAnyMarkersForText(const Text&) const;
   bool PossiblyHasTextMatchMarkers() const;
   Vector<gfx::Rect> LayoutRectsForTextMatchMarkers();
   void InvalidateRectsForAllTextMatchMarkers();
   void InvalidateRectsForTextMatchMarkersInNode(const Text&);
 
-  void Trace(Visitor*) const override;
+  void Trace(Visitor*) const;
 
 #if DCHECK_IS_ON()
   void ShowMarkers() const;
 #endif
 
-  // SynchronousMutationObserver
-  // For performance, observer is only registered when
-  // |possibly_existing_marker_types_| is non-zero.
   void DidUpdateCharacterData(CharacterData*,
                               unsigned offset,
                               unsigned old_length,
-                              unsigned new_length) final;
+                              unsigned new_length);
 
  private:
   void AddMarkerInternal(
@@ -237,13 +236,7 @@ class CORE_EXPORT DocumentMarkerController final
                                          const Text* key) const;
 
   // Called when a node is removed from a marker map.
-  // When clear_document_allowed is true this class will be removed from the
-  // mutation observer list when the marker set is empty. For efficiency
-  // it should generally be true, but it must be false when called
-  // from a method that implements SynchronousMutationObserver interfaces
-  // (currently only DidUpdateCharacterData);
-  void DidRemoveNodeFromMap(DocumentMarker::MarkerType,
-                            bool clear_document_allowed = true);
+  void DidRemoveNodeFromMap(DocumentMarker::MarkerType);
 
   MarkerMaps markers_;
 

@@ -125,7 +125,6 @@ v8::Local<v8::Value> ChromeSetting::GetOnChangeEvent(
   v8::Local<v8::Value> event;
   if (!wrapper->GetPrivate(context, key).ToLocal(&event)) {
     NOTREACHED();
-    return v8::Local<v8::Value>();
   }
 
   DCHECK(!event.IsEmpty());
@@ -140,7 +139,6 @@ v8::Local<v8::Value> ChromeSetting::GetOnChangeEvent(
     v8::Maybe<bool> set_result = wrapper->SetPrivate(context, key, event);
     if (!set_result.IsJust() || !set_result.FromJust()) {
       NOTREACHED();
-      return v8::Local<v8::Value>();
     }
   }
   return event;

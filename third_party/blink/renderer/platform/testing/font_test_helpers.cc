@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/platform/fonts/font.h"
 #include "third_party/blink/renderer/platform/fonts/font_custom_platform_data.h"
 #include "third_party/blink/renderer/platform/fonts/font_selector.h"
+#include "third_party/blink/renderer/platform/fonts/font_variant_emoji.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 
@@ -20,14 +21,17 @@ namespace {
 class TestFontSelector : public FontSelector {
  public:
   static TestFontSelector* Create(const String& path) {
-    scoped_refptr<SharedBuffer> font_buffer = test::ReadFromFile(path);
+    std::optional<Vector<char>> data = test::ReadFromFile(path);
+    CHECK(data);
+    scoped_refptr<SharedBuffer> font_buffer =
+        SharedBuffer::Create(std::move(*data));
     String ots_parse_message;
     return MakeGarbageCollected<TestFontSelector>(
         FontCustomPlatformData::Create(font_buffer.get(), ots_parse_message));
   }
 
-  static TestFontSelector* Create(const uint8_t* data, size_t size) {
-    scoped_refptr<SharedBuffer> font_buffer = SharedBuffer::Create(data, size);
+  static TestFontSelector* Create(base::span<const uint8_t> data) {
+    scoped_refptr<SharedBuffer> font_buffer = SharedBuffer::Create(data);
     String ots_parse_message;
     FontCustomPlatformData* font_custom_platform_data =
         FontCustomPlatformData::Create(font_buffer.get(), ots_parse_message);
@@ -123,35 +127,32 @@ class TestFontSelector : public FontSelector {
 }  // namespace
 
 Font CreateTestFont(const AtomicString& family_name,
-                    const uint8_t* data,
-                    size_t data_size,
+                    base::span<const uint8_t> data,
                     float size,
                     const FontDescription::VariantLigatures* ligatures) {
-  FontFamily family;
-  family.SetFamily(family_name, FontFamily::Type::kFamilyName);
-
   FontDescription font_description;
-  font_description.SetFamily(family);
+  font_description.SetFamily(
+      FontFamily(family_name, FontFamily::Type::kFamilyName));
   font_description.SetSpecifiedSize(size);
   font_description.SetComputedSize(size);
   if (ligatures)
     font_description.SetVariantLigatures(*ligatures);
 
-  return Font(font_description, TestFontSelector::Create(data, data_size));
+  return Font(font_description, TestFontSelector::Create(data));
 }
 
 Font CreateTestFont(const AtomicString& family_name,
                     const String& font_path,
                     float size,
                     const FontDescription::VariantLigatures* ligatures,
+                    const FontVariantEmoji variant_emoji,
                     void (*init_font_description)(FontDescription*)) {
-  FontFamily family;
-  family.SetFamily(family_name, FontFamily::Type::kFamilyName);
-
   FontDescription font_description;
-  font_description.SetFamily(family);
+  font_description.SetFamily(
+      FontFamily(family_name, FontFamily::Type::kFamilyName));
   font_description.SetSpecifiedSize(size);
   font_description.SetComputedSize(size);
+  font_description.SetVariantEmoji(variant_emoji);
   if (ligatures)
     font_description.SetVariantLigatures(*ligatures);
   if (init_font_description)

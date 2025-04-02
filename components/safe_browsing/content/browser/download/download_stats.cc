@@ -44,11 +44,11 @@ std::string GetDangerTypeMetricSuffix(
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_SAFE:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_FAILED:
-    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE:
     case download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS:
     case download::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT:
     case download::DOWNLOAD_DANGER_TYPE_USER_VALIDATED:
     case download::DOWNLOAD_DANGER_TYPE_ALLOWLISTED_BY_POLICY:
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
     case download::DOWNLOAD_DANGER_TYPE_MAX:
       return ".Others";
   }
@@ -110,23 +110,6 @@ void RecordDangerousDownloadWarningBypassed(
                                        kBypassedMetricSuffix);
   base::RecordAction(
       base::UserMetricsAction("SafeBrowsing.Download.WarningBypassed"));
-}
-
-void RecordDownloadOpenedLatency(download::DownloadDangerType danger_type,
-                                 download::DownloadContent download_content,
-                                 base::Time download_opened_time,
-                                 base::Time download_end_time,
-                                 bool show_download_in_folder) {
-  if (danger_type != download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS) {
-    return;
-  }
-  std::string metric_suffix =
-      show_download_in_folder ? ".ShowInFolder" : ".OpenDirectly";
-  base::UmaHistogramCustomTimes(
-      "SBClientDownload.SafeDownloadOpenedLatency2" + metric_suffix,
-      /* sample */ download_opened_time - download_end_time,
-      /* min */ base::Seconds(1),
-      /* max */ base::Days(1), /* buckets */ 50);
 }
 
 void RecordDownloadFileTypeAttributes(

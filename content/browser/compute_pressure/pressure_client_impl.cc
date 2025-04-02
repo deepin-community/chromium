@@ -25,34 +25,6 @@ void PressureClientImpl::OnPressureUpdated(
   }
 }
 
-void PressureClientImpl::AddClient(
-    device::mojom::PressureManager* pressure_manager,
-    mojo::PendingRemote<device::mojom::PressureClient> pending_client,
-    device::mojom::PressureSource source,
-    device::mojom::PressureManager::AddClientCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  client_remote_.Bind(std::move(pending_client));
-  // base::Unretained is safe because Mojo guarantees the callback will not
-  // be called after `client_remote_` is deallocated, and `client_remote_`
-  // is owned by this class.
-  client_remote_.set_disconnect_handler(
-      base::BindRepeating(&PressureClientImpl::Reset, base::Unretained(this)));
-
-  if (!client_receiver_.is_bound()) {
-    auto pending_remote = client_receiver_.BindNewPipeAndPassRemote();
-    // base::Unretained is safe because Mojo guarantees the callback will not
-    // be called after `client_receiver_` is deallocated, and `client_receiver_`
-    // is owned by this class.
-    client_receiver_.set_disconnect_handler(
-        base::BindOnce(&PressureClientImpl::Reset, base::Unretained(this)));
-    pressure_manager->AddClient(std::move(pending_remote), source,
-                                std::move(callback));
-  } else {
-    std::move(callback).Run(device::mojom::PressureStatus::kOk);
-  }
-}
-
 // Disconnection handler for |client_receiver_| and |client_remote_|. If the
 // PressureClient connection from //services or to Blink breaks, we should stop
 // delivering updates.
@@ -61,6 +33,36 @@ void PressureClientImpl::Reset() {
 
   client_receiver_.reset();
   client_remote_.reset();
+  pressure_source_type_ = PressureSourceType::kUnknown;
+}
+
+mojo::PendingReceiver<device::mojom::PressureClient>
+PressureClientImpl::BindNewPipeAndPassReceiver() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  auto pending_receiver = client_remote_.BindNewPipeAndPassReceiver();
+  // base::Unretained is safe because Mojo guarantees the callback will not
+  // be called after `client_remote_` is deallocated, and `client_remote_`
+  // is owned by this class.
+  client_remote_.set_disconnect_handler(
+      base::BindRepeating(&PressureClientImpl::Reset, base::Unretained(this)));
+  return pending_receiver;
+}
+
+void PressureClientImpl::BindReceiver(
+    mojo::PendingReceiver<device::mojom::PressureClient> pending_receiver,
+    bool is_virtual_source) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (is_virtual_source) {
+    pressure_source_type_ = PressureSourceType::kVirtual;
+  } else {
+    pressure_source_type_ = PressureSourceType::kNonVirtual;
+  }
+
+  client_receiver_.Bind(std::move(pending_receiver));
+  client_receiver_.set_disconnect_handler(
+      base::BindOnce(&PressureClientImpl::Reset, base::Unretained(this)));
 }
 
 }  // namespace content

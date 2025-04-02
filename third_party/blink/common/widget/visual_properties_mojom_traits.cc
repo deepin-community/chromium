@@ -18,13 +18,14 @@ bool StructTraits<
   if (!data.ReadScreenInfos(&out->screen_infos) ||
       !data.ReadMinSizeForAutoResize(&out->min_size_for_auto_resize) ||
       !data.ReadMaxSizeForAutoResize(&out->max_size_for_auto_resize) ||
-      !data.ReadNewSize(&out->new_size) ||
+      !data.ReadNewSize(&out->new_size_device_px) ||
       !data.ReadVisibleViewportSize(&out->visible_viewport_size) ||
       !data.ReadCompositorViewportPixelRect(
           &out->compositor_viewport_pixel_rect) ||
       !data.ReadBrowserControlsParams(&out->browser_controls_params) ||
       !data.ReadLocalSurfaceId(&out->local_surface_id) ||
-      !data.ReadRootWidgetWindowSegments(&out->root_widget_window_segments) ||
+      !data.ReadRootWidgetViewportSegments(
+          &out->root_widget_viewport_segments) ||
       !data.ReadWindowControlsOverlayRect(&out->window_controls_overlay_rect) ||
       !data.ReadWindowShowState(&out->window_show_state) ||
       data.page_scale_factor() <= 0 || data.compositing_scale_factor() <= 0 ||
@@ -38,6 +39,7 @@ bool StructTraits<
   out->display_mode = data.display_mode();
   out->capture_sequence_number = data.capture_sequence_number();
   out->zoom_level = data.zoom_level();
+  out->css_zoom_factor = data.css_zoom_factor();
   out->page_scale_factor = data.page_scale_factor();
   out->compositing_scale_factor = data.compositing_scale_factor();
   out->cursor_accessibility_scale_factor =

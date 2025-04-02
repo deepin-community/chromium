@@ -25,9 +25,6 @@ namespace updater {
 
 // AppUninstallSelf uninstalls this instance of the updater.
 class AppUninstallSelf : public App {
- public:
-  AppUninstallSelf() = default;
-
  private:
   ~AppUninstallSelf() override = default;
   [[nodiscard]] int Initialize() override;
@@ -41,7 +38,7 @@ class AppUninstallSelf : public App {
 
 int AppUninstallSelf::Initialize() {
   setup_lock_ =
-      ScopedLock::Create(kSetupMutex, updater_scope(), kWaitForSetupLock);
+      CreateScopedLock(kSetupMutex, updater_scope(), kWaitForSetupLock);
   return kErrorOk;
 }
 

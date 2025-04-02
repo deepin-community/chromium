@@ -165,6 +165,10 @@ void ArgumentSpec::InitializeType(const base::Value::Dict& dict) {
       // Additional properties are always optional.
       additional_properties_->optional_ = true;
     }
+
+    if (dict.FindBool("ignoreAdditionalProperties").value_or(false)) {
+      ignore_additional_properties_ = true;
+    }
   } else if (type_ == ArgumentType::LIST) {
     const base::Value::Dict* item_value = dict.FindDict("items");
     CHECK(item_value);
@@ -320,7 +324,6 @@ bool ArgumentSpec::ParseArgument(v8::Local<v8::Context> context,
   }
 
   NOTREACHED();
-  return false;
 }
 
 const std::string& ArgumentSpec::GetTypeName() const {
@@ -460,7 +463,6 @@ bool ArgumentSpec::ParseArgumentToFundamental(
     default:
       NOTREACHED();
   }
-  return false;
 }
 
 bool ArgumentSpec::ParseArgumentToObject(
@@ -526,6 +528,9 @@ bool ArgumentSpec::ParseArgumentToObject(
       // functions, or even NaN. If the additional properties are of
       // ArgumentType::ANY, allow anything, even if it doesn't serialize.
       allow_unserializable = property_spec->type_ == ArgumentType::ANY;
+    } else if (ignore_additional_properties_) {
+      // If we're ignoring additional properties, we just skip to the next one.
+      continue;
     } else {
       *error = api_errors::UnexpectedProperty(*utf8_key);
       return false;

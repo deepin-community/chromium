@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_map.h"
@@ -35,7 +36,7 @@ class Image;
 namespace ui {
 class ColorProvider;
 class DataPack;
-}
+}  // namespace ui
 
 // An optimized representation of a theme, backed by a mmapped DataPack.
 //
@@ -71,7 +72,8 @@ class BrowserThemePack : public CustomThemeSupplier {
   // operation should be relatively fast, as it should be an mmap() and some
   // pointer swizzling. Returns NULL on any error attempting to read |path|.
   static scoped_refptr<BrowserThemePack> BuildFromDataPack(
-      const base::FilePath& path, const std::string& expected_id);
+      const base::FilePath& path,
+      const std::string& expected_id);
 
   // Returns whether the specified identifier is one of the images we persist
   // in the data pack.
@@ -124,10 +126,10 @@ class BrowserThemePack : public CustomThemeSupplier {
   typedef base::flat_map<PersistentID, gfx::Image> ImageCache;
 
   // The raw PNG memory associated with a certain id.
-  typedef std::map<int, scoped_refptr<base::RefCountedMemory> > RawImages;
+  typedef std::map<int, scoped_refptr<base::RefCountedMemory>> RawImages;
 
   // The type passed to ui::DataPack::WritePack.
-  typedef std::map<uint16_t, base::StringPiece> RawDataForWriting;
+  typedef std::map<uint16_t, std::string_view> RawDataForWriting;
 
   // Maps scale factors (enum values) to file paths.
   typedef base::flat_map<ui::ResourceScaleFactor, base::FilePath>
@@ -223,8 +225,7 @@ class BrowserThemePack : public CustomThemeSupplier {
 
   // Loads the unmodified images packed in the extension to SkBitmaps. Returns
   // true if all images loaded.
-  bool LoadRawBitmapsTo(const FilePathMap& file_paths,
-                        ImageCache* image_cache);
+  bool LoadRawBitmapsTo(const FilePathMap& file_paths, ImageCache* image_cache);
 
   // Crops images down to a size such that most of the cropped image will be
   // displayed in the UI. Cropping is useful because images from custom themes
@@ -276,7 +277,8 @@ class BrowserThemePack : public CustomThemeSupplier {
   // images in |source|.
   void CopyImagesTo(const ImageCache& source, ImageCache* destination) const;
 
-  // Changes the RefCountedMemory based |images| into StringPiece data in |out|.
+  // Changes the RefCountedMemory based |images| into string_view data in
+  // |out|.
   void AddRawImagesTo(const RawImages& images, RawDataForWriting* out) const;
 
   // Retrieves the tint OR the default tint. Unlike the public interface, we
@@ -308,7 +310,7 @@ class BrowserThemePack : public CustomThemeSupplier {
   // NOTE: This structs can only contain primary data types to be reliably
   // seralized and de-seralized. Not even nested structs will work across
   // different machines, see crbug.com/988055.
-#pragma pack(push,1)
+#pragma pack(push, 1)
   // Header that is written to disk.
   struct BrowserThemePackHeader {
     // Numeric version to make sure we're compatible in the future.

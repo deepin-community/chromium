@@ -20,10 +20,10 @@
 #include <memory>
 #include <vector>
 
-#include "./centipede/defs.h"
 #include "./centipede/execution_metadata.h"
 #include "./centipede/knobs.h"
 #include "./centipede/mutation_input.h"
+#include "./common/defs.h"
 
 namespace centipede {
 
@@ -54,6 +54,7 @@ class FuzzTestMutator {
   // TODO(xinhaoyuan): Support set_alignment().
 
  private:
+  struct MutationMetadata;
   class MutatorDomain;
 
   // Propagates the execution `metadata` to the internal mutation dictionary.
@@ -72,6 +73,8 @@ class FuzzTestMutator {
   const Knobs &knobs_;
   Rng prng_;
   size_t max_len_ = 1000;
+
+  std::unique_ptr<MutationMetadata> mutation_metadata_;
   std::unique_ptr<MutatorDomain> domain_;
 };
 

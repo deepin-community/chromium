@@ -39,7 +39,7 @@ CrossUserSharingPublicPrivateKeyPair::CreateByImport(
   if (private_key.size() != X25519_PRIVATE_KEY_LEN) {
     return std::nullopt;
   }
-  return CrossUserSharingPublicPrivateKeyPair(std::move(private_key));
+  return CrossUserSharingPublicPrivateKeyPair(private_key);
 }
 
 CrossUserSharingPublicPrivateKeyPair::CrossUserSharingPublicPrivateKeyPair(
@@ -57,7 +57,7 @@ std::array<uint8_t, X25519_PRIVATE_KEY_LEN>
 CrossUserSharingPublicPrivateKeyPair::GetRawPrivateKey() const {
   std::array<uint8_t, X25519_PRIVATE_KEY_LEN> raw_private_key;
   size_t out_len;
-  CHECK(EVP_HPKE_KEY_private_key(key_.get(), raw_private_key.begin(), &out_len,
+  CHECK(EVP_HPKE_KEY_private_key(key_.get(), raw_private_key.data(), &out_len,
                                  raw_private_key.size()));
   CHECK_EQ(out_len, static_cast<size_t>(X25519_PRIVATE_KEY_LEN));
   return raw_private_key;
@@ -67,7 +67,7 @@ std::array<uint8_t, X25519_PUBLIC_VALUE_LEN>
 CrossUserSharingPublicPrivateKeyPair::GetRawPublicKey() const {
   std::array<uint8_t, X25519_PUBLIC_VALUE_LEN> raw_public_key;
   size_t out_len;
-  CHECK(EVP_HPKE_KEY_public_key(key_.get(), raw_public_key.begin(), &out_len,
+  CHECK(EVP_HPKE_KEY_public_key(key_.get(), raw_public_key.data(), &out_len,
                                 raw_public_key.size()));
   CHECK_EQ(out_len, static_cast<size_t>(X25519_PUBLIC_VALUE_LEN));
   return raw_public_key;
@@ -102,7 +102,7 @@ CrossUserSharingPublicPrivateKeyPair::HpkeAuthEncrypt(
                         EVP_HPKE_CTX_max_overhead(sender_context.get()));
 
   base::span<uint8_t> ciphertext =
-      base::make_span(encrypted_data).subspan(encapsulated_shared_secret_len);
+      base::span(encrypted_data).subspan(encapsulated_shared_secret_len);
   size_t ciphertext_len;
 
   if (!EVP_HPKE_CTX_seal(
@@ -148,8 +148,7 @@ CrossUserSharingPublicPrivateKeyPair::HpkeAuthDecrypt(
     return std::nullopt;
   }
 
-  base::span<const uint8_t> ciphertext =
-      encrypted_data.subspan(X25519_PUBLIC_VALUE_LEN);
+  auto ciphertext = encrypted_data.subspan<X25519_PUBLIC_VALUE_LEN>();
   std::vector<uint8_t> plaintext(ciphertext.size());
   size_t plaintext_len;
 

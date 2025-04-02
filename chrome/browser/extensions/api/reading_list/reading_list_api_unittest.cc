@@ -6,10 +6,12 @@
 
 #include <memory>
 
+#include "base/location.h"
 #include "base/test/values_test_util.h"
 #include "base/time/time.h"
 #include "chrome/browser/extensions/api/reading_list/reading_list_api_constants.h"
 #include "chrome/browser/extensions/api/reading_list/reading_list_event_router.h"
+#include "chrome/browser/extensions/api/reading_list/reading_list_event_router_factory.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/reading_list/reading_list_model_factory.h"
@@ -38,7 +40,7 @@ namespace {
 // Create an extension with "readingList" permission.
 scoped_refptr<const Extension> CreateReadingListExtension() {
   return ExtensionBuilder("Extension with readingList permission")
-      .AddPermission("readingList")
+      .AddAPIPermission("readingList")
       .Build();
 }
 
@@ -95,16 +97,16 @@ void ReadingListApiUnitTest::SetUp() {
   params.window = browser_window_.get();
   browser_ = std::unique_ptr<Browser>(Browser::Create(params));
 
-  ReadingListEventRouter::GetFactoryInstance()->SetTestingFactory(
+  ReadingListEventRouterFactory::GetInstance()->SetTestingFactory(
       browser_context(), base::BindRepeating(&BuildReadingListEventRouter));
 
   EventRouterFactory::GetInstance()->SetTestingFactory(
       browser_context(), base::BindRepeating(&BuildEventRouter));
 
-  // We need to call ReadingListEventRouterFactory::GetForProfile() in order to
-  // instantiate the keyed service, since it's not created by default in unit
-  // tests.
-  ReadingListEventRouter::Get(browser_context());
+  // We need to call ReadingListEventRouterFactory::GetForBrowserContext() in
+  // order to instantiate the keyed service, since it's not created by default
+  // in unit tests.
+  ReadingListEventRouterFactory::GetForBrowserContext(browser_context());
 }
 
 void ReadingListApiUnitTest::TearDown() {
@@ -501,7 +503,7 @@ TEST_F(ReadingListApiUnitTest, ReadingListOnEntryRemoved) {
 
   TestEventRouterObserver event_observer(EventRouter::Get(browser_context()));
 
-  reading_list_model->RemoveEntryByURL(url);
+  reading_list_model->RemoveEntryByURL(url, FROM_HERE);
   EXPECT_EQ(reading_list_model->size(), 0u);
 
   EXPECT_EQ(event_observer.events().size(), 1u);

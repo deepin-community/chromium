@@ -123,7 +123,6 @@ void ConversationStateListenerImpl::OnConversationTurnFinished(
     case Resolution::LONGFORM_KEEP_MIC_OPEN:
     case Resolution::BLUE_STEEL_ON_DEVICE_REJECTION:
       NOTREACHED();
-      return;
   }
 }
 

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "device/bluetooth/bluez/bluetooth_device_bluez.h"
 
 #include <stdio.h>
@@ -241,7 +246,6 @@ device::BluetoothTransport BluetoothDeviceBlueZ::GetType() const {
   }
 
   NOTREACHED();
-  return device::BLUETOOTH_TRANSPORT_INVALID;
 }
 
 void BluetoothDeviceBlueZ::CreateGattConnectionImpl(
@@ -299,7 +303,7 @@ void BluetoothDeviceBlueZ::DisconnectGatt() {
 
   // IsPaired() returns true if we've connected to the device before. So we
   // check the dbus property directly.
-  // TODO(crbug.com/649651): Use IsPaired once it returns true only for paired
+  // TODO(crbug.com/40486156): Use IsPaired once it returns true only for paired
   // devices.
   bluez::BluetoothDeviceClient::Properties* properties =
       bluez::BluezDBusManager::Get()->GetBluetoothDeviceClient()->GetProperties(
@@ -569,7 +573,6 @@ void BluetoothDeviceBlueZ::SetConnectionLatency(
       break;
     default:
       NOTREACHED();
-      break;
   }
 
   BLUETOOTH_LOG(EVENT) << "Setting LE connection parameters: min="

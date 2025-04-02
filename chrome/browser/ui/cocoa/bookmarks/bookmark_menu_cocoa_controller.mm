@@ -22,8 +22,8 @@
 #include "components/bookmarks/browser/bookmark_utils.h"
 #include "components/profile_metrics/browser_profile_type.h"
 #import "ui/base/cocoa/cocoa_base_utils.h"
-#import "ui/base/cocoa/menu_controller.h"
 #include "ui/base/window_open_disposition.h"
+#import "ui/menus/cocoa/menu_controller.h"
 
 using base::UserMetricsAction;
 using bookmarks::BookmarkModel;
@@ -37,8 +37,9 @@ namespace {
 NSMenuItem* GetItemWithSubmenu(NSMenu* submenu) {
   NSArray* parent_items = [[submenu supermenu] itemArray];
   for (NSMenuItem* item in parent_items) {
-    if ([item submenu] == submenu)
+    if ([item submenu] == submenu) {
       return item;
+    }
   }
   return nil;
 }
@@ -48,11 +49,12 @@ void DoOpenBookmark(Profile* profile,
                     const BookmarkNode* node) {
   DCHECK(profile);
   Browser* browser = chrome::FindTabbedBrowser(profile, true);
-  if (!browser)
+  if (!browser) {
     browser = Browser::Create(Browser::CreateParams(profile, true));
+  }
   OpenURLParams params(node->url(), Referrer(), disposition,
                        ui::PAGE_TRANSITION_AUTO_BOOKMARK, false);
-  browser->OpenURL(params);
+  browser->OpenURL(params, /*navigation_handle_callback=*/{});
   RecordBookmarkLaunch(BookmarkLaunchLocation::kTopMenu,
                        profile_metrics::GetBrowserProfileType(profile));
 }
@@ -68,31 +70,25 @@ class BookmarkRestorer : public bookmarks::BookmarkModelObserver {
   ~BookmarkRestorer() override = default;
 
   // bookmarks::BookmarkModelObserver:
-  void BookmarkModelBeingDeleted(BookmarkModel* model) override;
-  void BookmarkModelLoaded(BookmarkModel* model, bool ids_reassigned) override;
-  void BookmarkNodeMoved(BookmarkModel* model,
-                         const BookmarkNode* old_parent,
+  void BookmarkModelBeingDeleted() override;
+  void BookmarkModelLoaded(bool ids_reassigned) override;
+  void BookmarkNodeMoved(const BookmarkNode* old_parent,
                          size_t old_index,
                          const BookmarkNode* new_parent,
                          size_t new_index) override {}
-  void BookmarkNodeAdded(BookmarkModel* model,
-                         const BookmarkNode* parent,
+  void BookmarkNodeAdded(const BookmarkNode* parent,
                          size_t index,
                          bool added_by_user) override {}
-  void BookmarkNodeRemoved(BookmarkModel* model,
-                           const BookmarkNode* parent,
+  void BookmarkNodeRemoved(const BookmarkNode* parent,
                            size_t old_index,
                            const BookmarkNode* node,
-                           const std::set<GURL>& removed_urls) override {}
-  void BookmarkNodeChanged(BookmarkModel* model,
-                           const BookmarkNode* node) override {}
-  void BookmarkNodeFaviconChanged(BookmarkModel* model,
-                                  const BookmarkNode* node) override {}
-  void BookmarkNodeChildrenReordered(BookmarkModel* model,
-                                     const BookmarkNode* node) override {}
-  void BookmarkAllUserNodesRemoved(
-      BookmarkModel* model,
-      const std::set<GURL>& removed_urls) override {}
+                           const std::set<GURL>& removed_urls,
+                           const base::Location& location) override {}
+  void BookmarkNodeChanged(const BookmarkNode* node) override {}
+  void BookmarkNodeFaviconChanged(const BookmarkNode* node) override {}
+  void BookmarkNodeChildrenReordered(const BookmarkNode* node) override {}
+  void BookmarkAllUserNodesRemoved(const std::set<GURL>& removed_urls,
+                                   const base::Location& location) override {}
 
  private:
   const raw_ptr<Profile> profile_;
@@ -109,14 +105,12 @@ BookmarkRestorer::BookmarkRestorer(Profile* profile,
   observation_.Observe(BookmarkModelFactory::GetForBrowserContext(profile));
 }
 
-void BookmarkRestorer::BookmarkModelBeingDeleted(BookmarkModel* model) {
-  model->RemoveObserver(this);
+void BookmarkRestorer::BookmarkModelBeingDeleted() {
   delete this;
 }
 
-void BookmarkRestorer::BookmarkModelLoaded(BookmarkModel* model,
-                                           bool ids_reassigned) {
-  model->RemoveObserver(this);
+void BookmarkRestorer::BookmarkModelLoaded(bool ids_reassigned) {
+  const BookmarkModel* model = observation_.GetSource();
   if (const BookmarkNode* node = model->GetNodeByUuid(
           guid_, BookmarkModel::NodeTypeForUuidLookup::kLocalOrSyncableNodes)) {
     DoOpenBookmark(profile_, disposition_, node);
@@ -166,8 +160,9 @@ void OpenBookmarkByGUID(WindowOpenDisposition disposition,
 
 + (NSString*)tooltipForNode:(const BookmarkNode*)node {
   NSString* title = base::SysUTF16ToNSString(node->GetTitle());
-  if (node->is_folder())
+  if (node->is_folder()) {
     return title;
+  }
   std::string urlString = node->url().possibly_invalid_spec();
   NSString* url = base::SysUTF8ToNSString(urlString);
   return cocoa_l10n_util::TooltipForURLAndTitle(url, title);

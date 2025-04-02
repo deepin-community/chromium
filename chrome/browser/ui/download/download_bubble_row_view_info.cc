@@ -7,7 +7,6 @@
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/download/bubble/download_bubble_prefs.h"
 #include "chrome/browser/download/download_ui_safe_browsing_util.h"
-#include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager.h"
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager_factory.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_service.h"
@@ -15,11 +14,17 @@
 #include "chrome/browser/ui/download/download_item_mode.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/download/public/common/download_danger_type.h"
+#include "components/prefs/pref_service.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/views/vector_icons.h"
+
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+#include "chrome/browser/enterprise/connectors/common.h"
+#endif
 
 using download::DownloadItem;
 using offline_items_collection::FailState;
@@ -111,6 +116,7 @@ void DownloadBubbleRowViewInfo::PopulateForInProgressOrComplete() {
       break;
   }
 
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
   if (enterprise_connectors::ShouldPromptReviewForDownload(
           model_->profile(), model_->GetDownloadItem())) {
     switch (model_->GetDangerType()) {
@@ -129,6 +135,7 @@ void DownloadBubbleRowViewInfo::PopulateForInProgressOrComplete() {
         break;
     }
   }
+#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 
   if (TailoredWarningType type = model_->GetTailoredWarningType();
       type != TailoredWarningType::kNoTailoredWarning) {
@@ -207,13 +214,13 @@ void DownloadBubbleRowViewInfo::PopulateForInProgressOrComplete() {
     case download::DOWNLOAD_DANGER_TYPE_BLOCKED_PASSWORD_PROTECTED:
     case download::DOWNLOAD_DANGER_TYPE_BLOCKED_TOO_LARGE:
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK:
-    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_SAFE:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_OPENED_DANGEROUS:
     case download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS:
     case download::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT:
     case download::DOWNLOAD_DANGER_TYPE_USER_VALIDATED:
     case download::DOWNLOAD_DANGER_TYPE_ALLOWLISTED_BY_POLICY:
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
     case download::DOWNLOAD_DANGER_TYPE_MAX:
       break;
   }
@@ -234,12 +241,14 @@ void DownloadBubbleRowViewInfo::PopulateForInterrupted(
       return;
     }
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK: {
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
       if (enterprise_connectors::ShouldPromptReviewForDownload(
               model_->profile(), model_->GetDownloadItem())) {
         primary_button_command_ = DownloadCommands::Command::REVIEW;
-      } else {
-        has_subpage_ = true;
+        return;
       }
+#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+      has_subpage_ = true;
       return;
     }
     case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE:
@@ -254,7 +263,6 @@ void DownloadBubbleRowViewInfo::PopulateForInterrupted(
     case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
     case download::DOWNLOAD_DANGER_TYPE_ASYNC_SCANNING:
     case download::DOWNLOAD_DANGER_TYPE_ASYNC_LOCAL_PASSWORD_SCANNING:
-    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_FAILED:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_SAFE:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_OPENED_DANGEROUS:
@@ -262,6 +270,7 @@ void DownloadBubbleRowViewInfo::PopulateForInterrupted(
     case download::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT:
     case download::DOWNLOAD_DANGER_TYPE_USER_VALIDATED:
     case download::DOWNLOAD_DANGER_TYPE_ALLOWLISTED_BY_POLICY:
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
     case download::DOWNLOAD_DANGER_TYPE_MAX:
       break;
   }
@@ -314,7 +323,6 @@ void DownloadBubbleRowViewInfo::PopulateForInterrupted(
     case FailState::NETWORK_INSTABILITY:
     case FailState::CANNOT_DOWNLOAD:
       NOTREACHED();
-      break;
     case FailState::NO_FAILURE:
       return;
   }
@@ -335,7 +343,6 @@ void DownloadBubbleRowViewInfo::PopulateForTailoredWarning(
       return PopulateDangerousUiPattern();
     case TailoredWarningType::kNoTailoredWarning: {
       NOTREACHED();
-      return;
     }
   }
 }

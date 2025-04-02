@@ -9,7 +9,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/allocator/allocator_extension.h"
 #include "base/command_line.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
@@ -22,7 +21,6 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_checker.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "content/child/child_process.h"
 #include "content/common/process_visibility_tracker.h"
 #include "content/gpu/browser_exposed_gpu_interfaces.h"
@@ -52,7 +50,7 @@
 #include "media/mojo/clients/mojo_android_overlay.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "components/services/font/public/cpp/font_loader.h"  // nogncheck
 #include "components/services/font/public/mojom/font_service.mojom.h"  // nogncheck
 #include "third_party/skia/include/core/SkRefCnt.h"
@@ -85,10 +83,12 @@ ChildThreadImpl::Options GetOptions(
 
 viz::VizMainImpl::ExternalDependencies CreateVizMainDependencies() {
   viz::VizMainImpl::ExternalDependencies deps;
-  if (!base::PowerMonitor::IsInitialized()) {
+  if (!base::PowerMonitor::GetInstance()->IsInitialized()) {
     deps.power_monitor_source =
         std::make_unique<base::PowerMonitorDeviceSource>();
   }
+
+#if BUILDFLAG(IS_ANDROID)
   if (GetContentClient()->gpu()) {
     deps.sync_point_manager = GetContentClient()->gpu()->GetSyncPointManager();
     deps.shared_image_manager =
@@ -96,7 +96,11 @@ viz::VizMainImpl::ExternalDependencies CreateVizMainDependencies() {
     deps.scheduler = GetContentClient()->gpu()->GetScheduler();
     deps.viz_compositor_thread_runner =
         GetContentClient()->gpu()->GetVizCompositorThreadRunner();
+    deps.gr_context_options_provider =
+        GetContentClient()->gpu()->GetGrContextOptionsProvider();
   }
+#endif
+
   auto* process = ChildProcess::current();
   deps.shutdown_event = process->GetShutDownEvent();
   deps.io_thread_task_runner = process->io_task_runner();
@@ -156,7 +160,7 @@ void GpuChildThread::Init(const base::TimeTicks& process_start_time) {
   }
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (!in_process_gpu()) {
     mojo::PendingRemote<font_service::mojom::FontService> font_service;
     BindHostReceiver(font_service.InitWithNewPipeAndPassReceiver());
@@ -239,7 +243,6 @@ void GpuChildThread::OnMemoryPressure(
   if (level != base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL)
     return;
 
-  base::allocator::ReleaseFreeMemory();
   if (viz_main_.discardable_shared_memory_manager())
     viz_main_.discardable_shared_memory_manager()->ReleaseFreeMemory();
   SkGraphics::PurgeAllCaches();

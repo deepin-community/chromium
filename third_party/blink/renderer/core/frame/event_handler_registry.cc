@@ -204,7 +204,7 @@ void EventHandlerRegistry::DidMoveOutOfPage(EventTarget& target) {
 }
 
 void EventHandlerRegistry::DidRemoveAllEventHandlers(EventTarget& target) {
-  bool handlers_changed[kEventHandlerClassCount];
+  std::array<bool, kEventHandlerClassCount> handlers_changed;
 
   for (int i = 0; i < kEventHandlerClassCount; ++i) {
     EventHandlerClass handler_class = static_cast<EventHandlerClass>(i);
@@ -281,7 +281,6 @@ void EventHandlerRegistry::NotifyHandlersChanged(
 #endif
     default:
       NOTREACHED();
-      break;
   }
 
   if (handler_class == kTouchStartOrMoveEventBlocking ||

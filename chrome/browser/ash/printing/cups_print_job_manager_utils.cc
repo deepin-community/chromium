@@ -48,8 +48,6 @@ CupsPrintJob::State ConvertState(::printing::CupsJob::JobState state) {
   }
 
   NOTREACHED();
-
-  return CupsPrintJob::State::STATE_NONE;
 }
 
 // Update the current printed page.  Returns true of the page has been updated.

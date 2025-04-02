@@ -13,13 +13,11 @@
 // limitations under the License.
 
 import m from 'mithril';
-
-import {channelChanged, getNextChannel, setChannel} from '../common/channels';
+import {channelChanged, getNextChannel, setChannel} from '../core/channels';
 import {Anchor} from '../widgets/anchor';
 import {HotkeyGlyphs} from '../widgets/hotkey_glyphs';
-
-import {globals} from './globals';
-import {createPage} from './pages';
+import {PageAttrs} from '../public/page';
+import {assetSrc} from '../base/assets';
 
 export class Hints implements m.ClassComponent {
   view() {
@@ -49,23 +47,26 @@ export class Hints implements m.ClassComponent {
           m(HotkeyGlyphs, {hotkey: 'D'}),
           ' to navigate the trace.',
         ),
-        m('li',
+        m(
+          'li',
           'Try the ',
-          m(Anchor,
+          m(
+            Anchor,
             {
-              href:
-                      'https://perfetto.dev/docs/visualization/perfetto-ui#command-palette',
+              href: 'https://perfetto.dev/docs/visualization/perfetto-ui#command-palette',
             },
-            'command palette,'),
+            'command palette,',
+          ),
           ' press ',
           m(HotkeyGlyphs, {hotkey: '!Mod+Shift+P'}),
-          '.'),
+          '.',
+        ),
       ),
     );
   }
 }
 
-export const HomePage = createPage({
+export class HomePage implements m.ClassComponent<PageAttrs> {
   view() {
     return m(
       '.page.home-page',
@@ -73,29 +74,28 @@ export const HomePage = createPage({
         '.home-page-center',
         m(
           '.home-page-title',
-          m(`img.logo[src=${globals.root}assets/logo-3d.png]`),
+          m(`img.logo[src=${assetSrc('assets/logo-3d.png')}]`),
           'Perfetto',
         ),
         m(Hints),
         m(
           '.channel-select',
-          m('',
-            'Feeling adventurous? Try our bleeding edge Canary version'),
+          m('', 'Feeling adventurous? Try our bleeding edge Canary version'),
+          m('fieldset', mkChan('stable'), mkChan('canary'), m('.highlight')),
           m(
-            'fieldset',
-            mkChan('stable'),
-            mkChan('canary'),
-            m('.highlight'),
+            `.home-page-reload${channelChanged() ? '.show' : ''}`,
+            'You need to reload the page for the changes to have effect',
           ),
-          m(`.home-page-reload${channelChanged() ? '.show' : ''}`,
-            'You need to reload the page for the changes to have effect'),
         ),
       ),
-      m('a.privacy',
+      m(
+        'a.privacy',
         {href: 'https://policies.google.com/privacy', target: '_blank'},
-        'Privacy policy'));
-  },
-});
+        'Privacy policy',
+      ),
+    );
+  }
+}
 
 function mkChan(chan: string) {
   const checked = getNextChannel() === chan ? '[checked=true]' : '';

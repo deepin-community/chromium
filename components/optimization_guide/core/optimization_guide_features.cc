@@ -13,12 +13,14 @@
 #include "base/logging.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/rand_util.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/to_string.h"
 #include "base/system/sys_info.h"
-#include "build/build_config.h"
+#include "components/optimization_guide/core/feature_registry/mqls_feature_registry.h"
 #include "components/optimization_guide/core/insertion_ordered_set.h"
+#include "components/optimization_guide/core/model_execution/feature_keys.h"
 #include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_switches.h"
@@ -28,7 +30,6 @@
 #include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/google_api_keys.h"
 #include "net/base/url_util.h"
-#include "optimization_guide_features.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace optimization_guide {
@@ -36,91 +37,12 @@ namespace features {
 
 namespace {
 
-constexpr auto enabled_by_default_desktop_only =
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-    base::FEATURE_DISABLED_BY_DEFAULT;
-#else
-    base::FEATURE_ENABLED_BY_DEFAULT;
-#endif
-
 constexpr auto enabled_by_default_mobile_only =
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
     base::FEATURE_ENABLED_BY_DEFAULT;
 #else
     base::FEATURE_DISABLED_BY_DEFAULT;
 #endif
-
-// Returns whether |locale| is a supported locale for |feature|.
-//
-// This matches |locale| with the "supported_locales" feature param value in
-// |feature|, which is expected to be a comma-separated list of locales. A
-// feature param containing "en,es-ES,zh-TW" restricts the feature to English
-// language users from any locale and Spanish language users from the Spain
-// es-ES locale. A feature param containing "" is unrestricted by locale and any
-// user may load it.
-bool IsSupportedLocaleForFeature(
-    const std::string locale,
-    const base::Feature& feature,
-    const std::string& default_value = "de,en,es,fr,it,nl,pt,tr") {
-  if (!base::FeatureList::IsEnabled(feature)) {
-    return false;
-  }
-
-  std::string value =
-      base::GetFieldTrialParamValueByFeature(feature, "supported_locales");
-  if (value.empty()) {
-    // The default list of supported locales for optimization guide features.
-    value = default_value;
-  } else if (value == "*") {
-    // Still provide a way to enable all locales remotely via the '*' character.
-    return true;
-  }
-
-  std::vector<std::string> supported_locales = base::SplitString(
-      value, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-  // An empty allowlist admits any locale.
-  if (supported_locales.empty()) {
-    return true;
-  }
-
-  // Otherwise, the locale or the
-  // primary language subtag must match an element of the allowlist.
-  std::string locale_language = l10n_util::GetLanguage(locale);
-  return base::Contains(supported_locales, locale) ||
-         base::Contains(supported_locales, locale_language);
-}
-
-bool IsSupportedCountryForFeature(const std::string& country_code,
-                                  const base::Feature& feature,
-                                  const std::string& default_value) {
-  if (!base::FeatureList::IsEnabled(feature)) {
-    return false;
-  }
-
-  std::string value =
-      base::GetFieldTrialParamValueByFeature(feature, "supported_countries");
-  if (value.empty()) {
-    // The default list of supported countries for optimization guide features.
-    value = default_value;
-  } else if (value == "*") {
-    // Still provide a way to enable all countries remotely via the '*'
-    // character.
-    return true;
-  }
-
-  std::vector<std::string> supported_countries = base::SplitString(
-      value, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-  // An empty allowlist admits any country.
-  if (supported_countries.empty()) {
-    return true;
-  }
-
-  return base::ranges::any_of(
-      supported_countries, [&country_code](const auto& supported_country_code) {
-        return base::EqualsCaseInsensitiveASCII(supported_country_code,
-                                                country_code);
-      });
-}
 
 }  // namespace
 
@@ -139,12 +61,6 @@ BASE_FEATURE(kRemoteOptimizationGuideFetchingAnonymousDataConsent,
              "OptimizationHintsFetchingAnonymousDataConsent",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Enables performance info in the context menu and fetching from a remote
-// Optimization Guide Service.
-BASE_FEATURE(kContextMenuPerformanceInfoAndRemoteHintFetching,
-             "ContextMenuPerformanceInfoAndRemoteHintFetching",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 // Enables the prediction of optimization targets.
 BASE_FEATURE(kOptimizationTargetPrediction,
              "OptimizationTargetPrediction",
@@ -159,40 +75,6 @@ BASE_FEATURE(kOptimizationGuideModelDownloading,
              base::FEATURE_DISABLED_BY_DEFAULT
 #endif  // !BUILD_WITH_TFLITE_LIB
 );
-
-// Enables page content to be annotated.
-BASE_FEATURE(kPageContentAnnotations,
-             "PageContentAnnotations",
-             enabled_by_default_desktop_only);
-
-// Enables fetching page metadata from the remote Optimization Guide service.
-BASE_FEATURE(kRemotePageMetadata,
-             "RemotePageMetadata",
-             enabled_by_default_desktop_only);
-
-// Enables the page entities model to be annotated on every page load.
-BASE_FEATURE(kPageEntitiesPageContentAnnotations,
-             "PageEntitiesPageContentAnnotations",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-// Enables the page visibility model to be annotated on every page load.
-BASE_FEATURE(kPageVisibilityPageContentAnnotations,
-             "PageVisibilityPageContentAnnotations",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-// Enables the text embedding model to be annotated on every page load.
-BASE_FEATURE(kTextEmbeddingPageContentAnnotations,
-             "TextEmbeddingPageContentAnnotations",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// This feature flag does not allow for the entities model to load the name and
-// prefix filters.
-BASE_FEATURE(kPageEntitiesModelBypassFilters,
-             "PageEntitiesModelBypassFilters",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// This feature flag enables resetting the entities model on shutdown.
-BASE_FEATURE(kPageEntitiesModelResetOnShutdown,
-             "PageEntitiesModelResetOnShutdown",
-             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables push notification of hints.
 BASE_FEATURE(kPushNotifications,
@@ -210,24 +92,8 @@ BASE_FEATURE(kOptimizationGuideMetadataValidation,
              "OptimizationGuideMetadataValidation",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kPageVisibilityBatchAnnotations,
-             "PageVisibilityBatchAnnotations",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kTextEmbeddingBatchAnnotations,
-             "TextEmbeddingBatchAnnotations",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kPageContentAnnotationsValidation,
-             "PageContentAnnotationsValidation",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 BASE_FEATURE(kPreventLongRunningPredictionModels,
              "PreventLongRunningPredictionModels",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kOptimizationGuideUseContinueOnShutdownForPageContentAnnotations,
-             "OptimizationGuideUseContinueOnShutdownForPageContentAnnotations",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kOverrideNumThreadsForModelExecution,
@@ -238,24 +104,11 @@ BASE_FEATURE(kOptGuideEnableXNNPACKDelegateWithTFLite,
              "OptGuideEnableXNNPACKDelegateWithTFLite",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kOptimizationHintsComponent,
-             "OptimizationHintsComponent",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kExtractRelatedSearchesFromPrefetchedZPSResponse,
-             "ExtractRelatedSearchesFromPrefetchedZPSResponse",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kPageContentAnnotationsPersistSalientImageMetadata,
-             "PageContentAnnotationsPersistSalientImageMetadata",
-             enabled_by_default_desktop_only);
-
 // Killswitch for fetching on search results from a remote Optimization Guide
 // Service.
 BASE_FEATURE(kOptimizationGuideFetchingForSRP,
              "OptimizationHintsFetchingSRP",
              base::FEATURE_ENABLED_BY_DEFAULT);
-
 
 // Kill switch for disabling model quality logging.
 BASE_FEATURE(kModelQualityLogging,
@@ -266,11 +119,6 @@ BASE_FEATURE(kModelQualityLogging,
 BASE_FEATURE(kOptimizationGuidePersonalizedFetching,
              "OptimizationPersonalizedHintsFetching",
              base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Enables text embeddings to annotated on every page visit and later queried.
-BASE_FEATURE(kQueryInMemoryTextEmbeddings,
-             "QueryInMemoryTextEmbeddings",
-             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // An emergency kill switch feature to stop serving certain model versions per
 // optimization target. This is useful in exceptional situations when a bad
@@ -288,7 +136,11 @@ BASE_FEATURE(kOptimizationGuideModelExecution,
 // Whether to use the on device model service in optimization guide.
 BASE_FEATURE(kOptimizationGuideOnDeviceModel,
              "OptimizationGuideOnDeviceModel",
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#else
              base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
 
 // Whether to allow on device model evaluation for Compose. This has no effect
 // if OptimizationGuideOnDeviceModel is off.
@@ -305,16 +157,61 @@ BASE_FEATURE(kLogOnDeviceMetricsOnStartup,
 // Whether to download the text safety classifier model.
 BASE_FEATURE(kTextSafetyClassifier,
              "TextSafetyClassifier",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Whether to scan the full text when running the language detection in the text
+// safety classifier.
+BASE_FEATURE(kTextSafetyScanLanguageDetection,
+             "TextSafetyScanLanguageDetection",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-size_t MaxRelatedSearchesCacheSize() {
-  return GetFieldTrialParamByFeatureAsInt(
-      kExtractRelatedSearchesFromPrefetchedZPSResponse,
-      "max_related_searches_cache_size", 10);
-}
+// Whether the on-device model validation checks are enabled.
+BASE_FEATURE(kOnDeviceModelValidation,
+             "OnDeviceModelValidation",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Whether performance class should be fetched each startup or just after a
+// version update.
+BASE_FEATURE(kOnDeviceModelFetchPerformanceClassEveryStartup,
+             "OnDeviceModelFetchPerformanceClassEveryStartup",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enable the "Synapse" refreshed AI settings page.
+BASE_FEATURE(kAiSettingsPageRefresh,
+             "AiSettingsPageRefresh",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+const base::FeatureParam<bool> kShowAiSettingsForTesting{
+    &kAiSettingsPageRefresh, "show_ai_settings_for_testing", false};
+
+// Enable AI settings page integration with Privacy Guide.
+BASE_FEATURE(kPrivacyGuideAiSettings,
+             "PrivacyGuideAiSettings",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kAiSettingsPageEnterpriseDisabledUi,
+             "AiSettingsPageEnterpriseDisabledUi",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kOnDeviceModelPerformanceParams,
+             "OnDeviceModelPerformanceParams",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+const base::FeatureParam<std::string> kPerformanceClassListForOnDeviceModel{
+    &kOnDeviceModelPerformanceParams,
+    "compatible_on_device_performance_classes", "5,6"};
+
+const base::FeatureParam<std::string>
+    kLowTierPerformanceClassListForOnDeviceModel{
+        &kOnDeviceModelPerformanceParams,
+        "compatible_low_tier_on_device_performance_classes", ""};
+
+BASE_FEATURE(kOptimizationGuideIconView,
+             "OptimizationGuideIconView",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // The default value here is a bit of a guess.
-// TODO(crbug/1163244): This should be tuned once metrics are available.
+// TODO(crbug.com/40163041): This should be tuned once metrics are available.
 base::TimeDelta PageTextExtractionOutstandingRequestsGracePeriod() {
   return base::Milliseconds(GetFieldTrialParamByFeatureAsInt(
       kPageTextExtraction, "outstanding_requests_grace_period_ms", 1000));
@@ -332,9 +229,7 @@ bool ShouldBatchUpdateHintsForActiveTabsAndTopHosts() {
 
 size_t MaxResultsForSRPFetch() {
   static int max_urls = GetFieldTrialParamByFeatureAsInt(
-      kOptimizationGuideFetchingForSRP, "max_urls_for_srp_fetch",
-      // Default to match overall max.
-      MaxUrlsForOptimizationGuideServiceHintsFetch());
+      kOptimizationGuideFetchingForSRP, "max_urls_for_srp_fetch", 10);
   return max_urls;
 }
 
@@ -385,10 +280,11 @@ GURL GetOptimizationGuideServiceGetHintsURL() {
   std::string url = base::GetFieldTrialParamValueByFeature(
       kRemoteOptimizationGuideFetching, "optimization_guide_service_url");
   if (url.empty() || !GURL(url).SchemeIs(url::kHttpsScheme)) {
-    if (!url.empty())
+    if (!url.empty()) {
       LOG(WARNING)
           << "Empty or invalid optimization_guide_service_url provided: "
           << url;
+    }
     return GURL(kOptimizationGuideServiceGetHintsDefaultURL);
   }
 
@@ -423,27 +319,12 @@ bool IsModelQualityLoggingEnabled() {
 }
 
 bool IsModelQualityLoggingEnabledForFeature(
-    proto::ModelExecutionFeature feature_name) {
+    const MqlsFeatureMetadata* metadata) {
   if (!IsModelQualityLoggingEnabled()) {
     return false;
   }
 
-  if (feature_name ==
-      proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST) {
-    return false;
-  }
-
-  std::string param_name =
-      base::ToLowerASCII(proto::ModelExecutionFeature_Name(feature_name));
-  bool default_value = true;
-
-  // Disable logging for test feature.
-  if (feature_name ==
-      proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST) {
-    default_value = false;
-  }
-  return GetFieldTrialParamByFeatureAsBool(kModelQualityLogging, param_name,
-                                           default_value);
+  return metadata->LoggingEnabledViaFieldTrial();
 }
 
 bool IsRemoteFetchingEnabled() {
@@ -461,11 +342,6 @@ bool IsPushNotificationsEnabled() {
 bool IsRemoteFetchingForAnonymousDataConsentEnabled() {
   return base::FeatureList::IsEnabled(
       kRemoteOptimizationGuideFetchingAnonymousDataConsent);
-}
-
-bool IsRemoteFetchingExplicitlyAllowedForPerformanceInfo() {
-  return base::FeatureList::IsEnabled(
-      kContextMenuPerformanceInfoAndRemoteHintFetching);
 }
 
 int MaxServerBloomFilterByteSize() {
@@ -527,7 +403,7 @@ base::TimeDelta StoredHostModelFeaturesFreshnessDuration() {
 }
 
 base::TimeDelta StoredModelsValidDuration() {
-  // TODO(crbug.com/1234054) This field should not be changed without VERY
+  // TODO(crbug.com/40191801) This field should not be changed without VERY
   // careful consideration. This is the default duration for models that do not
   // specify retention, so changing this can cause models to be removed and
   // refetch would only apply to newer models. Any feature relying on the model
@@ -541,12 +417,6 @@ base::TimeDelta URLKeyedHintValidCacheDuration() {
   return base::Seconds(GetFieldTrialParamByFeatureAsInt(
       kOptimizationHints, "max_url_keyed_hint_valid_cache_duration_in_seconds",
       60 * 60 /* 1 hour */));
-}
-
-base::TimeDelta PCAServiceWaitForTitleDelayDuration() {
-  return base::Milliseconds(GetFieldTrialParamByFeatureAsInt(
-      kPageContentAnnotations,
-      "pca_service_wait_for_title_delay_in_milliseconds", 5000));
 }
 
 size_t MaxHostsForOptimizationGuideServiceModelsFetch() {
@@ -568,7 +438,7 @@ size_t MaxHostKeyedHintCacheSize() {
 
 size_t MaxURLKeyedHintCacheSize() {
   size_t max_url_keyed_hint_cache_size = GetFieldTrialParamByFeatureAsInt(
-      kOptimizationHints, "max_url_keyed_hint_cache_size", 30);
+      kOptimizationHints, "max_url_keyed_hint_cache_size", 50);
   DCHECK_GE(max_url_keyed_hint_cache_size,
             MaxUrlsForOptimizationGuideServiceHintsFetch());
   return max_url_keyed_hint_cache_size;
@@ -605,8 +475,9 @@ RequestContextSet GetAllowedContextsForPersonalizedMetadata() {
 
 bool ShouldOverrideOptimizationTargetDecisionForMetricsPurposes(
     proto::OptimizationTarget optimization_target) {
-  if (optimization_target != proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD)
+  if (optimization_target != proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD) {
     return false;
+  }
 
   return base::GetFieldTrialParamByFeatureAsBool(
       kOptimizationTargetPrediction, "painful_page_load_metrics_only", false);
@@ -637,9 +508,14 @@ base::TimeDelta PredictionModelFetchInterval() {
       kOptimizationTargetPrediction, "fetch_interval_hours", 24));
 }
 
-base::TimeDelta PredictionModelNewRegistrationFetchDelay() {
-  return base::Seconds(GetFieldTrialParamByFeatureAsInt(
-      kOptimizationTargetPrediction, "new_registration_fetch_delay_secs", 30));
+base::TimeDelta PredictionModelNewRegistrationFetchRandomDelay() {
+  static const base::FeatureParam<base::TimeDelta> kMinDelay{
+      &kOptimizationTargetPrediction, "new_registration_fetch_min_delay",
+      base::Seconds(5)};
+  static const base::FeatureParam<base::TimeDelta> kMaxDelay{
+      &kOptimizationTargetPrediction, "new_registration_fetch_max_delay",
+      base::Seconds(10)};
+  return base::RandTimeDelta(kMinDelay.Get(), kMaxDelay.Get());
 }
 
 bool IsModelExecutionWatchdogEnabled() {
@@ -668,77 +544,10 @@ bool IsUnrestrictedModelDownloadingEnabled() {
       true);
 }
 
-bool IsPageContentAnnotationEnabled() {
-  return base::FeatureList::IsEnabled(kPageContentAnnotations);
-}
-
-bool ShouldWriteContentAnnotationsToHistoryService() {
-  return base::GetFieldTrialParamByFeatureAsBool(
-      kPageContentAnnotations, "write_to_history_service", true);
-}
-
-size_t MaxContentAnnotationRequestsCached() {
-  return GetFieldTrialParamByFeatureAsInt(
-      kPageContentAnnotations, "max_content_annotation_requests_cached", 50);
-}
-
-const base::FeatureParam<bool> kContentAnnotationsExtractRelatedSearchesParam{
-    &kPageContentAnnotations, "extract_related_searches", true};
-
-bool ShouldExtractRelatedSearches() {
-  return kContentAnnotationsExtractRelatedSearchesParam.Get();
-}
-
-bool ShouldExecutePageEntitiesModelOnPageContent(const std::string& locale) {
-  return base::FeatureList::IsEnabled(kPageEntitiesPageContentAnnotations) &&
-         IsSupportedLocaleForFeature(locale,
-                                     kPageEntitiesPageContentAnnotations);
-}
-
-bool ShouldExecutePageVisibilityModelOnPageContent(const std::string& locale) {
-  return base::FeatureList::IsEnabled(kPageVisibilityPageContentAnnotations) &&
-         IsSupportedLocaleForFeature(locale,
-                                     kPageVisibilityPageContentAnnotations,
-                                     /*default_value=*/"en");
-}
-
-bool ShouldExecuteTextEmbeddingModelOnPageContent(const std::string& locale) {
-  return (base::FeatureList::IsEnabled(kTextEmbeddingPageContentAnnotations) ||
-          TextEmbeddingBatchAnnotationsEnabled()) &&
-         IsSupportedLocaleForFeature(locale,
-                                     kTextEmbeddingPageContentAnnotations);
-}
-
-bool RemotePageMetadataEnabled(const std::string& locale,
-                               const std::string& country_code) {
-  return base::FeatureList::IsEnabled(kRemotePageMetadata) &&
-         IsSupportedLocaleForFeature(locale, kRemotePageMetadata, "en-US") &&
-         IsSupportedCountryForFeature(country_code, kRemotePageMetadata, "us");
-}
-
-int GetMinimumPageCategoryScoreToPersist() {
-  return GetFieldTrialParamByFeatureAsInt(kRemotePageMetadata,
-                                          "min_page_category_score", 85);
-}
-
 base::TimeDelta GetOnloadDelayForHintsFetching() {
   return base::Milliseconds(GetFieldTrialParamByFeatureAsInt(
       kRemoteOptimizationGuideFetching, "onload_delay_for_hints_fetching_ms",
       0));
-}
-
-int NumBitsForRAPPORMetrics() {
-  // The number of bits must be at least 1.
-  return std::max(
-      1, GetFieldTrialParamByFeatureAsInt(kPageContentAnnotations,
-                                          "num_bits_for_rappor_metrics", 4));
-}
-
-double NoiseProbabilityForRAPPORMetrics() {
-  // The noise probability must be between 0 and 1.
-  return std::max(0.0, std::min(1.0, GetFieldTrialParamByFeatureAsDouble(
-                                         kPageContentAnnotations,
-                                         "noise_prob_for_rappor_metrics", .5)));
 }
 
 bool ShouldMetadataValidationFetchHostKeyed() {
@@ -756,67 +565,6 @@ bool ShouldDeferStartupActiveTabsHintsFetch() {
       false
 #endif
   );
-}
-
-bool PageVisibilityBatchAnnotationsEnabled() {
-  return base::FeatureList::IsEnabled(kPageVisibilityBatchAnnotations);
-}
-
-bool TextEmbeddingBatchAnnotationsEnabled() {
-  return base::FeatureList::IsEnabled(kTextEmbeddingBatchAnnotations);
-}
-
-size_t AnnotateVisitBatchSize() {
-  return std::max(
-      1, GetFieldTrialParamByFeatureAsInt(kPageContentAnnotations,
-                                          "annotate_visit_batch_size", 1));
-}
-
-bool PageContentAnnotationValidationEnabledForType(AnnotationType type) {
-  if (base::FeatureList::IsEnabled(kPageContentAnnotationsValidation)) {
-    if (GetFieldTrialParamByFeatureAsBool(kPageContentAnnotationsValidation,
-                                          AnnotationTypeToString(type),
-                                          false)) {
-      return true;
-    }
-  }
-
-  base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
-  switch (type) {
-    case AnnotationType::kPageEntities:
-      return cmd->HasSwitch(
-          switches::kPageContentAnnotationsValidationPageEntities);
-    case AnnotationType::kContentVisibility:
-      return cmd->HasSwitch(
-          switches::kPageContentAnnotationsValidationContentVisibility);
-    case AnnotationType::kTextEmbedding:
-      return cmd->HasSwitch(
-          switches::kPageContentAnnotationsValidationTextEmbedding);
-    default:
-      NOTREACHED();
-      break;
-  }
-
-  return false;
-}
-
-base::TimeDelta PageContentAnnotationValidationStartupDelay() {
-  return switches::PageContentAnnotationsValidationStartupDelay().value_or(
-      base::Seconds(std::max(
-          1, GetFieldTrialParamByFeatureAsInt(kPageContentAnnotationsValidation,
-                                              "startup_delay", 30))));
-}
-
-size_t PageContentAnnotationsValidationBatchSize() {
-  return switches::PageContentAnnotationsValidationBatchSize().value_or(
-      std::max(1, GetFieldTrialParamByFeatureAsInt(
-                      kPageContentAnnotationsValidation, "batch_size", 25)));
-}
-
-size_t MaxVisitAnnotationCacheSize() {
-  int batch_size = GetFieldTrialParamByFeatureAsInt(
-      kPageContentAnnotations, "max_visit_annotation_cache_size", 50);
-  return std::max(1, batch_size);
 }
 
 std::optional<int> OverrideNumThreadsForOptTarget(
@@ -840,28 +588,6 @@ std::optional<int> OverrideNumThreadsForOptTarget(
 
 bool TFLiteXNNPACKDelegateEnabled() {
   return base::FeatureList::IsEnabled(kOptGuideEnableXNNPACKDelegateWithTFLite);
-}
-
-bool ShouldCheckFailedComponentVersionPref() {
-  return GetFieldTrialParamByFeatureAsBool(
-      kOptimizationHintsComponent, "check_failed_component_version_pref",
-      false);
-}
-
-bool ShouldPersistSalientImageMetadata(const std::string& locale,
-                                       const std::string& country_code) {
-  return base::FeatureList::IsEnabled(
-             kPageContentAnnotationsPersistSalientImageMetadata) &&
-         IsSupportedLocaleForFeature(
-             locale, kPageContentAnnotationsPersistSalientImageMetadata,
-             "en-US") &&
-         IsSupportedCountryForFeature(
-             country_code, kPageContentAnnotationsPersistSalientImageMetadata,
-             "us");
-}
-
-bool ShouldQueryEmbeddings() {
-  return (base::FeatureList::IsEnabled(kQueryInMemoryTextEmbeddings));
 }
 
 std::map<proto::OptimizationTarget, std::set<int64_t>>
@@ -909,6 +635,15 @@ base::TimeDelta GetOnDeviceModelIdleTimeout() {
   return kOnDeviceModelServiceIdleTimeout.Get();
 }
 
+base::TimeDelta GetOnDeviceModelExecutionValidationStartupDelay() {
+  static const base::FeatureParam<base::TimeDelta>
+      kOnDeviceModelExecutionValidationStartupDelay{
+          &kOptimizationGuideOnDeviceModel,
+          "on_device_model_execution_validation_startup_delay",
+          base::Seconds(5)};
+  return kOnDeviceModelExecutionValidationStartupDelay.Get();
+}
+
 int GetOnDeviceModelMinTokensForContext() {
   static const base::FeatureParam<int> kOnDeviceModelMinTokensForContext{
       &kOptimizationGuideOnDeviceModel,
@@ -944,6 +679,12 @@ int GetOnDeviceModelMaxTokensForOutput() {
   return kOnDeviceModelMaxTokensForOutput.Get();
 }
 
+uint32_t GetOnDeviceModelMaxTokens() {
+  return static_cast<uint32_t>(GetOnDeviceModelMaxTokensForContext() +
+                               GetOnDeviceModelMaxTokensForExecute() +
+                               GetOnDeviceModelMaxTokensForOutput());
+}
+
 int GetOnDeviceModelCrashCountBeforeDisable() {
   static const base::FeatureParam<int> kOnDeviceModelDisableCrashCount{
       &kOptimizationGuideOnDeviceModel, "on_device_model_disable_crash_count",
@@ -951,26 +692,27 @@ int GetOnDeviceModelCrashCountBeforeDisable() {
   return kOnDeviceModelDisableCrashCount.Get();
 }
 
-int GetOnDeviceModelTimeoutCountBeforeDisable() {
-  static const base::FeatureParam<int> kOnDeviceModelDisableTimeoutCount{
-      &kOptimizationGuideOnDeviceModel, "on_device_model_disable_timeout_count",
-      2};
-  return kOnDeviceModelDisableTimeoutCount.Get();
+base::TimeDelta GetOnDeviceModelMaxCrashBackoffTime() {
+  static const base::FeatureParam<base::TimeDelta>
+      kOnDeviceModelMaxCrashBackoffTime{
+          &kOptimizationGuideOnDeviceModel,
+          "on_device_model_max_crash_backoff_time", base::Hours(1)};
+  return kOnDeviceModelMaxCrashBackoffTime.Get();
+}
+
+base::TimeDelta GetOnDeviceModelCrashBackoffBaseTime() {
+  static const base::FeatureParam<base::TimeDelta>
+      kOnDeviceModelCrashBackoffBaseTime{
+          &kOptimizationGuideOnDeviceModel,
+          "on_device_model_crash_backoff_base_time", base::Minutes(1)};
+  return kOnDeviceModelCrashBackoffBaseTime.Get();
 }
 
 base::TimeDelta GetOnDeviceStartupMetricDelay() {
   static const base::FeatureParam<base::TimeDelta> kOnDeviceStartupMetricDelay{
       &kLogOnDeviceMetricsOnStartup, "on_device_startup_metric_delay",
-      base::Minutes(2)};
+      base::Minutes(3)};
   return kOnDeviceStartupMetricDelay.Get();
-}
-
-base::TimeDelta GetOnDeviceModelTimeForInitialResponse() {
-  static const base::FeatureParam<base::TimeDelta>
-      kOnDeviceModelTimeForInitialResponse{
-          &kOptimizationGuideOnDeviceModel,
-          "on_device_time_for_initial_response", base::Seconds(15)};
-  return kOnDeviceModelTimeForInitialResponse.Get();
 }
 
 bool GetOnDeviceFallbackToServerOnDisconnect() {
@@ -979,21 +721,6 @@ bool GetOnDeviceFallbackToServerOnDisconnect() {
           &kOptimizationGuideOnDeviceModel,
           "on_device_fallback_to_server_on_disconnect", true};
   return kOnDeviceModelFallbackToServerOnDisconnect.Get();
-}
-
-bool IsPerformanceClassCompatibleWithOnDeviceModel(
-    OnDeviceModelPerformanceClass performance_class) {
-  std::string perf_classes_string = base::GetFieldTrialParamValueByFeature(
-      kOptimizationGuideOnDeviceModel,
-      "compatible_on_device_performance_classes");
-  if (perf_classes_string.empty()) {
-    perf_classes_string = "3,4,5,6";
-  }
-  std::vector<std::string_view> perf_classes_list = base::SplitStringPiece(
-      perf_classes_string, ",", base::WhitespaceHandling::TRIM_WHITESPACE,
-      base::SplitResult::SPLIT_WANT_NONEMPTY);
-  return base::Contains(perf_classes_list,
-                        base::ToString(static_cast<int>(performance_class)));
 }
 
 bool CanLaunchOnDeviceModelService() {
@@ -1007,18 +734,28 @@ bool IsOnDeviceExecutionEnabled() {
          base::FeatureList::IsEnabled(kOptimizationGuideOnDeviceModel);
 }
 
+base::TimeDelta GetOnDeviceEligibleModelFeatureRecentUsePeriod() {
+  return base::GetFieldTrialParamByFeatureAsTimeDelta(
+      kOptimizationGuideOnDeviceModel,
+      "on_device_model_feature_recent_use_period", base::Days(30));
+}
+
 base::TimeDelta GetOnDeviceModelRetentionTime() {
   return base::GetFieldTrialParamByFeatureAsTimeDelta(
       kOptimizationGuideOnDeviceModel, "on_device_model_retention_time",
       base::Days(30));
 }
 
+int GetDiskSpaceRequiredInMbForOnDeviceModelInstall() {
+  return base::GetFieldTrialParamByFeatureAsInt(
+      kOptimizationGuideOnDeviceModel,
+      "on_device_model_free_space_mb_required_to_install", 20 * 1024);
+}
+
 bool IsFreeDiskSpaceSufficientForOnDeviceModelInstall(
     int64_t free_disk_space_bytes) {
-  return base::GetFieldTrialParamByFeatureAsInt(
-             kOptimizationGuideOnDeviceModel,
-             "on_device_model_free_space_mb_required_to_install",
-             20 * 1024) <= free_disk_space_bytes / (1024 * 1024);
+  return GetDiskSpaceRequiredInMbForOnDeviceModelInstall() <=
+         free_disk_space_bytes / (1024 * 1024);
 }
 
 bool IsFreeDiskSpaceTooLowForOnDeviceModelInstall(
@@ -1032,25 +769,12 @@ bool IsFreeDiskSpaceTooLowForOnDeviceModelInstall(
 bool GetOnDeviceModelRetractUnsafeContent() {
   static const base::FeatureParam<bool>
       kOnDeviceModelShouldRetractUnsafeContent{
-          &kTextSafetyClassifier, "on_device_retract_unsafe_content", false};
+          &kTextSafetyClassifier, "on_device_retract_unsafe_content", true};
   return kOnDeviceModelShouldRetractUnsafeContent.Get();
-}
-
-bool GetOnDeviceModelMustUseSafetyModel() {
-  static const base::FeatureParam<bool> kOnDeviceModelMustUseSafetyModel{
-      &kTextSafetyClassifier, "on_device_must_use_safety_model", false};
-  return kOnDeviceModelMustUseSafetyModel.Get();
 }
 
 bool ShouldUseTextSafetyClassifierModel() {
   return base::FeatureList::IsEnabled(kTextSafetyClassifier);
-}
-
-uint32_t GetOnDeviceModelTextSafetyTokenInterval() {
-  static const base::FeatureParam<int32_t>
-      kOnDeviceModelTextSafetyTokenInterval{
-          &kTextSafetyClassifier, "on_device_text_safety_token_interval", 10};
-  return static_cast<uint32_t>(kOnDeviceModelTextSafetyTokenInterval.Get());
 }
 
 double GetOnDeviceModelLanguageDetectionMinimumReliability() {
@@ -1078,6 +802,90 @@ bool GetOnDeviceModelRetractRepeats() {
       &kOptimizationGuideOnDeviceModel, "on_device_model_retract_repeats",
       true};
   return kOnDeviceModelRetractRepeats.Get();
+}
+
+int GetOnDeviceModelDefaultTopK() {
+  static const base::FeatureParam<int> kTopK{
+      &optimization_guide::features::kOptimizationGuideOnDeviceModel,
+      "on_device_model_topk", 3};
+  return kTopK.Get();
+}
+
+int GetOnDeviceModelMaxTopK() {
+  static const base::FeatureParam<int> kMaxTopK{
+      &optimization_guide::features::kOptimizationGuideOnDeviceModel,
+      "on_device_model_max_topk", 128};
+  return kMaxTopK.Get();
+}
+
+double GetOnDeviceModelDefaultTemperature() {
+  static const base::FeatureParam<double> kTemperature{
+      &kOptimizationGuideOnDeviceModel, "on_device_model_temperature", 0.8};
+  return kTemperature.Get();
+}
+
+std::vector<uint32_t> GetOnDeviceModelAllowedAdaptationRanks() {
+  static const base::FeatureParam<std::string>
+      kOnDeviceModelAllowedAdaptationRanks{&kOptimizationGuideOnDeviceModel,
+                                           "allowed_adaptation_ranks", "32"};
+  std::vector<uint32_t> ranks;
+  const auto ranks_str = kOnDeviceModelAllowedAdaptationRanks.Get();
+  auto rank_strs = base::SplitStringPiece(
+      ranks_str, ",", base::WhitespaceHandling::TRIM_WHITESPACE,
+      base::SplitResult::SPLIT_WANT_NONEMPTY);
+  ranks.reserve(rank_strs.size());
+  for (const auto& rank_str : rank_strs) {
+    uint32_t rank;
+    if (base::StringToUint(rank_str, &rank)) {
+      ranks.push_back(rank);
+    }
+  }
+  return ranks;
+}
+
+bool IsOnDeviceModelValidationEnabled() {
+  return base::FeatureList::IsEnabled(kOnDeviceModelValidation);
+}
+
+bool ShouldOnDeviceModelBlockOnValidationFailure() {
+  static const base::FeatureParam<bool> kParam{
+      &kOnDeviceModelValidation, "on_device_model_block_on_validation_failure",
+      false};
+  return kParam.Get();
+}
+
+bool ShouldOnDeviceModelClearValidationOnVersionChange() {
+  static const base::FeatureParam<bool> kParam{
+      &kOnDeviceModelValidation,
+      "on_device_model_clear_validation_on_version_change", false};
+  return kParam.Get();
+}
+
+base::TimeDelta GetOnDeviceModelValidationDelay() {
+  static const base::FeatureParam<base::TimeDelta> kParam{
+      &kOnDeviceModelValidation, "on_device_model_validation_delay",
+      base::Seconds(30)};
+  return kParam.Get();
+}
+
+int GetOnDeviceModelValidationAttemptCount() {
+  static const base::FeatureParam<int> kParam{
+      &kOnDeviceModelValidation, "on_device_model_validation_attempt_count", 3};
+  return kParam.Get();
+}
+
+bool ShouldEnableOptimizationGuideIconView() {
+  return base::FeatureList::IsEnabled(kOptimizationGuideIconView);
+}
+
+bool IsAiSettingsPageRefreshEnabled() {
+  return base::FeatureList::IsEnabled(kAiSettingsPageRefresh) ||
+         base::FeatureList::IsEnabled(kPrivacyGuideAiSettings) ||
+         base::FeatureList::IsEnabled(kAiSettingsPageEnterpriseDisabledUi);
+}
+
+bool IsPrivacyGuideAiSettingsEnabled() {
+  return base::FeatureList::IsEnabled(kPrivacyGuideAiSettings);
 }
 
 }  // namespace features

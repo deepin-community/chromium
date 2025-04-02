@@ -57,7 +57,6 @@ class UpdateService : public base::RefCountedThreadSafe<UpdateService> {
     // concurrently.
     kUpdateInProgress = 1,
 
-    // Not used. TODO(crbug.com/1290331).
     kUpdateCanceled = 2,
 
     // The function failed because of a throttling policy such as load shedding.
@@ -86,11 +85,27 @@ class UpdateService : public base::RefCountedThreadSafe<UpdateService> {
     // Failed to run app installer.
     kInstallFailed = 10,
 
+    // The server received the request and rejected the requester as
+    // unauthorized to make it.
+    kPermissionDenied = 11,
+
+    // The remote transmitted a value unknown to this version of the app.
+    kUnknown = 12,
+
     // The service has been stopped, because the system is shutting down, or
     // any other reason.
-    kServiceStopped = 11,
+    kServiceStopped = 13,
+
+    // The request could not be serviced, either because no user has accepted
+    // the terms of service, or OEM mode is in effect.
+    kEulaRequiredOrOemMode = 14,
+
+    // The service failed to fetch policies.
+    kFetchPoliciesFailed = 15,
 
     // Update EnumTraits<UpdateService::Result> when adding new values.
+    // Also update the `UpdateService::Result` `enum` in `updater_service.mojom`
+    // when adding new values.
   };
 
   // Run time errors are organized in specific categories to indicate the
@@ -103,6 +118,8 @@ class UpdateService : public base::RefCountedThreadSafe<UpdateService> {
     kInstall = 3,
     kService = 4,
     kUpdateCheck = 5,
+    // kUnknown = 6, defined in `updater_service.mojom`.
+    kInstaller = 7,
     // Update EnumTraits<UpdateService::ErrorCategory> when adding new values.
   };
 
@@ -207,11 +224,8 @@ class UpdateService : public base::RefCountedThreadSafe<UpdateService> {
     std::string brand_code;
     base::FilePath brand_path;
     base::FilePath ecp;
+    std::string cohort;
   };
-
-  using Callback = base::OnceCallback<void(Result)>;
-  using StateChangeCallback = base::RepeatingCallback<void(const UpdateState&)>;
-  using InstallerResult = update_client::CrxInstaller::Result;
 
   // Returns the version of the active updater. The version object is invalid
   // if an error (including timeout) occurs.
@@ -240,8 +254,9 @@ class UpdateService : public base::RefCountedThreadSafe<UpdateService> {
       const std::string& app_id,
       Priority priority,
       PolicySameVersionUpdate policy_same_version_update,
-      StateChangeCallback state_update,
-      Callback callback) = 0;
+      const std::string& language,
+      base::RepeatingCallback<void(const UpdateState&)> state_update,
+      base::OnceCallback<void(Result)> callback) = 0;
 
   // Updates specified product. This update may be on-demand.
   //
@@ -250,6 +265,7 @@ class UpdateService : public base::RefCountedThreadSafe<UpdateService> {
   //   `install_data_index`: Index of the server install data.
   //   `priority`: Priority for processing this update.
   //   `policy_same_version_update`: Whether a same-version update is allowed.
+  //   `language`: The UI language for the update.
   //   `state_update`: The callback will be invoked every time the update
   //     changes state when the engine starts. It will be called on the
   //     sequence used by the update service, so this callback must not block.
@@ -262,18 +278,21 @@ class UpdateService : public base::RefCountedThreadSafe<UpdateService> {
   //
   //   `callback` arg:
   //     Result: the final result from the update engine.
-  virtual void Update(const std::string& app_id,
-                      const std::string& install_data_index,
-                      Priority priority,
-                      PolicySameVersionUpdate policy_same_version_update,
-                      StateChangeCallback state_update,
-                      Callback callback) = 0;
+  virtual void Update(
+      const std::string& app_id,
+      const std::string& install_data_index,
+      Priority priority,
+      PolicySameVersionUpdate policy_same_version_update,
+      const std::string& language,
+      base::RepeatingCallback<void(const UpdateState&)> state_update,
+      base::OnceCallback<void(Result)> callback) = 0;
 
   // Initiates an update check for all registered applications. Receives state
   // change notifications through the repeating `state_update` callback.
   // Calls `callback` once  the operation is complete.
-  virtual void UpdateAll(StateChangeCallback state_update,
-                         Callback callback) = 0;
+  virtual void UpdateAll(
+      base::RepeatingCallback<void(const UpdateState&)> state_update,
+      base::OnceCallback<void(Result)> callback) = 0;
 
   // Registers and installs an application from the network.
   //
@@ -283,6 +302,7 @@ class UpdateService : public base::RefCountedThreadSafe<UpdateService> {
   //   `install_data_index`: Index of the server install data. Effective only
   //     when `client_install_data` is not set.
   //   `priority`: Priority for processing this update.
+  //   `language`: The UI language for the install.
   //   `state_update`: The callback will be invoked every time the update
   //     changes state when the engine starts. It will be called on the
   //     sequence used by the update service, so this callback must not block.
@@ -295,12 +315,14 @@ class UpdateService : public base::RefCountedThreadSafe<UpdateService> {
   //
   //   `callback` arg:
   //     Result: the final result from the update engine.
-  virtual void Install(const RegistrationRequest& registration,
-                       const std::string& client_install_data,
-                       const std::string& install_data_index,
-                       Priority priority,
-                       StateChangeCallback state_update,
-                       Callback callback) = 0;
+  virtual void Install(
+      const RegistrationRequest& registration,
+      const std::string& client_install_data,
+      const std::string& install_data_index,
+      Priority priority,
+      const std::string& language,
+      base::RepeatingCallback<void(const UpdateState&)> state_update,
+      base::OnceCallback<void(Result)> callback) = 0;
 
   // Cancels any ongoing installations of the specified product. This does not
   // interrupt any product installers that are currently running, but does
@@ -311,8 +333,6 @@ class UpdateService : public base::RefCountedThreadSafe<UpdateService> {
   virtual void CancelInstalls(const std::string& app_id) = 0;
 
   // Install an app by running its installer.
-  // TODO(crbug.com/1286574): perform necessary actions after install, such as
-  // sending install ping and/or run post-install command.
   //
   // Args:
   //   `app_id`: ID of app to install.
@@ -321,18 +341,21 @@ class UpdateService : public base::RefCountedThreadSafe<UpdateService> {
   //   `install_data`: Server install data extracted from the offline manifest.
   //   `install_settings`: An optional serialized dictionary to customize the
   //       installation.
+  //   `language`: The UI language for the install.
   //   `state_update` arg:
   //     UpdateState: the new state of this install request.
   //
   //   `callback` arg:
   //     Result: the final result from the update engine.
-  virtual void RunInstaller(const std::string& app_id,
-                            const base::FilePath& installer_path,
-                            const std::string& install_args,
-                            const std::string& install_data,
-                            const std::string& install_settings,
-                            StateChangeCallback state_update,
-                            Callback callback) = 0;
+  virtual void RunInstaller(
+      const std::string& app_id,
+      const base::FilePath& installer_path,
+      const std::string& install_args,
+      const std::string& install_data,
+      const std::string& install_settings,
+      const std::string& language,
+      base::RepeatingCallback<void(const UpdateState&)> state_update,
+      base::OnceCallback<void(Result)> callback) = 0;
 
  protected:
   friend class base::RefCountedThreadSafe<UpdateService>;
@@ -345,7 +368,7 @@ template <>
 struct EnumTraits<UpdateService::Result> {
   using Result = UpdateService::Result;
   static constexpr Result first_elem = Result::kSuccess;
-  static constexpr Result last_elem = Result::kServiceStopped;
+  static constexpr Result last_elem = Result::kFetchPoliciesFailed;
 };
 
 template <>
@@ -359,7 +382,7 @@ template <>
 struct EnumTraits<UpdateService::ErrorCategory> {
   using ErrorCategory = UpdateService::ErrorCategory;
   static constexpr ErrorCategory first_elem = ErrorCategory::kNone;
-  static constexpr ErrorCategory last_elem = ErrorCategory::kUpdateCheck;
+  static constexpr ErrorCategory last_elem = ErrorCategory::kInstaller;
 };
 
 std::ostream& operator<<(std::ostream& os,

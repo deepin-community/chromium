@@ -29,6 +29,7 @@
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 
 #include "base/notreached.h"
+#include "third_party/blink/renderer/platform/bindings/exception_messages.h"
 
 namespace blink {
 
@@ -196,7 +197,6 @@ const DOMExceptionEntry* FindErrorEntry(DOMExceptionCode exception_code) {
       return &entry;
   }
   NOTREACHED();
-  return nullptr;
 }
 
 uint16_t FindLegacyErrorCode(const String& name) {
@@ -238,16 +238,27 @@ String DOMException::GetErrorMessage(DOMExceptionCode exception_code) {
 }
 
 DOMException::DOMException(DOMExceptionCode exception_code,
-                           const String& sanitized_message,
-                           const String& unsanitized_message)
-    : DOMException(ToLegacyErrorCode(FindErrorEntry(exception_code)->code),
-                   FindErrorEntry(exception_code)->name
-                       ? FindErrorEntry(exception_code)->name
-                       : "Error",
-                   sanitized_message.IsNull()
-                       ? String(FindErrorEntry(exception_code)->message)
-                       : sanitized_message,
-                   unsanitized_message) {}
+                           String sanitized_message,
+                           String unsanitized_message) {
+  // Don't delegate to another constructor to avoid calling FindErrorEntry()
+  // multiple times.
+  auto* error_entry = FindErrorEntry(exception_code);
+  CHECK(error_entry);
+  legacy_code_ = ToLegacyErrorCode(error_entry->code);
+  name_ = error_entry->name;
+  sanitized_message_ = sanitized_message.IsNull()
+                           ? String(error_entry->message)
+                           : std::move(sanitized_message);
+  unsanitized_message_ = std::move(unsanitized_message);
+}
+
+DOMException::DOMException(DOMExceptionCode exception_code,
+                           const char* sanitized_message,
+                           const char* unsanitized_message)
+    : DOMException(
+          exception_code,
+          sanitized_message ? String(sanitized_message) : String(),
+          unsanitized_message ? String(unsanitized_message) : String()) {}
 
 DOMException::DOMException(uint16_t legacy_code,
                            const String& name,
@@ -261,7 +272,23 @@ DOMException::DOMException(uint16_t legacy_code,
 }
 
 String DOMException::ToStringForConsole() const {
-  return name() + ": " + MessageForConsole();
+  // If an unsanitized message is present, we prefer it.
+  const String& message_for_console =
+      !unsanitized_message_.empty() ? unsanitized_message_ : sanitized_message_;
+  return message_for_console.empty()
+             ? String()
+             : "Uncaught " + name() + ": " + message_for_console;
+}
+
+void DOMException::AddContextToMessages(v8::ExceptionContext type,
+                                        const char* class_name,
+                                        const String& property_name) {
+  sanitized_message_ = ExceptionMessages::AddContextToMessage(
+      type, class_name, property_name, sanitized_message_);
+  if (!unsanitized_message_.IsNull()) {
+    unsanitized_message_ = ExceptionMessages::AddContextToMessage(
+        type, class_name, property_name, unsanitized_message_);
+  }
 }
 
 }  // namespace blink

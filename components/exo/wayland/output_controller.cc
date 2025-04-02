@@ -9,9 +9,10 @@
 #include <wayland-server-core.h>
 #include <xdg-output-unstable-v1-server-protocol.h>
 
+#include <algorithm>
+
 #include "ash/shell.h"
 #include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
 #include "components/exo/wayland/output_configuration_change.h"
 #include "components/exo/wayland/wayland_display_output.h"
 #include "components/exo/wayland/wl_output.h"
@@ -104,7 +105,7 @@ void OutputController::OnDidProcessDisplayChanges(
   UpdateActivatedDisplayIfNecessary();
 
   // Flush updated outputs to clients immediately.
-  // TODO(crbug.com/1502682): Exo should be updated to automatically flush
+  // TODO(crbug.com/40943061): Exo should be updated to automatically flush
   // buffers at the end of task processing if necessary.
   delegate_->Flush();
 }
@@ -132,8 +133,8 @@ WaylandDisplayOutput* OutputController::GetWaylandDisplayOutput(
 
 WaylandOutputList OutputController::GetActiveOutputs() const {
   WaylandOutputList output_list;
-  base::ranges::transform(outputs_, std::back_inserter(output_list),
-                          [](auto& pair) { return pair.second.get(); });
+  std::ranges::transform(outputs_, std::back_inserter(output_list),
+                         [](auto& pair) { return pair.second.get(); });
   return output_list;
 }
 
@@ -141,13 +142,12 @@ bool OutputController::ProcessDisplayChangesForAuraOutputManager(
     const DisplayConfigurationChange& configuration_change) {
   OutputConfigurationChange output_config_change;
 
-  base::ranges::transform(
-      configuration_change.added_displays,
-      std::back_inserter(output_config_change.added_outputs),
-      [this](const display::Display& display) {
-        return GetWaylandDisplayOutput(display.id());
-      });
-  base::ranges::transform(
+  std::ranges::transform(configuration_change.added_displays,
+                         std::back_inserter(output_config_change.added_outputs),
+                         [this](const display::Display& display) {
+                           return GetWaylandDisplayOutput(display.id());
+                         });
+  std::ranges::transform(
       configuration_change.removed_displays,
       std::back_inserter(output_config_change.removed_outputs),
       [this](const display::Display& display) {
@@ -185,6 +185,7 @@ void OutputController::UpdateActivatedDisplayIfNecessary() {
   auto output_pair = outputs_.find(current_active_display_id);
   if (output_pair != outputs_.end()) {
     output_pair->second->SendOutputActivated();
+    aura_output_manager_v2_->SendOutputActivated(*output_pair->second);
     dispatched_activated_display_id_ = current_active_display_id;
   }
 }

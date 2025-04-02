@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/lifetime/browser_shutdown.h"
+
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -30,13 +31,13 @@ using testing::AtLeast;
 
 class BrowserShutdownBrowserTest : public InProcessBrowserTest {
  public:
-  BrowserShutdownBrowserTest() {}
+  BrowserShutdownBrowserTest() = default;
 
   BrowserShutdownBrowserTest(const BrowserShutdownBrowserTest&) = delete;
   BrowserShutdownBrowserTest& operator=(const BrowserShutdownBrowserTest&) =
       delete;
 
-  ~BrowserShutdownBrowserTest() override {}
+  ~BrowserShutdownBrowserTest() override = default;
 
  protected:
   base::HistogramTester histogram_tester_;
@@ -44,7 +45,7 @@ class BrowserShutdownBrowserTest : public InProcessBrowserTest {
 
 class BrowserClosingObserver : public BrowserListObserver {
  public:
-  BrowserClosingObserver() {}
+  BrowserClosingObserver() = default;
 
   BrowserClosingObserver(const BrowserClosingObserver&) = delete;
   BrowserClosingObserver& operator=(const BrowserClosingObserver&) = delete;

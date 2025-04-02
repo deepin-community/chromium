@@ -13,6 +13,7 @@
 #include <limits>
 
 #include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/time/time.h"
 
 namespace base {
@@ -30,7 +31,7 @@ std::atomic<bool> g_subsampling_never_sample = false;
 
 uint64_t RandUint64() {
   uint64_t number;
-  RandBytes(&number, sizeof(number));
+  RandBytes(base::byte_span_from_ref(number));
   return number;
 }
 
@@ -53,6 +54,12 @@ double RandDouble() {
 
 float RandFloat() {
   return BitsToOpenEndedUnitIntervalF(base::RandUint64());
+}
+
+bool RandBool() {
+  uint8_t number;
+  RandBytes(span_from_ref(number));
+  return number & 1;
 }
 
 TimeDelta RandTimeDelta(TimeDelta start, TimeDelta limit) {
@@ -111,17 +118,14 @@ uint64_t RandGenerator(uint64_t range) {
 }
 
 std::string RandBytesAsString(size_t length) {
-  DCHECK_GT(length, 0u);
   std::string result(length, '\0');
-  RandBytes(result.data(), length);
+  RandBytes(as_writable_byte_span(result));
   return result;
 }
 
 std::vector<uint8_t> RandBytesAsVector(size_t length) {
   std::vector<uint8_t> result(length);
-  if (result.size()) {
-    RandBytes(result);
-  }
+  RandBytes(result);
   return result;
 }
 
@@ -135,7 +139,7 @@ void InsecureRandomGenerator::ReseedForTesting(uint64_t seed) {
   b_ = seed;
 }
 
-uint64_t InsecureRandomGenerator::RandUint64() {
+uint64_t InsecureRandomGenerator::RandUint64() const {
   // Using XorShift128+, which is simple and widely used. See
   // https://en.wikipedia.org/wiki/Xorshift#xorshift+ for details.
   uint64_t t = a_;
@@ -150,7 +154,7 @@ uint64_t InsecureRandomGenerator::RandUint64() {
   return t + s;
 }
 
-uint32_t InsecureRandomGenerator::RandUint32() {
+uint32_t InsecureRandomGenerator::RandUint32() const {
   // The generator usually returns an uint64_t, truncate it.
   //
   // It is noted in this paper (https://arxiv.org/abs/1810.05313) that the
@@ -159,7 +163,7 @@ uint32_t InsecureRandomGenerator::RandUint32() {
   return this->RandUint64() >> 32;
 }
 
-double InsecureRandomGenerator::RandDouble() {
+double InsecureRandomGenerator::RandDouble() const {
   uint64_t x = RandUint64();
   // From https://vigna.di.unimi.it/xorshift/.
   // 53 bits of mantissa, hence the "hexadecimal exponent" 1p-53.
@@ -167,7 +171,7 @@ double InsecureRandomGenerator::RandDouble() {
 }
 
 MetricsSubSampler::MetricsSubSampler() = default;
-bool MetricsSubSampler::ShouldSample(double probability) {
+bool MetricsSubSampler::ShouldSample(double probability) const {
   if (g_subsampling_always_sample.load(std::memory_order_relaxed)) {
     return true;
   }

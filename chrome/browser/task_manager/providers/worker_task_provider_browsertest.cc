@@ -6,11 +6,9 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
@@ -37,7 +35,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "url/origin.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_switches.h"
 #endif
 
@@ -56,7 +54,7 @@ int GetChildProcessID(Browser* browser) {
       ->GetActiveWebContents()
       ->GetPrimaryMainFrame()
       ->GetProcess()
-      ->GetID();
+      ->GetDeprecatedID();
 }
 
 }  // namespace
@@ -123,7 +121,7 @@ class WorkerTaskProviderBrowserTest : public InProcessBrowserTest,
 
   void TaskRemoved(Task* task) override {
     DCHECK(task);
-    base::Erase(tasks_, task);
+    std::erase(tasks_, task);
 
     if (expected_task_count_ == tasks_.size())
       StopWaiting();
@@ -136,7 +134,7 @@ class WorkerTaskProviderBrowserTest : public InProcessBrowserTest,
 
  protected:
   void SetUpCommandLine(base::CommandLine* command_line) override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     command_line->AppendSwitch(
         ash::switches::kIgnoreUserProfileMappingForTests);
 #endif
@@ -330,7 +328,7 @@ IN_PROC_BROWSER_TEST_F(WorkerTaskProviderBrowserTest, CreateExistingTasks) {
 // Tests that destroying a profile while updating will correctly remove the
 // existing tasks. An incognito browser is used because a regular profile is
 // never truly destroyed until browser shutdown (See https://crbug.com/88586).
-// TODO(crbug.com/1168407): Fix the flakiness and re-enable this.
+// TODO(crbug.com/40743320): Fix the flakiness and re-enable this.
 IN_PROC_BROWSER_TEST_F(WorkerTaskProviderBrowserTest,
                        DISABLED_DestroyedProfile) {
   StartUpdating();

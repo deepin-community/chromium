@@ -27,7 +27,6 @@ MojomDecryptStatus EnumTraits<MojomDecryptStatus, NativeDecryptStatus>::ToMojom(
       return MojomDecryptStatus::kFailure;
   }
   NOTREACHED();
-  return MojomDecryptStatus::kFailure;
 }
 
 // static
@@ -46,7 +45,6 @@ bool EnumTraits<MojomDecryptStatus, NativeDecryptStatus>::FromMojom(
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -57,14 +55,12 @@ EnumTraits<MojomEncryptionScheme, NativeEncryptionScheme>::ToMojom(
     // We should never encounter the unencrypted value.
     case NativeEncryptionScheme::kUnencrypted:
       NOTREACHED();
-      return MojomEncryptionScheme::kCenc;
     case NativeEncryptionScheme::kCenc:
       return MojomEncryptionScheme::kCenc;
     case NativeEncryptionScheme::kCbcs:
       return MojomEncryptionScheme::kCbcs;
   }
   NOTREACHED();
-  return MojomEncryptionScheme::kCenc;
 }
 
 // static
@@ -80,7 +76,6 @@ bool EnumTraits<MojomEncryptionScheme, NativeEncryptionScheme>::FromMojom(
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 // static

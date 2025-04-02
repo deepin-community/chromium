@@ -30,6 +30,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_LOCAL_FRAME_H_
 
 #include <memory>
+#include <vector>
 
 #include "base/gtest_prod_util.h"
 #include "base/time/default_tick_clock.h"
@@ -43,10 +44,10 @@
 #include "third_party/blink/public/common/frame/frame_ad_evidence.h"
 #include "third_party/blink/public/common/frame/frame_owner_element_type.h"
 #include "third_party/blink/public/common/frame/history_user_activation_state.h"
-#include "third_party/blink/public/common/frame/transient_allow_fullscreen.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/back_forward_cache_not_restored_reasons.mojom-blink.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/confidence_level.mojom-blink.h"
 #include "third_party/blink/public/mojom/device_posture/device_posture_provider.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/devtools/devtools_agent.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/back_forward_cache_controller.mojom-blink-forward.h"
@@ -67,7 +68,8 @@
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink-forward.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/platform/web_background_resource_fetch_assets.h"
-#include "third_party/blink/public/platform/web_vector.h"
+#include "third_party/blink/public/platform/web_content_settings_client.h"
+#include "third_party/blink/public/web/web_print_params.h"
 #include "third_party/blink/public/web/web_script_execution_callback.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/document_style_environment_variables.h"
@@ -77,6 +79,7 @@
 #include "third_party/blink/renderer/core/frame/ad_script_identifier.h"
 #include "third_party/blink/renderer/core/frame/frame.h"
 #include "third_party/blink/renderer/core/frame/frame_types.h"
+#include "third_party/blink/renderer/core/frame/frame_visibility_observer.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/loader/back_forward_cache_loader_helper_impl.h"
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
@@ -86,6 +89,7 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/client_hints_preferences.h"
 #include "third_party/blink/renderer/platform/loader/fetch/loader_freeze_mode.h"
+#include "third_party/blink/renderer/platform/mojo/browser_interface_broker_proxy_impl.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_associated_remote.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_unique_receiver_set.h"
@@ -104,7 +108,6 @@ namespace gfx {
 class Point;
 class Range;
 class Size;
-class SizeF;
 }  // namespace gfx
 
 namespace network {
@@ -119,7 +122,6 @@ class AttributionSrcLoader;
 class AuditsIssue;
 class BackgroundColorPaintImageGenerator;
 class BoxShadowPaintImageGenerator;
-class BrowserInterfaceBrokerProxy;
 class ClipPathPaintImageGenerator;
 class Color;
 class ContentCaptureManager;
@@ -140,6 +142,7 @@ class InspectorTaskRunner;
 class InspectorTraceEvents;
 class InterfaceRegistry;
 class LCPCriticalPathPredictor;
+class LCPScriptObserver;
 class LayoutView;
 class LocalDOMWindow;
 class LocalFrameClient;
@@ -148,6 +151,7 @@ class LocalWindowProxy;
 class Node;
 class NodeTraversal;
 class PerformanceMonitor;
+class WebLinkPreviewTriggerer;
 class PluginData;
 class PolicyContainer;
 class ScrollSnapshotClient;
@@ -209,6 +213,7 @@ class CORE_EXPORT LocalFrame final
       const LocalFrameToken& frame_token,
       WindowAgentFactory* inheriting_agent_factory,
       InterfaceRegistry*,
+      mojo::PendingRemote<mojom::blink::BrowserInterfaceBroker>,
       const base::TickClock* clock = base::DefaultTickClock::GetInstance());
 
   // Initialize the LocalFrame, creating and initializing its LocalDOMWindow. It
@@ -288,6 +293,7 @@ class CORE_EXPORT LocalFrame final
   void SetDOMWindow(LocalDOMWindow*);
   LocalFrameView* View() const override;
   Document* GetDocument() const;
+  void DocumentDetached();
   void SetPagePopupOwner(Element&);
   Element* PagePopupOwner() const { return page_popup_owner_.Get(); }
   bool HasPagePopupOwner() const { return page_popup_owner_ != nullptr; }
@@ -339,8 +345,7 @@ class CORE_EXPORT LocalFrame final
   // The |notification_type| parameter is used for histograms only.
   static void NotifyUserActivation(
       LocalFrame*,
-      mojom::blink::UserActivationNotificationType notification_type,
-      bool need_browser_verification = false);
+      mojom::blink::UserActivationNotificationType notification_type);
 
   // Returns the transient user activation state of the |LocalFrame|, provided
   // it is non-null.  Otherwise returns |false|.
@@ -398,14 +403,13 @@ class CORE_EXPORT LocalFrame final
 
   // Begin printing.
   // If too large (in the inline direction), the frame content will fit to the
-  // page size with the specified maximum shrink ratio.
-  void StartPrinting(const WebPrintPageDescription&,
-                     float maximum_shrink_ratio = 0);
-  void StartPrinting(const gfx::SizeF& page_size = gfx::SizeF(),
-                     float maximum_shrink_ratio = 0);
+  // page size with the specified maximum shrink ratio, if this value is larger
+  // than 1. If this value is 1 or less, there will be no shrinking.
+  void StartPrinting(const WebPrintParams&, float maximum_shrink_ratio = 0);
+  void StartPrintingSubLocalFrame();
 
   void EndPrinting();
-  bool ShouldUsePrintingLayout() const;
+  bool ShouldUsePaginatedLayout() const;
 
   // Setup for a Paint Preview of the page which will paint the full page
   // contents.
@@ -422,12 +426,12 @@ class CORE_EXPORT LocalFrame final
   bool InViewSourceMode() const;
   void SetInViewSourceMode(bool = true);
 
-  void SetPageZoomFactor(float);
-  float PageZoomFactor() const { return page_zoom_factor_; }
+  void SetLayoutZoomFactor(float);
+  float LayoutZoomFactor() const { return layout_zoom_factor_; }
   void SetTextZoomFactor(float);
   float TextZoomFactor() const { return text_zoom_factor_; }
-  void SetPageAndTextZoomFactors(float page_zoom_factor,
-                                 float text_zoom_factor);
+  void SetLayoutAndTextZoomFactors(float layout_zoom_factor,
+                                   float text_zoom_factor);
 
   double DevicePixelRatio() const;
 
@@ -435,12 +439,12 @@ class CORE_EXPORT LocalFrame final
   // media query value changed.
   void MediaQueryAffectingValueChangedForLocalSubtree(MediaValueChange);
 
-  void WindowSegmentsChanged(const WebVector<gfx::Rect>& window_segments);
+  void ViewportSegmentsChanged(const std::vector<gfx::Rect>& viewport_segments);
   void UpdateViewportSegmentCSSEnvironmentVariables(
-      const WebVector<gfx::Rect>& window_segments);
+      const std::vector<gfx::Rect>& viewport_segments);
   void UpdateViewportSegmentCSSEnvironmentVariables(
       StyleEnvironmentVariables& vars,
-      const WebVector<gfx::Rect>& window_segments);
+      const std::vector<gfx::Rect>& viewport_segments);
 
   void OverrideDevicePostureForEmulation(
       mojom::blink::DevicePostureType device_posture_param);
@@ -461,9 +465,6 @@ class CORE_EXPORT LocalFrame final
   void RemoveSpellingMarkersUnderWords(const Vector<String>& words);
 
   bool ShouldThrottleRendering() const;
-
-  // Called on the main frame of the portal is activated or adopted.
-  void PortalStateChanged();
 
   // Returns frame scheduler for this frame.
   // FrameScheduler is destroyed during frame detach and nullptr will be
@@ -526,6 +527,7 @@ class CORE_EXPORT LocalFrame final
   IdlenessDetector* GetIdlenessDetector() { return idleness_detector_.Get(); }
   AdTracker* GetAdTracker() { return ad_tracker_.Get(); }
   void SetAdTrackerForTesting(AdTracker* ad_tracker);
+  LCPScriptObserver* GetScriptObserver() { return script_observer_.Get(); }
   AttributionSrcLoader* GetAttributionSrcLoader() {
     return attribution_src_loader_.Get();
   }
@@ -584,7 +586,7 @@ class CORE_EXPORT LocalFrame final
   // |mime_type| and populated with the contents of |data|. Only intended for
   // use in internal-implementation LocalFrames that aren't in the frame tree.
   void ForceSynchronousDocumentInstall(const AtomicString& mime_type,
-                                       scoped_refptr<const SharedBuffer> data);
+                                       const SegmentedBuffer& data);
 
   // Called when certain event listeners are added for the first time/last time,
   // making it possible/not possible to terminate the frame suddenly.
@@ -624,8 +626,8 @@ class CORE_EXPORT LocalFrame final
   bool IsAdScriptInStack() const;
 
   // The evidence for or against a frame being an ad. `std::nullopt` if not yet
-  // set or if the frame is a subfiltering root frame (outermost main frame or
-  // portal) as only child frames can be tagged as ads.
+  // set or if the frame is a subfiltering root frame (outermost main frame) as
+  // only child frames can be tagged as ads.
   const std::optional<blink::FrameAdEvidence>& AdEvidence() const {
     return ad_evidence_;
   }
@@ -676,6 +678,11 @@ class CORE_EXPORT LocalFrame final
       mojom::blink::BackForwardCacheNotRestoredReasonsPtr);
   const mojom::blink::BackForwardCacheNotRestoredReasonsPtr&
   GetNotRestoredReasons();
+
+  // Sets navigation confidence for this frame. Only set for outermost
+  // main frame.
+  void SetNavigationConfidence(double randomized_trigger_rate,
+                               mojom::blink::ConfidenceLevel confidence);
 
   const AtomicString& GetReducedAcceptLanguage() const {
     return reduced_accept_language_;
@@ -736,11 +743,11 @@ class CORE_EXPORT LocalFrame final
       const gfx::Point& viewport_position,
       const blink::mojom::blink::MediaPlayerActionType type,
       bool enable);
-  void RequestVideoFrameAt(
+  void RequestVideoFrameAtWithBoundsHint(
       const gfx::Point& viewport_position,
       const gfx::Size& max_size,
       int max_area,
-      base::OnceCallback<void(const gfx::ImageSkia&)> callback);
+      base::OnceCallback<void(const SkBitmap&, const gfx::Rect&)> callback);
 
   // Handle the request as a download. If the request is for a blob: URL,
   // a BlobURLToken should be provided as |blob_url_token| to ensure the
@@ -797,14 +804,6 @@ class CORE_EXPORT LocalFrame final
   // access).
   bool CanAccessEvent(const WebInputEventAttribution&) const;
 
-  // Return true if the frame has a transient affordance to enter fullscreen.
-  bool IsTransientAllowFullscreenActive() const;
-
-  // Activate the transient affordance to enter fullscreen.
-  void ActivateTransientAllowFullscreen() {
-    transient_allow_fullscreen_.Activate();
-  }
-
   LocalFrameToken GetLocalFrameToken() const;
 
   LoaderFreezeMode GetLoaderFreezeMode();
@@ -813,6 +812,10 @@ class CORE_EXPORT LocalFrame final
   // of subframes, `Owner()->frame()`, or in the case of the main frame,
   // `GetPage()->Frame()`). Must only be called on provisional frames.
   bool SwapIn();
+
+  // Replaces the active document with an empty document to free resources,
+  // e.g. for supporting tab discard.
+  void Discard();
 
   void LoadJavaScriptURL(const KURL& url);
   void RequestExecuteScript(int32_t world_id,
@@ -846,6 +849,9 @@ class CORE_EXPORT LocalFrame final
   // Invokes on first paint, this method could be invoked multiple times, refer
   // to FrameFirstPaint.
   void OnFirstPaint(bool text_painted, bool image_painted);
+
+  // Invoked on first contentful paint on this frame.
+  void OnFirstContentfulPaint();
 
 #if BUILDFLAG(IS_MAC)
   void ResetTextInputHostForTesting();
@@ -902,6 +908,11 @@ class CORE_EXPORT LocalFrame final
 
   void ScheduleNextServiceForScrollSnapshotClients();
 
+  void CheckPositionAnchorsForCssVisibilityChanges();
+  // This is called after all other position-visibility conditions have been
+  // checked.
+  void CheckPositionAnchorsForChainedVisibilityChanges();
+
   using BlockingDetailsList = Vector<mojom::blink::BlockingDetailsPtr>;
   static BlockingDetailsList ConvertFeatureAndLocationToMojomStruct(
       const BFCacheBlockingFeatureAndLocations&,
@@ -914,9 +925,48 @@ class CORE_EXPORT LocalFrame final
     return *v8_local_compile_hints_producer_;
   }
 
-  // Gets the content settings associated with the current navigation commit.
+  // Returns whether images are allowed to load for the current frame. This is a
+  // convenience method that checks both renderer content settings and frame
+  // settings.
   // Can only be called while the frame is not detached.
-  const mojom::RendererContentSettingsPtr& GetContentSettings();
+  bool ImagesEnabled();
+
+  // Returns whether script is allowed to run for the current frame. This is a
+  // convenience method that checks both renderer content settings and frame
+  // settings.
+  // Can only be called while the frame is not detached.
+  bool ScriptEnabled();
+
+  const WebPrintParams& GetPrintParams() const;
+
+  // Returns the `Frame` for which `provisional_frame_ == this`. May only be
+  // called on a provisional frame.
+  Frame* GetProvisionalOwnerFrame();
+
+  // Return a keep alive handle for the browser side NavigationStateKeepAlive.
+  // The NavigationStateKeepAlive is created by a RenderFrameHost. Holding the
+  // pending receiver of this remote means the keep alive handle can still exist
+  // beyond the lifetime of the RenderFrameHost that created it.
+  mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>
+  IssueKeepAliveHandle();
+
+  WebLinkPreviewTriggerer* GetOrCreateLinkPreviewTriggerer();
+  void SetLinkPreviewTriggererForTesting(
+      std::unique_ptr<WebLinkPreviewTriggerer> trigger);
+
+  void AllowStorageAccessAndNotify(
+      blink::WebContentSettingsClient::StorageType storage_type,
+      base::OnceCallback<void(bool)> callback);
+
+  bool AllowStorageAccessSyncAndNotify(
+      blink::WebContentSettingsClient::StorageType storage_type);
+
+  void NotifyFrameVisibilityChanged(mojom::blink::FrameVisibility visibility);
+
+  HeapHashSet<WeakMember<FrameVisibilityObserver>>&
+  GetFrameVisibilityObserverSet() {
+    return frame_visibility_observers_;
+  }
 
  private:
   friend class FrameNavigationDisabler;
@@ -952,8 +1002,6 @@ class CORE_EXPORT LocalFrame final
   void SetPrinting(bool printing, float maximum_shrink_ratio);
 
   // FrameScheduler::Delegate overrides:
-  ukm::UkmRecorder* GetUkmRecorder() override;
-  ukm::SourceId GetUkmSourceId() override;
   void UpdateTaskTime(base::TimeDelta time) override;
   void UpdateBackForwardCacheDisablingFeatures(
       BlockingDetails details) override;
@@ -961,13 +1009,8 @@ class CORE_EXPORT LocalFrame final
   void OnTaskCompleted(base::TimeTicks start_time,
                        base::TimeTicks end_time) override;
   void MainFrameInteractive() override;
-
-  // Activates the user activation states of this frame and all its ancestors.
-  //
-  // The |notification_type| parameter is used for histograms only.
-  void NotifyUserActivation(
-      mojom::blink::UserActivationNotificationType notification_type,
-      bool need_browser_verification);
+  void MainFrameFirstMeaningfulPaint() override;
+  DocumentResourceCoordinator* GetDocumentResourceCoordinator() override;
 
   // Consumes and returns the transient user activation state this frame, after
   // updating all other frames in the frame tree.
@@ -987,10 +1030,6 @@ class CORE_EXPORT LocalFrame final
 
   bool ShouldThrottleDownload();
 
-  // Returns the `Frame` for which `provisional_frame_ == this`. May only be
-  // called on a provisional frame.
-  Frame* GetProvisionalOwnerFrame();
-
   void ExtractSmartClipDataInternal(const gfx::Rect& rect_in_viewport,
                                     String& clip_text,
                                     String& clip_html,
@@ -1000,6 +1039,8 @@ class CORE_EXPORT LocalFrame final
   void SetTitlebarAreaDocumentStyleEnvironmentVariables() const;
   void MaybeUpdateWindowControlsOverlayWithNewZoomLevel();
 #endif
+
+  void EnsureLinkPreviewTriggererInitialized();
 
   std::unique_ptr<FrameScheduler> frame_scheduler_;
 
@@ -1046,13 +1087,16 @@ class CORE_EXPORT LocalFrame final
   // Whether this frame is known to be completely occluded by other opaque
   // OS-level windows.
   unsigned hidden_ : 1;
+  // Whether DetachImpl() has run to completion on this LocalFrame.
+  unsigned did_run_detach_impl_ : 1 = false;
 
-  float page_zoom_factor_;
+  float layout_zoom_factor_;
   float text_zoom_factor_;
 
   Member<CoreProbeSink> probe_sink_;
   scoped_refptr<InspectorTaskRunner> inspector_task_runner_;
   Member<PerformanceMonitor> performance_monitor_;
+
   Member<AdTracker> ad_tracker_;
   Member<IdlenessDetector> idleness_detector_;
   Member<AttributionSrcLoader> attribution_src_loader_;
@@ -1064,6 +1108,7 @@ class CORE_EXPORT LocalFrame final
   // Access content_capture_manager_ through GetOrResetContentCaptureManager()
   // because WebContentCaptureClient might already stop the capture.
   Member<ContentCaptureManager> content_capture_manager_;
+  Member<LCPScriptObserver> script_observer_;
 
   HistoryUserActivationState history_user_activation_state_;
 
@@ -1121,16 +1166,13 @@ class CORE_EXPORT LocalFrame final
   // be registered at the actual elements as the references here are weak.
   HeapHashSet<WeakMember<ScrollSnapshotClient>> scroll_snapshot_clients_;
 
-  // Manages a transient affordance for this frame to enter fullscreen.
-  TransientAllowFullscreen transient_allow_fullscreen_;
-
 #if !BUILDFLAG(IS_ANDROID)
   bool is_window_controls_overlay_visible_ = false;
-  // |page_zoom_factor_| is asynchronously set sometimes (most prominently seen
-  // on mac) in |LocalFrame| via |PropagatePageZoomToNewlyAttachedFrame| on
+  // |layout_zoom_factor_| is asynchronously set sometimes (most prominently
+  // seen on mac) in |LocalFrame| via |WebFrameWidgetImpl::SetZoomLevel| on
   // navigation. We need to store the window_controls_overlay_rect sent from the
   // browser in dips so we can convert the rect to blink space coordinates when
-  // |page_zoom_factor_| gets updated this way.
+  // |layout_zoom_factor_| gets updated this way.
   gfx::Rect window_controls_overlay_rect_in_dips_;
   gfx::Rect window_controls_overlay_rect_;
   WeakMember<WindowControlsOverlayChangedDelegate>
@@ -1181,6 +1223,22 @@ class CORE_EXPORT LocalFrame final
   // not so it can block BFCache.
   FrameScheduler::SchedulingAffectingFeatureHandle
       feature_handle_for_scheduler_;
+
+  WebPrintParams print_params_;
+
+  BrowserInterfaceBrokerProxyImpl browser_interface_broker_proxy_;
+
+  // Holds WebLinkPreviewTriggerer instance if content renderer client wants to
+  // inject it. Note that `link_preview_triggerer_` may be nullptr after
+  // initialization.
+  bool is_link_preivew_triggerer_initialized_ = false;
+  std::unique_ptr<WebLinkPreviewTriggerer> link_preview_triggerer_;
+
+  HeapHashSet<WeakMember<FrameVisibilityObserver>> frame_visibility_observers_;
+
+  void OnStorageAccessCallback(base::OnceCallback<void(bool)> callback,
+                               mojom::blink::StorageTypeAccessed storage_type,
+                               bool isAllowed);
 };
 
 inline FrameLoader& LocalFrame::Loader() const {

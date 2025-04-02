@@ -78,26 +78,6 @@ class BufferZeroInitTest : public DawnTest {
         return device.CreateBuffer(&descriptor);
     }
 
-    void MapAsyncAndWait(wgpu::Buffer buffer,
-                         wgpu::MapMode mapMode,
-                         uint64_t offset,
-                         uint64_t size) {
-        DAWN_ASSERT(mapMode == wgpu::MapMode::Read || mapMode == wgpu::MapMode::Write);
-
-        bool done = false;
-        buffer.MapAsync(
-            mapMode, offset, size,
-            [](WGPUBufferMapAsyncStatus status, void* userdata) {
-                ASSERT_EQ(WGPUBufferMapAsyncStatus_Success, status);
-                *static_cast<bool*>(userdata) = true;
-            },
-            &done);
-
-        while (!done) {
-            WaitABit();
-        }
-    }
-
     wgpu::Texture CreateAndInitializeTexture(const wgpu::Extent3D& size,
                                              wgpu::TextureFormat format,
                                              wgpu::Color color = {0.f, 0.f, 0.f, 0.f}) {
@@ -438,7 +418,7 @@ class BufferZeroInitTest : public DawnTest {
         constexpr wgpu::TextureFormat kColorAttachmentFormat = wgpu::TextureFormat::RGBA8Unorm;
         constexpr wgpu::Color kClearColorGreen = {0.f, 1.f, 0.f, 1.f};
 
-        // As long as the comptue shader is executed once, the pixel color of outImage will be set
+        // As long as the compute shader is executed once, the pixel color of outImage will be set
         // to red.
         const char* computeShader = R"(
             @group(0) @binding(0) var outImage : texture_storage_2d<rgba8unorm, write>;
@@ -935,6 +915,10 @@ TEST_P(BufferZeroInitTest, CopyBufferToTexture) {
 // Test that the code path of CopyTextureToBuffer clears the destination buffer correctly when it is
 // the first use of the buffer and the texture is a 2D non-array texture.
 TEST_P(BufferZeroInitTest, Copy2DTextureToBuffer) {
+    // TODO(crbug.com/388318201): investigate
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
+
     constexpr wgpu::Extent3D kTextureSize = {64u, 8u, 1u};
 
     // TODO(crbug.com/dawn/2295): diagnose this failure on Pixel 4 OpenGLES
@@ -974,6 +958,10 @@ TEST_P(BufferZeroInitTest, Copy2DTextureToBuffer) {
 // Test that the code path of CopyTextureToBuffer clears the destination buffer correctly when it is
 // the first use of the buffer and the texture is a 2D array texture.
 TEST_P(BufferZeroInitTest, Copy2DArrayTextureToBuffer) {
+    // TODO(crbug.com/388318201): investigate
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
+
     constexpr wgpu::Extent3D kTextureSize = {64u, 4u, 3u};
 
     // bytesPerRow == texelBlockSizeInBytes * copySize.width && rowsPerImage == copySize.height &&
@@ -1003,9 +991,6 @@ TEST_P(BufferZeroInitTest, Copy2DArrayTextureToBuffer) {
 // Test that the buffer will be lazy initialized correctly when its first use is to be bound as a
 // uniform buffer.
 TEST_P(BufferZeroInitTest, BoundAsUniformBuffer) {
-    // TODO(crbug.com/dawn/661): Diagnose and fix this backend validation failure on GLES.
-    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsBackendValidationEnabled());
-
     constexpr uint32_t kBoundBufferSize = 16u;
     wgpu::ShaderModule module = utils::CreateShaderModule(device, R"(
         struct UBO {
@@ -1042,9 +1027,6 @@ TEST_P(BufferZeroInitTest, BoundAsUniformBuffer) {
 // Test that the buffer will be lazy initialized correctly when its first use is to be bound as a
 // read-only storage buffer.
 TEST_P(BufferZeroInitTest, BoundAsReadonlyStorageBuffer) {
-    // TODO(crbug.com/dawn/661): Diagnose and fix this backend validation failure on GLES.
-    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsBackendValidationEnabled());
-
     constexpr uint32_t kBoundBufferSize = 16u;
     wgpu::ShaderModule module = utils::CreateShaderModule(device, R"(
         struct SSBO {
@@ -1081,9 +1063,6 @@ TEST_P(BufferZeroInitTest, BoundAsReadonlyStorageBuffer) {
 // Test that the buffer will be lazy initialized correctly when its first use is to be bound as a
 // storage buffer.
 TEST_P(BufferZeroInitTest, BoundAsStorageBuffer) {
-    // TODO(crbug.com/dawn/661): Diagnose and fix this backend validation failure on GLES.
-    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsBackendValidationEnabled());
-
     constexpr uint32_t kBoundBufferSize = 32u;
     wgpu::ShaderModule module = utils::CreateShaderModule(device, R"(
         struct SSBO {
@@ -1154,6 +1133,8 @@ TEST_P(BufferZeroInitTest, PaddingInitialized) {
 
     // TODO(crbug.com/dawn/2295): diagnose this failure on Pixel 4 OpenGLES
     DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && IsQualcomm());
+    // TODO(crbug.com/dawn/2295): diagnose this failure on Pixel 6 OpenGLES
+    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && IsARM());
 
     constexpr wgpu::TextureFormat kColorAttachmentFormat = wgpu::TextureFormat::RGBA8Unorm;
     // A small sub-4-byte format means a single vertex can fit entirely within the padded buffer,
@@ -1272,10 +1253,6 @@ TEST_P(BufferZeroInitTest, SetIndexBuffer) {
 // Test the buffer will be lazily initialized correctly when its first use is an indirect buffer for
 // DrawIndirect.
 TEST_P(BufferZeroInitTest, IndirectBufferForDrawIndirect) {
-    // TODO(crbug.com/dawn/1292): Some Intel OpenGL drivers don't seem to like
-    // the offset= that Tint/GLSL produces.
-    DAWN_SUPPRESS_TEST_IF(IsIntel() && IsOpenGL() && IsLinux());
-
     // Bind the whole buffer as an indirect buffer.
     {
         constexpr uint64_t kOffset = 0u;
@@ -1292,10 +1269,6 @@ TEST_P(BufferZeroInitTest, IndirectBufferForDrawIndirect) {
 // Test the buffer will be lazily initialized correctly when its first use is an indirect buffer for
 // DrawIndexedIndirect.
 TEST_P(BufferZeroInitTest, IndirectBufferForDrawIndexedIndirect) {
-    // TODO(crbug.com/dawn/1292): Some Intel OpenGL drivers don't seem to like
-    // the offset= that Tint/GLSL produces.
-    DAWN_SUPPRESS_TEST_IF(IsIntel() && IsOpenGL() && IsLinux());
-
     // Bind the whole buffer as an indirect buffer.
     {
         constexpr uint64_t kOffset = 0u;
@@ -1312,9 +1285,6 @@ TEST_P(BufferZeroInitTest, IndirectBufferForDrawIndexedIndirect) {
 // Test the buffer will be lazily initialized correctly when its first use is an indirect buffer for
 // DispatchIndirect.
 TEST_P(BufferZeroInitTest, IndirectBufferForDispatchIndirect) {
-    // TODO(crbug.com/dawn/661): Diagnose and fix this backend validation failure on GLES.
-    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsBackendValidationEnabled());
-
     // Bind the whole buffer as an indirect buffer.
     {
         constexpr uint64_t kOffset = 0u;

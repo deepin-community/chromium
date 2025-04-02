@@ -13,13 +13,13 @@ bool CanSetThreadTypeToRealtimeAudio() {
 }
 
 bool SetCurrentThreadTypeForPlatform(ThreadType thread_type,
-                                MessagePumpType pump_type_hint) {
+                                     MessagePumpType pump_type_hint) {
   return false;
 }
 
-absl::optional<ThreadPriorityForTest>
+std::optional<ThreadPriorityForTest>
 GetCurrentThreadPriorityForPlatformForTest() {
-  return absl::nullopt;
+  return std::nullopt;
 }
 }  // namespace internal
 

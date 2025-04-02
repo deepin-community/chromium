@@ -31,6 +31,7 @@
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
+
 class AudioCaptureSettings;
 class LocalFrame;
 class MediaStreamAudioSource;
@@ -39,6 +40,17 @@ class VideoCaptureSettings;
 class WebMediaStreamDeviceObserver;
 class WebMediaStreamSource;
 class WebString;
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class CameraCaptureCapability {
+  kHdAndFullHdMissing = 0,
+  kHdOrFullHd = 1,
+  kHdOrFullHd_360p = 2,
+  kHdOrFullHd_480p = 3,
+  kHdOrFullHd_360p_480p = 4,
+  kMaxValue = kHdOrFullHd_360p_480p,
+};
 
 // UserMediaProcessor is responsible for processing getUserMedia() requests.
 // It also keeps tracks of all sources used by streams created with
@@ -145,7 +157,11 @@ class MODULES_EXPORT UserMediaProcessor
 
   // Intended to be used only for testing.
   const blink::AudioCaptureSettings& AudioCaptureSettingsForTesting() const;
+  const Vector<blink::AudioCaptureSettings>&
+  EligibleAudioCaptureSettingsForTesting() const;
   const blink::VideoCaptureSettings& VideoCaptureSettingsForTesting() const;
+  const Vector<blink::VideoCaptureSettings>&
+  EligibleVideoCaptureSettingsForTesting() const;
 
   void SetMediaStreamDeviceObserverForTesting(
       WebMediaStreamDeviceObserver* media_stream_device_observer);
@@ -236,6 +252,10 @@ class MODULES_EXPORT UserMediaProcessor
       blink::mojom::blink::MediaStreamRequestResult result,
       const String& result_name);
 
+  void OnVideoSourceStarted(
+      blink::WebPlatformMediaStreamSource* source,
+      blink::mojom::blink::MediaStreamRequestResult result);
+
   void NotifyCurrentRequestInfoOfAudioSourceStarted(
       blink::WebPlatformMediaStreamSource* source,
       blink::mojom::blink::MediaStreamRequestResult result,
@@ -292,13 +312,15 @@ class MODULES_EXPORT UserMediaProcessor
       const blink::VideoCaptureSettings& settings);
   void SelectVideoContentSettings();
 
-  std::optional<base::UnguessableToken> DetermineExistingAudioSessionId();
+  std::optional<base::UnguessableToken> DetermineExistingAudioSessionId(
+      const blink::AudioCaptureSettings& settings);
+
+  WTF::HashMap<String, base::UnguessableToken>
+  DetermineExistingAudioSessionIds();
 
   void GenerateStreamForCurrentRequestInfo(
-      std::optional<base::UnguessableToken> requested_audio_capture_session_id =
-          std::nullopt,
-      blink::mojom::StreamSelectionStrategy strategy =
-          blink::mojom::StreamSelectionStrategy::SEARCH_BY_DEVICE_ID);
+      WTF::HashMap<String, base::UnguessableToken>
+          requested_audio_capture_session_ids = {});
 
   WebMediaStreamDeviceObserver* GetMediaStreamDeviceObserver();
 

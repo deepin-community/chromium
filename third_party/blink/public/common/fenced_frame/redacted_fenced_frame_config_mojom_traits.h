@@ -256,7 +256,7 @@ struct BLINK_COMMON_EXPORT
     return config.mode_;
   }
 
-  static const std::vector<blink::mojom::PermissionsPolicyFeature>&
+  static const std::vector<network::mojom::PermissionsPolicyFeature>&
   effective_enabled_permissions(
       const blink::FencedFrame::RedactedFencedFrameConfig& config) {
     return config.effective_enabled_permissions_;
@@ -306,16 +306,12 @@ struct BLINK_COMMON_EXPORT
       const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
     return properties.shared_storage_budget_metadata_;
   }
-  static bool has_fenced_frame_reporting(
-      const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
-    return properties.has_fenced_frame_reporting_;
-  }
   static const blink::FencedFrame::DeprecatedFencedFrameMode& mode(
       const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
     return properties.mode_;
   }
 
-  static const std::vector<blink::mojom::PermissionsPolicyFeature>&
+  static const std::vector<network::mojom::PermissionsPolicyFeature>&
   effective_enabled_permissions(
       const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
     return properties.effective_enabled_permissions_;
@@ -323,6 +319,14 @@ struct BLINK_COMMON_EXPORT
   static bool can_disable_untrusted_network(
       const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
     return properties.can_disable_untrusted_network_;
+  }
+  static bool is_cross_origin_content(
+      const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
+    return properties.is_cross_origin_content_;
+  }
+  static bool allow_cross_origin_event_reporting(
+      const blink::FencedFrame::RedactedFencedFrameProperties& properties) {
+    return properties.allow_cross_origin_event_reporting_;
   }
 
   static const std::optional<blink::FencedFrame::ParentPermissionsInfo>&

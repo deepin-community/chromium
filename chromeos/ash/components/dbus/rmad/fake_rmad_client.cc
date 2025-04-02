@@ -86,7 +86,6 @@ rmad::RmadState* CreateState(rmad::RmadState::StateCase state_case) {
       break;
     default:
       NOTREACHED();
-      break;
   }
   return state;
 }

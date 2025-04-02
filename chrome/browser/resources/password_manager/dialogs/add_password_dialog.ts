@@ -182,8 +182,8 @@ export class AddPasswordDialogElement extends AddPasswordDialogElementBase {
 
       canAddPassword_: {
         type: Boolean,
-        computed: 'computeCanAddPassword_(websiteErrorMessage_, username_, ' +
-            'password_, note_)',
+        computed: 'computeCanAddPassword_(websiteErrorMessage_, website_, ' +
+            'usernameErrorMessage_, password_, note_)',
       },
 
       storeOptionAccountValue_: {
@@ -245,12 +245,7 @@ export class AddPasswordDialogElement extends AddPasswordDialogElementBase {
 
   private updateDefaultStore_() {
     if (this.isAccountStoreUser) {
-      PasswordManagerImpl.getInstance().isAccountStoreDefault().then(
-          isAccountStoreDefault => {
-            this.$.storePicker.value = isAccountStoreDefault ?
-                this.storeOptionAccountValue_ :
-                this.storeOptionDeviceValue_;
-          });
+      this.$.storePicker.value = this.storeOptionAccountValue_;
     }
   }
 
@@ -318,7 +313,7 @@ export class AddPasswordDialogElement extends AddPasswordDialogElementBase {
   }
 
   private isNoteInputInvalid_(): boolean {
-    return this.note_.length >= PASSWORD_NOTE_MAX_CHARACTER_COUNT;
+    return this.note_.length > PASSWORD_NOTE_MAX_CHARACTER_COUNT;
   }
 
   private getFirstNoteFooter_(): string {

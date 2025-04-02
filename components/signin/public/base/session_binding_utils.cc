@@ -5,15 +5,19 @@
 #include "components/signin/public/base/session_binding_utils.h"
 
 #include <optional>
+#include <string_view>
+#include <vector>
 
 #include "base/base64url.h"
 #include "base/containers/span.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "components/signin/public/base/hybrid_encryption_key.h"
 #include "crypto/sha2.h"
 #include "crypto/signature_verifier.h"
 #include "third_party/boringssl/src/include/openssl/bn.h"
@@ -40,7 +44,7 @@ std::string SignatureAlgorithmToString(
   }
 }
 
-std::string Base64UrlEncode(base::StringPiece data) {
+std::string Base64UrlEncode(std::string_view data) {
   std::string output;
   base::Base64UrlEncode(data, base::Base64UrlEncodePolicy::OMIT_PADDING,
                         &output);
@@ -48,7 +52,7 @@ std::string Base64UrlEncode(base::StringPiece data) {
 }
 
 std::string Base64UrlEncode(base::span<const uint8_t> data) {
-  return Base64UrlEncode(base::StringPiece(
+  return Base64UrlEncode(std::string_view(
       reinterpret_cast<const char*>(data.data()), data.size()));
 }
 
@@ -60,9 +64,17 @@ base::Value::Dict CreatePublicKeyInfo(base::span<const uint8_t> pubkey) {
       .Set("SubjectPublicKeyInfo", Base64UrlEncode(pubkey));
 }
 
+base::Value::Dict CreateHybridPublicKeyInfo(
+    std::string_view ephemeral_public_key) {
+  return base::Value::Dict()
+      .Set("kty",
+           "type.googleapis.com/google.crypto.tink.EciesAeadHkdfPublicKey")
+      .Set("TinkKeysetPublicKeyInfo", Base64UrlEncode(ephemeral_public_key));
+}
+
 std::optional<std::string> CreateHeaderAndPayloadWithCustomPayload(
     crypto::SignatureVerifier::SignatureAlgorithm algorithm,
-    base::StringPiece schema,
+    std::string_view schema,
     const base::Value::Dict& payload) {
   auto header = base::Value::Dict()
                     .Set("alg", SignatureAlgorithmToString(algorithm))
@@ -115,9 +127,37 @@ std::optional<std::vector<uint8_t>> ConvertDERSignatureToRaw(
 
 }  // namespace
 
+std::optional<crypto::SignatureVerifier::SignatureAlgorithm>
+SignatureAlgorithmFromString(std::string_view algorithm) {
+  if (base::EqualsCaseInsensitiveASCII(algorithm, "ES256")) {
+    return crypto::SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256;
+  }
+
+  if (base::EqualsCaseInsensitiveASCII(algorithm, "RS256")) {
+    return crypto::SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA256;
+  }
+
+  return std::nullopt;
+}
+
+std::vector<crypto::SignatureVerifier::SignatureAlgorithm>
+ParseSignatureAlgorithmList(std::string_view algorithm_list) {
+  std::vector<crypto::SignatureVerifier::SignatureAlgorithm> result;
+  for (const auto& algorithm_str : base::SplitStringPiece(
+           algorithm_list, " ", base::WhitespaceHandling::TRIM_WHITESPACE,
+           base::SplitResult::SPLIT_WANT_NONEMPTY)) {
+    std::optional<crypto::SignatureVerifier::SignatureAlgorithm> algorithm =
+        signin::SignatureAlgorithmFromString(algorithm_str);
+    if (algorithm) {
+      result.push_back(*algorithm);
+    }
+  }
+  return result;
+}
+
 std::optional<std::string> CreateKeyRegistrationHeaderAndPayloadForTokenBinding(
-    base::StringPiece client_id,
-    base::StringPiece auth_code,
+    std::string_view client_id,
+    std::string_view auth_code,
     const GURL& registration_url,
     crypto::SignatureVerifier::SignatureAlgorithm algorithm,
     base::span<const uint8_t> pubkey,
@@ -139,7 +179,7 @@ std::optional<std::string> CreateKeyRegistrationHeaderAndPayloadForTokenBinding(
 
 std::optional<std::string>
 CreateKeyRegistrationHeaderAndPayloadForSessionBinding(
-    base::StringPiece challenge,
+    std::string_view challenge,
     const GURL& registration_url,
     crypto::SignatureVerifier::SignatureAlgorithm algorithm,
     base::span<const uint8_t> pubkey,
@@ -161,22 +201,27 @@ CreateKeyRegistrationHeaderAndPayloadForSessionBinding(
 std::optional<std::string> CreateKeyAssertionHeaderAndPayload(
     crypto::SignatureVerifier::SignatureAlgorithm algorithm,
     base::span<const uint8_t> pubkey,
-    base::StringPiece client_id,
-    base::StringPiece challenge,
+    std::string_view client_id,
+    std::string_view challenge,
     const GURL& destination_url,
-    base::StringPiece name_space) {
+    std::string_view name_space,
+    std::string_view ephemeral_public_key) {
   auto payload = base::Value::Dict()
                      .Set("sub", client_id)
                      .Set("aud", destination_url.spec())
                      .Set("jti", challenge)
                      .Set("iss", Base64UrlEncode(crypto::SHA256Hash(pubkey)))
                      .Set("namespace", name_space);
+  if (!ephemeral_public_key.empty()) {
+    payload.Set("ephemeral_key",
+                CreateHybridPublicKeyInfo(ephemeral_public_key));
+  }
   return CreateHeaderAndPayloadWithCustomPayload(
       algorithm, "DEVICE_BOUND_SESSION_CREDENTIALS_ASSERTION", payload);
 }
 
 std::optional<std::string> AppendSignatureToHeaderAndPayload(
-    base::StringPiece header_and_payload,
+    std::string_view header_and_payload,
     crypto::SignatureVerifier::SignatureAlgorithm algorithm,
     base::span<const uint8_t> signature) {
   std::optional<std::vector<uint8_t>> signature_holder;
@@ -185,10 +230,28 @@ std::optional<std::string> AppendSignatureToHeaderAndPayload(
     if (!signature_holder.has_value()) {
       return std::nullopt;
     }
-    signature = base::make_span(*signature_holder);
+    signature = base::span(*signature_holder);
   }
 
   return base::StrCat({header_and_payload, ".", Base64UrlEncode(signature)});
+}
+
+std::string DecryptValueWithEphemeralKey(
+    const HybridEncryptionKey& ephemeral_key,
+    std::string_view base64_encrypted_value) {
+  std::optional<std::vector<uint8_t>> encrypted_value = base::Base64UrlDecode(
+      base64_encrypted_value, base::Base64UrlDecodePolicy::IGNORE_PADDING);
+  if (!encrypted_value.has_value()) {
+    return std::string();
+  }
+
+  std::optional<std::vector<uint8_t>> decryption_result =
+      ephemeral_key.Decrypt(*encrypted_value);
+  if (!decryption_result.has_value()) {
+    return std::string();
+  }
+
+  return std::string(decryption_result->begin(), decryption_result->end());
 }
 
 }  // namespace signin

@@ -6,7 +6,7 @@
 
 #include "base/android/android_hardware_buffer_compat.h"
 #include "base/containers/contains.h"
-#include "base/numerics/math_constants.h"
+#include "base/numerics/angle_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 
 namespace {}
@@ -100,7 +100,7 @@ std::vector<float> FakeArCore::TransformDisplayUvCoords(
   //    uv[4]=(0.0325521, 0)
   //    uv[6]=(0.967448, 0)
   //
-  // TODO(https://crbug.com/1382576): This logic is quite complicated,
+  // TODO(crbug.com/40877372): This logic is quite complicated,
   // and the current arcore_device_unittest doesn't really care about
   // the details.
 
@@ -192,7 +192,7 @@ gfx::Transform FakeArCore::GetProjectionMatrix(float near, float far) {
   // simulation of ArCore should apply cropping to the underlying fixed-aspect
   // simulated camera image.
   constexpr float fov_half_angle_degrees = 30.f;
-  float base_tan = tanf(fov_half_angle_degrees * base::kPiFloat / 180.f);
+  float base_tan = tanf(base::DegToRad(fov_half_angle_degrees));
   float right_tan;
   float up_tan;
   if (display_rotation_ == display::Display::Rotation::ROTATE_0 ||
@@ -254,7 +254,6 @@ std::optional<uint64_t> FakeArCore::SubscribeToHitTest(
     const std::vector<mojom::EntityTypeForHitTest>& entity_types,
     mojom::XRRayPtr ray) {
   NOTREACHED();
-  return std::nullopt;
 }
 
 std::optional<uint64_t> FakeArCore::SubscribeToHitTestForTransientInput(
@@ -262,7 +261,6 @@ std::optional<uint64_t> FakeArCore::SubscribeToHitTestForTransientInput(
     const std::vector<mojom::EntityTypeForHitTest>& entity_types,
     mojom::XRRayPtr ray) {
   NOTREACHED();
-  return std::nullopt;
 }
 
 mojom::XRHitTestSubscriptionResultsDataPtr
@@ -346,7 +344,7 @@ void FakeArCore::CreatePlaneAttachedAnchor(
     const device::Pose& native_origin_from_anchor,
     uint64_t plane_id,
     CreateAnchorCallback callback) {
-  // TODO(992035): Fix this when implementing tests.
+  // TODO(crbug.com/41475117): Fix this when implementing tests.
   std::move(callback).Run(mojom::CreateAnchorResult::FAILURE, 0);
 }
 

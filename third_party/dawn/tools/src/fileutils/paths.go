@@ -34,6 +34,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"dawn.googlesource.com/dawn/tools/src/oswrapper"
 )
 
 // ThisLine returns the filepath and line number of the calling function
@@ -90,6 +92,19 @@ func ExpandHome(path string) string {
 	return path
 }
 
+// TODO(crbug.com/344014313): Merge this into ExpandHome once all uses are using
+// dependency injection.
+// ExpandHomeWithWrapper is a copy of ExpandHome that uses the provided
+// FilesystemReader instead of calling os directly.
+func ExpandHomeWithWrapper(path string, environProvider oswrapper.EnvironProvider) string {
+	if strings.ContainsRune(path, '~') {
+		if home, err := environProvider.UserHomeDir(); err == nil {
+			return strings.ReplaceAll(path, "~", home)
+		}
+	}
+	return path
+}
+
 // NodePath looks for the node binary, first in dawn's third_party directory,
 // falling back to PATH.
 func NodePath() string {
@@ -117,6 +132,18 @@ func NodePath() string {
 		return path
 	}
 
+	return ""
+}
+
+// BuildPath looks for the binary output directory at '<dawn>/out/active'.
+// Returns the path if found, otherwise an empty string.
+func BuildPath() string {
+	if dawnRoot := DawnRoot(); dawnRoot != "" {
+		bin := filepath.Join(dawnRoot, "out/active")
+		if info, err := os.Stat(bin); err == nil && info.IsDir() {
+			return bin
+		}
+	}
 	return ""
 }
 

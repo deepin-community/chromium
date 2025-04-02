@@ -25,7 +25,7 @@
 
 namespace device {
 namespace {
-// TODO(https://crbug.com/1429096): It's not clear if the display rotation
+// TODO(crbug.com/40900871): It's not clear if the display rotation
 // should factor into Cardboard's viewport orientation. Initial attempts to
 // map them together frequently gave wrong results, whereas statically using
 // kLandscapeLeft has the expected effect.
@@ -104,10 +104,16 @@ void CardboardRenderLoop::CreateSession(
     return;
   }
 
+  // Set whether or not the session produces frames with WebGPU based on in the
+  // 'webgpu' feature was requested.
+  bool webgpu_session =
+      enabled_features_.contains(device::mojom::XRSessionFeature::WEBGPU);
+
   cardboard_image_transport_->Initialize(
       webxr_.get(),
       base::BindOnce(&CardboardRenderLoop::OnCardboardImageTransportReady,
-                     weak_ptr_factory_.GetWeakPtr()));
+                     weak_ptr_factory_.GetWeakPtr()),
+      webgpu_session);
 
   left_eye_ = mojom::XRView::New();
   left_eye_->eye = mojom::XREye::kLeft;
@@ -143,11 +149,11 @@ bool CardboardRenderLoop::InitializeGl(gfx::AcceleratedWidget drawing_widget) {
   DCHECK(task_runner()->BelongsToCurrentThread());
   CHECK(drawing_widget);
 
-  // TODO(https://crbug.com/1170580): While we actually *can* launch Cardboard
+  // TODO(crbug.com/40744597): While we actually *can* launch Cardboard
   // with ANGLE support; if we do so, once we try to launch ARCore (which
   // disables it), we end up hitting a crash. We should investigate if this can
   // be resolved to use ANGLE with Cardboard.
-  gl::init::DisableANGLE();
+  gl::DisableANGLE();
 
   gl::GLDisplay* display = nullptr;
   if (gl::GetGLImplementation() == gl::kGLImplementationNone) {
@@ -233,20 +239,9 @@ void CardboardRenderLoop::OnCardboardImageTransportReady(bool success) {
       device::mojom::XRPresentationTransportOptions::New();
   transport_options->wait_for_gpu_fence = true;
 
-  if (CardboardImageTransport::UseSharedBuffer()) {
-    DVLOG(2) << __func__
-             << ": UseSharedBuffer()=true, DRAW_INTO_TEXTURE_MAILBOX";
-    transport_options->transport_method =
-        device::mojom::XRPresentationTransportMethod::DRAW_INTO_TEXTURE_MAILBOX;
-  } else {
-    DVLOG(2) << __func__
-             << ": UseSharedBuffer()=false, SUBMIT_AS_MAILBOX_HOLDER";
-    transport_options->transport_method =
-        device::mojom::XRPresentationTransportMethod::SUBMIT_AS_MAILBOX_HOLDER;
-    transport_options->wait_for_transfer_notification = true;
-    cardboard_image_transport_->SetFrameAvailableCallback(base::BindRepeating(
-        &CardboardRenderLoop::RenderFrame, weak_ptr_factory_.GetWeakPtr()));
-  }
+  DVLOG(2) << __func__ << ": UseSharedBuffer()=true, DRAW_INTO_TEXTURE_MAILBOX";
+  transport_options->transport_method =
+      device::mojom::XRPresentationTransportMethod::DRAW_INTO_TEXTURE_MAILBOX;
 
   mojom::XRRuntimeSessionResultPtr result =
       device::mojom::XRRuntimeSessionResult::New();
@@ -270,7 +265,7 @@ void CardboardRenderLoop::OnCardboardImageTransportReady(bool success) {
   session->device_config = device::mojom::XRSessionDeviceConfig::New();
   auto* config = session->device_config.get();
 
-  // TODO(https://crbug.com/1429098): Determine if we should support this.
+  // TODO(crbug.com/40900872): Determine if we should support this.
   config->supports_viewport_scaling = false;
 
   config->default_framebuffer_scale = kRecommendedResolutionScale;
@@ -351,12 +346,13 @@ void CardboardRenderLoop::GetFrameData(
   xr_frame->bounds_left = left_bounds_;
   xr_frame->bounds_right = right_bounds_;
 
-  if (CardboardImageTransport::UseSharedBuffer()) {
-    // We aren't modifying the texture that we give to the page, so we just pass
-    // in identity for the uv_transform.
-    frame_data->buffer_holder = cardboard_image_transport_->TransferFrame(
-        webxr_.get(), texture_size_, gfx::Transform());
-  }
+  // We aren't modifying the texture that we give to the page, so we just pass
+  // in identity for the uv_transform.
+  WebXrSharedBuffer* shared_buffer = cardboard_image_transport_->TransferFrame(
+      webxr_.get(), texture_size_, gfx::Transform());
+  CHECK(shared_buffer);
+  frame_data->buffer_shared_image = shared_buffer->shared_image->Export();
+  frame_data->buffer_sync_token = shared_buffer->sync_token;
 
   // Get the head pose
   int64_t timestamp_ns = GetBootTimeNano() + kPredictionTimeWithoutVsyncNanos;
@@ -392,7 +388,7 @@ void CardboardRenderLoop::GetFrameData(
 
   frame_data->time_delta = now - base::TimeTicks();
 
-  // TODO(https://crbug.com/1429098): Calculating
+  // TODO(crbug.com/40900872): Calculating
   // frame_data->rendering_time_ratio may be necessary for viewport scaling.
   std::move(callback).Run(std::move(frame_data));
 }
@@ -453,39 +449,7 @@ void CardboardRenderLoop::SubmitFrameMissing(int16_t frame_index,
 void CardboardRenderLoop::SubmitFrame(int16_t frame_index,
                                       const gpu::MailboxHolder& mailbox,
                                       base::TimeDelta time_waited) {
-  TRACE_EVENT1("gpu", __func__, "frame", frame_index);
-  DVLOG(2) << __func__ << ": frame=" << frame_index;
-  CHECK(!CardboardImageTransport::UseSharedBuffer());
-
-  if (!IsSubmitFrameExpected(frame_index)) {
-    return;
-  }
-
-  webxr_->ProcessOrDefer(
-      base::BindOnce(&CardboardRenderLoop::ProcessFrameFromMailbox,
-                     weak_ptr_factory_.GetWeakPtr(), frame_index, mailbox));
-}
-
-void CardboardRenderLoop::ProcessFrameFromMailbox(
-    int16_t frame_index,
-    const gpu::MailboxHolder& mailbox) {
-  TRACE_EVENT1("gpu", __func__, "frame", frame_index);
-  DVLOG(2) << __func__ << ": frame=" << frame_index;
-  CHECK(webxr_->HaveProcessingFrame());
-  CHECK(!CardboardImageTransport::UseSharedBuffer());
-
-  // We aren't modifying the texture that we've received from the page, so we
-  // just pass in identity.
-  cardboard_image_transport_->CopyMailboxToSurfaceAndSwap(
-      texture_size_, mailbox, gfx::Transform());
-
-  // Notify the client that we're done with the mailbox so that the underlying
-  // image is eligible for destruction.
-  submit_client_->OnSubmitFrameTransferred(true);
-
-  // Now wait for cardboard_image_transport_ to call RenderFrame indicating that
-  // the image drawn onto the Surface is ready for consumption from the
-  // SurfaceTexture.
+  NOTREACHED();
 }
 
 void CardboardRenderLoop::SubmitFrameDrawnIntoTexture(
@@ -494,7 +458,6 @@ void CardboardRenderLoop::SubmitFrameDrawnIntoTexture(
     base::TimeDelta time_waited) {
   TRACE_EVENT1("gpu", __func__, "frame", frame_index);
   DVLOG(2) << __func__ << ": frame=" << frame_index;
-  CHECK(CardboardImageTransport::UseSharedBuffer());
 
   if (!IsSubmitFrameExpected(frame_index)) {
     return;
@@ -673,7 +636,7 @@ void CardboardRenderLoop::UpdateLayerBounds(int16_t frame_index,
   left_bounds_ = left_bounds;
   right_bounds_ = right_bounds;
 
-  // TODO(https://crbug.com/1429105): This was lifted from ArCoreGl which does
+  // TODO(crbug.com/40900879): This was lifted from ArCoreGl which does
   // a very similar thing, but both cases actually use this texture_size_ to
   // render with and there isn't a corresponding item on the
   // WebXrPresentationState. Replacing the assignment below with a CHECK did not

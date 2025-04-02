@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include <limits>
+#include <optional>
 #include <type_traits>
 #include <vector>
 
@@ -147,7 +148,7 @@ bool MatchScaledIndex(InstructionSelectorT<TurboshaftAdapter>* selector,
   return false;
 }
 
-base::Optional<ScaledIndexMatch<TurboshaftAdapter>> TryMatchScaledIndex(
+std::optional<ScaledIndexMatch<TurboshaftAdapter>> TryMatchScaledIndex(
     InstructionSelectorT<TurboshaftAdapter>* selector, turboshaft::OpIndex node,
     bool allow_power_of_two_plus_one) {
   ScaledIndexMatch<TurboshaftAdapter> match;
@@ -157,11 +158,11 @@ base::Optional<ScaledIndexMatch<TurboshaftAdapter>> TryMatchScaledIndex(
     match.base = plus_one ? match.index : turboshaft::OpIndex{};
     return match;
   }
-  return base::nullopt;
+  return std::nullopt;
 }
 
 // Copied verbatim from x64 (just renamed).
-base::Optional<BaseWithScaledIndexAndDisplacementMatch<TurboshaftAdapter>>
+std::optional<BaseWithScaledIndexAndDisplacementMatch<TurboshaftAdapter>>
 TryMatchBaseWithScaledIndexAndDisplacementForWordBinop(
     InstructionSelectorT<TurboshaftAdapter>* selector, turboshaft::OpIndex left,
     turboshaft::OpIndex right) {
@@ -189,7 +190,7 @@ TryMatchBaseWithScaledIndexAndDisplacementForWordBinop(
           OwnedByAddressingOperand(right)) {
         if (!selector->MatchIntegralWord32Constant(right_binop->right(),
                                                    &result.displacement)) {
-          return base::nullopt;
+          return std::nullopt;
         }
         result.base = right_binop->left();
         result.displacement_mode = kNegativeDisplacement;
@@ -272,7 +273,7 @@ TryMatchBaseWithScaledIndexAndDisplacementForWordBinop(
 }
 
 // Copied verbatim from x64 (just renamed).
-base::Optional<BaseWithScaledIndexAndDisplacementMatch<TurboshaftAdapter>>
+std::optional<BaseWithScaledIndexAndDisplacementMatch<TurboshaftAdapter>>
 TryMatchBaseWithScaledIndexAndDisplacement(
     InstructionSelectorT<TurboshaftAdapter>* selector,
     turboshaft::OpIndex node) {
@@ -335,7 +336,7 @@ TryMatchBaseWithScaledIndexAndDisplacement(
     return result;
 #endif  // V8_ENABLE_WEBASSEMBLY
   } else {
-    return base::nullopt;
+    return std::nullopt;
   }
 
   const WordBinopOp& binop = op.Cast<WordBinopOp>();
@@ -399,9 +400,8 @@ class IA32OperandGeneratorT final : public OperandGeneratorT<Adapter> {
         constant.is_relocatable_int64()) {
       return true;
     }
-    if (constant.is_number()) {
-      const double value = constant.number_value();
-      return base::bit_cast<int64_t>(value) == 0;
+    if (constant.is_number_zero()) {
+      return true;
     }
     // If we want to support HeapConstant nodes here, we must find a way
     // to check that they're not in new-space without dereferencing the
@@ -413,8 +413,8 @@ class IA32OperandGeneratorT final : public OperandGeneratorT<Adapter> {
     DCHECK(CanBeImmediate(node));
     auto constant = this->constant_view(node);
     if (constant.is_int32()) return constant.int32_value();
-    DCHECK(constant.is_number());
-    return static_cast<int32_t>(constant.number_value());
+    DCHECK(constant.is_number_zero());
+    return 0;
   }
 
   bool ValueFitsIntoImmediate(int64_t value) const {
@@ -637,9 +637,12 @@ ArchOpcode GetLoadOpcode(LoadRepresentation load_rep) {
     case MachineRepresentation::kSimd128:
       opcode = kIA32Movdqu;
       break;
+    case MachineRepresentation::kFloat16:
+      UNIMPLEMENTED();
     case MachineRepresentation::kSimd256:            // Fall through.
     case MachineRepresentation::kCompressedPointer:  // Fall through.
     case MachineRepresentation::kCompressed:         // Fall through.
+    case MachineRepresentation::kProtectedPointer:   // Fall through.
     case MachineRepresentation::kIndirectPointer:    // Fall through.
     case MachineRepresentation::kSandboxedPointer:   // Fall through.
     case MachineRepresentation::kWord64:             // Fall through.
@@ -951,7 +954,7 @@ void InstructionSelectorT<Adapter>::VisitLoadLane(node_t node) {
     // IA32 supports unaligned loads.
     DCHECK_NE(params.kind, MemoryAccessKind::kUnaligned);
     // Trap handler is not supported on IA32.
-    DCHECK_NE(params.kind, MemoryAccessKind::kProtected);
+    DCHECK_NE(params.kind, MemoryAccessKind::kProtectedByTrapHandler);
   }
 
   IA32OperandGeneratorT<Adapter> g(this);
@@ -1076,7 +1079,7 @@ void InstructionSelectorT<TurbofanAdapter>::VisitLoadTransform(Node* node) {
   // IA32 supports unaligned loads.
   DCHECK_NE(params.kind, MemoryAccessKind::kUnaligned);
   // Trap handler is not supported on IA32.
-  DCHECK_NE(params.kind, MemoryAccessKind::kProtected);
+  DCHECK_NE(params.kind, MemoryAccessKind::kProtectedByTrapHandler);
 
   VisitLoad(node, node, opcode);
 }
@@ -1129,9 +1132,12 @@ ArchOpcode GetStoreOpcode(MachineRepresentation rep) {
       return kIA32Movl;
     case MachineRepresentation::kSimd128:
       return kIA32Movdqu;
+    case MachineRepresentation::kFloat16:
+      UNIMPLEMENTED();
     case MachineRepresentation::kSimd256:            // Fall through.
     case MachineRepresentation::kCompressedPointer:  // Fall through.
     case MachineRepresentation::kCompressed:         // Fall through.
+    case MachineRepresentation::kProtectedPointer:   // Fall through.
     case MachineRepresentation::kIndirectPointer:    // Fall through.
     case MachineRepresentation::kSandboxedPointer:   // Fall through.
     case MachineRepresentation::kWord64:             // Fall through.
@@ -1161,7 +1167,7 @@ template <typename Adapter>
 void VisitAtomicExchange(InstructionSelectorT<Adapter>* selector,
                          typename Adapter::node_t node, ArchOpcode opcode,
                          MachineRepresentation rep) {
-  using node_t = Adapter::node_t;
+  using node_t = typename Adapter::node_t;
   IA32OperandGeneratorT<Adapter> g(selector);
   node_t base = selector->input_at(node, 0);
   node_t index = selector->input_at(node, 1);
@@ -1195,7 +1201,7 @@ void VisitStoreCommon(InstructionSelectorT<Adapter>* selector,
   node_t value = store.value();
   int32_t displacement = store.displacement();
   uint8_t element_size_log2 = store.element_size_log2();
-  base::Optional<AtomicMemoryOrder> atomic_order = store.memory_order();
+  std::optional<AtomicMemoryOrder> atomic_order = store.memory_order();
   StoreRepresentation store_rep = store.stored_rep();
 
   WriteBarrierKind write_barrier_kind = store_rep.write_barrier_kind();
@@ -1732,7 +1738,7 @@ template <typename Adapter>
 void VisitWord32PairShift(InstructionSelectorT<Adapter>* selector,
                           InstructionCode opcode,
                           typename Adapter::node_t node) {
-  using node_t = Adapter::node_t;
+  using node_t = typename Adapter::node_t;
   IA32OperandGeneratorT<Adapter> g(selector);
 
   node_t shift = selector->input_at(node, 2);
@@ -1805,7 +1811,6 @@ void InstructionSelectorT<Adapter>::VisitWord32Ror(node_t node) {
   V(Word32Popcnt, kIA32Popcnt)                               \
   V(SignExtendWord8ToInt32, kIA32Movsxbl)                    \
   V(SignExtendWord16ToInt32, kIA32Movsxwl)                   \
-  IF_WASM(V, F64x2Sqrt, kIA32F64x2Sqrt)
 
 #define RO_WITH_TEMP_OP_T_LIST(V) V(ChangeUint32ToFloat64, kIA32Uint32ToFloat64)
 
@@ -1835,25 +1840,18 @@ void InstructionSelectorT<Adapter>::VisitWord32Ror(node_t node) {
   IF_WASM(V, F64x2Floor, kIA32F64x2Round | MiscField::encode(kRoundDown))      \
   IF_WASM(V, F64x2Trunc, kIA32F64x2Round | MiscField::encode(kRoundToZero))    \
   IF_WASM(V, F64x2NearestInt,                                                  \
-          kIA32F64x2Round | MiscField::encode(kRoundToNearest))
+          kIA32F64x2Round | MiscField::encode(kRoundToNearest))                \
+  IF_WASM(V, F64x2Sqrt, kIA32F64x2Sqrt)
 
-#define RRO_FLOAT_OP_T_LIST(V)        \
-  V(Float32Add, kFloat32Add)          \
-  V(Float64Add, kFloat64Add)          \
-  V(Float32Sub, kFloat32Sub)          \
-  V(Float64Sub, kFloat64Sub)          \
-  V(Float32Mul, kFloat32Mul)          \
-  V(Float64Mul, kFloat64Mul)          \
-  V(Float32Div, kFloat32Div)          \
-  V(Float64Div, kFloat64Div)          \
-  IF_WASM(V, F64x2Add, kIA32F64x2Add) \
-  IF_WASM(V, F64x2Sub, kIA32F64x2Sub) \
-  IF_WASM(V, F64x2Mul, kIA32F64x2Mul) \
-  IF_WASM(V, F64x2Div, kIA32F64x2Div) \
-  IF_WASM(V, F64x2Eq, kIA32F64x2Eq)   \
-  IF_WASM(V, F64x2Ne, kIA32F64x2Ne)   \
-  IF_WASM(V, F64x2Lt, kIA32F64x2Lt)   \
-  IF_WASM(V, F64x2Le, kIA32F64x2Le)
+#define RRO_FLOAT_OP_T_LIST(V) \
+  V(Float32Add, kFloat32Add)   \
+  V(Float64Add, kFloat64Add)   \
+  V(Float32Sub, kFloat32Sub)   \
+  V(Float64Sub, kFloat64Sub)   \
+  V(Float32Mul, kFloat32Mul)   \
+  V(Float64Mul, kFloat64Mul)   \
+  V(Float32Div, kFloat32Div)   \
+  V(Float64Div, kFloat64Div)
 
 #define FLOAT_UNOP_T_LIST(V)        \
   V(Float32Abs, kFloat32Abs)        \
@@ -1921,6 +1919,18 @@ FLOAT_UNOP_T_LIST(FLOAT_UNOP_VISITOR)
 #undef FLOAT_UNOP_T_LIST
 
 template <typename Adapter>
+void InstructionSelectorT<Adapter>::VisitTruncateFloat64ToFloat16RawBits(
+    node_t node) {
+  UNIMPLEMENTED();
+}
+
+template <typename Adapter>
+void InstructionSelectorT<Adapter>::VisitChangeFloat16RawBitsToFloat64(
+    node_t node) {
+  UNIMPLEMENTED();
+}
+
+template <typename Adapter>
 void InstructionSelectorT<Adapter>::VisitWord32ReverseBits(node_t node) {
   UNREACHABLE();
 }
@@ -1951,7 +1961,7 @@ void InstructionSelectorT<TurboshaftAdapter>::VisitInt32Add(node_t node) {
   turboshaft::OpIndex left = add.left();
   turboshaft::OpIndex right = add.right();
 
-  base::Optional<BaseWithScaledIndexAndDisplacementMatch<TurboshaftAdapter>> m =
+  std::optional<BaseWithScaledIndexAndDisplacementMatch<TurboshaftAdapter>> m =
       TryMatchBaseWithScaledIndexAndDisplacementForWordBinop(this, left, right);
   if (m.has_value()) {
     if (g.ValueFitsIntoImmediate(m->displacement)) {
@@ -2171,7 +2181,6 @@ void InstructionSelectorT<Adapter>::EmitPrepareArguments(
   IA32OperandGeneratorT<Adapter> g(this);
 
   {  // Temporary scope to minimize indentation change churn below.
-
     // Prepare for C function call.
     if (call_descriptor->IsCFunctionCall()) {
       InstructionOperand temps[] = {g.TempRegister()};
@@ -2261,43 +2270,6 @@ void InstructionSelectorT<Adapter>::EmitPrepareResults(
 template <typename Adapter>
 bool InstructionSelectorT<Adapter>::IsTailCallAddressImmediate() {
   return true;
-}
-
-template <>
-Node* InstructionSelectorT<TurbofanAdapter>::FindProjection(
-    Node* node, size_t projection_index) {
-  return NodeProperties::FindProjection(node, projection_index);
-}
-
-template <>
-TurboshaftAdapter::node_t
-InstructionSelectorT<TurboshaftAdapter>::FindProjection(
-    node_t node, size_t projection_index) {
-  using namespace turboshaft;  // NOLINT(build/namespaces)
-  const turboshaft::Graph* graph = this->turboshaft_graph();
-  // Projections are always emitted right after the operation.
-  for (OpIndex next = graph->NextIndex(node); next.valid();
-       next = graph->NextIndex(next)) {
-    const ProjectionOp* projection = graph->Get(next).TryCast<ProjectionOp>();
-    if (projection == nullptr) break;
-    if (projection->index == projection_index) return next;
-  }
-
-  // If there is no Projection with index {projection_index} following the
-  // operation, then there shouldn't be any such Projection in the graph. We
-  // verify this in Debug mode.
-#ifdef DEBUG
-  for (OpIndex use : turboshaft_uses(node)) {
-    if (const ProjectionOp* projection =
-            this->Get(use).TryCast<ProjectionOp>()) {
-      DCHECK_EQ(projection->input(), node);
-      if (projection->index == projection_index) {
-        UNREACHABLE();
-      }
-    }
-  }
-#endif  // DEBUG
-  return OpIndex::Invalid();
 }
 
 namespace {
@@ -2507,7 +2479,7 @@ template <typename Adapter>
 void VisitAtomicBinOp(InstructionSelectorT<Adapter>* selector,
                       typename Adapter::node_t node, ArchOpcode opcode,
                       MachineRepresentation rep) {
-  using node_t = Adapter::node_t;
+  using node_t = typename Adapter::node_t;
   AddressingMode addressing_mode;
   IA32OperandGeneratorT<Adapter> g(selector);
   node_t base = selector->input_at(node, 0);
@@ -2528,7 +2500,7 @@ void VisitAtomicBinOp(InstructionSelectorT<Adapter>* selector,
 template <typename Adapter>
 void VisitPairAtomicBinOp(InstructionSelectorT<Adapter>* selector,
                           typename Adapter::node_t node, ArchOpcode opcode) {
-  using node_t = Adapter::node_t;
+  using node_t = typename Adapter::node_t;
   IA32OperandGeneratorT<Adapter> g(selector);
   node_t base = selector->input_at(node, 0);
   node_t index = selector->input_at(node, 1);
@@ -2573,14 +2545,8 @@ void InstructionSelectorT<TurboshaftAdapter>::VisitWordCompareZero(
     node_t user, node_t value, FlagsContinuation* cont) {
   using namespace turboshaft;  // NOLINT(build/namespaces)
   // Try to combine with comparisons against 0 by simply inverting the branch.
-  while (const ComparisonOp* equal = TryCast<Opmask::kWord32Equal>(value)) {
-    if (!CanCover(user, value)) break;
-    if (!MatchIntegralZero(equal->right())) break;
+  ConsumeEqualZero(&user, &value, cont);
 
-    user = value;
-    value = equal->left();
-    cont->Negate();
-  }
   if (CanCover(user, value)) {
     const Operation& value_op = Get(value);
     if (const ComparisonOp* comparison = value_op.TryCast<ComparisonOp>()) {
@@ -2635,22 +2601,20 @@ void InstructionSelectorT<TurboshaftAdapter>::VisitWordCompareZero(
         // of the actual value, or was already defined, which means it is
         // scheduled *AFTER* this branch).
         OpIndex node = projection->input();
-        OpIndex result = FindProjection(node, 0);
-        if (!result.valid() || IsDefined(result)) {
-          if (const OverflowCheckedBinopOp* binop =
-                  this->TryCast<OverflowCheckedBinopOp>(node)) {
-            DCHECK_EQ(binop->rep, WordRepresentation::Word32());
-            cont->OverwriteAndNegateIfEqual(kOverflow);
-            switch (binop->kind) {
-              case OverflowCheckedBinopOp::Kind::kSignedAdd:
-                return VisitBinop(this, node, kIA32Add, cont);
-              case OverflowCheckedBinopOp::Kind::kSignedSub:
-                return VisitBinop(this, node, kIA32Sub, cont);
-              case OverflowCheckedBinopOp::Kind::kSignedMul:
-                return VisitBinop(this, node, kIA32Imul, cont);
-            }
-            UNREACHABLE();
+        if (const OverflowCheckedBinopOp* binop =
+                this->TryCast<OverflowCheckedBinopOp>(node);
+            binop && CanDoBranchIfOverflowFusion(node)) {
+          DCHECK_EQ(binop->rep, WordRepresentation::Word32());
+          cont->OverwriteAndNegateIfEqual(kOverflow);
+          switch (binop->kind) {
+            case OverflowCheckedBinopOp::Kind::kSignedAdd:
+              return VisitBinop(this, node, kIA32Add, cont);
+            case OverflowCheckedBinopOp::Kind::kSignedSub:
+              return VisitBinop(this, node, kIA32Sub, cont);
+            case OverflowCheckedBinopOp::Kind::kSignedMul:
+              return VisitBinop(this, node, kIA32Imul, cont);
           }
+          UNREACHABLE();
         }
       }
     } else if (value_op.Is<StackPointerGreaterThanOp>()) {
@@ -3009,7 +2973,7 @@ MachineType AtomicOpType(InstructionSelectorT<TurboshaftAdapter>* selector,
                          turboshaft::OpIndex node) {
   const turboshaft::AtomicRMWOp& atomic_op =
       selector->Get(node).template Cast<turboshaft::AtomicRMWOp>();
-  return atomic_op.input_rep.ToMachineType();
+  return atomic_op.memory_rep.ToMachineType();
 }
 
 MachineType AtomicOpType(InstructionSelectorT<TurbofanAdapter>* selector,
@@ -3163,7 +3127,7 @@ void InstructionSelectorT<Adapter>::VisitWord32AtomicPairLoad(node_t node) {
     // TODO(ahaas): Introduce an enum for {scale} instead of an integer.
     // {scale = 0} means *1 in the generated code.
     int scale = 0;
-    AddressingMode mode = g.GenerateMemoryOperandInputs(
+    mode = g.GenerateMemoryOperandInputs(
         index, scale, base, this->valid(projection0) ? 0 : 4,
         kPositiveDisplacement, inputs, &input_count);
     InstructionCode code = opcode | AddressingModeField::encode(mode);
@@ -3316,6 +3280,14 @@ void InstructionSelectorT<Adapter>::VisitWord32AtomicPairCompareExchange(
   V(F32x4Le)                               \
   V(F32x4Min)                              \
   V(F32x4Max)                              \
+  IF_WASM(V, F64x2Add)                     \
+  IF_WASM(V, F64x2Sub)                     \
+  IF_WASM(V, F64x2Mul)                     \
+  IF_WASM(V, F64x2Div)                     \
+  IF_WASM(V, F64x2Eq)                      \
+  IF_WASM(V, F64x2Ne)                      \
+  IF_WASM(V, F64x2Lt)                      \
+  IF_WASM(V, F64x2Le)                      \
   V(I64x2Add)                              \
   V(I64x2Sub)                              \
   V(I64x2Eq)                               \
@@ -3541,9 +3513,9 @@ template <typename Adapter>
 void InstructionSelectorT<Adapter>::VisitI64x2Neg(node_t node) {
   IA32OperandGeneratorT<Adapter> g(this);
   // If AVX unsupported, make sure dst != src to avoid a move.
-  InstructionOperand operand0 = IsSupported(AVX)
-                                    ? g.UseRegister(this->input_at(node, 0))
-                                    : g.UseUnique(this->input_at(node, 0));
+  InstructionOperand operand0 =
+      IsSupported(AVX) ? g.UseRegister(this->input_at(node, 0))
+                       : g.UseUniqueRegister(this->input_at(node, 0));
   Emit(kIA32I64x2Neg, g.DefineAsRegister(node), operand0);
 }
 
@@ -3656,6 +3628,11 @@ SIMD_INT_TYPES(VISIT_SIMD_SPLAT)
 #undef VISIT_SIMD_SPLAT
 
 template <typename Adapter>
+void InstructionSelectorT<Adapter>::VisitF16x8Splat(node_t node) {
+  UNIMPLEMENTED();
+}
+
+template <typename Adapter>
 void InstructionSelectorT<Adapter>::VisitI8x16ExtractLaneU(node_t node) {
   VisitRRISimd(this, node, kIA32Pextrb);
 }
@@ -3678,6 +3655,16 @@ void InstructionSelectorT<Adapter>::VisitI16x8ExtractLaneS(node_t node) {
 template <typename Adapter>
 void InstructionSelectorT<Adapter>::VisitI32x4ExtractLane(node_t node) {
   VisitRRISimd(this, node, kIA32I32x4ExtractLane);
+}
+
+template <typename Adapter>
+void InstructionSelectorT<Adapter>::VisitF16x8ExtractLane(node_t node) {
+  UNIMPLEMENTED();
+}
+
+template <typename Adapter>
+void InstructionSelectorT<Adapter>::VisitF16x8ReplaceLane(node_t node) {
+  UNIMPLEMENTED();
 }
 
 #define SIMD_REPLACE_LANE_TYPE_OP(V) \
@@ -3741,6 +3728,44 @@ SIMD_UNOP_LIST(VISIT_SIMD_UNOP)
 #undef VISIT_SIMD_UNOP
 #undef SIMD_UNOP_LIST
 
+#define UNIMPLEMENTED_SIMD_UNOP_LIST(V) \
+  V(F16x8Abs)                           \
+  V(F16x8Neg)                           \
+  V(F16x8Sqrt)                          \
+  V(F16x8Floor)                         \
+  V(F16x8Ceil)                          \
+  V(F16x8Trunc)                         \
+  V(F16x8NearestInt)
+
+#define SIMD_VISIT_UNIMPL_UNOP(Name)                             \
+  template <typename Adapter>                                    \
+  void InstructionSelectorT<Adapter>::Visit##Name(node_t node) { \
+    UNIMPLEMENTED();                                             \
+  }
+
+UNIMPLEMENTED_SIMD_UNOP_LIST(SIMD_VISIT_UNIMPL_UNOP)
+#undef SIMD_VISIT_UNIMPL_UNOP
+#undef UNIMPLEMENTED_SIMD_UNOP_LIST
+
+#define UNIMPLEMENTED_SIMD_CVTOP_LIST(V) \
+  V(F16x8SConvertI16x8)                  \
+  V(F16x8UConvertI16x8)                  \
+  V(I16x8SConvertF16x8)                  \
+  V(I16x8UConvertF16x8)                  \
+  V(F32x4PromoteLowF16x8)                \
+  V(F16x8DemoteF32x4Zero)                \
+  V(F16x8DemoteF64x2Zero)
+
+#define SIMD_VISIT_UNIMPL_CVTOP(Name)                            \
+  template <typename Adapter>                                    \
+  void InstructionSelectorT<Adapter>::Visit##Name(node_t node) { \
+    UNIMPLEMENTED();                                             \
+  }
+
+UNIMPLEMENTED_SIMD_CVTOP_LIST(SIMD_VISIT_UNIMPL_CVTOP)
+#undef SIMD_VISIT_UNIMPL_CVTOP
+#undef UNIMPLEMENTED_SIMD_CVTOP_LIST
+
 template <typename Adapter>
 void InstructionSelectorT<Adapter>::VisitV128AnyTrue(node_t node) {
   IA32OperandGeneratorT<Adapter> g(this);
@@ -3770,6 +3795,30 @@ SIMD_ALLTRUE_LIST(VISIT_SIMD_ALLTRUE)
 SIMD_BINOP_LIST(VISIT_SIMD_BINOP)
 #undef VISIT_SIMD_BINOP
 #undef SIMD_BINOP_LIST
+
+#define UNIMPLEMENTED_SIMD_BINOP_LIST(V) \
+  V(F16x8Add)                            \
+  V(F16x8Sub)                            \
+  V(F16x8Mul)                            \
+  V(F16x8Div)                            \
+  V(F16x8Min)                            \
+  V(F16x8Max)                            \
+  V(F16x8Pmin)                           \
+  V(F16x8Pmax)                           \
+  V(F16x8Eq)                             \
+  V(F16x8Ne)                             \
+  V(F16x8Lt)                             \
+  V(F16x8Le)
+
+#define SIMD_VISIT_UNIMPL_BINOP(Name)                            \
+  template <typename Adapter>                                    \
+  void InstructionSelectorT<Adapter>::Visit##Name(node_t node) { \
+    UNIMPLEMENTED();                                             \
+  }
+
+UNIMPLEMENTED_SIMD_BINOP_LIST(SIMD_VISIT_UNIMPL_BINOP)
+#undef SIMD_VISIT_UNIMPL_BINOP
+#undef UNIMPLEMENTED_SIMD_BINOP_LIST
 
 #define VISIT_SIMD_BINOP_UNIFIED_SSE_AVX(Opcode)                   \
   template <typename Adapter>                                      \
@@ -4420,7 +4469,8 @@ void InstructionSelectorT<Adapter>::VisitF64x2PromoteLowF32x4(node_t node) {
 
     if (m.Is(LoadTransformation::kS128Load64Zero) && CanCover(node, input)) {
       // Trap handler is not supported on IA32.
-      DCHECK_NE(m.ResolvedValue().kind, MemoryAccessKind::kProtected);
+      DCHECK_NE(m.ResolvedValue().kind,
+                MemoryAccessKind::kProtectedByTrapHandler);
       // LoadTransforms cannot be eliminated, so they are visited even if
       // unused. Mark it as defined so that we don't visit it.
       MarkAsDefined(input);
@@ -4492,6 +4542,16 @@ void InstructionSelectorT<Adapter>::VisitF32x4Qfma(node_t node) {
 template <typename Adapter>
 void InstructionSelectorT<Adapter>::VisitF32x4Qfms(node_t node) {
   VisitRRRR(this, node, kIA32F32x4Qfms);
+}
+
+template <typename Adapter>
+void InstructionSelectorT<Adapter>::VisitF16x8Qfma(node_t node) {
+  UNIMPLEMENTED();
+}
+
+template <typename Adapter>
+void InstructionSelectorT<Adapter>::VisitF16x8Qfms(node_t node) {
+  UNIMPLEMENTED();
 }
 
 template <typename Adapter>

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "printing/backend/cups_jobs.h"
 
 #include <cups/ipp.h>
@@ -21,7 +26,9 @@
 #include "base/threading/scoped_blocking_call.h"
 #include "base/version.h"
 #include "printing/backend/cups_deleters.h"
+#include "printing/backend/cups_helper.h"
 #include "printing/backend/cups_ipp_helper.h"
+#include "printing/backend/cups_weak_functions.h"
 #include "printing/printer_status.h"
 
 namespace printing {
@@ -150,10 +157,7 @@ CupsJob::JobState ToJobState(ipp_attribute_t* attr) {
       return CupsJob::STOPPED;
     default:
       NOTREACHED() << "Unidentifed state " << state;
-      break;
   }
-
-  return CupsJob::UNKNOWN;
 }
 
 // Returns the Reason corresponding to the string `reason`.  Returns
@@ -199,7 +203,7 @@ PrinterStatus::PrinterReason::Reason ToReason(std::string_view reason) {
           {kCupsPkiExpired, PReason::kCupsPkiExpired},
       });
 
-  const auto* entry = kLabelToReasonMap.find(reason);
+  const auto entry = kLabelToReasonMap.find(reason);
   return entry != kLabelToReasonMap.end() ? entry->second
                                           : PReason::kUnknownReason;
 }
@@ -233,7 +237,7 @@ PrinterStatus::PrinterReason ToPrinterReason(std::string_view reason) {
 
   size_t last_dash = reason.rfind('-');
   auto severity = PSeverity::kUnknownSeverity;
-  if (last_dash != base::StringPiece::npos) {
+  if (last_dash != std::string_view::npos) {
     // try to parse the last part of the string as the severity.
     severity = ToSeverity(reason.substr(last_dash + 1));
   }
@@ -532,16 +536,18 @@ PrinterQueryResult GetPrinterInfo(const std::string& address,
   http_addrlist_t* addr_list = httpAddrGetList(
       address.c_str(), AF_UNSPEC, base::NumberToString(port).c_str());
   if (!addr_list) {
-    LOG(WARNING) << "Unable to resolve IP address from hostname";
+    LOG(WARNING) << "Unable to resolve IP address from hostname " << address
+                 << ": " << cupsLastErrorString();
     return PrinterQueryResult::kHostnameResolution;
   }
 
-  ScopedHttpPtr http = ScopedHttpPtr(httpConnect2(
+  ScopedHttpPtr http = HttpConnect2(
       address.c_str(), port, addr_list, AF_UNSPEC,
       encrypted ? HTTP_ENCRYPTION_ALWAYS : HTTP_ENCRYPTION_IF_REQUESTED, 0,
-      kHttpConnectTimeoutMs, nullptr));
+      kHttpConnectTimeoutMs, nullptr);
   if (!http) {
-    LOG(WARNING) << "Could not connect to host";
+    LOG(WARNING) << "Could not connect to host " << address << ":" << port
+                 << ": " << cupsLastErrorString();
     return PrinterQueryResult::kUnreachable;
   }
 
@@ -560,7 +566,7 @@ PrinterQueryResult GetPrinterInfo(const std::string& address,
       http.get(), printer_uri, resource, kPrinterInfoAndStatus.size(),
       kPrinterInfoAndStatus.data(), &status);
   if (StatusError(status) || response.get() == nullptr) {
-    LOG(WARNING) << "Get attributes failure: "
+    LOG(WARNING) << "Failed to get attributes from " << printer_uri << ": "
                  << base::StringPrintf("0x%04x", status);
     return PrinterQueryResult::kUnknownFailure;
   }
@@ -583,8 +589,11 @@ bool GetPrinterStatus(http_t* http,
       GetPrinterAttributes(http, printer_uri, "/", kPrinterAttributes.size(),
                            kPrinterAttributes.data(), &status);
 
-  if (status != IPP_STATUS_OK)
+  if (status != IPP_STATUS_OK) {
+    LOG(WARNING) << "Failed to get printer status from " << printer_uri << ": "
+                 << cupsLastErrorString();
     return false;
+  }
 
   ParsePrinterStatus(response.get(), printer_status);
 
@@ -618,7 +627,8 @@ bool GetCupsJobs(http_t* http,
                nullptr, which == COMPLETED ? kCompleted : kNotCompleted);
 
   if (ippValidateAttributes(request.get()) != 1) {
-    LOG(WARNING) << "Could not validate ipp request: " << cupsLastErrorString();
+    LOG(WARNING) << "Could not validate Get-Jobs ipp request: "
+                 << cupsLastErrorString();
     return false;
   }
 

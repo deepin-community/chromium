@@ -4,6 +4,8 @@
 
 #include "services/network/ssl_config_service_mojo.h"
 
+#include <array>
+
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/memory/raw_ptr.h"
@@ -333,13 +335,14 @@ TEST_F(NetworkServiceSSLConfigServiceTest, SymantecEnforcementDisabled) {
 }
 
 TEST_F(NetworkServiceSSLConfigServiceTest, SSLVersion) {
-  const struct {
+  struct VersionTable {
     mojom::SSLVersion mojo_ssl_version;
     int net_ssl_version;
-  } kVersionTable[] = {
+  };
+  const auto kVersionTable = std::to_array<VersionTable>({
       {mojom::SSLVersion::kTLS12, net::SSL_PROTOCOL_VERSION_TLS1_2},
       {mojom::SSLVersion::kTLS13, net::SSL_PROTOCOL_VERSION_TLS1_3},
-  };
+  });
 
   for (size_t min_index = 0; min_index < std::size(kVersionTable);
        ++min_index) {

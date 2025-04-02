@@ -1,6 +1,16 @@
 // Copyright 2017 The Chromium Authors
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "simple_path_builder_delegate.h"
 
@@ -19,7 +29,7 @@
 #include "signature_algorithm.h"
 #include "verify_signed_data.h"
 
-namespace bssl {
+BSSL_NAMESPACE_BEGIN
 
 DEFINE_CERT_ERROR_ID(SimplePathBuilderDelegate::kRsaModulusTooSmall,
                      "RSA modulus too small");
@@ -97,7 +107,7 @@ bool SimplePathBuilderDelegate::IsPublicKeyAcceptable(EVP_PKEY *public_key,
     unsigned int modulus_length_bits = RSA_bits(rsa);
 
     if (modulus_length_bits < min_rsa_modulus_length_bits_) {
-      errors->AddError(
+      errors->AddWarning(
           kRsaModulusTooSmall,
           CreateCertErrorParams2SizeT("actual", modulus_length_bits, "minimum",
                                       min_rsa_modulus_length_bits_));
@@ -116,7 +126,7 @@ bool SimplePathBuilderDelegate::IsPublicKeyAcceptable(EVP_PKEY *public_key,
     int curve_nid = EC_GROUP_get_curve_name(EC_KEY_get0_group(ec));
 
     if (!IsAcceptableCurveForEcdsa(curve_nid)) {
-      errors->AddError(kUnacceptableCurveForEcdsa);
+      errors->AddWarning(kUnacceptableCurveForEcdsa);
       return false;
     }
 
@@ -127,4 +137,4 @@ bool SimplePathBuilderDelegate::IsPublicKeyAcceptable(EVP_PKEY *public_key,
   return false;
 }
 
-}  // namespace bssl
+BSSL_NAMESPACE_END

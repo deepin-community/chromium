@@ -265,7 +265,6 @@ void CryptAuthDeviceSyncerImpl::AttemptNextStep() {
     }
     case State::kFinished:
       NOTREACHED();
-      return;
   }
 }
 
@@ -497,7 +496,7 @@ void CryptAuthDeviceSyncerImpl::ProcessEncryptedGroupPrivateKey() {
   }
 
   if (encrypted_group_private_key_->encrypted_private_key().empty()) {
-    // TODO(https://crbug.com/936273): Log metrics for empty private key.
+    // TODO(crbug.com/41443836): Log metrics for empty private key.
     PA_LOG(ERROR) << "Group private key from CryptAuth unexpectedly empty.";
     did_non_fatal_error_occur_ = true;
     group_private_key_status_ =

@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -190,11 +191,11 @@ void OnMetricsReportingStateChanged(bool* new_state_ptr,
   std::move(run_loop_closure).Run();
 }
 
-bool HistogramExists(base::StringPiece name) {
+bool HistogramExists(std::string_view name) {
   return base::StatisticsRecorder::FindHistogram(name) != nullptr;
 }
 
-base::HistogramBase::Count GetHistogramDeltaTotalCount(base::StringPiece name) {
+base::HistogramBase::Count32 GetHistogramDeltaTotalCount(std::string_view name) {
   return base::StatisticsRecorder::FindHistogram(name)
       ->SnapshotDelta()
       ->TotalCount();
@@ -212,7 +213,8 @@ IN_PROC_BROWSER_TEST_P(MetricsReportingStateTestParameterized,
   ChangeMetricsReportingStateWithReply(
       is_metrics_reporting_enabled_final_value(),
       base::BindOnce(&OnMetricsReportingStateChanged, &value_after_change,
-                     run_loop.QuitClosure()));
+                     run_loop.QuitClosure()),
+      ChangeMetricsReportingStateCalledFrom::kUiFirstRun);
   run_loop.Run();
 
   // Verify that the reporting state has been duly updated.
@@ -309,9 +311,9 @@ INSTANTIATE_TEST_SUITE_P(
     MetricsReportingStateTests,
     MetricsReportingStateClearDataTest,
     testing::ValuesIn<ChangeMetricsReportingStateCalledFrom>(
-        {ChangeMetricsReportingStateCalledFrom::kUnknown,
-         ChangeMetricsReportingStateCalledFrom::kUiSettings,
+        {ChangeMetricsReportingStateCalledFrom::kUiSettings,
          ChangeMetricsReportingStateCalledFrom::kUiFirstRun,
+         ChangeMetricsReportingStateCalledFrom::kSessionCrashedDialog,
          ChangeMetricsReportingStateCalledFrom::kCrosMetricsSettingsChange}));
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)

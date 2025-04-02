@@ -41,30 +41,25 @@
 #include "dawn/native/d3d12/ResourceHeapAllocationD3D12.h"
 #include "dawn/native/d3d12/d3d12_platform.h"
 
-namespace dawn::native::d3d12 {
+namespace dawn::native {
+namespace d3d {
+class KeyedMutex;
+}  // namespace d3d
 
+namespace d3d12 {
 class SharedTextureMemory;
 class CommandRecordingContext;
 class Device;
-
-MaybeError ValidateTextureCanBeWrapped(ID3D12Resource* d3d12Resource,
-                                       const UnpackedPtr<TextureDescriptor>& descriptor);
-MaybeError ValidateVideoTextureCanBeShared(Device* device, DXGI_FORMAT textureFormat);
 
 class Texture final : public d3d::Texture {
   public:
     static ResultOrError<Ref<Texture>> Create(Device* device,
                                               const UnpackedPtr<TextureDescriptor>& descriptor);
-    static ResultOrError<Ref<Texture>> CreateExternalImage(
+    static ResultOrError<Ref<Texture>> CreateForSwapChain(
         Device* device,
         const UnpackedPtr<TextureDescriptor>& descriptor,
-        ComPtr<IUnknown> d3dTexture,
-        std::vector<FenceAndSignalValue> waitFences,
-        bool isSwapChainTexture,
-        bool isInitialized);
-    static ResultOrError<Ref<Texture>> Create(Device* device,
-                                              const UnpackedPtr<TextureDescriptor>& descriptor,
-                                              ComPtr<ID3D12Resource> d3d12Texture);
+        ComPtr<ID3D12Resource> d3d12Texture,
+        D3D12_RESOURCE_STATES state);
     static ResultOrError<Ref<Texture>> CreateFromSharedTextureMemory(
         SharedTextureMemory* memory,
         const UnpackedPtr<TextureDescriptor>& descriptor);
@@ -93,9 +88,11 @@ class Texture final : public d3d::Texture {
     MaybeError EnsureSubresourceContentInitialized(CommandRecordingContext* commandContext,
                                                    const SubresourceRange& range);
 
-    MaybeError SynchronizeTextureBeforeUse();
+    MaybeError SynchronizeTextureBeforeUse(CommandRecordingContext* commandContext);
 
     void NotifySwapChainPresentToPIX();
+
+    void SetIsSwapchainTexture(bool isSwapChainTexture);
 
     void TrackUsageAndGetResourceBarrierForPass(CommandRecordingContext* commandContext,
                                                 std::vector<D3D12_RESOURCE_BARRIER>* barrier,
@@ -114,6 +111,8 @@ class Texture final : public d3d::Texture {
     // all subresources are now in the COMMON state.
     void ResetSubresourceStateAndDecayToCommon();
 
+    D3D12_RESOURCE_STATES GetCurrentStateForSwapChain() const;
+
   private:
     using Base = d3d::Texture;
 
@@ -122,9 +121,11 @@ class Texture final : public d3d::Texture {
 
     MaybeError InitializeAsInternalTexture();
     MaybeError InitializeAsExternalTexture(ComPtr<IUnknown> d3dTexture,
+                                           Ref<d3d::KeyedMutex> keyedMutex,
                                            std::vector<FenceAndSignalValue> waitFences,
                                            bool isSwapChainTexture);
-    MaybeError InitializeAsSwapChainTexture(ComPtr<ID3D12Resource> d3d12Texture);
+    MaybeError InitializeAsSwapChainTexture(ComPtr<ID3D12Resource> d3d12Texture,
+                                            D3D12_RESOURCE_STATES state);
 
     void SetLabelHelper(const char* prefix);
 
@@ -161,9 +162,11 @@ class Texture final : public d3d::Texture {
     D3D12_RESOURCE_FLAGS mD3D12ResourceFlags;
     ResourceHeapAllocation mResourceAllocation;
 
-    // TODO(crbug.com/1515640): Remove these once Chromium has migrated to SharedTextureMemory.
+    Ref<d3d::KeyedMutex> mKeyedMutex;
+
+    // TODO(crbug.com/1515640): Remove wait fences once Chromium has migrated to
+    // SharedTextureMemory.
     std::vector<FenceAndSignalValue> mWaitFences;
-    std::optional<ExecutionSerial> mSignalFenceValue;
 
     bool mSwapChainTexture = false;
 
@@ -172,7 +175,8 @@ class Texture final : public d3d::Texture {
 
 class TextureView final : public TextureViewBase {
   public:
-    static Ref<TextureView> Create(TextureBase* texture, const TextureViewDescriptor* descriptor);
+    static Ref<TextureView> Create(TextureBase* texture,
+                                   const UnpackedPtr<TextureViewDescriptor>& descriptor);
 
     DXGI_FORMAT GetD3D12Format() const;
 
@@ -182,10 +186,11 @@ class TextureView final : public TextureViewBase {
     D3D12_UNORDERED_ACCESS_VIEW_DESC GetUAVDescriptor() const;
 
   private:
-    TextureView(TextureBase* texture, const TextureViewDescriptor* descriptor);
+    TextureView(TextureBase* texture, const UnpackedPtr<TextureViewDescriptor>& descriptor);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC mSrvDesc;
 };
-}  // namespace dawn::native::d3d12
+}  // namespace d3d12
+}  // namespace dawn::native
 
 #endif  // SRC_DAWN_NATIVE_D3D12_TEXTURED3D12_H_

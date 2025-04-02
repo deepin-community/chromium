@@ -10,13 +10,14 @@
 
 import '../controls/settings_toggle_button.js';
 
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {castExists} from '../assert_extras.js';
-import {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
+import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 
-import {MetricsConsentBrowserProxy, MetricsConsentBrowserProxyImpl} from './metrics_consent_browser_proxy.js';
+import type {MetricsConsentBrowserProxy} from './metrics_consent_browser_proxy.js';
+import {MetricsConsentBrowserProxyImpl} from './metrics_consent_browser_proxy.js';
 import {getTemplate} from './metrics_consent_toggle_button.html.js';
 
 const SettingsMetricsConsentToggleButtonElementBase =

@@ -79,7 +79,6 @@ class CORE_EXPORT Dictionary final {
         return dictionary_object_;
       default:
         NOTREACHED();
-        return v8::Local<v8::Value>();
     }
   }
 

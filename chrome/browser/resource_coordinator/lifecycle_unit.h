@@ -16,7 +16,6 @@
 #include "chrome/browser/resource_coordinator/decision_details.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom-forward.h"
 #include "content/public/browser/visibility.h"
-#include "services/metrics/public/cpp/ukm_source_id.h"
 
 namespace resource_coordinator {
 
@@ -71,9 +70,13 @@ class LifecycleUnit {
   // title is available.
   virtual std::u16string GetTitle() const = 0;
 
-  // Returns the last time at which the LifecycleUnit was focused, or
+  // Returns the last time ticks at which the LifecycleUnit was focused, or
   // base::TimeTicks::Max() if the LifecycleUnit is currently focused.
-  virtual base::TimeTicks GetLastFocusedTime() const = 0;
+  virtual base::TimeTicks GetLastFocusedTimeTicks() const = 0;
+
+  // Returns the last time at which the LifecycleUnit was focused, or
+  // base::Time::Max() if the LifecycleUnit is currently focused.
+  virtual base::Time GetLastFocusedTime() const = 0;
 
   // Returns the current visibility of this LifecycleUnit.
   virtual content::Visibility GetVisibility() const = 0;
@@ -154,13 +157,10 @@ class LifecycleUnit {
   // Adds/removes an observer to this LifecycleUnit.
   virtual void AddObserver(LifecycleUnitObserver* observer) = 0;
   virtual void RemoveObserver(LifecycleUnitObserver* observer) = 0;
-
-  // Returns the UKM source ID associated with this LifecycleUnit, if it has
-  // one.
-  virtual ukm::SourceId GetUkmSourceId() const = 0;
 };
 
-using LifecycleUnitSet = base::flat_set<LifecycleUnit*>;
+using LifecycleUnitSet =
+    base::flat_set<raw_ptr<LifecycleUnit, CtnExperimental>>;
 using LifecycleUnitVector =
     std::vector<raw_ptr<LifecycleUnit, VectorExperimental>>;
 

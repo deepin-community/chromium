@@ -10,6 +10,7 @@
 #include "base/containers/contains.h"
 #include "base/containers/extend.h"
 #include "base/containers/flat_set.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chrome/browser/web_applications/web_app_icon_generator.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
@@ -33,7 +34,7 @@ base::flat_set<GURL> GetAllIconUrlsForSizeAny(
 
 void PopulateIconUrlsForSizeAnyIfNeeded(
     std::vector<IconUrlWithSize>& icon_vector,
-    base::flat_set<GURL> icon_urls_to_download_if_any,
+    const base::flat_set<GURL>& icon_urls_to_download_if_any,
     SizeSet icon_sizes_found,
     bool is_app_icon = false) {
   std::set<SquareSizePx> sizes_to_generate = web_app::SizesToGenerate();

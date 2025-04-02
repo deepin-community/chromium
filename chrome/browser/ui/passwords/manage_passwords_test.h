@@ -10,7 +10,9 @@
 
 #include "base/metrics/histogram_samples.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "chrome/browser/optimization_guide/mock_optimization_guide_keyed_service.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
+#include "components/affiliations/core/browser/mock_affiliation_service.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/password_manager/core/browser/fake_form_fetcher.h"
@@ -18,6 +20,7 @@
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/browser/stub_password_manager_driver.h"
 #include "components/password_manager/core/common/credential_manager_types.h"
+#include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 class ManagePasswordsUIController;
@@ -45,14 +48,19 @@ class ManagePasswordsTest : public InteractiveBrowserTest {
 
   // InteractiveBrowserTest:
   void SetUpOnMainThread() override;
+  void TearDownOnMainThread() override;
   void SetUpInProcessBrowserTestFixture() override;
 
   // Execute the browser command to open the manage passwords bubble.
   void ExecuteManagePasswordsCommand();
 
   // Put the controller, icon, and bubble into a managing-password state.
-  // TODO(1518786): Make password form url stable without having to override it.
+  // TODO(crbug.com/41491760): Make password form url stable without having to
+  // override it.
   void SetupManagingPasswords(const GURL& password_form_url = GURL());
+
+  // Put the controller, icon, and bubble into password_change state.
+  void SetupPasswordChange();
 
   // Put the controller, icon, and bubble into the confirmation state.
   void SetupAutomaticPassword();
@@ -88,15 +96,24 @@ class ManagePasswordsTest : public InteractiveBrowserTest {
   // Get the UI controller for the current WebContents.
   ManagePasswordsUIController* GetController();
 
- private:
-  std::unique_ptr<password_manager::PasswordFormManager> CreateFormManager();
+ protected:
+  // Creates a form manager using the given password password stores.
+  // If |profile_store| is nullptr, password_manager::StubFormSaver is used for
+  // the profile store. If |account_store| is nullptr, a nullptr
+  // password_manager::FormSaver is used for the account store.
+  std::unique_ptr<password_manager::PasswordFormManager> CreateFormManager(
+      password_manager::PasswordStoreInterface* profile_store = nullptr,
+      password_manager::PasswordStoreInterface* account_store = nullptr);
 
+ private:
   password_manager::PasswordForm password_form_;
   password_manager::PasswordForm insecure_credential_;
   base::HistogramTester histogram_tester_;
   password_manager::StubPasswordManagerClient client_;
   password_manager::StubPasswordManagerDriver driver_;
   password_manager::FakeFormFetcher fetcher_;
+  std::unique_ptr<testing::NiceMock<MockOptimizationGuideKeyedService>>
+      mock_optimization_service_;
 
   base::CallbackListSubscription create_services_subscription_;
 };

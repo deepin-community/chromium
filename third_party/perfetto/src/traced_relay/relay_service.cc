@@ -16,33 +16,181 @@
 
 #include "src/traced_relay/relay_service.h"
 
+#include <functional>
 #include <memory>
 
 #include "perfetto/base/build_config.h"
 #include "perfetto/base/logging.h"
 #include "perfetto/base/task_runner.h"
+#include "perfetto/ext/base/clock_snapshots.h"
 #include "perfetto/ext/base/file_utils.h"
 #include "perfetto/ext/base/hash.h"
 #include "perfetto/ext/base/string_utils.h"
 #include "perfetto/ext/base/unix_socket.h"
 #include "perfetto/ext/base/utils.h"
+#include "perfetto/ext/ipc/client.h"
+#include "perfetto/tracing/core/forward_decls.h"
 #include "protos/perfetto/ipc/wire_protocol.gen.h"
 #include "src/ipc/buffered_frame_deserializer.h"
 #include "src/traced_relay/socket_relay_handler.h"
+#include "src/tracing/ipc/producer/relay_ipc_client.h"
 
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
     PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <sys/utsname.h>
 #include <unistd.h>
+#include <time.h>
+#endif
+
+// Non-QNX include statements
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+    PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX_BUT_NOT_QNX) || \
+    PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+#include <sys/syscall.h>
+#endif
+
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_QNX)
+#include <sys/neutrino.h>
+#include <sys/syspage.h>
 #endif
 
 using ::perfetto::protos::gen::IPCFrame;
 
 namespace perfetto {
+namespace {
+
+std::string GenerateSetPeerIdentityRequest(int32_t pid,
+                                           int32_t uid,
+                                           const std::string& machine_id_hint) {
+  IPCFrame ipc_frame;
+  ipc_frame.set_request_id(0);
+
+  auto* set_peer_identity = ipc_frame.mutable_set_peer_identity();
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) || \
+    PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
+  set_peer_identity->set_pid(pid);
+#else
+  base::ignore_result(pid);
+#endif
+  set_peer_identity->set_uid(uid);
+  set_peer_identity->set_machine_id_hint(machine_id_hint);
+
+  return ipc::BufferedFrameDeserializer::Serialize(ipc_frame);
+}
+
+}  // Anonymous namespace.
+
+RelayClient::~RelayClient() = default;
+RelayClient::RelayClient(const std::string& client_sock_name,
+                         const std::string& machine_id_hint,
+                         base::TaskRunner* task_runner,
+                         OnErrorCallback on_error_callback)
+    : task_runner_(task_runner),
+      on_error_callback_(on_error_callback),
+      client_sock_name_(client_sock_name),
+      machine_id_hint_(machine_id_hint) {
+  Connect();
+}
+
+void RelayClient::Connect() {
+  auto sock_family = base::GetSockFamily(client_sock_name_.c_str());
+  client_sock_ =
+      base::UnixSocket::Connect(client_sock_name_, this, task_runner_,
+                                sock_family, base::SockType::kStream);
+}
+
+void RelayClient::NotifyError() {
+  if (!on_error_callback_)
+    return;
+
+  // Can only notify once.
+  on_error_callback_();
+  on_error_callback_ = nullptr;
+}
+
+void RelayClient::OnConnect(base::UnixSocket* self, bool connected) {
+  if (!connected) {
+    return NotifyError();
+  }
+
+  // The RelayClient needs to send its peer identity to the host.
+  auto req = GenerateSetPeerIdentityRequest(
+      getpid(), static_cast<int32_t>(geteuid()), machine_id_hint_);
+  if (!self->SendStr(req)) {
+    return NotifyError();
+  }
+
+  // Create the IPC client with a connected socket.
+  PERFETTO_DCHECK(self == client_sock_.get());
+  auto sock_fd = client_sock_->ReleaseSocket().ReleaseFd();
+  client_sock_ = nullptr;
+  relay_ipc_client_ = std::make_unique<RelayIPCClient>(
+      ipc::Client::ConnArgs(std::move(sock_fd)),
+      weak_factory_for_ipc_client.GetWeakPtr(), task_runner_);
+}
+
+void RelayClient::OnServiceConnected() {
+  phase_ = Phase::PING;
+  SendSyncClockRequest();
+}
+
+void RelayClient::OnServiceDisconnected() {
+  NotifyError();
+}
+
+void RelayClient::SendSyncClockRequest() {
+  protos::gen::SyncClockRequest request;
+  switch (phase_) {
+    case Phase::CONNECTING:
+      PERFETTO_DFATAL("Should be unreachable.");
+      return;
+    case Phase::PING:
+      request.set_phase(SyncClockRequest::PING);
+      break;
+    case Phase::UPDATE:
+      request.set_phase(SyncClockRequest::UPDATE);
+      break;
+  }
+
+  base::ClockSnapshotVector snapshot_data = base::CaptureClockSnapshots();
+  for (auto& clock : snapshot_data) {
+    auto* clock_proto = request.add_clocks();
+    clock_proto->set_clock_id(clock.clock_id);
+    clock_proto->set_timestamp(clock.timestamp);
+  }
+
+  relay_ipc_client_->SyncClock(request);
+}
+
+void RelayClient::OnSyncClockResponse(const protos::gen::SyncClockResponse&) {
+  static constexpr uint32_t kSyncClockIntervalMs = 30000;  // 30 Sec.
+  switch (phase_) {
+    case Phase::CONNECTING:
+      PERFETTO_DFATAL("Should be unreachable.");
+      break;
+    case Phase::PING:
+      phase_ = Phase::UPDATE;
+      SendSyncClockRequest();
+      break;
+    case Phase::UPDATE:
+      // The client finished one run of clock sync. Schedule for next sync after
+      // 30 sec.
+      clock_synced_with_service_for_testing_ = true;
+      task_runner_->PostDelayedTask(
+          [self = weak_factory_.GetWeakPtr()]() {
+            if (!self)
+              return;
+
+            self->phase_ = Phase::PING;
+            self->SendSyncClockRequest();
+          },
+          kSyncClockIntervalMs);
+      break;
+  }
+}
 
 RelayService::RelayService(base::TaskRunner* task_runner)
     : task_runner_(task_runner), machine_id_hint_(GetMachineIdHint()) {}
@@ -62,6 +210,28 @@ void RelayService::Start(const char* listening_socket_name,
   // Save |client_socket_name| for opening new client connection to remote
   // service when a local producer connects.
   client_socket_name_ = client_socket_name;
+
+  ConnectRelayClient();
+}
+
+void RelayService::Start(base::ScopedSocketHandle server_socket_handle,
+                         const char* client_socket_name) {
+  // Called when the service is started by Android init, where
+  // |server_socket_handle| is a unix socket.
+  listening_socket_ = base::UnixSocket::Listen(
+      std::move(server_socket_handle), this, task_runner_,
+      base::SockFamily::kUnix, base::SockType::kStream);
+  bool producer_socket_listening =
+      listening_socket_ && listening_socket_->is_listening();
+  if (!producer_socket_listening) {
+    PERFETTO_FATAL("Failed to listen to the server socket");
+  }
+
+  // Save |client_socket_name| for opening new client connection to remote
+  // service when a local producer connects.
+  client_socket_name_ = client_socket_name;
+
+  ConnectRelayClient();
 }
 
 void RelayService::OnNewIncomingConnection(
@@ -82,20 +252,15 @@ void RelayService::OnNewIncomingConnection(
   // This code pretends that we received a SetPeerIdentity frame from the
   // connecting producer (while instead we are just forging it). The host traced
   // will only accept only one SetPeerIdentity request pre-queued here.
-  IPCFrame ipc_frame;
-  ipc_frame.set_request_id(0);
-  auto* set_peer_identity = ipc_frame.mutable_set_peer_identity();
-#if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) || \
+  int32_t pid = base::kInvalidPid;
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX_BUT_NOT_QNX) || \
     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
-  set_peer_identity->set_pid(server_conn->peer_pid_linux());
+  pid = server_conn->peer_pid_linux();
 #endif
-  set_peer_identity->set_uid(
-      static_cast<int32_t>(server_conn->peer_uid_posix()));
-
-  set_peer_identity->set_machine_id_hint(machine_id_hint_);
-
+  auto req = GenerateSetPeerIdentityRequest(
+      pid, static_cast<int32_t>(server_conn->peer_uid_posix()),
+      machine_id_hint_);
   // Buffer the SetPeerIdentity request.
-  auto req = ipc::BufferedFrameDeserializer::Serialize(ipc_frame);
   SocketWithBuffer server, client;
   PERFETTO_CHECK(server.available_bytes() >= req.size());
   memcpy(server.buffer(), req.data(), req.size());
@@ -140,9 +305,29 @@ void RelayService::OnDataAvailable(base::UnixSocket*) {
   PERFETTO_DFATAL("Should be unreachable.");
 }
 
+void RelayService::ReconnectRelayClient() {
+  static constexpr uint32_t kMaxRelayClientRetryDelayMs = 30000;
+  task_runner_->PostDelayedTask([this]() { this->ConnectRelayClient(); },
+                                relay_client_retry_delay_ms_);
+  relay_client_retry_delay_ms_ =
+      relay_client_->ipc_client_connected()
+          ? kDefaultRelayClientRetryDelayMs
+          : std::min(kMaxRelayClientRetryDelayMs,
+                     relay_client_retry_delay_ms_ * 2);
+}
+
+void RelayService::ConnectRelayClient() {
+  if (relay_client_disabled_for_testing_)
+    return;
+
+  relay_client_ = std::make_unique<RelayClient>(
+      client_socket_name_, machine_id_hint_, task_runner_,
+      [this]() { this->ReconnectRelayClient(); });
+}
+
 std::string RelayService::GetMachineIdHint(
     bool use_pseudo_boot_id_for_testing) {
-  // Gets kernel boot ID if possible.
+  // Gets kernel boot ID if available.
   std::string boot_id;
   if (!use_pseudo_boot_id_for_testing &&
       base::ReadFile("/proc/sys/kernel/random/boot_id", &boot_id)) {
@@ -154,19 +339,45 @@ std::string RelayService::GetMachineIdHint(
     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
   auto get_pseudo_boot_id = []() -> std::string {
     base::Hasher hasher;
-    const char* dev_path = "/dev";
     // Generate a pseudo-unique identifier for the current machine.
     // Source 1: system boot timestamp from the creation time of /dev inode.
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
     // Mac or iOS, just use stat(2).
+    const char* dev_path = "/dev";
     struct stat stat_buf {};
     int rc = PERFETTO_EINTR(stat(dev_path, &stat_buf));
     if (rc == -1)
       return std::string();
     hasher.Update(reinterpret_cast<const char*>(&stat_buf.st_birthtimespec),
                   sizeof(stat_buf.st_birthtimespec));
+#elif PERFETTO_BUILDFLAG(PERFETTO_OS_QNX)
+    // QNX doesn't support the file birthtime flag in the stat structure.
+    // In order to still calculate the system boot time in epoch seconds
+    // we get the current epoch seconds and substract the amount of time
+    // since boot. This is a more generic approach that could be used in
+    // general for POSIX operating systems (even though is not as accurate).
+    timespec system_boottime;
+    uint64_t timesinceboot_secs;
+
+    // Get current epoch time
+    int rc = clock_gettime(CLOCK_REALTIME, &system_boottime);
+    if (rc == 0)
+        return std::string();
+
+    // Get seconds since system boot
+    timesinceboot_secs = ClockCycles() / SYSPAGE_ENTRY(qtime)->cycles_per_sec;
+
+    // Calculate system boot time in epoch seconds
+    if (timesinceboot_secs > static_cast<uint64_t>(system_boottime.tv_sec))
+        return std::string();
+
+    system_boottime.tv_sec -= timesinceboot_secs;
+
+    hasher.Update(reinterpret_cast<const char*>(&system_boottime),
+                  sizeof(system_boottime));
 #else
     // Android or Linux, use statx(2)
+    const char* dev_path = "/dev";
     struct statx stat_buf {};
     auto rc = PERFETTO_EINTR(syscall(__NR_statx, /*dirfd=*/-1, dev_path,
                                      /*flags=*/0, STATX_BTIME, &stat_buf));

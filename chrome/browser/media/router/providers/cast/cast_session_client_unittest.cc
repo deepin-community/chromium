@@ -20,12 +20,15 @@
 #include "chrome/browser/media/router/providers/cast/test_util.h"
 #include "chrome/browser/media/router/test/mock_mojo_media_router.h"
 #include "chrome/browser/media/router/test/provider_test_helpers.h"
+#include "components/media_router/common/mojom/debugger.mojom.h"
+#include "components/media_router/common/mojom/logger.mojom.h"
 #include "components/media_router/common/providers/cast/channel/cast_test_util.h"
 #include "components/media_router/common/test/test_helper.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -46,7 +49,7 @@ using testing::WithArg;
 namespace media_router {
 
 namespace {
-constexpr int kTabId = 213;
+constexpr content::FrameTreeNodeId kTabId = content::FrameTreeNodeId(213);
 
 class MockPresentationConnection : public blink::mojom::PresentationConnection {
  public:
@@ -100,14 +103,18 @@ class CastSessionClientImplTest : public testing::Test {
                                               origin_,
                                               kTabId,
                                               AutoJoinPolicy::kPageScoped,
-                                              &activity_);
+                                              &activity_,
+                                              logger_,
+                                              debugger_);
   std::unique_ptr<MockPresentationConnection> mock_connection_ =
       std::make_unique<NiceMock<MockPresentationConnection>>(client_->Init());
   base::test::MockLog log_;
+  mojo::Remote<mojom::Logger> logger_;
+  mojo::Remote<mojom::Debugger> debugger_;
 };
 
 TEST_F(CastSessionClientImplTest, OnInvalidJson) {
-  // TODO(crbug.com/905002): Check UMA calls instead of logging (here and
+  // TODO(crbug.com/41426190): Check UMA calls instead of logging (here and
   // below).
   EXPECT_ERROR_LOG(HasSubstr("Failed to parse Cast client message"));
 
@@ -162,7 +169,7 @@ TEST_F(CastSessionClientImplTest, OnMessageWrongSessionId) {
 TEST_F(CastSessionClientImplTest, NullFieldsAreRemoved) {
   EXPECT_CALL(activity_, SendMediaRequestToReceiver)
       .WillOnce([](const auto& message) {
-        // TODO(crbug.com/961081): Use IsCastInternalMessage as argument to
+        // TODO(crbug.com/41457655): Use IsCastInternalMessage as argument to
         // SendMediaRequestToReceiver when bug is fixed.
         EXPECT_THAT(message, IsCastInternalMessage(R"({
           "type": "v2_message",
@@ -212,7 +219,7 @@ TEST_F(CastSessionClientImplTest, AppMessageFromClient) {
 TEST_F(CastSessionClientImplTest, OnMediaStatusUpdatedWithPendingRequest) {
   EXPECT_CALL(activity_, SendMediaRequestToReceiver)
       .WillOnce([](const auto& message) {
-        // TODO(crbug.com/961081): Use IsCastInternalMessage as argument to
+        // TODO(crbug.com/41457655): Use IsCastInternalMessage as argument to
         // SendSetVolumeRequestToReceiver when bug is fixed.
         EXPECT_THAT(message, IsCastInternalMessage(R"({
           "type": "v2_message",
@@ -249,7 +256,7 @@ TEST_F(CastSessionClientImplTest, OnMediaStatusUpdatedWithPendingRequest) {
 TEST_F(CastSessionClientImplTest, SendSetVolumeCommandToReceiver) {
   EXPECT_CALL(activity_, SendSetVolumeRequestToReceiver)
       .WillOnce([](const auto& message, auto callback) {
-        // TODO(crbug.com/961081): Use IsCastInternalMessage as argument to
+        // TODO(crbug.com/41457655): Use IsCastInternalMessage as argument to
         // SendSetVolumeRequestToReceiver when bug is fixed.
         EXPECT_THAT(message, IsCastInternalMessage(R"({
           "type": "v2_message",

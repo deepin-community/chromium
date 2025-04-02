@@ -9,12 +9,15 @@
 
 namespace enterprise_connectors {
 
-// Controls whether the custom message per rule feature is enabled or not. Does
-// not affect interstitials custom message per rule feature.
-BASE_DECLARE_FEATURE(kDialogCustomRuleMessageEnabled);
+// Controls whether Chrome can stop register fcm token.
+BASE_DECLARE_FEATURE(kStopRegisterFcmEnabled);
 
-// Return true if custom rule message is enabled.
-bool IsDialogCustomRuleMessageEnabled();
+// Controls uploading scanned data even after a metadata verdict
+// is received for content scans.
+BASE_DECLARE_FEATURE(kEnableAsyncUploadAfterVerdict);
+
+// Returns true if stop register fcm token is enabled.
+bool IsStopRegisterFcmEnabled();
 
 }  // namespace enterprise_connectors
 

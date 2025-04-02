@@ -12,6 +12,7 @@
 // use require here due to
 // https://github.com/evanw/esbuild/issues/587#issuecomment-901397213
 import puppeteer = require('puppeteer-core');
+
 const path = require('path');
 
 const ALLOWED_ASSERTION_FAILURES = [
@@ -36,6 +37,9 @@ const ALLOWED_ASSERTION_FAILURES = [
   'Request Storage.getStorageKeyForFrame failed. {"code":-32602,"message":"Frame tree node for given frame not found"}',
   'Unable to create texture',
   'Not allowed to load local resource: devtools://theme/colors.css',
+  // neterror.js started serving sourcemaps and we're requesting it unnecessarily.
+  'Request Network.loadNetworkResource failed. {"code":-32602,"message":"Unsupported URL scheme"}',
+  'Fetch API cannot load chrome-error://chromewebdata/neterror.rollup.js.map. URL scheme "chrome-error" is not supported.',
 ];
 
 const logLevels = {

@@ -12,6 +12,7 @@
 
 #include "base/time/time.h"
 #include "third_party/blink/public/common/common_export.h"
+#include "third_party/blink/public/common/interest_group/ad_auction_constants.h"
 #include "third_party/blink/public/common/interest_group/interest_group.h"
 #include "third_party/blink/public/mojom/interest_group/interest_group_types.mojom.h"
 #include "url/gurl.h"
@@ -22,7 +23,8 @@ namespace blink {
 
 TestInterestGroupBuilder::TestInterestGroupBuilder(url::Origin owner,
                                                    std::string name) {
-  interest_group_.expiry = base::Time::Now() + base::Days(30);
+  interest_group_.expiry =
+      base::Time::Now() + blink::MaxInterestGroupLifetime();
   interest_group_.owner = std::move(owner);
   interest_group_.name = std::move(name);
 }
@@ -74,7 +76,7 @@ TestInterestGroupBuilder& TestInterestGroupBuilder::SetSellerCapabilities(
   return *this;
 }
 
-TestInterestGroupBuilder& TestInterestGroupBuilder::SetAllSellerCapabilities(
+TestInterestGroupBuilder& TestInterestGroupBuilder::SetAllSellersCapabilities(
     SellerCapabilitiesType all_sellers_capabilities) {
   interest_group_.all_sellers_capabilities =
       std::move(all_sellers_capabilities);
@@ -129,17 +131,25 @@ TestInterestGroupBuilder::SetTrustedBiddingSignalsKeys(
   return *this;
 }
 
-TestInterestGroupBuilder& TestInterestGroupBuilder::SetUserBiddingSignals(
-    std::optional<std::string> user_bidding_signals) {
-  interest_group_.user_bidding_signals = std::move(user_bidding_signals);
-  return *this;
-}
-
 TestInterestGroupBuilder&
 TestInterestGroupBuilder::SetMaxTrustedBiddingSignalsURLLength(
     int32_t max_trusted_bidding_signals_url_length) {
   interest_group_.max_trusted_bidding_signals_url_length =
       max_trusted_bidding_signals_url_length;
+  return *this;
+}
+
+TestInterestGroupBuilder&
+TestInterestGroupBuilder::SetTrustedBiddingSignalsCoordinator(
+    std::optional<url::Origin> trusted_bidding_signals_coordinator) {
+  interest_group_.trusted_bidding_signals_coordinator =
+      trusted_bidding_signals_coordinator;
+  return *this;
+}
+
+TestInterestGroupBuilder& TestInterestGroupBuilder::SetUserBiddingSignals(
+    std::optional<std::string> user_bidding_signals) {
+  interest_group_.user_bidding_signals = std::move(user_bidding_signals);
   return *this;
 }
 

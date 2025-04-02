@@ -595,6 +595,9 @@ void JSGenericLowering::LowerJSLoadContext(Node* node) {
   UNREACHABLE();  // Eliminated in typed lowering.
 }
 
+void JSGenericLowering::LowerJSLoadScriptContext(Node* node) {
+  UNREACHABLE();  // Eliminated in typed lowering.
+}
 
 void JSGenericLowering::LowerJSStoreContext(Node* node) {
   UNREACHABLE();  // Eliminated in typed lowering.
@@ -672,6 +675,10 @@ void JSGenericLowering::LowerJSObjectIsArray(Node* node) {
 
 void JSGenericLowering::LowerJSCreateObject(Node* node) {
   ReplaceWithBuiltinCall(node, Builtin::kCreateObjectWithoutProperties);
+}
+
+void JSGenericLowering::LowerJSCreateStringWrapper(Node* node) {
+  UNREACHABLE();  // Eliminated in typed lowering.
 }
 
 void JSGenericLowering::LowerJSParseInt(Node* node) {
@@ -762,7 +769,7 @@ void JSGenericLowering::LowerJSCreateLiteralArray(Node* node) {
       p.length() < ConstructorBuiltins::kMaximumClonedShallowArrayElements) {
     ReplaceWithBuiltinCall(node, Builtin::kCreateShallowArrayLiteral);
   } else {
-    ReplaceWithRuntimeCall(node, Runtime::kCreateArrayLiteral);
+    ReplaceWithBuiltinCall(node, Builtin::kCreateArrayFromSlowBoilerplate);
   }
 }
 
@@ -816,7 +823,7 @@ void JSGenericLowering::LowerJSCreateLiteralObject(Node* node) {
           ConstructorBuiltins::kMaximumClonedShallowObjectProperties) {
     ReplaceWithBuiltinCall(node, Builtin::kCreateShallowObjectLiteral);
   } else {
-    ReplaceWithRuntimeCall(node, Runtime::kCreateObjectLiteral);
+    ReplaceWithBuiltinCall(node, Builtin::kCreateObjectFromSlowBoilerplate);
   }
 }
 

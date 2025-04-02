@@ -4,6 +4,7 @@
 
 #include "device/vr/android/arcore/arcore_impl.h"
 
+#include <algorithm>
 #include <optional>
 
 #include "base/android/jni_android.h"
@@ -12,8 +13,6 @@
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/checked_math.h"
-#include "base/numerics/math_constants.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
@@ -70,8 +69,8 @@ std::set<ArTrackableType> GetArCoreEntityTypes(
     const std::vector<device::mojom::EntityTypeForHitTest>& entity_types) {
   std::set<ArTrackableType> result;
 
-  base::ranges::transform(entity_types, std::inserter(result, result.end()),
-                          GetArCoreEntityType);
+  std::ranges::transform(entity_types, std::inserter(result, result.end()),
+                         GetArCoreEntityType);
 
   return result;
 }
@@ -79,7 +78,7 @@ std::set<ArTrackableType> GetArCoreEntityTypes(
 // Helper, computes mojo_from_input_source transform based on mojo_from_viever
 // pose and input source state (containing input_from_pointer transform, which
 // in case of input sources is equivalent to viewer_from_pointer).
-// TODO(https://crbug.com/1043389): this currently assumes that the input source
+// TODO(crbug.com/40669002): this currently assumes that the input source
 // ray mode is "tapping", which is OK for input sources available for AR on
 // Android, but is not true in the general case. This method should duplicate
 // the logic found in XRTargetRaySpace::MojoFromNative().
@@ -107,62 +106,53 @@ void ReleaseArCoreCubemap(ArImageCubemap* cube_map) {
 
 // Helper, copies ARCore image to the passed in buffer, assuming that the caller
 // allocated the buffer to fit all the data.
-template <typename T>
 void CopyArCoreImage(const ArSession* session,
                      const ArImage* image,
                      int32_t plane_index,
-                     base::span<T> out_pixels,
+                     base::span<uint8_t> out_pixels,
+                     size_t out_pixel_size,
                      uint32_t width,
                      uint32_t height) {
   DVLOG(3) << __func__ << ": width=" << width << ", height=" << height
            << ", out_pixels.size()=" << out_pixels.size();
 
-  DCHECK_GE(out_pixels.size(), width * height);
+  CHECK_GE(out_pixels.size(), out_pixel_size * width * height);
 
   int32_t src_row_stride = 0, src_pixel_stride = 0;
   ArImage_getPlaneRowStride(session, image, plane_index, &src_row_stride);
   ArImage_getPlanePixelStride(session, image, plane_index, &src_pixel_stride);
 
   // Naked pointer since ArImage_getPlaneData does not transfer ownership to us.
-  uint8_t const* src_buffer = nullptr;
+  const uint8_t* src_buffer = nullptr;
   int32_t src_buffer_length = 0;
   ArImage_getPlaneData(session, image, plane_index, &src_buffer,
                        &src_buffer_length);
+  // SAFETY: A successful ArImage_getPlaneData call sets src_buffer to a valid
+  // address of length `src_buffer_length`. While this buffer is unowned, it is
+  // guaranteed to stay valid until the ArImage (`image`), is released, which is
+  // not done in this function, so the span stays valid for this whole scope.
+  // size_t can hold more positive numbers than int32_t so as long as the length
+  // is greater than 0 (which it should be) the static_cast is safe.
+  UNSAFE_BUFFERS(base::span<const uint8_t> src_span(
+      src_buffer, base::checked_cast<size_t>(src_buffer_length)));
 
   // Fast path: Source and destination have the same layout
-  bool const fast_path =
-      static_cast<size_t>(src_row_stride) == width * sizeof(T);
-  TRACE_EVENT1("xr", "CopyArCoreImage: memcpy", "fastPath", fast_path);
+  const auto src_row_stride_s = base::checked_cast<size_t>(src_row_stride);
+  const bool fast_path = src_row_stride_s == width * out_pixel_size;
 
   DVLOG(3) << __func__ << ": plane_index=" << plane_index
            << ", src_buffer_length=" << src_buffer_length
            << ", src_row_stride=" << src_row_stride
            << ", src_pixel_stride=" << src_pixel_stride
-           << ", fast_path=" << fast_path << ", sizeof(T)=" << sizeof(T);
+           << ", fast_path=" << fast_path
+           << ", out_pixel_size=" << out_pixel_size;
 
-  // If they have the same layout, we can copy the entire buffer at once
-  if (fast_path) {
-    CHECK_EQ(out_pixels.size() * sizeof(T),
-             static_cast<size_t>(src_buffer_length));
-    memcpy(out_pixels.data(), src_buffer, src_buffer_length);
-    return;
-  }
+  // Based on the current metrics, we have determined that slow path is never
+  // taken. Therefore, we can just copy the entire buffer at once.
+  CHECK(fast_path);
 
-  CHECK_EQ(sizeof(T), static_cast<size_t>(src_pixel_stride));
-
-  // Slow path: copy pixel by pixel, row by row
-  for (uint32_t row = 0; row < height; ++row) {
-    auto* src = src_buffer + src_row_stride * row;
-    auto* dest = out_pixels.data() + width * row;
-
-    // For each pixel
-    for (uint32_t x = 0; x < width; ++x) {
-      memcpy(dest, src, sizeof(T));
-
-      src += src_pixel_stride;
-      dest += 1;
-    }
-  }
+  TRACE_EVENT0("xr", "CopyArCoreImage: memcpy");
+  out_pixels.copy_from(src_span);
 }
 
 // Helper, copies ARCore image to the passed in vector, discovering the buffer
@@ -185,8 +175,9 @@ void CopyArCoreImage(const ArSession* session,
   // Allocate memory for the output.
   out_pixels->resize(width * height);
 
-  CopyArCoreImage(session, image, plane_index, base::span<T>(*out_pixels),
-                  width, height);
+  CopyArCoreImage(session, image, plane_index,
+                  base::as_writable_byte_span(*out_pixels), sizeof(T), width,
+                  height);
 }
 
 device::mojom::XRLightProbePtr GetLightProbe(
@@ -205,9 +196,9 @@ device::mojom::XRLightProbePtr GetLightProbe(
 
   ArLightEstimate_getEnvironmentalHdrAmbientSphericalHarmonics(
       arcore_session, arcore_light_estimate,
-      light_probe->spherical_harmonics->coefficients.data()->components);
+      light_probe->spherical_harmonics->coefficients.data()->components.data());
 
-  float main_light_direction[3] = {0};
+  float main_light_direction[3] = {};
   ArLightEstimate_getEnvironmentalHdrMainLightDirection(
       arcore_session, arcore_light_estimate, main_light_direction);
   light_probe->main_light_direction.set_x(main_light_direction[0]);
@@ -216,7 +207,7 @@ device::mojom::XRLightProbePtr GetLightProbe(
 
   ArLightEstimate_getEnvironmentalHdrMainLightIntensity(
       arcore_session, arcore_light_estimate,
-      light_probe->main_light_intensity.components);
+      light_probe->main_light_intensity.components.data());
 
   return light_probe;
 }
@@ -229,7 +220,7 @@ device::mojom::XRReflectionProbePtr GetReflectionProbe(
       arcore_session, arcore_light_estimate, arcore_cube_map);
 
   auto cube_map = device::mojom::XRCubeMap::New();
-  std::vector<device::RgbaTupleF16>* const cube_map_faces[] = {
+  std::array<std::vector<device::RgbaTupleF16>*, 6> const cube_map_faces = {
       &cube_map->positive_x, &cube_map->negative_x, &cube_map->positive_y,
       &cube_map->negative_y, &cube_map->positive_z, &cube_map->negative_z};
 
@@ -242,8 +233,9 @@ device::mojom::XRReflectionProbePtr GetReflectionProbe(
                 "`device::mojom::XRCubeMap::kNumComponentsPerPixel` is "
                 "expected to be 4 (RGBA)`, as that's the format ArCore uses.");
 
-  for (size_t i = 0; i < std::size(arcore_cube_map); ++i) {
-    auto* arcore_cube_map_face = arcore_cube_map[i];
+  auto arcore_cube_map_span = base::span(arcore_cube_map);
+  for (size_t i = 0; i < arcore_cube_map_span.size(); ++i) {
+    auto* arcore_cube_map_face = arcore_cube_map_span[i];
     if (!arcore_cube_map_face) {
       DVLOG(1) << "`ArLightEstimate_acquireEnvironmentalHdrCubemap` failed to "
                   "return all faces";
@@ -306,6 +298,11 @@ device::mojom::XRReflectionProbePtr GetReflectionProbe(
 
 constexpr float kDefaultFloorHeightEstimation = 1.2;
 
+constexpr std::array<device::mojom::XRDepthDataFormat, 2>
+    kSupportedDepthFormats = {
+        device::mojom::XRDepthDataFormat::kLuminanceAlpha,
+        device::mojom::XRDepthDataFormat::kUnsignedShort,
+};
 }  // namespace
 
 namespace device {
@@ -545,7 +542,7 @@ std::optional<ArCore::InitializeResult> ArCoreImpl::Initialize(
   DCHECK(IsOnGlThread());
   DCHECK(!arcore_session_.is_valid());
 
-  // TODO(https://crbug.com/837944): Notify error earlier if this will fail.
+  // TODO(crbug.com/41386064): Notify error earlier if this will fail.
 
   JNIEnv* env = base::android::AttachCurrentThread();
   if (!env) {
@@ -714,6 +711,14 @@ bool ArCoreImpl::ConfigureFeatures(
     // the desired usage and data format.
     ArConfig_setDepthMode(ar_session, arcore_config.get(),
                           AR_DEPTH_MODE_AUTOMATIC);
+  } else if (depth_api_required) {
+    // If we couldn't support the desired usage/format and depth is required,
+    // reject the session.
+    return false;
+  } else if (depth_api_optional) {
+    // If we couldn't support the desired usage/format and depth is optional,
+    // remove it from our list of enabled features.
+    enabled_features.erase(device::mojom::XRSessionFeature::DEPTH);
   }
 
   ArStatus status = ArSession_configure(ar_session, arcore_config.get());
@@ -754,19 +759,45 @@ bool ArCoreImpl::ConfigureDepthSensing(
     return false;
   }
 
-  if (!base::Contains(depth_sensing_config->depth_usage_preference,
+  // We can only support cpu-optimized usage. If the preference list is empty we
+  // are allowed to return any supported depth usage.
+  const auto& usage_preference = depth_sensing_config->depth_usage_preference;
+  if (!usage_preference.empty() &&
+      !base::Contains(usage_preference,
                       device::mojom::XRDepthUsage::kCPUOptimized)) {
     return false;
   }
 
-  if (!base::Contains(depth_sensing_config->depth_data_format_preference,
-                      device::mojom::XRDepthDataFormat::kLuminanceAlpha)) {
+  std::optional<device::mojom::XRDepthDataFormat> maybe_format;
+  const auto& format_preference =
+      depth_sensing_config->depth_data_format_preference;
+  if (format_preference.empty()) {
+    // An empty preference list means we're allowed to use our preferred format.
+    maybe_format = device::mojom::XRDepthDataFormat::kLuminanceAlpha;
+  } else {
+    // Try and find the first format that we support in the preference list.
+    const auto format_it = std::ranges::find_if(
+        format_preference.begin(), format_preference.end(),
+        [](const device::mojom::XRDepthDataFormat& format) {
+          return base::Contains(kSupportedDepthFormats, format);
+        });
+
+    if (format_it != format_preference.end()) {
+      maybe_format = *format_it;
+    }
+  }
+
+  // If we were unable to find a format that we support, we cannot enable depth.
+  if (!maybe_format) {
     return false;
   }
 
+  // Note that since both of our supported formats are the same size, we don't
+  // currently need to store the value we return to the session since for our
+  // purposes they are interchangeable.
+  static_assert(kSupportedDepthFormats.size() == 2u);
   depth_configuration_ = device::mojom::XRDepthConfig(
-      device::mojom::XRDepthUsage::kCPUOptimized,
-      device::mojom::XRDepthDataFormat::kLuminanceAlpha);
+      device::mojom::XRDepthUsage::kCPUOptimized, *maybe_format);
 
   return true;
 }
@@ -1237,7 +1268,7 @@ std::optional<uint64_t> ArCoreImpl::SubscribeToHitTest(
       // Unsupported by ARCore:
       return std::nullopt;
     case mojom::XRNativeOriginInformation::Tag::kImageIndex:
-      // TODO(https://crbug.com/1143575): Add hit test support for tracked
+      // TODO(crbug.com/40728355): Add hit test support for tracked
       // images.
       return std::nullopt;
     case mojom::XRNativeOriginInformation::Tag::kAnchorId:
@@ -1481,7 +1512,7 @@ bool ArCoreImpl::NativeOriginExists(
     case mojom::XRNativeOriginInformation::Tag::kHandJointSpaceInfo:
       return false;
     case mojom::XRNativeOriginInformation::Tag::kImageIndex:
-      // TODO(https://crbug.com/1143575): Needed for anchor creation relaitve to
+      // TODO(crbug.com/40728355): Needed for anchor creation relaitve to
       // tracked images.
       return false;
   }
@@ -1531,7 +1562,7 @@ std::optional<gfx::Transform> ArCoreImpl::GetMojoFromNativeOrigin(
       return std::nullopt;
 
     case mojom::XRNativeOriginInformation::Tag::kImageIndex:
-      // TODO(https://crbug.com/1143575): Needed for hit test and anchors
+      // TODO(crbug.com/40728355): Needed for hit test and anchors
       // support for tracked images.
       return std::nullopt;
   }
@@ -1922,6 +1953,8 @@ mojom::XRDepthDataPtr ArCoreImpl::GetDepthData() {
   CHECK_EQ(image_format, AR_IMAGE_FORMAT_D_16)
       << "Depth image format must be AR_IMAGE_FORMAT_D_16 ("
       << AR_IMAGE_FORMAT_D_16 << "), found: " << image_format;
+  // AR_IMAGE_FORMAT_D_16 means 2 bytes per pixel.
+  constexpr size_t kDepthPixelSize = 2;
 
   int32_t num_planes;
   ArImage_getNumberOfPlanes(arcore_session_.get(), ar_image.get(), &num_planes);
@@ -1934,8 +1967,6 @@ mojom::XRDepthDataPtr ArCoreImpl::GetDepthData() {
     // to send the latest information back:
     mojom::XRDepthDataUpdatedPtr result = mojom::XRDepthDataUpdated::New();
 
-    result->time_delta = time_delta;
-
     int32_t width = 0, height = 0;
     ArImage_getWidth(arcore_session_.get(), ar_image.get(), &width);
     ArImage_getHeight(arcore_session_.get(), ar_image.get(), &height);
@@ -1943,32 +1974,23 @@ mojom::XRDepthDataPtr ArCoreImpl::GetDepthData() {
     DVLOG(3) << __func__ << ": depth image dimensions=" << width << "x"
              << height;
 
-    // Depth image is defined as a width by height array of 2-byte elements:
-    auto checked_buffer_size = base::CheckMul<size_t>(2, width, height);
+    // The depth image is a width by height array of |kDepthPixelSize| elements:
+    auto checked_buffer_size =
+        base::CheckMul<size_t>(kDepthPixelSize, width, height);
 
     size_t buffer_size;
     if (!checked_buffer_size.AssignIfValid(&buffer_size)) {
       DVLOG(2) << __func__
-               << ": overflow in 2 * width * height expression, returning null "
-                  "depth data";
+               << ": overflow in kDepthPixelSize * width * height expression, "
+                  "returning null depth data";
       return nullptr;
     }
-
-    // Log a histogram w/ the number of entries in the depth buffer to make sure
-    // we have a way of measuring the impact of the decision to suppress
-    // too-high-resolution depth buffers. Assuming various common aspect ratios
-    // & fixing the width to 160 pixels, the total number of pixels varies from
-    // ~6000 to ~20000, and w/ the threshold below set to 43200 pixels, the
-    // custom count from 5000 to 55000 with bucket size of 1000 should give us
-    // sufficient granularity of data.
-    UMA_HISTOGRAM_CUSTOM_COUNTS("XR.ARCore.DepthBufferSizeInPixels",
-                                buffer_size / 2, 5000, 55000, 50);
 
     TRACE_COUNTER2(TRACE_DISABLED_BY_DEFAULT("xr.debug"),
                    "Depth buffer resolution (in pixels)", "width", width,
                    "height", height);
 
-    if (buffer_size / 2 > 240 * 180) {
+    if (buffer_size / kDepthPixelSize > 240 * 180) {
       // ARCore should report depth data buffers w/ resolution in the ballpark
       // of 160x120. If the number of data entries is higher than 240 * 180
       // (=43200), we should not return it. The threshold was picked by
@@ -1982,11 +2004,8 @@ mojom::XRDepthDataPtr ArCoreImpl::GetDepthData() {
 
     // Interpret BigBuffer's data as a width by height array of uint16_t's and
     // copy image data into it:
-    CopyArCoreImage(
-        arcore_session_.get(), ar_image.get(), 0,
-        base::span<uint16_t>(reinterpret_cast<uint16_t*>(pixels.data()),
-                             pixels.size() / 2),
-        width, height);
+    CopyArCoreImage(arcore_session_.get(), ar_image.get(), 0, pixels,
+                    kDepthPixelSize, width, height);
 
     result->pixel_data = std::move(pixels);
     // Transform needed to consume the data:

@@ -8,36 +8,45 @@
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "build/build_config.h"
+#include "extensions/buildflags/buildflags.h"
 
 namespace supervised_user {
 
-// Experiment to enable kid-friendly content feed.
-BASE_DECLARE_FEATURE(kKidFriendlyContentFeed);
-extern const base::FeatureParam<std::string> kKidFriendlyContentFeedEndpoint;
-
 BASE_DECLARE_FEATURE(kLocalWebApprovals);
 
-// Flags related to supervision features on Desktop and iOS platforms.
-BASE_DECLARE_FEATURE(kFilterWebsitesForSupervisedUsersOnDesktopAndIOS);
-BASE_DECLARE_FEATURE(kSupervisedPrefsControlledBySupervisedStore);
-BASE_DECLARE_FEATURE(kEnableManagedByParentUi);
-extern const base::FeatureParam<std::string> kManagedByParentUiMoreInfoUrl;
+#if BUILDFLAG(IS_IOS)
+extern const base::FeatureParam<int> kLocalWebApprovalBottomSheetLoadTimeoutMs;
+#endif
+
+// Whether the Pacp widget can process a url payload as part of the local
+// approval request.
+BASE_DECLARE_FEATURE(kLocalWebApprovalsWidgetSupportsUrlPayload);
 
 // Applies the updated extension approval flow, which can skip parent-approvals
 // on extension installations.
 BASE_DECLARE_FEATURE(
     kEnableSupervisedUserSkipParentApprovalToInstallExtensions);
 
+// Applies new informative strings during the parental extension approval flow.
+BASE_DECLARE_FEATURE(kUpdatedSupervisedUserExtensionApprovalStrings);
+
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 BASE_DECLARE_FEATURE(kEnableExtensionsPermissionsForSupervisedUsersOnDesktop);
 #endif
 
-// Returns whether banner can be displayed to the user after website filtering
-// is enabled
-bool CanDisplayFirstTimeInterstitialBanner();
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+// Returns whether a new installation state for supervised users
+// on new extension installations is offered to the Webstore.
+BASE_DECLARE_FEATURE(kExposedParentalControlNeededForExtensionInstallation);
 
-// Request priority experiment for ClassifyUrl (for critical path of rendering).
-BASE_DECLARE_FEATURE(kHighestRequestPriorityForClassifyUrl);
+// Returns whether the new mode for extension approval management is enabled.
+// Under this mode, supervised users may request parent approval on each
+// extension installation or the parent allows and approves by default all
+// extension installations.
+// On Win/Linux/Mac enabling the new mode requires that the feature
+// `kEnableExtensionsPermissionsForSupervisedUsersOnDesktop` is also enabled.
+bool IsSupervisedUserSkipParentApprovalToInstallExtensionsEnabled();
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Enable different web sign in interception behaviour for supervised users:
 //
@@ -46,20 +55,47 @@ BASE_DECLARE_FEATURE(kHighestRequestPriorityForClassifyUrl);
 // 2. Supervised user signs in as secondary account in existing signed in
 //    Profile
 //
-// Only affects Desktop platforms.
-BASE_DECLARE_FEATURE(kCustomWebSignInInterceptForSupervisedUsers);
+// Only affects Linux/Mac/Windows platforms.
+BASE_DECLARE_FEATURE(kCustomProfileStringsForSupervisedUsers);
 
-// Runs a shadow no-op safe-sites call alongside kids-api call, to compare
-// latencies.
-BASE_DECLARE_FEATURE(kShadowKidsApiWithSafeSites);
+// Displays a Family Link kite badge on the supervised user avatar in various
+// surfaces.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+BASE_DECLARE_FEATURE(kShowKiteForSupervisedUsers);
+#endif
 
-// Forces Safe Search for supervised users.
-BASE_DECLARE_FEATURE(kForceGoogleSafeSearchForSupervisedUsers);
+// Force enable SafeSearch for a supervised profile with an
+// unauthenticated (e.g. signed out of the content area) account.
+BASE_DECLARE_FEATURE(kForceSafeSearchForUnauthenticatedSupervisedUsers);
 
-// Updates usages of Profile.isChild() in Profile.java to use the account
-// capability to determine if account is supervised.
-#if BUILDFLAG(IS_ANDROID)
-BASE_DECLARE_FEATURE(kMigrateAccountManagementSettingsToCapabilities);
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+// Uses supervised user strings on the signout dialog.
+BASE_DECLARE_FEATURE(kEnableSupervisedUserVersionSignOutDialog);
+
+// Force re-authentication when an unauthenticated supervised user tries to
+// access YouTube, so that content restrictions can be applied.
+BASE_DECLARE_FEATURE(kForceSupervisedUserReauthenticationForYouTube);
+
+// Specifies if infrastructure-related YouTube endpoints should be still
+// reachable even if parental controls related restrict YouTube access.
+BASE_DECLARE_FEATURE(kExemptYouTubeInfrastructureFromBlocking);
+#endif
+
+// Fallback to sending un-credentialed filtering requests for supervised users
+// if they do not have a valid access token.
+BASE_DECLARE_FEATURE(kUncredentialedFilteringFallbackForSupervisedUsers);
+
+// Uses PrimaryAccountAccessTokenFetcher::Mode::kWaitUntilAvailable for
+// ClassifyUrl fetches.
+BASE_DECLARE_FEATURE(kWaitUntilAccessTokenAvailableForClassifyUrl);
+
+#if BUILDFLAG(IS_IOS)
+// Replaces usages of prefs::kSupervisedUserID with AccountInfo capabilities on
+// iOS.
+BASE_DECLARE_FEATURE(kReplaceSupervisionPrefsWithAccountCapabilitiesOnIOS);
+// Replaces usages of system capabilities with AccountInfo capabilities on iOS.
+BASE_DECLARE_FEATURE(
+    kReplaceSupervisionSystemCapabilitiesWithAccountCapabilitiesOnIOS);
 #endif
 
 // Returns whether local parent approvals on Family Link user's device are
@@ -67,20 +103,6 @@ BASE_DECLARE_FEATURE(kMigrateAccountManagementSettingsToCapabilities);
 // Local web approvals are only available when refreshed version of web
 // filter interstitial is enabled.
 bool IsLocalWebApprovalsEnabled();
-
-// Returns true if child account supervision features should be enabled for this
-// client.
-//
-// This method does not take into account whether the user is actually a child;
-// that must be handled by calling code.
-bool IsChildAccountSupervisionEnabled();
-
-// Returns whether the experiment to display a kid-friendly content stream on
-// the New Tab page has been enabled.
-bool IsKidFriendlyContentFeedAvailable();
-
-// Returns whether to shadow safe-sites call with kids-api call.
-bool IsShadowKidsApiWithSafeSitesEnabled();
 
 }  // namespace supervised_user
 

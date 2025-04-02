@@ -9,6 +9,7 @@
 
 #include "base/containers/contains.h"
 #include "base/memory/raw_ref.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
@@ -107,8 +108,7 @@ class DeviceDescriptionServiceTest : public ::testing::Test {
     (*description_cache_)[device_label] = cache_entry;
   }
 
-  void OnDeviceDescriptionFetchComplete(int num) {
-  }
+  void OnDeviceDescriptionFetchComplete(int num) {}
 
   void TestOnParsedDeviceDescription(
       ParsedDialDeviceDescription device_description,
@@ -266,9 +266,10 @@ TEST_F(DeviceDescriptionServiceTest, TestOnParsedDeviceDescription) {
       SafeDialDeviceDescriptionParser::ParsingResult::kFailedToReadFriendlyName,
       SafeDialDeviceDescriptionParser::ParsingResult::kFailedToReadModelName,
       SafeDialDeviceDescriptionParser::ParsingResult::kFailedToReadDeviceType};
-  for (auto error : errors)
+  for (auto error : errors) {
     TestOnParsedDeviceDescription(ParsedDialDeviceDescription(), error,
                                   error_message);
+  }
 
   // Empty field
   error_message = "Failed to process fetch result";
@@ -286,7 +287,7 @@ TEST_F(DeviceDescriptionServiceTest, TestOnParsedDeviceDescription) {
   // Valid device description ptr and skip cache.
   size_t cache_num = 256;
   for (size_t i = 0; i < cache_num; i++) {
-    AddToCache(std::to_string(i), ParsedDialDeviceDescription(),
+    AddToCache(base::NumberToString(i), ParsedDialDeviceDescription(),
                false /* expired */);
   }
 

@@ -2,13 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/page_info/safety_tip_page_info_bubble_view.h"
+
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -18,6 +20,7 @@
 #include "chrome/browser/history/history_test_utils.h"
 #include "chrome/browser/lookalikes/lookalike_test_helper.h"
 #include "chrome/browser/lookalikes/lookalike_url_service.h"
+#include "chrome/browser/lookalikes/lookalike_url_service_factory.h"
 #include "chrome/browser/lookalikes/safety_tip_ui.h"
 #include "chrome/browser/lookalikes/safety_tip_ui_helper.h"
 #include "chrome/browser/lookalikes/safety_tip_web_contents_observer.h"
@@ -31,7 +34,6 @@
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view_base.h"
 #include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
-#include "chrome/browser/ui/views/page_info/safety_tip_page_info_bubble_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
@@ -267,7 +269,7 @@ class SafetyTipPageInfoBubbleViewBrowserTest : public InProcessBrowserTest {
   void TearDownOnMainThread() override {
     InProcessBrowserTest::TearDownOnMainThread();
     LookalikeTestHelper::TearDownLookalikeTestParams();
-    LookalikeUrlService::Get(browser()->profile())
+    LookalikeUrlServiceFactory::GetForProfile(browser()->profile())
         ->ResetWarningDismissedETLDPlusOnesForTesting();
   }
 
@@ -339,7 +341,7 @@ class SafetyTipPageInfoBubbleViewBrowserTest : public InProcessBrowserTest {
 
       case security_state::SafetyTipStatus::kUnknown:
       case security_state::SafetyTipStatus::kNone:
-        NOTREACHED_NORETURN();
+        NOTREACHED();
     }
     content::WebContentsAddedObserver new_tab_observer;
     static_cast<views::StyledLabel*>(
@@ -493,7 +495,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest, NoShowOnError) {
 }
 
 // Ensure blocked sites get blocked in incognito.
-// TODO(crbug.com/1405351): Fix this test and re-enable.
+// TODO(crbug.com/40886576): Fix this test and re-enable.
 IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
                        DISABLED_ShowOnBlockIncognito) {
   auto kNavigatedUrl = GetURL("accounts-google.com");
@@ -560,7 +562,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
     ASSERT_NO_FATAL_FAILURE(CheckPageInfoDoesNotShowSafetyTipInfo(browser()));
   }
 
-  // TODO(crbug.com/1401102): This shouldn't record a UKM.
+  // TODO(crbug.com/40884082): This shouldn't record a UKM.
   test_helper()->CheckSafetyTipUkmCount(2);
   test_helper()->CheckInterstitialUkmCount(0);
 }
@@ -801,7 +803,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
   EXPECT_FALSE(IsUIShowing());
   ASSERT_NO_FATAL_FAILURE(CheckPageInfoDoesNotShowSafetyTipInfo(browser()));
 
-  // TODO(crbug.com/1401102): Only one UKM should have been recorded, but
+  // TODO(crbug.com/40884082): Only one UKM should have been recorded, but
   // allowlisted domain also records one.
   test_helper()->CheckSafetyTipUkmCount(2);
   test_helper()->CheckInterstitialUkmCount(0);
@@ -858,7 +860,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
   EXPECT_FALSE(IsUIShowing());
   ASSERT_NO_FATAL_FAILURE(CheckPageInfoDoesNotShowSafetyTipInfo(browser()));
 
-  // TODO(crbug.com/1401102): This shouldn't record metrics.
+  // TODO(crbug.com/40884082): This shouldn't record metrics.
   test_helper()->CheckSafetyTipUkmCount(1);
   test_helper()->CheckInterstitialUkmCount(0);
 }
@@ -1266,7 +1268,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
     }
   }
 
-  size_t expected_event_count = base::ranges::count_if(
+  size_t expected_event_count = std::ranges::count_if(
       test_cases, [](const HeuristicsTestCase& test_case) {
         return test_case.expected_lookalike;
       });
@@ -1427,7 +1429,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
 // a combo squatting url is flagged with a hard-coded brand name.
 // This test case trigger `keyword` heuristic as well because of `google`
 // in the URL.
-// TODO(crbug.com/1343630): keyword (embedded keyword) heuristic should
+// TODO(crbug.com/40852479): keyword (embedded keyword) heuristic should
 // be removed from the code including CheckHeuristicsUkmRecord.
 IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
                        DontTriggerOnAllowlistedComboSquatting) {
@@ -1447,7 +1449,7 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewBrowserTest,
   ASSERT_FALSE(IsUIShowing());
   histograms.ExpectTotalCount(kInterstitialHistogramName, 0);
 
-  // TODO(crbug.com/1401102): This shouldn't record a UKM.
+  // TODO(crbug.com/40884082): This shouldn't record a UKM.
   test_helper()->CheckSafetyTipUkmCount(1);
   test_helper()->CheckInterstitialUkmCount(0);
 }
@@ -1678,8 +1680,9 @@ IN_PROC_BROWSER_TEST_F(SafetyTipPageInfoBubbleViewPrerenderBrowserTest,
   ASSERT_TRUE(safety_tip_observer->safety_tip_check_pending_for_testing());
   auto prerender_url = embedded_test_server()->GetURL("/simple.html");
   // Loads |prerender_url| in the prerenderer.
-  auto prerender_id = prerender_helper()->AddPrerender(prerender_url);
-  ASSERT_NE(content::RenderFrameHost::kNoFrameTreeNodeId, prerender_id);
+  content::FrameTreeNodeId prerender_id =
+      prerender_helper()->AddPrerender(prerender_url);
+  ASSERT_TRUE(prerender_id);
   content::test::PrerenderHostObserver host_observer(*web_contents(),
                                                      prerender_id);
   // Waits until SafetyTipWebContentsObserver calls the callback.

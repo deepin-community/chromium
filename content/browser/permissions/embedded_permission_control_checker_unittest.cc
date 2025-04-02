@@ -10,13 +10,13 @@
 #include "base/test/scoped_feature_list.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/content_features.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/render_frame_host_test_support.h"
 #include "content/public/test/test_renderer_host.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features_generated.h"
 #include "third_party/blink/public/mojom/permissions/permission.mojom.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
 #include "url/gurl.h"
@@ -73,7 +73,7 @@ class EmbeddedPermissionControlCheckerTest
     : public content::RenderViewHostTestHarness {
  public:
   EmbeddedPermissionControlCheckerTest()
-      : scoped_feature_list_(features::kPermissionElement) {}
+      : scoped_feature_list_(blink::features::kPermissionElement) {}
   EmbeddedPermissionControlCheckerTest(
       const EmbeddedPermissionControlCheckerTest&) = delete;
   EmbeddedPermissionControlCheckerTest& operator=(
@@ -99,13 +99,13 @@ class EmbeddedPermissionControlCheckerTest
 
     std::vector<PermissionDescriptorPtr> permission_descriptors;
     permission_descriptors.reserve(permissions.size());
-    base::ranges::transform(permissions,
-                            std::back_inserter(permission_descriptors),
-                            [](const auto& permission) {
-                              auto descriptor = PermissionDescriptor::New();
-                              descriptor->name = permission;
-                              return descriptor;
-                            });
+    std::ranges::transform(permissions,
+                           std::back_inserter(permission_descriptors),
+                           [](const auto& permission) {
+                             auto descriptor = PermissionDescriptor::New();
+                             descriptor->name = permission;
+                             return descriptor;
+                           });
 
     permission_service()->RegisterPageEmbeddedPermissionControl(
         std::move(permission_descriptors), std::move(mojo_client));

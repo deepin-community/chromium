@@ -25,6 +25,7 @@
 
 #include "third_party/blink/renderer/core/layout/layout_multi_column_flow_thread.h"
 
+#include "base/not_fatal_until.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/layout/fragmentation_utils.h"
 #include "third_party/blink/renderer/core/layout/geometry/writing_mode_converter.h"
@@ -676,7 +677,6 @@ bool LayoutMultiColumnFlowThread::DescendantIsValidColumnSpanner(
       return false;
   }
   NOTREACHED();
-  return false;
 }
 
 void LayoutMultiColumnFlowThread::AddColumnSetToThread(
@@ -686,7 +686,7 @@ void LayoutMultiColumnFlowThread::AddColumnSetToThread(
           column_set->NextSiblingMultiColumnSet()) {
     LayoutMultiColumnSetList::iterator it =
         multi_column_set_list_.find(next_set);
-    DCHECK(it != multi_column_set_list_.end());
+    CHECK(it != multi_column_set_list_.end(), base::NotFatalUntil::M130);
     multi_column_set_list_.InsertBefore(it, column_set);
   } else {
     multi_column_set_list_.insert(column_set);
@@ -896,8 +896,8 @@ static inline bool NeedsToReinsertIntoFlowThread(
   // re-evaluate the need for column sets. There may be out-of-flow descendants
   // further down that become part of the flow thread, or cease to be part of
   // the flow thread, because of this change.
-  if (object.ComputeIsFixedContainer(&old_style) !=
-      object.ComputeIsFixedContainer(&new_style)) {
+  if (object.ComputeIsFixedContainer(old_style) !=
+      object.ComputeIsFixedContainer(new_style)) {
     return true;
   }
   return old_style.GetPosition() != new_style.GetPosition();

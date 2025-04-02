@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/gpu/v4l2/v4l2_video_decoder_delegate_h265.h"
 
 #include <linux/v4l2-controls.h>
@@ -192,6 +197,16 @@ V4L2VideoDecoderDelegateH265::SubmitFrameMetadata(
     const H265Picture::Vector& ref_pic_set_st_curr_after,
     const H265Picture::Vector& ref_pic_set_st_curr_before,
     scoped_refptr<H265Picture> pic) {
+  drop_frame_ = false;
+  if (pic->no_rasl_output_flag_ &&
+      (slice_hdr->nal_unit_type == H265NALU::RASL_N ||
+       slice_hdr->nal_unit_type == H265NALU::RASL_R)) {
+    // Drop this RASL frame as this is not decodable.
+    DVLOGF(3) << "Drop RASL frame";
+    drop_frame_ = true;
+    return Status::kOk;
+  }
+
   struct v4l2_ext_control ctrl;
   std::vector<struct v4l2_ext_control> ctrls;
 
@@ -386,19 +401,45 @@ V4L2VideoDecoderDelegateH265::SubmitFrameMetadata(
                                    ? pps->scaling_list_data
                                    : sps->scaling_list_data;
 
-    memcpy(v4l2_scaling_matrix.scaling_list_4x4, scaling_list.scaling_list_4x4,
-           sizeof(v4l2_scaling_matrix.scaling_list_4x4));
-    memcpy(v4l2_scaling_matrix.scaling_list_8x8, scaling_list.scaling_list_8x8,
-           sizeof(v4l2_scaling_matrix.scaling_list_8x8));
-    memcpy(v4l2_scaling_matrix.scaling_list_16x16,
-           scaling_list.scaling_list_16x16,
-           sizeof(v4l2_scaling_matrix.scaling_list_16x16));
-    memcpy(v4l2_scaling_matrix.scaling_list_32x32[0],
-           scaling_list.scaling_list_32x32[0],
-           sizeof(v4l2_scaling_matrix.scaling_list_32x32[0]));
-    memcpy(v4l2_scaling_matrix.scaling_list_32x32[1],
-           scaling_list.scaling_list_32x32[3],
-           sizeof(v4l2_scaling_matrix.scaling_list_32x32[1]));
+    for (size_t i = 0; i < H265ScalingListData::kNumScalingListMatrices; ++i) {
+      for (size_t j = 0; j < H265ScalingListData::kScalingListSizeId0Count;
+           ++j) {
+        v4l2_scaling_matrix.scaling_list_4x4[i][j] =
+            scaling_list.GetScalingList4x4EntryInRasterOrder(/*matrix_id=*/i,
+                                                             /*raster_idx=*/j);
+      }
+    }
+
+    for (size_t i = 0; i < H265ScalingListData::kNumScalingListMatrices; ++i) {
+      for (size_t j = 0; j < H265ScalingListData::kScalingListSizeId1To3Count;
+           ++j) {
+        v4l2_scaling_matrix.scaling_list_8x8[i][j] =
+            scaling_list.GetScalingList8x8EntryInRasterOrder(/*matrix_id=*/i,
+                                                             /*raster_idx=*/j);
+      }
+    }
+
+    for (size_t i = 0; i < H265ScalingListData::kNumScalingListMatrices; ++i) {
+      for (size_t j = 0; j < H265ScalingListData::kScalingListSizeId1To3Count;
+           ++j) {
+        v4l2_scaling_matrix.scaling_list_16x16[i][j] =
+            scaling_list.GetScalingList16x16EntryInRasterOrder(
+                /*matrix_id=*/i,
+                /*raster_idx=*/j);
+      }
+    }
+
+    for (size_t i = 0; i < H265ScalingListData::kNumScalingListMatrices;
+         i += 3) {
+      for (size_t j = 0; j < H265ScalingListData::kScalingListSizeId1To3Count;
+           ++j) {
+        v4l2_scaling_matrix.scaling_list_32x32[i / 3][j] =
+            scaling_list.GetScalingList32x32EntryInRasterOrder(
+                /*matrix_id=*/i,
+                /*raster_idx=*/j);
+      }
+    }
+
     memcpy(v4l2_scaling_matrix.scaling_list_dc_coef_16x16,
            scaling_list.scaling_list_dc_coef_16x16,
            sizeof(v4l2_scaling_matrix.scaling_list_dc_coef_16x16));
@@ -480,6 +521,10 @@ H265Decoder::H265Accelerator::Status V4L2VideoDecoderDelegateH265::SubmitSlice(
     const uint8_t* data,
     size_t size,
     const std::vector<SubsampleEntry>& subsamples) {
+  if (drop_frame_) {
+    return Status::kOk;
+  }
+
   scoped_refptr<V4L2DecodeSurface> dec_surface =
       H265PictureToV4L2DecodeSurface(pic.get());
 
@@ -494,11 +539,11 @@ H265Decoder::H265Accelerator::Status V4L2VideoDecoderDelegateH265::SubmitSlice(
                ? Status::kOk
                : Status::kFail;
   }
-  std::unique_ptr<uint8_t[]> data_copy(new uint8_t[data_copy_size]);
-  memset(data_copy.get(), 0, data_copy_size);
+  auto data_copy = base::HeapArray<uint8_t>::Uninit(data_copy_size);
+  memset(data_copy.data(), 0, data_copy_size);
   data_copy[2] = 0x01;
-  memcpy(data_copy.get() + 3, data, size);
-  return surface_handler_->SubmitSlice(dec_surface.get(), data_copy.get(),
+  memcpy(data_copy.data() + 3, data, size);
+  return surface_handler_->SubmitSlice(dec_surface.get(), data_copy.data(),
                                        data_copy_size)
              ? Status::kOk
              : Status::kFail;
@@ -506,10 +551,12 @@ H265Decoder::H265Accelerator::Status V4L2VideoDecoderDelegateH265::SubmitSlice(
 
 H265Decoder::H265Accelerator::Status V4L2VideoDecoderDelegateH265::SubmitDecode(
     scoped_refptr<H265Picture> pic) {
+  if (drop_frame_) {
+    return Status::kOk;
+  }
+
   scoped_refptr<V4L2DecodeSurface> dec_surface =
       H265PictureToV4L2DecodeSurface(pic.get());
-
-  Reset();
 
   DVLOGF(4) << "Submitting decode for surface: " << dec_surface->ToString();
   surface_handler_->DecodeSurface(dec_surface);
@@ -524,7 +571,9 @@ bool V4L2VideoDecoderDelegateH265::OutputPicture(
   return true;
 }
 
-void V4L2VideoDecoderDelegateH265::Reset() {}
+void V4L2VideoDecoderDelegateH265::Reset() {
+  drop_frame_ = false;
+}
 
 bool V4L2VideoDecoderDelegateH265::IsChromaSamplingSupported(
     VideoChromaSampling chroma_sampling) {

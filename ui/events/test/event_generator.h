@@ -12,7 +12,6 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
-#include "build/chromeos_buildflags.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event_dispatcher.h"
@@ -234,7 +233,7 @@ class EventGenerator {
     MoveMouseToInHost(gfx::Point(x, y));
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Generates a mouse move event at the point given in the host
   // coordinates, with a native event with |point_for_natve|.
   void MoveMouseToWithNative(const gfx::Point& point_in_host,
@@ -298,6 +297,9 @@ class EventGenerator {
   // Set force of touch PointerDetails.
   void SetTouchForce(float force) { touch_pointer_details_.force = force; }
 
+  // Sets Event properties. The previous value is replaced if present.
+  void SetProperties(std::optional<Event::Properties> properties);
+
   // Generates a touch press event. If |touch_location_in_screen| is not null,
   // the touch press event will happen at |touch_location_in_screen|. Otherwise,
   // it will happen at the current event location |current_screen_location_|.
@@ -310,19 +312,20 @@ class EventGenerator {
       int touch_id,
       const std::optional<gfx::Point>& touch_location_in_screen = std::nullopt);
 
-  // Generates a ET_TOUCH_MOVED event to |point|.
+  // Generates a EventType::kTouchMoved event to |point|.
   void MoveTouch(const gfx::Point& point);
 
-  // Generates a ET_TOUCH_MOVED event moving by (x, y) from current location.
+  // Generates a EventType::kTouchMoved event moving by (x, y) from current
+  // location.
   void MoveTouchBy(int x, int y) {
     MoveTouch(current_screen_location_ + gfx::Vector2d(x, y));
   }
 
-  // Generates a ET_TOUCH_MOVED event to |point| with |touch_id|.
+  // Generates a EventType::kTouchMoved event to |point| with |touch_id|.
   void MoveTouchId(const gfx::Point& point, int touch_id);
 
-  // Generates a ET_TOUCH_MOVED event moving (x, y) from current location with
-  // |touch_id|.
+  // Generates a EventType::kTouchMoved event moving (x, y) from current
+  // location with |touch_id|.
   void MoveTouchIdBy(int touch_id, int x, int y) {
     MoveTouchId(current_screen_location_ + gfx::Vector2d(x, y), touch_id);
   }
@@ -386,8 +389,9 @@ class EventGenerator {
 
   // The same as GestureScrollSequence(), with the exception that |callback| is
   // called at each step of the scroll sequence. |callback| is called at the
-  // start of the sequence with ET_GESTURE_SCROLL_BEGIN, followed by one or more
-  // ET_GESTURE_SCROLL_UPDATE and ends with an ET_GESTURE_SCROLL_END.
+  // start of the sequence with EventType::kGestureScrollBegin, followed by one
+  // or more EventType::kGestureScrollUpdate and ends with an
+  // EventType::kGestureScrollEnd.
   void GestureScrollSequenceWithCallback(const gfx::Point& start,
                                          const gfx::Point& end,
                                          const base::TimeDelta& duration,
@@ -548,11 +552,13 @@ class EventGenerator {
   Target target_ = Target::WIDGET;
 
   std::unique_ptr<TestTickClock> tick_clock_;
+
+  std::optional<Event::Properties> properties_;
 };
 
 // This generates key events for moidfiers as well as the key with
 // modifiers.
-// TODO(crbug.com/1415115): Remove this once the EventGenerator is
+// TODO(crbug.com/40256427): Remove this once the EventGenerator is
 // modified to generate the same sequence.
 void EmulateFullKeyPressReleaseSequence(test::EventGenerator* generator,
                                         KeyboardCode key,

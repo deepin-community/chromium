@@ -35,7 +35,7 @@
 #include "libavutil/mathematics.h"
 #include "libavutil/opt.h"
 #include "libavutil/timestamp.h"
-#include "internal.h"
+#include "filters.h"
 #include "drawutils.h"
 #include "framesync.h"
 #include "video.h"
@@ -161,9 +161,11 @@ static const enum AVPixelFormat alpha_pix_fmts[] = {
     AV_PIX_FMT_BGRA, AV_PIX_FMT_GBRAP, AV_PIX_FMT_NONE
 };
 
-static int query_formats(AVFilterContext *ctx)
+static int query_formats(const AVFilterContext *ctx,
+                         AVFilterFormatsConfig **cfg_in,
+                         AVFilterFormatsConfig **cfg_out)
 {
-    OverlayContext *s = ctx->priv;
+    const OverlayContext *s = ctx->priv;
 
     /* overlay formats contains alpha, for avoiding conversion with alpha information loss */
     static const enum AVPixelFormat main_pix_fmts_yuv420[] = {
@@ -268,18 +270,18 @@ static int query_formats(AVFilterContext *ctx)
         overlay_formats = overlay_pix_fmts_gbrp;
         break;
     case OVERLAY_FORMAT_AUTO:
-        return ff_set_common_formats_from_list(ctx, alpha_pix_fmts);
+        return ff_set_common_formats_from_list2(ctx, cfg_in, cfg_out, alpha_pix_fmts);
     default:
         av_assert0(0);
     }
 
     formats = ff_make_format_list(main_formats);
-    if ((ret = ff_formats_ref(formats, &ctx->inputs[MAIN]->outcfg.formats)) < 0 ||
-        (ret = ff_formats_ref(formats, &ctx->outputs[MAIN]->incfg.formats)) < 0)
+    if ((ret = ff_formats_ref(formats, &cfg_in[MAIN]->formats)) < 0 ||
+        (ret = ff_formats_ref(formats, &cfg_out[MAIN]->formats)) < 0)
         return ret;
 
     return ff_formats_ref(ff_make_format_list(overlay_formats),
-                          &ctx->inputs[OVERLAY]->outcfg.formats);
+                          &cfg_in[OVERLAY]->formats);
 }
 
 static int config_input_overlay(AVFilterLink *inlink)
@@ -881,6 +883,7 @@ static int do_blend(FFFrameSync *fs)
     AVFrame *mainpic, *second;
     OverlayContext *s = ctx->priv;
     AVFilterLink *inlink = ctx->inputs[0];
+    FilterLink *inl = ff_filter_link(inlink);
     int ret;
 
     ret = ff_framesync_dualinput_get_writable(fs, &mainpic, &second);
@@ -891,7 +894,7 @@ static int do_blend(FFFrameSync *fs)
 
     if (s->eval_mode == EVAL_MODE_FRAME) {
 
-        s->var_values[VAR_N] = inlink->frame_count_out;
+        s->var_values[VAR_N] = inl->frame_count_out;
         s->var_values[VAR_T] = mainpic->pts == AV_NOPTS_VALUE ?
             NAN : mainpic->pts * av_q2d(inlink->time_base);
 #if FF_API_FRAME_PKT
@@ -943,21 +946,22 @@ static int activate(AVFilterContext *ctx)
 
 #define OFFSET(x) offsetof(OverlayContext, x)
 #define FLAGS AV_OPT_FLAG_VIDEO_PARAM|AV_OPT_FLAG_FILTERING_PARAM
+#define TFLAGS AV_OPT_FLAG_VIDEO_PARAM|AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_RUNTIME_PARAM
 
 static const AVOption overlay_options[] = {
-    { "x", "set the x expression", OFFSET(x_expr), AV_OPT_TYPE_STRING, {.str = "0"}, 0, 0, FLAGS },
-    { "y", "set the y expression", OFFSET(y_expr), AV_OPT_TYPE_STRING, {.str = "0"}, 0, 0, FLAGS },
+    { "x", "set the x expression", OFFSET(x_expr), AV_OPT_TYPE_STRING, {.str = "0"}, 0, 0, TFLAGS },
+    { "y", "set the y expression", OFFSET(y_expr), AV_OPT_TYPE_STRING, {.str = "0"}, 0, 0, TFLAGS },
     { "eof_action", "Action to take when encountering EOF from secondary input ",
         OFFSET(fs.opt_eof_action), AV_OPT_TYPE_INT, { .i64 = EOF_ACTION_REPEAT },
-        EOF_ACTION_REPEAT, EOF_ACTION_PASS, .flags = FLAGS, "eof_action" },
-        { "repeat", "Repeat the previous frame.",   0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_REPEAT }, .flags = FLAGS, "eof_action" },
-        { "endall", "End both streams.",            0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_ENDALL }, .flags = FLAGS, "eof_action" },
-        { "pass",   "Pass through the main input.", 0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_PASS },   .flags = FLAGS, "eof_action" },
-    { "eval", "specify when to evaluate expressions", OFFSET(eval_mode), AV_OPT_TYPE_INT, {.i64 = EVAL_MODE_FRAME}, 0, EVAL_MODE_NB-1, FLAGS, "eval" },
+        EOF_ACTION_REPEAT, EOF_ACTION_PASS, .flags = FLAGS, .unit = "eof_action" },
+        { "repeat", "Repeat the previous frame.",   0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_REPEAT }, .flags = FLAGS, .unit = "eof_action" },
+        { "endall", "End both streams.",            0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_ENDALL }, .flags = FLAGS, .unit = "eof_action" },
+        { "pass",   "Pass through the main input.", 0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_PASS },   .flags = FLAGS, .unit = "eof_action" },
+    { "eval", "specify when to evaluate expressions", OFFSET(eval_mode), AV_OPT_TYPE_INT, {.i64 = EVAL_MODE_FRAME}, 0, EVAL_MODE_NB-1, FLAGS, .unit = "eval" },
          { "init",  "eval expressions once during initialization", 0, AV_OPT_TYPE_CONST, {.i64=EVAL_MODE_INIT},  .flags = FLAGS, .unit = "eval" },
          { "frame", "eval expressions per-frame",                  0, AV_OPT_TYPE_CONST, {.i64=EVAL_MODE_FRAME}, .flags = FLAGS, .unit = "eval" },
     { "shortest", "force termination when the shortest input terminates", OFFSET(fs.opt_shortest), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
-    { "format", "set output format", OFFSET(format), AV_OPT_TYPE_INT, {.i64=OVERLAY_FORMAT_YUV420}, 0, OVERLAY_FORMAT_NB-1, FLAGS, "format" },
+    { "format", "set output format", OFFSET(format), AV_OPT_TYPE_INT, {.i64=OVERLAY_FORMAT_YUV420}, 0, OVERLAY_FORMAT_NB-1, FLAGS, .unit = "format" },
         { "yuv420", "", 0, AV_OPT_TYPE_CONST, {.i64=OVERLAY_FORMAT_YUV420}, .flags = FLAGS, .unit = "format" },
         { "yuv420p10", "", 0, AV_OPT_TYPE_CONST, {.i64=OVERLAY_FORMAT_YUV420P10}, .flags = FLAGS, .unit = "format" },
         { "yuv422", "", 0, AV_OPT_TYPE_CONST, {.i64=OVERLAY_FORMAT_YUV422}, .flags = FLAGS, .unit = "format" },
@@ -968,7 +972,7 @@ static const AVOption overlay_options[] = {
         { "gbrp",   "", 0, AV_OPT_TYPE_CONST, {.i64=OVERLAY_FORMAT_GBRP},   .flags = FLAGS, .unit = "format" },
         { "auto",   "", 0, AV_OPT_TYPE_CONST, {.i64=OVERLAY_FORMAT_AUTO},   .flags = FLAGS, .unit = "format" },
     { "repeatlast", "repeat overlay of the last overlay frame", OFFSET(fs.opt_repeatlast), AV_OPT_TYPE_BOOL, {.i64=1}, 0, 1, FLAGS },
-    { "alpha", "alpha format", OFFSET(alpha_format), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS, "alpha_format" },
+    { "alpha", "alpha format", OFFSET(alpha_format), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS, .unit = "alpha_format" },
         { "straight",      "", 0, AV_OPT_TYPE_CONST, {.i64=0}, .flags = FLAGS, .unit = "alpha_format" },
         { "premultiplied", "", 0, AV_OPT_TYPE_CONST, {.i64=1}, .flags = FLAGS, .unit = "alpha_format" },
     { NULL }
@@ -1009,7 +1013,7 @@ const AVFilter ff_vf_overlay = {
     .process_command = process_command,
     FILTER_INPUTS(avfilter_vf_overlay_inputs),
     FILTER_OUTPUTS(avfilter_vf_overlay_outputs),
-    FILTER_QUERY_FUNC(query_formats),
+    FILTER_QUERY_FUNC2(query_formats),
     .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL |
                      AVFILTER_FLAG_SLICE_THREADS,
 };

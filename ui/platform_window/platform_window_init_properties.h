@@ -69,6 +69,7 @@ struct COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindowInitProperties {
   explicit PlatformWindowInitProperties(const gfx::Rect& bounds);
 
   PlatformWindowInitProperties(PlatformWindowInitProperties&& props);
+  PlatformWindowInitProperties& operator=(PlatformWindowInitProperties&&);
 
   ~PlatformWindowInitProperties();
 
@@ -76,9 +77,6 @@ struct COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindowInitProperties {
   PlatformWindowType type = PlatformWindowType::kWindow;
   // Sets the desired initial bounds. Can be empty.
   gfx::Rect bounds;
-  // Sets the frame insets. Can be empty.
-  // TODO(crbug.com/1306688): Use DIP for frame insets.
-  gfx::Insets frame_insets_px;
   // Tells PlatformWindow which native widget its parent holds. It is usually
   // used to find a parent from internal list of PlatformWindows.
   gfx::AcceleratedWidget parent_widget = gfx::kNullAcceleratedWidget;
@@ -105,9 +103,11 @@ struct COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindowInitProperties {
   // Specifies whether system virtual keyboard support is enabled.
   bool enable_virtual_keyboard = false;
 
-  ScenicWindowDelegate* scenic_window_delegate = nullptr;
+  raw_ptr<ScenicWindowDelegate> scenic_window_delegate = nullptr;
 #endif
 
+  // See Widget::InitParams for details.
+  bool accept_events = true;
   bool activatable = true;
   bool force_show_in_taskbar;
   bool keep_on_top = false;
@@ -138,16 +138,6 @@ struct COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindowInitProperties {
   // Wayland specific.  Holds the application ID that is used by the window
   // manager to match the desktop entry and group windows.
   std::string wayland_app_id;
-
-  // Specifies the unique session id and the restore window id.
-  int32_t restore_session_id;
-  std::optional<int32_t> restore_window_id;
-
-  // Specifies the source to get `restore_window_id` from.
-  std::optional<std::string> restore_window_id_source;
-
-  // Specifies whether the associated window is persistable.
-  bool persistable = true;
 
   // Specifies the id of the target display the window will be created on.
   std::optional<int64_t> display_id;

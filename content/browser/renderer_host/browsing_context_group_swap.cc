@@ -50,7 +50,6 @@ bool BrowsingContextGroupSwap::ShouldSwap() const {
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 bool BrowsingContextGroupSwap::ShouldClearProxiesOnCommit() const {
@@ -65,7 +64,6 @@ bool BrowsingContextGroupSwap::ShouldClearProxiesOnCommit() const {
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 bool BrowsingContextGroupSwap::ShouldClearWindowName() const {
@@ -80,7 +78,6 @@ bool BrowsingContextGroupSwap::ShouldClearWindowName() const {
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 BrowsingContextGroupSwap::BrowsingContextGroupSwap(

@@ -41,7 +41,7 @@
 #include "include/effects/SkPerlinNoiseShader.h"
 #include "include/encode/SkPngEncoder.h"
 #include "include/gpu/GpuTypes.h"
-#include "include/gpu/GrTypes.h"
+#include "include/gpu/ganesh/GrTypes.h"
 #include "include/private/base/SkTArray.h"
 #include "include/private/base/SkTo.h"
 #include "src/core/SkBitmapDevice.h"
@@ -55,14 +55,13 @@
 #include "tests/CtsEnforcement.h"
 #include "tests/Test.h"
 #include "tools/EncodeUtils.h"
-#include "tools/GpuToolUtils.h"
 #include "tools/Resources.h"
 #include "tools/ToolUtils.h"
 #include "tools/fonts/FontToolUtils.h"
 
 #if defined(SK_GANESH)
-#include "include/gpu/GrDirectContext.h"
-#include "include/gpu/GrRecordingContext.h"
+#include "include/gpu/ganesh/GrDirectContext.h"
+#include "include/gpu/ganesh/GrRecordingContext.h"
 #include "include/gpu/ganesh/SkImageGanesh.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "src/gpu/ganesh/GrCaps.h"
@@ -76,6 +75,7 @@
 #include "include/gpu/graphite/Context.h"
 #include "include/gpu/graphite/Image.h"
 #include "include/gpu/graphite/Surface.h"
+#include "tools/graphite/GraphiteToolUtils.h"
 #endif
 
 #include <algorithm>
@@ -101,7 +101,10 @@ public:
     MatrixTestImageFilter(skiatest::Reporter* reporter, const SkMatrix& expectedMatrix)
             : SkImageFilter_Base(nullptr, 0)
             , fReporter(reporter)
-            , fExpectedMatrix(expectedMatrix) {}
+            , fExpectedMatrix(expectedMatrix) {
+        // Layers have an extra pixel of padding that adjusts the coordinate space
+        fExpectedMatrix.postTranslate(1.f, 1.f);
+    }
 
 private:
     Factory getFactory() const override {
@@ -1898,7 +1901,7 @@ DEF_GANESH_TEST_FOR_RENDERING_CONTEXTS(ImageFilterMakeWithFilter_Ganesh,
 DEF_GRAPHITE_TEST_FOR_RENDERING_CONTEXTS(ImageFilterMakeWithFilter_Graphite,
                                          reporter,
                                          context,
-                                         CtsEnforcement::kNextRelease) {
+                                         CtsEnforcement::kApiLevel_V) {
     std::unique_ptr<skgpu::graphite::Recorder> recorder =
             context->makeRecorder(ToolUtils::CreateTestingRecorderOptions());
 

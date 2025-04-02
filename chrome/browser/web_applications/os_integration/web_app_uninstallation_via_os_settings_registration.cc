@@ -23,13 +23,12 @@ bool RegisterUninstallationViaOsSettingsWithOs(
     const std::string& app_name,
     const base::FilePath& profile_path) {
   NOTREACHED();
-  return true;
 }
 
 bool UnregisterUninstallationViaOsSettingsWithOs(
     const webapps::AppId& app_id,
     const base::FilePath& profile_path) {
-  NOTREACHED();
+  DUMP_WILL_BE_NOTREACHED();
   return true;
 }
 

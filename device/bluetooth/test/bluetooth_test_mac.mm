@@ -271,13 +271,6 @@ BluetoothDevice* BluetoothTestMac::SimulateLowEnergyDevice(int device_ordinal) {
     default:
       NOTREACHED() << "SimulateLowEnergyDevice not implemented for "
                    << device_ordinal;
-      identifier = nil;
-      name = nil;
-      rssi = nil;
-      uuids = nil;
-      service_data = nil;
-      manufacturer_data = nil;
-      tx_power = nil;
   }
   MockCBPeripheral* mock_peripheral =
       [[MockCBPeripheral alloc] initWithUTF8StringIdentifier:identifier

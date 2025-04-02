@@ -6,30 +6,94 @@
 
 #include "ash/birch/birch_item.h"
 #include "ash/birch/birch_model.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/shell.h"
+#include "base/callback_list.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/ash/crosapi/suggestion_service_ash.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/session_sync_service_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
+#include "components/prefs/pref_service.h"
+#include "components/sync/service/sync_service.h"
+#include "components/sync/service/sync_user_settings.h"
 #include "components/sync_sessions/open_tabs_ui_delegate.h"
 #include "components/sync_sessions/session_sync_service.h"
 
 namespace ash {
+
+namespace {
+
+BirchTabItem::DeviceFormFactor GetTabItemFormFactor(
+    syncer::DeviceInfo::FormFactor form_factor) {
+  // Convert to a BirchTabItem specific form factor to ensure any changes
+  // to DeviceInfo::FormFactor won't break the BirchTabItem's form factor.
+  switch (form_factor) {
+    case syncer::DeviceInfo::FormFactor::kUnknown:
+    case syncer::DeviceInfo::FormFactor::kAutomotive:
+    case syncer::DeviceInfo::FormFactor::kWearable:
+    case syncer::DeviceInfo::FormFactor::kTv:
+    case syncer::DeviceInfo::FormFactor::kDesktop:
+      return BirchTabItem::DeviceFormFactor::kDesktop;
+    case syncer::DeviceInfo::FormFactor::kPhone:
+      return BirchTabItem::DeviceFormFactor::kPhone;
+    case syncer::DeviceInfo::FormFactor::kTablet:
+      return BirchTabItem::DeviceFormFactor::kTablet;
+  }
+}
+
+}  // namespace
 
 BirchRecentTabsProvider::BirchRecentTabsProvider(Profile* profile)
     : profile_(profile) {}
 
 BirchRecentTabsProvider::~BirchRecentTabsProvider() = default;
 
-void BirchRecentTabsProvider::GetRecentTabs() {
+void BirchRecentTabsProvider::RequestBirchDataFetch() {
+  syncer::SyncService* sync_service =
+      SyncServiceFactory::GetForProfile(profile_);
+  // `sync_service_` can be null in some tests, so check that here.
+  bool tab_sync_enabled =
+      sync_service && sync_service->GetUserSettings()->GetSelectedTypes().Has(
+                          syncer::UserSelectableType::kTabs);
+  if (!tab_sync_enabled) {
+    // Complete the request with an empty set of tabs when tab sync is
+    // disabled
+    Shell::Get()->birch_model()->SetRecentTabItems({});
+    return;
+  }
+
+  const auto* const pref_service = profile_->GetPrefs();
+  if (!pref_service ||
+      !base::Contains(pref_service->GetList(
+                          prefs::kContextualGoogleIntegrationsConfiguration),
+                      prefs::kChromeSyncIntegrationName)) {
+    // ChromeSync integration is disabled by policy.
+    Shell::Get()->birch_model()->SetRecentTabItems({});
+    return;
+  }
+
   auto* session_sync_service =
       SessionSyncServiceFactory::GetInstance()->GetForProfile(profile_);
-
   sync_sessions::OpenTabsUIDelegate* open_tabs =
       session_sync_service->GetOpenTabsUIDelegate();
+
+  if (!open_tabs) {
+    // When no open tabs delegate is available, return early and wait for a
+    // foreign session change to occur before attempting to fetch tab items.
+    foreign_sessions_subscription_ =
+        session_sync_service->SubscribeToForeignSessionsChanged(
+            base::BindRepeating(
+                &BirchRecentTabsProvider::OnForeignSessionsChanged,
+                weak_factory_.GetWeakPtr()));
+    return;
+  }
+
   std::vector<raw_ptr<const sync_sessions::SyncedSession, VectorExperimental>>
       remote_sessions;
-
-  if (!open_tabs || !open_tabs->GetAllForeignSessions(&remote_sessions)) {
+  if (!open_tabs->GetAllForeignSessions(&remote_sessions)) {
+    Shell::Get()->birch_model()->SetRecentTabItems({});
     return;
   }
 
@@ -46,12 +110,18 @@ void BirchRecentTabsProvider::GetRecentTabs() {
         items.emplace_back(
             current_navigation.title(), current_navigation.virtual_url(),
             current_navigation.timestamp(), current_navigation.favicon_url(),
-            session->GetSessionName());
+            session->GetSessionName(),
+            GetTabItemFormFactor(session->GetDeviceFormFactor()));
       }
     }
   }
 
   Shell::Get()->birch_model()->SetRecentTabItems(std::move(items));
+}
+
+void BirchRecentTabsProvider::OnForeignSessionsChanged() {
+  foreign_sessions_subscription_ = base::CallbackListSubscription();
+  RequestBirchDataFetch();
 }
 
 }  // namespace ash

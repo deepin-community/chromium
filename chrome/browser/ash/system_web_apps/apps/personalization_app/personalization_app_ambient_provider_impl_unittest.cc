@@ -4,7 +4,9 @@
 
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_ambient_provider_impl.h"
 
+#include <algorithm>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include "ash/ambient/ambient_controller.h"
@@ -25,7 +27,6 @@
 #include "ash/webui/personalization_app/mojom/personalization_app.mojom.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
@@ -35,9 +36,11 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_web_ui.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -60,7 +63,7 @@ using ::testing::Pointee;
 
 constexpr char kFakeTestEmail[] = "fakeemail@example.com";
 const AccountId kFakeTestAccountId =
-    AccountId::FromUserEmailGaiaId(kFakeTestEmail, kFakeTestEmail);
+    AccountId::FromUserEmailGaiaId(kFakeTestEmail, GaiaId("1111"));
 
 class TestAmbientObserver
     : public ash::personalization_app::mojom::AmbientObserver {
@@ -101,8 +104,11 @@ class TestAmbientObserver
     ambient_ui_visibility_ = visibility;
   }
 
-  void OnGeolocationPermissionForSystemServicesChanged(bool enabled) override {
+  void OnGeolocationPermissionForSystemServicesChanged(
+      bool enabled,
+      bool is_user_modifiable) override {
     geolocation_permission_enabled_ = enabled;
+    is_geolocation_user_modifiable_ = is_user_modifiable;
   }
 
   mojo::PendingRemote<ash::personalization_app::mojom::AmbientObserver>
@@ -155,6 +161,11 @@ class TestAmbientObserver
     return geolocation_permission_enabled_;
   }
 
+  bool is_geolocation_user_modifiable() {
+    ambient_observer_receiver_.FlushForTesting();
+    return is_geolocation_user_modifiable_;
+  }
+
  private:
   mojo::Receiver<ash::personalization_app::mojom::AmbientObserver>
       ambient_observer_receiver_{this};
@@ -169,6 +180,7 @@ class TestAmbientObserver
   ash::AmbientUiVisibility ambient_ui_visibility_ =
       ash::AmbientUiVisibility::kClosed;
   bool geolocation_permission_enabled_ = true;
+  bool is_geolocation_user_modifiable_ = true;
   std::vector<ash::personalization_app::mojom::AmbientModeAlbumPtr> albums_;
   std::vector<GURL> previews_;
 };
@@ -183,7 +195,7 @@ class PersonalizationAppAmbientProviderImplTest : public ash::AshTestBase {
                 base::test::TaskEnvironment::TimeSource::MOCK_TIME))),
         profile_manager_(TestingBrowserProcess::GetGlobal()) {
     scoped_feature_list_.InitWithFeatures(
-        personalization_app::GetTimeOfDayEnabledFeatures(), {});
+        personalization_app::GetTimeOfDayFeatures(), {});
   }
   PersonalizationAppAmbientProviderImplTest(
       const PersonalizationAppAmbientProviderImplTest&) = delete;
@@ -291,6 +303,11 @@ class PersonalizationAppAmbientProviderImplTest : public ash::AshTestBase {
     return test_ambient_observer_.is_geolocation_enabled();
   }
 
+  bool ObservedGeolocationIsManaged() {
+    ambient_provider_remote_.FlushForTesting();
+    return !test_ambient_observer_.is_geolocation_user_modifiable();
+  }
+
   std::optional<ash::AmbientSettings>& settings() {
     return ambient_provider_->settings_;
   }
@@ -300,7 +317,10 @@ class PersonalizationAppAmbientProviderImplTest : public ash::AshTestBase {
                                       enabled);
   }
 
-  void SetGeolocationPref(bool enabled) {
+  // Depending on the `managed` argument, sets the value of the
+  // `kUserGeolocationAccessLevel` pref either in `PrefStoreType::MANAGED_STORE`
+  // or in `PrefStoreType::USER_STORE` PrefStore.
+  void SetGeolocationPref(bool enabled, bool managed) {
     GeolocationAccessLevel level;
     if (enabled) {
       level = GeolocationAccessLevel::kOnlyAllowedForSystem;
@@ -308,8 +328,15 @@ class PersonalizationAppAmbientProviderImplTest : public ash::AshTestBase {
       level = GeolocationAccessLevel::kDisallowed;
     }
 
-    profile()->GetPrefs()->SetInteger(ash::prefs::kUserGeolocationAccessLevel,
-                                      static_cast<int>(level));
+    if (managed) {
+      profile()->GetTestingPrefService()->SetManagedPref(
+          ash::prefs::kUserGeolocationAccessLevel,
+          base::Value(static_cast<int>(level)));
+    } else {
+      profile()->GetTestingPrefService()->SetUserPref(
+          ash::prefs::kUserGeolocationAccessLevel,
+          base::Value(static_cast<int>(level)));
+    }
   }
 
   void SetAmbientTheme(mojom::AmbientTheme ambient_theme) {
@@ -337,7 +364,7 @@ class PersonalizationAppAmbientProviderImplTest : public ash::AshTestBase {
     ambient_provider_->SetTopicSource(topic_source);
   }
 
-  void SetAlbumSelected(base::StringPiece id,
+  void SetAlbumSelected(std::string_view id,
                         mojom::TopicSource topic_source,
                         bool selected) {
     ambient_provider_->SetAlbumSelected(std::string(id), topic_source,
@@ -638,11 +665,26 @@ TEST_F(PersonalizationAppAmbientProviderImplTest,
 TEST_F(PersonalizationAppAmbientProviderImplTest,
        ShouldCallOnGeolocationPermissionForSystemServicesChanged) {
   SetAmbientObserver();
+
+  // Check default values:
   EXPECT_TRUE(ObservedGeolocationPermissionEnabled());
-  SetGeolocationPref(/*enabled=*/false);
+  EXPECT_FALSE(ObservedGeolocationIsManaged());
+
+  // Check consumer scenario:
+  SetGeolocationPref(/*enabled=*/false, /*managed=*/false);
   EXPECT_FALSE(ObservedGeolocationPermissionEnabled());
-  SetGeolocationPref(/*enabled=*/true);
+  EXPECT_FALSE(ObservedGeolocationIsManaged());
+  SetGeolocationPref(/*enabled=*/true, /*managed=*/false);
   EXPECT_TRUE(ObservedGeolocationPermissionEnabled());
+  EXPECT_FALSE(ObservedGeolocationIsManaged());
+
+  // Check managed scenario:
+  SetGeolocationPref(/*enabled=*/false, /*managed=*/true);
+  EXPECT_FALSE(ObservedGeolocationPermissionEnabled());
+  EXPECT_TRUE(ObservedGeolocationIsManaged());
+  SetGeolocationPref(/*enabled=*/true, /*managed=*/true);
+  EXPECT_TRUE(ObservedGeolocationPermissionEnabled());
+  EXPECT_TRUE(ObservedGeolocationIsManaged());
 }
 
 TEST_F(PersonalizationAppAmbientProviderImplTest, SetTopicSource) {
@@ -930,7 +972,7 @@ TEST_F(PersonalizationAppAmbientProviderImplTest, TestSetSelectedArtAlbum) {
 
   // The fake data has art setting '0' as enabled.
   std::vector<ash::ArtSetting> art_settings = ArtSettings();
-  auto it = base::ranges::find_if(art_settings, &ash::ArtSetting::enabled);
+  auto it = std::ranges::find_if(art_settings, &ash::ArtSetting::enabled);
   EXPECT_NE(it, art_settings.end());
   EXPECT_EQ(it->album_id, "0");
 
@@ -942,7 +984,7 @@ TEST_F(PersonalizationAppAmbientProviderImplTest, TestSetSelectedArtAlbum) {
   SetAlbumSelected(album->id, album->topic_source, album->checked);
 
   art_settings = ArtSettings();
-  EXPECT_TRUE(base::ranges::none_of(art_settings, &ash::ArtSetting::enabled));
+  EXPECT_TRUE(std::ranges::none_of(art_settings, &ash::ArtSetting::enabled));
 
   album = ash::personalization_app::mojom::AmbientModeAlbum::New();
   album->id = '1';
@@ -951,7 +993,7 @@ TEST_F(PersonalizationAppAmbientProviderImplTest, TestSetSelectedArtAlbum) {
   SetAlbumSelected(album->id, album->topic_source, album->checked);
 
   art_settings = ArtSettings();
-  it = base::ranges::find_if(art_settings, &ash::ArtSetting::enabled);
+  it = std::ranges::find_if(art_settings, &ash::ArtSetting::enabled);
   EXPECT_NE(it, art_settings.end());
   EXPECT_EQ(it->album_id, "1");
 }

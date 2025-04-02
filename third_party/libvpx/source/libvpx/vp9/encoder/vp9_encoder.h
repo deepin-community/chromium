@@ -263,6 +263,8 @@ typedef struct VP9EncoderConfig {
 
   int enable_tpl_model;
 
+  int enable_keyframe_filtering;
+
   int max_threads;
 
   unsigned int target_level;
@@ -339,6 +341,10 @@ typedef struct TileDataEnc {
 
   // Used for adaptive_rd_thresh with row multithreading
   int *row_base_thresh_freq_fact;
+  // The value of sb_rows when row_base_thresh_freq_fact is allocated.
+  // The row_base_thresh_freq_fact array has sb_rows * BLOCK_SIZES * MAX_MODES
+  // elements.
+  int sb_rows;
   MV firstpass_top_mv;
 } TileDataEnc;
 
@@ -499,6 +505,7 @@ typedef struct ARNRFilterData {
   int frame_count;
   int alt_ref_index;
   struct scale_factors sf;
+  YV12_BUFFER_CONFIG *dst;
 } ARNRFilterData;
 
 typedef struct EncFrameBuf {
@@ -796,6 +803,8 @@ typedef struct VP9_COMP {
   int mb_wiener_var_cols;
   double *mi_ssim_rdmult_scaling_factors;
 
+  int64_t *sb_mul_scale;
+
   YV12_BUFFER_CONFIG last_frame_uf;
 
   TOKENEXTRA *tile_tok[4][1 << 6];
@@ -868,7 +877,7 @@ typedef struct VP9_COMP {
   // Force recalculation of segment_ids for each mode info
   uint8_t force_update_segmentation;
 
-  YV12_BUFFER_CONFIG alt_ref_buffer;
+  YV12_BUFFER_CONFIG tf_buffer;
 
   // class responsible for adaptive
   // quantization of altref frames
@@ -889,7 +898,7 @@ typedef struct VP9_COMP {
   double total_blockiness;
   double worst_blockiness;
 
-  int bytes;
+  uint64_t bytes;
   double summed_quality;
   double summed_weights;
   double summedp_quality;
@@ -1063,8 +1072,6 @@ typedef struct VP9_COMP {
    */
   uint64_t frame_component_time[kTimingComponents];
 #endif
-  // Flag to indicate if QP and GOP for TPL are controlled by external RC.
-  int tpl_with_external_rc;
 } VP9_COMP;
 
 #if CONFIG_RATE_CTRL
@@ -1221,8 +1228,8 @@ int vp9_receive_raw_frame(VP9_COMP *cpi, vpx_enc_frame_flags_t frame_flags,
                           int64_t end_time);
 
 int vp9_get_compressed_data(VP9_COMP *cpi, unsigned int *frame_flags,
-                            size_t *size, uint8_t *dest, int64_t *time_stamp,
-                            int64_t *time_end, int flush,
+                            size_t *size, uint8_t *dest, size_t dest_size,
+                            int64_t *time_stamp, int64_t *time_end, int flush,
                             ENCODE_FRAME_RESULT *encode_frame_result);
 
 int vp9_get_preview_raw_frame(VP9_COMP *cpi, YV12_BUFFER_CONFIG *dest,
@@ -1345,7 +1352,13 @@ static INLINE int get_token_alloc(int mb_rows, int mb_cols) {
   // mb_rows, cols are in units of 16 pixels. We assume 3 planes all at full
   // resolution. We assume up to 1 token per pixel, and then allow
   // a head room of 4.
-  return mb_rows * mb_cols * (16 * 16 * 3 + 4);
+
+  // Use aligned mb_rows and mb_cols to better align with actual token sizes.
+  const int aligned_mb_rows =
+      ALIGN_POWER_OF_TWO(mb_rows, MI_BLOCK_SIZE_LOG2 - 1);
+  const int aligned_mb_cols =
+      ALIGN_POWER_OF_TWO(mb_cols, MI_BLOCK_SIZE_LOG2 - 1);
+  return aligned_mb_rows * aligned_mb_cols * (16 * 16 * 3 + 4);
 }
 
 // Get the allocated token size for a tile. It does the same calculation as in

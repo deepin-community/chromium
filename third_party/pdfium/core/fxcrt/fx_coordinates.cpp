@@ -18,10 +18,6 @@
 #include "core/fxcrt/fx_safe_types.h"
 #include "core/fxcrt/fx_system.h"
 
-#ifndef NDEBUG
-#include <ostream>
-#endif
-
 namespace {
 
 void MatchFloatRange(float f1, float f2, int* i1, int* i2) {
@@ -66,7 +62,7 @@ static_assert(sizeof(FX_RECT::bottom) == sizeof(RECT::bottom),
 
 template <>
 float CFX_VTemplate<float>::Length() const {
-  return FXSYS_sqrt2(x, y);
+  return hypotf(x, y);
 }
 
 template <>
@@ -186,20 +182,20 @@ void CFX_FloatRect::Union(const CFX_FloatRect& other_rect) {
 
 FX_RECT CFX_FloatRect::GetOuterRect() const {
   FX_RECT rect;
-  rect.left = pdfium::base::saturated_cast<int>(floor(left));
-  rect.bottom = pdfium::base::saturated_cast<int>(ceil(top));
-  rect.right = pdfium::base::saturated_cast<int>(ceil(right));
-  rect.top = pdfium::base::saturated_cast<int>(floor(bottom));
+  rect.left = pdfium::saturated_cast<int>(floor(left));
+  rect.bottom = pdfium::saturated_cast<int>(ceil(top));
+  rect.right = pdfium::saturated_cast<int>(ceil(right));
+  rect.top = pdfium::saturated_cast<int>(floor(bottom));
   rect.Normalize();
   return rect;
 }
 
 FX_RECT CFX_FloatRect::GetInnerRect() const {
   FX_RECT rect;
-  rect.left = pdfium::base::saturated_cast<int>(ceil(left));
-  rect.bottom = pdfium::base::saturated_cast<int>(floor(top));
-  rect.right = pdfium::base::saturated_cast<int>(floor(right));
-  rect.top = pdfium::base::saturated_cast<int>(ceil(bottom));
+  rect.left = pdfium::saturated_cast<int>(ceil(left));
+  rect.bottom = pdfium::saturated_cast<int>(floor(top));
+  rect.right = pdfium::saturated_cast<int>(floor(right));
+  rect.top = pdfium::saturated_cast<int>(ceil(bottom));
   rect.Normalize();
   return rect;
 }
@@ -373,20 +369,6 @@ FX_RECT CFX_RectF::GetOuterRect() const {
                  static_cast<int32_t>(ceil(bottom())));
 }
 
-#ifndef NDEBUG
-std::ostream& operator<<(std::ostream& os, const CFX_FloatRect& rect) {
-  os << "rect[w " << rect.Width() << " x h " << rect.Height() << " (left "
-     << rect.left << ", bot " << rect.bottom << ")]";
-  return os;
-}
-
-std::ostream& operator<<(std::ostream& os, const CFX_RectF& rect) {
-  os << "rect[w " << rect.Width() << " x h " << rect.Height() << " (left "
-     << rect.left << ", top " << rect.top << ")]";
-  return os;
-}
-#endif  // NDEBUG
-
 CFX_Matrix CFX_Matrix::GetInverse() const {
   CFX_Matrix inverse;
   float i = a * d - b * c;
@@ -454,7 +436,7 @@ float CFX_Matrix::GetXUnit() const {
     return (a > 0 ? a : -a);
   if (a == 0)
     return (b > 0 ? b : -b);
-  return FXSYS_sqrt2(a, b);
+  return hypotf(a, b);
 }
 
 float CFX_Matrix::GetYUnit() const {
@@ -462,7 +444,7 @@ float CFX_Matrix::GetYUnit() const {
     return (d > 0 ? d : -d);
   if (d == 0)
     return (c > 0 ? c : -c);
-  return FXSYS_sqrt2(c, d);
+  return hypotf(c, d);
 }
 
 CFX_FloatRect CFX_Matrix::GetUnitRect() const {
@@ -472,7 +454,7 @@ CFX_FloatRect CFX_Matrix::GetUnitRect() const {
 float CFX_Matrix::TransformXDistance(float dx) const {
   float fx = a * dx;
   float fy = b * dx;
-  return FXSYS_sqrt2(fx, fy);
+  return hypotf(fx, fy);
 }
 
 float CFX_Matrix::TransformDistance(float distance) const {

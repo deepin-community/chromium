@@ -45,7 +45,6 @@ bool ShouldAllowInsecurePrivateNetworkRequests(
       NOTREACHED()
           << "Invalid content setting for insecure private network requests: "
           << setting;
-      return false;
   }
 }
 

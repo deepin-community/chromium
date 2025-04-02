@@ -2,10 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/browser/service_worker/service_worker_installed_script_reader.h"
 
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/task/sequenced_task_runner.h"
@@ -23,7 +29,6 @@ class ServiceWorkerInstalledScriptReader::MetaDataSender {
   MetaDataSender(scoped_refptr<net::IOBufferWithSize> meta_data,
                  mojo::ScopedDataPipeProducerHandle handle)
       : meta_data_(std::move(meta_data)),
-        bytes_sent_(0),
         handle_(std::move(handle)),
         watcher_(FROM_HERE,
                  mojo::SimpleWatcher::ArmingPolicy::AUTOMATIC,
@@ -39,19 +44,20 @@ class ServiceWorkerInstalledScriptReader::MetaDataSender {
   void OnWritable(MojoResult) {
     // It isn't necessary to handle MojoResult here since WriteDataRaw()
     // returns an equivalent error.
-    uint32_t size = meta_data_->size() - bytes_sent_;
+    base::span<const uint8_t> bytes_to_write =
+        meta_data_->span().subspan(bytes_sent_);
+    size_t actually_written_bytes = 0;
     TRACE_EVENT2(
         "ServiceWorker",
         "ServiceWorkerInstalledScriptReader::MetaDataSender::OnWritable",
         "meta_data size", meta_data_->size(), "bytes_sent_", bytes_sent_);
-    MojoResult rv = handle_->WriteData(meta_data_->data() + bytes_sent_, &size,
-                                       MOJO_WRITE_DATA_FLAG_NONE);
+    MojoResult rv = handle_->WriteData(
+        bytes_to_write, MOJO_WRITE_DATA_FLAG_NONE, actually_written_bytes);
     switch (rv) {
       case MOJO_RESULT_INVALID_ARGUMENT:
       case MOJO_RESULT_OUT_OF_RANGE:
       case MOJO_RESULT_BUSY:
         NOTREACHED();
-        return;
       case MOJO_RESULT_FAILED_PRECONDITION:
         OnCompleted(false);
         return;
@@ -64,13 +70,14 @@ class ServiceWorkerInstalledScriptReader::MetaDataSender {
         OnCompleted(false);
         return;
     }
-    bytes_sent_ += size;
+    bytes_sent_ += actually_written_bytes;
     TRACE_EVENT2(
         "ServiceWorker",
         "ServiceWorkerInstalledScriptReader::MetaDataSender::OnWritable",
         "meta_data size", meta_data_->size(), "new bytes_sent_", bytes_sent_);
-    if (meta_data_->size() == bytes_sent_)
+    if (static_cast<size_t>(meta_data_->size()) == bytes_sent_) {
       OnCompleted(true);
+    }
   }
 
   void OnCompleted(bool success) {
@@ -86,7 +93,7 @@ class ServiceWorkerInstalledScriptReader::MetaDataSender {
   base::OnceCallback<void(bool /* success */)> callback_;
 
   scoped_refptr<net::IOBufferWithSize> meta_data_;
-  int64_t bytes_sent_;
+  size_t bytes_sent_ = 0;
   mojo::ScopedDataPipeProducerHandle handle_;
   mojo::SimpleWatcher watcher_;
 
@@ -169,7 +176,7 @@ void ServiceWorkerInstalledScriptReader::OnReadDataPrepared(
       return;
     }
 
-    // TODO(crbug.com/1055677): Avoid copying |metadata| if |client_| doesn't
+    // TODO(crbug.com/40120038): Avoid copying |metadata| if |client_| doesn't
     // need it.
     auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(metadata->size());
     memmove(buffer->data(), metadata->data(), metadata->size());

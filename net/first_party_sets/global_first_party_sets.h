@@ -10,6 +10,7 @@
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/function_ref.h"
+#include "base/types/optional_ref.h"
 #include "base/version.h"
 #include "net/base/net_export.h"
 #include "net/base/schemeful_site.h"
@@ -76,7 +77,7 @@ class NET_EXPORT GlobalFirstPartySets {
   // Computes the First-Party Set metadata related to the given request context.
   FirstPartySetMetadata ComputeMetadata(
       const SchemefulSite& site,
-      const SchemefulSite* top_frame_site,
+      base::optional_ref<const SchemefulSite> top_frame_site,
       const FirstPartySetsContextConfig& fps_context_config) const;
 
   // Modifies this instance such that it will respect the given
@@ -151,6 +152,27 @@ class NET_EXPORT GlobalFirstPartySets {
       const SchemefulSite& site,
       const FirstPartySetsContextConfig* config) const;
 
+  using FlattenedSets = base::flat_map<SchemefulSite, FirstPartySetEntry>;
+
+  // Finds the existing primary sites whose sets are affected by a set of custom
+  // additions.
+  base::flat_map<SchemefulSite, FirstPartySetEntry>
+  FindPrimariesAffectedByAdditions(const FlattenedSets& additions) const;
+
+  // Finds the existing primary sites whose sets are affected by a set of custom
+  // replacements.
+  //
+  // Returns the set of existing primaries that may become a singleton (along
+  // with the sites in their set that have left due to the replacements); and
+  // the set of existing primaries that themselves were in a replacement set.
+  std::pair<base::flat_map<SchemefulSite, base::flat_set<SchemefulSite>>,
+            base::flat_set<SchemefulSite>>
+  FindPrimariesAffectedByReplacements(
+      const FlattenedSets& replacements,
+      const FlattenedSets& additions,
+      const base::flat_map<SchemefulSite, FirstPartySetEntry>&
+          addition_intersected_primaries) const;
+
   // Preprocesses a collection of "addition" sets, such that any sets that
   // transitively overlap (when taking the current `entries_` of this map, plus
   // the manual config, into account) are unioned together. I.e., this ensures
@@ -173,9 +195,9 @@ class NET_EXPORT GlobalFirstPartySets {
   void ForEachAlias(base::FunctionRef<void(const SchemefulSite&,
                                            const SchemefulSite&)> f) const;
 
-  // Returns true iff this instance contains a singleton set (a set with only
-  // one site).
-  bool ContainsSingleton() const;
+  // Synchronously iterate over all the effective entries. Returns true iff all
+  // the entries are valid.
+  bool IsValid(const FirstPartySetsContextConfig* config = nullptr) const;
 
   // The version associated with the component_updater-provided public sets.
   // This may be invalid if the "First-Party Sets" component has not been

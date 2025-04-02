@@ -21,6 +21,7 @@
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/controls/textfield/textfield_test_api.h"
+#include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
 
@@ -46,9 +47,8 @@ class AXSystemCaretWinTest : public test::DesktopWidgetTest {
     textfield_->SetBounds(0, 0, 200, 20);
     textfield_->SetText(u"Some text.");
     widget_->GetRootView()->AddChildView(textfield_.get());
-    test::WidgetActivationWaiter waiter(widget_, true);
     widget_->Show();
-    waiter.Wait();
+    test::WaitForWidgetActive(widget_, true);
     textfield_->RequestFocus();
     ASSERT_TRUE(widget_->IsActive());
     ASSERT_TRUE(textfield_->HasFocus());
@@ -142,8 +142,9 @@ WinAccessibilityCaretEventMonitor::~WinAccessibilityCaretEventMonitor() {
 void WinAccessibilityCaretEventMonitor::WaitForNextEvent(DWORD* out_event,
                                                          UINT* out_role,
                                                          UINT* out_state) {
-  if (event_queue_.empty())
+  if (event_queue_.empty()) {
     loop_runner_.Run();
+  }
 
   EventInfo event_info = event_queue_.front();
   event_queue_.pop_front();
@@ -157,16 +158,18 @@ void WinAccessibilityCaretEventMonitor::WaitForNextEvent(DWORD* out_event,
                                           child_variant.Receive()));
 
   base::win::ScopedVariant role_variant;
-  if (S_OK == acc_obj->get_accRole(child_variant, role_variant.Receive()))
+  if (S_OK == acc_obj->get_accRole(child_variant, role_variant.Receive())) {
     *out_role = V_I4(role_variant.ptr());
-  else
+  } else {
     *out_role = 0;
+  }
 
   base::win::ScopedVariant state_variant;
-  if (S_OK == acc_obj->get_accState(child_variant, state_variant.Receive()))
+  if (S_OK == acc_obj->get_accState(child_variant, state_variant.Receive())) {
     *out_state = V_I4(state_variant.ptr());
-  else
+  } else {
     *out_state = 0;
+  }
 }
 
 void WinAccessibilityCaretEventMonitor::OnWinEventHook(HWINEVENTHOOK handle,
@@ -304,7 +307,7 @@ TEST_F(AXSystemCaretWinTest, TestMovingWindow) {
   EXPECT_EQ(height, height3);
 }
 
-// TODO(https://crbug.com/1294822): This test is flaky.
+// TODO(crbug.com/40820766): This test is flaky.
 TEST_F(AXSystemCaretWinTest, DISABLED_TestCaretMSAAEvents) {
   TextfieldTestApi textfield_test_api(textfield_);
   Microsoft::WRL::ComPtr<IAccessible> caret_accessible;
@@ -351,11 +354,10 @@ TEST_F(AXSystemCaretWinTest, DISABLED_TestCaretMSAAEvents) {
     LabelButton button{Button::PressedCallback(), std::u16string()};
     button.SetBounds(500, 0, 200, 20);
     widget_->GetRootView()->AddChildView(&button);
-    test::WidgetActivationWaiter waiter(widget_, true);
     WinAccessibilityCaretEventMonitor monitor(EVENT_OBJECT_SHOW,
                                               EVENT_OBJECT_LOCATIONCHANGE);
     widget_->Show();
-    waiter.Wait();
+    test::WaitForWidgetActive(widget_, true);
     button.SetFocusBehavior(View::FocusBehavior::ALWAYS);
     button.RequestFocus();
     monitor.WaitForNextEvent(&event, &role, &state);

@@ -44,37 +44,33 @@ const char kDictionaryPrefName[] = "pref.dictionary";
 const char kCustomMergePrefName[] = "pref.custom";
 
 const char kStringPriorityPrefName[] = "priority.pref.string";
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 const char kStringOsPrefName[] = "os.pref.string";
 const char kStringOsPriorityPrefName[] = "os.priority.pref.string";
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // Assigning an id of 0 to all the test prefs.
-const std::unordered_map<std::string, SyncablePrefMetadata>
-    kSyncablePrefsDatabase = {
-        {kStringPrefName,
-         {0, syncer::PREFERENCES, PrefSensitivity::kNone,
-          MergeBehavior::kNone}},
-        {kListPrefName,
-         {0, syncer::PREFERENCES, PrefSensitivity::kNone,
-          MergeBehavior::kMergeableListWithRewriteOnUpdate}},
-        {kDictionaryPrefName,
-         {0, syncer::PREFERENCES, PrefSensitivity::kNone,
-          MergeBehavior::kMergeableDict}},
-        {kCustomMergePrefName,
-         {0, syncer::PREFERENCES, PrefSensitivity::kNone,
-          MergeBehavior::kCustom}},
-        {kStringPriorityPrefName,
-         {0, syncer::PRIORITY_PREFERENCES, PrefSensitivity::kNone,
-          MergeBehavior::kNone}},
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-        {kStringOsPrefName,
-         {0, syncer::OS_PREFERENCES, PrefSensitivity::kNone,
-          MergeBehavior::kNone}},
-        {kStringOsPriorityPrefName,
-         {0, syncer::OS_PRIORITY_PREFERENCES, PrefSensitivity::kNone,
-          MergeBehavior::kNone}},
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+const TestSyncablePrefsDatabase::PrefsMap kSyncablePrefsDatabase = {
+    {kStringPrefName,
+     {0, syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+    {kListPrefName,
+     {0, syncer::PREFERENCES, PrefSensitivity::kNone,
+      MergeBehavior::kMergeableListWithRewriteOnUpdate}},
+    {kDictionaryPrefName,
+     {0, syncer::PREFERENCES, PrefSensitivity::kNone,
+      MergeBehavior::kMergeableDict}},
+    {kCustomMergePrefName,
+     {0, syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kCustom}},
+    {kStringPriorityPrefName,
+     {0, syncer::PRIORITY_PREFERENCES, PrefSensitivity::kNone,
+      MergeBehavior::kNone}},
+#if BUILDFLAG(IS_CHROMEOS)
+    {kStringOsPrefName,
+     {0, syncer::OS_PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+    {kStringOsPriorityPrefName,
+     {0, syncer::OS_PRIORITY_PREFERENCES, PrefSensitivity::kNone,
+      MergeBehavior::kNone}},
+#endif  // BUILDFLAG(IS_CHROMEOS)
 };
 
 // Creates SyncData for a remote pref change.
@@ -88,8 +84,8 @@ syncer::SyncData CreateRemoteSyncData(const std::string& name,
   pref_specifics->set_name(name);
   pref_specifics->set_value(serialized);
   return syncer::SyncData::CreateRemoteData(
-      specifics, syncer::ClientTagHash::FromUnhashed(
-                     syncer::ModelType::PREFERENCES, name));
+      specifics,
+      syncer::ClientTagHash::FromUnhashed(syncer::DataType::PREFERENCES, name));
 }
 
 class TestPrefModelAssociatorClient : public PrefModelAssociatorClient {
@@ -103,7 +99,7 @@ class TestPrefModelAssociatorClient : public PrefModelAssociatorClient {
 
   // PrefModelAssociatorClient implementation.
   base::Value MaybeMergePreferenceValues(
-      const std::string& pref_name,
+      std::string_view pref_name,
       const base::Value& local_value,
       const base::Value& server_value) const override {
     if (pref_name == kCustomMergePrefName) {
@@ -471,7 +467,7 @@ TEST_F(DictionaryPreferenceMergeTest, MergeValueToDictionary) {
   base::Value::Dict server_dict_value;
   server_dict_value.SetByDottedPath("key.subkey", 0);
 
-  // TODO(https://crbug.com/1187026): Migrate MergePreference() to
+  // TODO(crbug.com/40754070): Migrate MergePreference() to
   // take a base::Value::Dict.
   base::Value merged_value(helper::MergePreference(
       client_.get(), kDictionaryPrefName, base::Value(local_dict_value.Clone()),
@@ -601,7 +597,7 @@ TEST_F(SyncablePrefsDatabaseTest, ShouldAllowRegisteringSyncablePriorityPrefs) {
               NotNull());
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(SyncablePrefsDatabaseTest, ShouldAllowRegisteringSyncableOSPrefs) {
   pref_registry_->RegisterStringPref(
       kStringOsPrefName, std::string(),
@@ -664,7 +660,7 @@ TEST_F(SyncablePrefsDatabaseDeathTest,
       kExpectedErrorMessageHint);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(SyncablePrefsDatabaseDeathTest, ShouldFailRegisteringIllegalOSPrefs) {
   const std::string kIllegalStringPrefName = "not-allowed_string_pref";
   const std::string kIllegalListPrefName = "not-allowed_list_pref";
@@ -725,7 +721,7 @@ TEST_F(SyncablePrefsDatabaseDeathTest,
                                kStringPriorityPrefName, std::string(),
                                user_prefs::PrefRegistrySyncable::SYNCABLE_PREF),
                            kExpectedErrorMessageHint);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   EXPECT_DCHECK_DEATH_WITH(
       pref_registry_->RegisterStringPref(
           kStringOsPrefName, std::string(),

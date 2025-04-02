@@ -245,7 +245,7 @@ TEST_F(ActionIdMapTest, MapBetweenEnumAndString) {
 #include "ui/actions/action_id_macros.inc"
 
 TEST_F(ActionIdMapTest, MergeMaps) {
-  auto test_action_map = base::MakeFlatMap<ActionId, std::string>(
+  auto test_action_map = base::flat_map<ActionId, std::string>(
       std::vector<std::pair<ActionId, std::string>>{TEST_ACTION_IDS});
   ActionIdMap::AddActionIdToStringMappings(test_action_map);
 
@@ -320,6 +320,7 @@ TEST_F(ActionItemTest, ActionBuilderChildrenTest) {
               .CopyAddressTo(&child_action2)
               .SetActionId(kActionTest3)
               .SetChecked(true)
+              .SetIsShowingBubble(true)
               .SetText(kChild2Text));
   // clang-format on
   auto& manager = ActionManager::GetForTesting();
@@ -335,12 +336,14 @@ TEST_F(ActionItemTest, ActionBuilderChildrenTest) {
   ASSERT_TRUE(child_action_id1);
   EXPECT_EQ(child_action_id1.value(), kActionTest2);
   EXPECT_FALSE(child_action1->GetChecked());
+  EXPECT_FALSE(child_action1->GetIsShowingBubble());
 
   EXPECT_EQ(child_action2->GetText(), kChild2Text);
   auto child_action_id2 = child_action2->GetActionId();
   ASSERT_TRUE(child_action_id2);
   EXPECT_EQ(child_action_id2.value(), kActionTest3);
   EXPECT_TRUE(child_action2->GetChecked());
+  EXPECT_TRUE(child_action2->GetIsShowingBubble());
 
   EXPECT_FALSE(root_action->GetEnabled());
   EXPECT_EQ(action_invoked_count, 0);

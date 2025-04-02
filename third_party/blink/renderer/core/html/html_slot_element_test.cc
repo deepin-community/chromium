@@ -6,8 +6,8 @@
 
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
+#include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 
@@ -158,7 +158,7 @@ TEST_F(HTMLSlotElementInDocumentTest, RecalcAssignedNodeStyleForReattach) {
   Element& span = *GetDocument().getElementById(AtomicString("span"));
 
   ShadowRoot& shadow_root =
-      host.AttachShadowRootForTesting(ShadowRootType::kOpen);
+      host.AttachShadowRootForTesting(ShadowRootMode::kOpen);
 
   shadow_root.setInnerHTML(R"HTML(<span><slot /></span>)HTML");
 
@@ -182,7 +182,7 @@ TEST_F(HTMLSlotElementInDocumentTest, SlotableFallback) {
 
   Element& host = *GetDocument().getElementById(AtomicString("host"));
   ShadowRoot& shadow_root =
-      host.AttachShadowRootForTesting(ShadowRootType::kOpen);
+      host.AttachShadowRootForTesting(ShadowRootMode::kOpen);
 
   shadow_root.setInnerHTML(R"HTML(<slot><span></span><!-- -->text</slot>)HTML");
 

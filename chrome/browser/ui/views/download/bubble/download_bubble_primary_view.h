@@ -5,8 +5,9 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_DOWNLOAD_BUBBLE_DOWNLOAD_BUBBLE_PRIMARY_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_DOWNLOAD_BUBBLE_DOWNLOAD_BUBBLE_PRIMARY_VIEW_H_
 
+#include <string_view>
+
 #include "base/memory/raw_ptr.h"
-#include "base/strings/string_piece.h"
 #include "chrome/browser/download/download_ui_model.h"
 #include "chrome/browser/ui/download/download_bubble_row_list_view_info.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -53,11 +54,8 @@ class DownloadBubblePrimaryView : public views::FlexLayoutView {
 
   views::ScrollView* scroll_view_for_testing() { return scroll_view_; }
 
-  // Whether this primary view is a partial view.
-  virtual bool IsPartialView() const = 0;
-
  protected:
-  // TODO(crbug.com/1344515): Add support for refreshing the scroll view
+  // TODO(crbug.com/40853007): Add support for refreshing the scroll view
   // contents.
   void BuildAndAddScrollView(
       base::WeakPtr<Browser> browser,
@@ -71,10 +69,6 @@ class DownloadBubblePrimaryView : public views::FlexLayoutView {
   // Maybe show the banner informing the user that any files downloaded
   // in OTR mode are visible to anyone on the device.
   void MaybeAddOtrInfoRow(Browser* browser);
-
-  // Log the histogram for how long the bubble was visible.
-  void LogVisibleTimeMetrics() const;
-  virtual base::StringPiece GetVisibleTimeHistogramName() const = 0;
 
  private:
   // The ScrollView holding the DownloadBubbleRowListView with the download

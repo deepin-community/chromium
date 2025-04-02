@@ -11,7 +11,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/strings/escape.h"
-#include "components/navigation_interception/jni_headers/InterceptNavigationDelegate_jni.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
@@ -31,6 +30,9 @@
 #include "url/android/gurl_android.h"
 #include "url/gurl.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/navigation_interception/jni_headers/InterceptNavigationDelegate_jni.h"
+
 using base::android::ConvertUTF8ToJavaString;
 using base::android::ScopedJavaLocalRef;
 using content::BrowserThread;
@@ -45,18 +47,11 @@ namespace {
 const void* const kInterceptNavigationDelegateUserDataKey =
     &kInterceptNavigationDelegateUserDataKey;
 
-bool CheckIfShouldIgnoreNavigationOnUIThread(
-    content::NavigationHandle* navigation_handle) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(navigation_handle);
-
-  InterceptNavigationDelegate* intercept_navigation_delegate =
-      InterceptNavigationDelegate::Get(navigation_handle->GetWebContents());
-  if (!intercept_navigation_delegate)
-    return false;
-
-  return intercept_navigation_delegate->ShouldIgnoreNavigation(
-      navigation_handle);
+void AllowNavigationToProceed(
+    content::NavigationHandle* navigation_handle,
+    bool should_run_async,
+    InterceptNavigationThrottle::ResultCallback result_callback) {
+  std::move(result_callback).Run(false);
 }
 
 class RedirectURLLoader : public network::mojom::URLLoader {
@@ -115,8 +110,6 @@ class RedirectURLLoader : public network::mojom::URLLoader {
   }
   void SetPriority(net::RequestPriority priority,
                    int intra_priority_value) override {}
-  void PauseReadingBodyFromNet() override {}
-  void ResumeReadingBodyFromNet() override {}
 
   mojo::Remote<network::mojom::URLLoaderClient> client_;
   network::ResourceRequest request_;
@@ -159,35 +152,60 @@ InterceptNavigationDelegate::MaybeCreateThrottleFor(
   if (!handle->IsInPrimaryMainFrame())
     return nullptr;
 
+  InterceptNavigationDelegate* intercept_navigation_delegate =
+      InterceptNavigationDelegate::Get(handle->GetWebContents());
+
+  if (!intercept_navigation_delegate) {
+    return std::make_unique<InterceptNavigationThrottle>(
+        handle, base::BindRepeating(&AllowNavigationToProceed), mode,
+        base::DoNothing());
+  }
+
   return std::make_unique<InterceptNavigationThrottle>(
-      handle, base::BindRepeating(&CheckIfShouldIgnoreNavigationOnUIThread),
-      mode);
+      handle,
+      base::BindRepeating(&InterceptNavigationDelegate::ShouldIgnoreNavigation,
+                          base::Unretained(intercept_navigation_delegate)),
+      mode,
+      base::BindRepeating(
+          &InterceptNavigationDelegate::RequestFinishPendingShouldIgnoreCheck,
+          base::Unretained(intercept_navigation_delegate)));
 }
 
 InterceptNavigationDelegate::InterceptNavigationDelegate(
     JNIEnv* env,
-    jobject jdelegate,
+    const jni_zero::JavaRef<jobject>& jdelegate,
     bool escape_external_handler_value)
     : weak_jdelegate_(env, jdelegate),
       escape_external_handler_value_(escape_external_handler_value) {}
 
 InterceptNavigationDelegate::~InterceptNavigationDelegate() = default;
 
-bool InterceptNavigationDelegate::ShouldIgnoreNavigation(
-    content::NavigationHandle* navigation_handle) {
+void InterceptNavigationDelegate::ShouldIgnoreNavigation(
+    content::NavigationHandle* navigation_handle,
+    bool should_run_async,
+    InterceptNavigationThrottle::ResultCallback result_callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  // Avoid having two outstanding checks at once for simplicity.
+  if (should_ignore_result_callback_) {
+    RequestFinishPendingShouldIgnoreCheck();
+  }
   GURL escaped_url = escape_external_handler_value_
                          ? GURL(base::EscapeExternalHandlerValue(
                                navigation_handle->GetURL().spec()))
                          : navigation_handle->GetURL();
 
-  if (!escaped_url.is_valid())
-    return false;
+  if (!escaped_url.is_valid()) {
+    std::move(result_callback).Run(false);
+    return;
+  }
 
   JNIEnv* env = base::android::AttachCurrentThread();
   ScopedJavaLocalRef<jobject> jdelegate = weak_jdelegate_.get(env);
 
-  if (jdelegate.is_null())
-    return false;
+  if (jdelegate.is_null()) {
+    std::move(result_callback).Run(false);
+    return;
+  }
 
   bool hidden_cross_frame = false;
   // Only main frame navigations use this path, so we only need to check if the
@@ -216,10 +234,28 @@ bool InterceptNavigationDelegate::ShouldIgnoreNavigation(
                       navigation_handle->SandboxFlagsInitiator() !=
                           network::mojom::WebSandboxFlags::kNone;
 
-  return Java_InterceptNavigationDelegate_shouldIgnoreNavigation(
+  should_ignore_result_callback_ = std::move(result_callback);
+  Java_InterceptNavigationDelegate_callShouldIgnoreNavigation(
       env, jdelegate, navigation_handle->GetJavaNavigationHandle(),
       url::GURLAndroid::FromNativeGURL(env, escaped_url), hidden_cross_frame,
-      is_sandboxed);
+      is_sandboxed, should_run_async);
+}
+
+void InterceptNavigationDelegate::OnShouldIgnoreNavigationResult(
+    bool should_ignore) {
+  std::move(should_ignore_result_callback_).Run(should_ignore);
+}
+
+void InterceptNavigationDelegate::RequestFinishPendingShouldIgnoreCheck() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> jdelegate = weak_jdelegate_.get(env);
+
+  if (jdelegate.is_null()) {
+    OnShouldIgnoreNavigationResult(false);
+    return;
+  }
+  Java_InterceptNavigationDelegate_requestFinishPendingShouldIgnoreCheck(
+      env, jdelegate);
 }
 
 void InterceptNavigationDelegate::HandleSubframeExternalProtocol(
@@ -249,10 +285,11 @@ void InterceptNavigationDelegate::HandleSubframeExternalProtocol(
       Java_InterceptNavigationDelegate_handleSubframeExternalProtocol(
           env, jdelegate, url::GURLAndroid::FromNativeGURL(env, escaped_url),
           page_transition, has_user_gesture,
-          initiating_origin ? initiating_origin->ToJavaObject() : nullptr);
+          initiating_origin ? initiating_origin->ToJavaObject(env) : nullptr);
   if (j_gurl.is_null())
     return;
-  subframe_redirect_url_ = url::GURLAndroid::ToNativeGURL(env, j_gurl);
+  subframe_redirect_url_ =
+      std::make_unique<GURL>(url::GURLAndroid::ToNativeGURL(env, j_gurl));
 
   mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver =
       out_factory->InitWithNewPipeAndPassReceiver();
@@ -304,8 +341,25 @@ void InterceptNavigationDelegate::OnSubframeAsyncActionTaken(
   // subframe_redirect_url_ no longer empty indicates the async action has been
   // taken.
   subframe_redirect_url_ =
-      j_gurl.is_null() ? nullptr : url::GURLAndroid::ToNativeGURL(env, j_gurl);
+      j_gurl.is_null()
+          ? nullptr
+          : std::make_unique<GURL>(url::GURLAndroid::ToNativeGURL(env, j_gurl));
   MaybeHandleSubframeAction();
+}
+
+static void JNI_InterceptNavigationDelegate_OnShouldIgnoreNavigationResult(
+    JNIEnv* env,
+    const base::android::JavaParamRef<jobject>& jweb_contents,
+    jboolean should_ignore) {
+  content::WebContents* web_contents =
+      content::WebContents::FromJavaWebContents(jweb_contents);
+  if (!web_contents) {
+    return;
+  }
+  navigation_interception::InterceptNavigationDelegate* delegate =
+      navigation_interception::InterceptNavigationDelegate::Get(web_contents);
+  CHECK(delegate);
+  delegate->OnShouldIgnoreNavigationResult(should_ignore);
 }
 
 }  // namespace navigation_interception

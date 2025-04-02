@@ -27,8 +27,9 @@ WordBoundaries::~WordBoundaries() = default;
 
 aura::Window* GetWindowParentIncludingTransient(aura::Window* window) {
   aura::Window* transient_parent = wm::GetTransientParent(window);
-  if (transient_parent)
+  if (transient_parent) {
     return transient_parent;
+  }
 
   return window->parent();
 }
@@ -54,9 +55,9 @@ WordBoundaries ComputeWordBoundaries(const std::u16string& text) {
 
 std::vector<int32_t> ComputeTextOffsets(gfx::RenderText* render_text) {
   std::vector<int32_t> offsets;
-  // TODO(https://crbug.com/1085014): Allow elided text once the support for
+  // TODO(crbug.com/40132003): Allow elided text once the support for
   // elided text in `RenderText::GetLookupDataForRange` is completed.
-  // TODO(https://crbug.com/1485632): Add support for multiline textfields.
+  // TODO(crbug.com/40933356): Add support for multiline textfields.
   if (!render_text || render_text->multiline() ||
       render_text->elide_behavior() == gfx::ELIDE_MIDDLE ||
       render_text->elide_behavior() == gfx::ELIDE_HEAD ||
@@ -64,7 +65,7 @@ std::vector<int32_t> ComputeTextOffsets(gfx::RenderText* render_text) {
     return offsets;
   }
 
-  // TODO(https://crbug.com/1505805): Add a maximum length check to avoid hangs.
+  // TODO(crbug.com/40946445): Add a maximum length check to avoid hangs.
   size_t begin_position = 0;
   int last_x = 0;
 

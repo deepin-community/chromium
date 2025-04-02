@@ -10,6 +10,7 @@
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -65,14 +66,15 @@ std::vector<std::u16string> GenerateEnterpriseMessage(
     message.push_back(l10n_util::GetStringUTF16(
         IDS_POLICY_BLOCKED_EXTENSIONS_ALERT_ITEM_TITLE));
     for (const auto& extension : forbidden) {
-      message.push_back(
-          l10n_util::GetStringFUTF16(IDS_BLOCKLISTED_EXTENSIONS_ALERT_ITEM,
-                                     base::UTF8ToUTF16(extension->name())));
+      message.push_back(l10n_util::GetStringFUTF16(
+          IDS_BLOCKLISTED_EXTENSIONS_ALERT_ITEM,
+          util::GetFixupExtensionNameForUIDisplay(extension->name())));
     }
   } else {
     message.push_back(l10n_util::GetStringFUTF16(
         IDS_POLICY_BLOCKED_EXTENSION_ALERT_ITEM_DETAIL,
-        base::UTF8ToUTF16(forbidden.begin()->get()->name())));
+        util::GetFixupExtensionNameForUIDisplay(
+            forbidden.begin()->get()->name())));
   }
   return message;
 }
@@ -91,17 +93,18 @@ std::vector<std::u16string> GenerateMessage(
   }
 
   if (forbidden.size() == 1) {
-    message.push_back(l10n_util::GetStringFUTF16(
-        IDS_EXTENSION_ALERT_ITEM_BLOCKLISTED_MALWARE,
-        base::UTF8ToUTF16(forbidden.begin()->get()->name())));
+    message.push_back(
+        l10n_util::GetStringFUTF16(IDS_EXTENSION_ALERT_ITEM_BLOCKLISTED_MALWARE,
+                                   util::GetFixupExtensionNameForUIDisplay(
+                                       forbidden.begin()->get()->name())));
     return message;
   }
   message.push_back(l10n_util::GetStringUTF16(
       IDS_EXTENSIONS_ALERT_ITEM_BLOCKLISTED_MALWARE_TITLE));
   for (const auto& extension : forbidden) {
-    message.push_back(
-        l10n_util::GetStringFUTF16(IDS_BLOCKLISTED_EXTENSIONS_ALERT_ITEM,
-                                   base::UTF8ToUTF16(extension->name())));
+    message.push_back(l10n_util::GetStringFUTF16(
+        IDS_BLOCKLISTED_EXTENSIONS_ALERT_ITEM,
+        util::GetFixupExtensionNameForUIDisplay(extension->name())));
   }
   return message;
 }
@@ -121,8 +124,7 @@ class ExtensionGlobalError : public GlobalErrorWithStandardBubble {
         extension_count_++;
       }
       if (management_policy_ &&
-          !management_policy_->UserMayLoad(extension.get(),
-                                           nullptr /*=ignore error */)) {
+          !management_policy_->UserMayLoad(extension.get())) {
         item_blocked_by_policy_exists_ = true;
       }
     }
@@ -135,8 +137,7 @@ class ExtensionGlobalError : public GlobalErrorWithStandardBubble {
     // |item_blocked_by_policy_exists_| may also need to be updated.
     if (management_policy_) {
       for (const auto& extension : delegate_->GetBlocklistedExtensions()) {
-        if (!management_policy_->UserMayLoad(extension.get(),
-                                             nullptr /*=ignore error */)) {
+        if (!management_policy_->UserMayLoad(extension.get())) {
           item_blocked_by_policy_exists_ = true;
           break;
         }
@@ -148,15 +149,9 @@ class ExtensionGlobalError : public GlobalErrorWithStandardBubble {
   // GlobalError overrides:
   bool HasMenuItem() override { return false; }
 
-  int MenuItemCommandID() override {
-    NOTREACHED();
-    return 0;
-  }
+  int MenuItemCommandID() override { NOTREACHED(); }
 
-  std::u16string MenuItemLabel() override {
-    NOTREACHED();
-    return {};
-  }
+  std::u16string MenuItemLabel() override { NOTREACHED(); }
 
   void ExecuteMenuItem(Browser* browser) override { NOTREACHED(); }
 

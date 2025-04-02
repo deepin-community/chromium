@@ -2,17 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/browser/browser_switcher/alternative_browser_driver.h"
 
 #include <stdlib.h>
 
+#include <algorithm>
 #include <string_view>
 
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/process/launch.h"
-#include "base/ranges/algorithm.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
@@ -33,7 +37,7 @@ using LaunchCallback = AlternativeBrowserDriver::LaunchCallback;
 
 const char kUrlVarName[] = "${url}";
 
-// TODO(crbug.com/1124758): add ${edge} on macOS/Linux once it's released on
+// TODO(crbug.com/40147515): add ${edge} on macOS/Linux once it's released on
 // those platforms.
 
 #if BUILDFLAG(IS_MAC)
@@ -118,7 +122,7 @@ void ExpandEnvironmentVariables(std::string* arg) {
 
 #if BUILDFLAG(IS_MAC)
 bool ContainsUrlVarName(const std::vector<std::string>& tokens) {
-  return base::ranges::any_of(tokens, [](const std::string& token) {
+  return std::ranges::any_of(tokens, [](const std::string& token) {
     return token.find(kUrlVarName) != std::string::npos;
   });
 }
@@ -141,7 +145,7 @@ void AppendCommandLineArguments(base::CommandLine* cmd_line,
     cmd_line->AppendArg(url.spec());
 }
 
-const BrowserVarMapping* FindBrowserMapping(base::StringPiece path) {
+const BrowserVarMapping* FindBrowserMapping(std::string_view path) {
 #if BUILDFLAG(IS_MAC)
   // Unlike most POSIX platforms, MacOS always has another browser than Chrome,
   // so admins don't have to explicitly configure one.

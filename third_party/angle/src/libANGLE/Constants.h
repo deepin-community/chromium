@@ -66,7 +66,7 @@ enum
     IMPLEMENTATION_MAX_2D_TEXTURE_SIZE         = 32768,
     IMPLEMENTATION_MAX_CUBE_MAP_TEXTURE_SIZE   = 32768,
     IMPLEMENTATION_MAX_3D_TEXTURE_SIZE         = 16384,
-    IMPLEMENTATION_MAX_2D_ARRAY_TEXTURE_LAYERS = 2048,
+    IMPLEMENTATION_MAX_2D_ARRAY_TEXTURE_LAYERS = 4096,
 
     // 1+log2 of max of MAX_*_TEXTURE_SIZE
     IMPLEMENTATION_MAX_TEXTURE_LEVELS = 16,
@@ -102,7 +102,7 @@ enum
 
     // QCOM foveated rendering constants
     // We support a max of 1 layer and 2 focal points, for now
-    // TODO (anglebug.com/8484): Implement support for multiple layers
+    // TODO (anglebug.com/42266906): Implement support for multiple layers
     IMPLEMENTATION_MAX_NUM_LAYERS   = 1,
     IMPLEMENTATION_MAX_FOCAL_POINTS = 2,
 };
@@ -131,5 +131,19 @@ constexpr uint32_t kMinTextureBufferOffsetAlignment = 256;
 }  // namespace limits
 
 }  // namespace gl
+
+namespace cl
+{
+enum
+{
+    // Implementation maximums
+
+    // CL requires a min of 128 maximum read images as kernel arguments
+    IMPLEMENATION_MAX_READ_IMAGES = 128,
+
+    // CL requires a min of 64 maximum write images as kernel arguments
+    IMPLEMENATION_MAX_WRITE_IMAGES = 64,
+};
+}
 
 #endif  // LIBANGLE_CONSTANTS_H_

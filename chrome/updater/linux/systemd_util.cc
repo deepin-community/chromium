@@ -14,6 +14,7 @@
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/files/file_descriptor_watcher_posix.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -139,8 +140,8 @@ void StopService(UpdaterScope scope) {
                                       std::string unit_definition) {
   base::File unit_file(unit_path,
                        base::File::FLAG_WRITE | base::File::FLAG_CREATE_ALWAYS);
-  return unit_file.IsValid() && unit_file.Write(0, unit_definition.c_str(),
-                                                unit_definition.size()) != -1;
+  return unit_file.IsValid() &&
+         unit_file.WriteAndCheck(0, base::as_byte_span(unit_definition));
 }
 
 // Returns the command line which should be used to start the updater service.
@@ -153,9 +154,6 @@ std::string GetLauncherCommandLine(UpdaterScope scope,
   if (scope == UpdaterScope::kSystem) {
     command.AppendSwitch(kSystemSwitch);
   }
-  command.AppendSwitch(kEnableLoggingSwitch);
-  command.AppendSwitchASCII(kLoggingModuleSwitch, kLoggingModuleSwitchValue);
-
   return command.GetCommandLineString();
 }
 

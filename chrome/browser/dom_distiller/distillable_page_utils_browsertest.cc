@@ -4,6 +4,7 @@
 
 #include "components/dom_distiller/content/browser/distillable_page_utils.h"
 
+#include <array>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -28,11 +29,6 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
-    BUILDFLAG(IS_WIN)
-#include "components/ukm/test_ukm_recorder.h"
-#endif
-
 namespace dom_distiller {
 namespace {
 
@@ -51,8 +47,12 @@ const char kSimpleArticleIFramePath[] =
 const char kArticlePath[] = "/dom_distiller/og_article.html";
 const char kNonArticlePath[] = "/dom_distiller/non_og_article.html";
 
-const char* kAllPaths[] = {kSimpleArticlePath, kSimpleArticleIFramePath,
-                           kArticlePath, kNonArticlePath};
+auto kAllPaths = std::to_array<const char*>({
+    kSimpleArticlePath,
+    kSimpleArticleIFramePath,
+    kArticlePath,
+    kNonArticlePath,
+});
 
 class MockObserver : public DistillabilityObserver {
  public:
@@ -203,7 +203,8 @@ using DistillablePageUtilsBrowserTestAdaboost =
 
 IN_PROC_BROWSER_TEST_F(DistillablePageUtilsBrowserTestAdaboost,
                        SimpleArticlesCallObserverTwiceWithIsDistillable) {
-  const char* paths[] = {kSimpleArticlePath, kSimpleArticleIFramePath};
+  auto paths = std::to_array<const char*>(
+      {kSimpleArticlePath, kSimpleArticleIFramePath});
   for (unsigned i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
     testing::InSequence dummy;
     EXPECT_CALL(holder_, OnResult(AllOf(IsDistillable(), Not(IsLast()),
@@ -240,7 +241,8 @@ using DistillablePageUtilsBrowserTestAllArticles =
 
 IN_PROC_BROWSER_TEST_F(DistillablePageUtilsBrowserTestAllArticles,
                        SimpleArticlesCallObserverTwiceWithIsDistillable) {
-  const char* paths[] = {kSimpleArticlePath, kSimpleArticleIFramePath};
+  auto paths = std::to_array<const char*>(
+      {kSimpleArticlePath, kSimpleArticleIFramePath});
   for (unsigned i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
     testing::InSequence dummy;
     EXPECT_CALL(holder_, OnResult(AllOf(IsDistillable(), Not(IsLast()),
@@ -271,7 +273,7 @@ IN_PROC_BROWSER_TEST_F(DistillablePageUtilsBrowserTestAllArticles,
       Optional(AllOf(Not(IsDistillable()), IsLast(), Not(IsMobileFriendly()))));
 }
 
-// TODO(crbug.com/1461973): Flaky on Linux MSAN.
+// TODO(crbug.com/40921719): Flaky on Linux MSAN.
 #if BUILDFLAG(IS_LINUX) && defined(MEMORY_SANITIZER)
 #define MAYBE_ObserverNotCalledAfterRemoval \
   DISABLED_ObserverNotCalledAfterRemoval
@@ -287,43 +289,5 @@ IN_PROC_BROWSER_TEST_F(DistillablePageUtilsBrowserTestAllArticles,
       GetLatestResult(web_contents_),
       Optional(AllOf(IsDistillable(), IsLast(), Not(IsMobileFriendly()))));
 }
-
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
-    BUILDFLAG(IS_WIN)
-IN_PROC_BROWSER_TEST_F(DistillablePageUtilsBrowserTestAllArticles,
-                       RecordPageIsDistillableOnArticleLoad) {
-  ON_CALL(holder_, OnResult(IsLast()))
-      .WillByDefault(InvokeWithoutArgs(this, &TestOption::QuitSoon));
-
-  ukm::TestAutoSetUkmRecorder ukm_recorder;
-  NavigateAndWait(kSimpleArticlePath, base::TimeDelta());
-
-  std::vector<raw_ptr<const ukm::mojom::UkmEntry, VectorExperimental>>
-      distillability_entries =
-          ukm_recorder.GetEntriesByName("ReaderModeReceivedDistillability");
-  ASSERT_THAT(distillability_entries, SizeIs(1));
-  EXPECT_THAT(ukm_recorder.GetEntryMetric(distillability_entries.front(),
-                                          "IsPageDistillable"),
-              Pointee(true));
-}
-
-IN_PROC_BROWSER_TEST_F(DistillablePageUtilsBrowserTestAllArticles,
-                       RecordPageIsNotDistillableOnNonArticleLoad) {
-  ON_CALL(holder_, OnResult(IsLast()))
-      .WillByDefault(InvokeWithoutArgs(this, &TestOption::QuitSoon));
-
-  ukm::TestAutoSetUkmRecorder ukm_recorder;
-  NavigateAndWait(kNonArticlePath, base::TimeDelta());
-
-  std::vector<raw_ptr<const ukm::mojom::UkmEntry, VectorExperimental>>
-      distillability_entries =
-          ukm_recorder.GetEntriesByName("ReaderModeReceivedDistillability");
-  ASSERT_THAT(distillability_entries, SizeIs(1));
-  EXPECT_THAT(ukm_recorder.GetEntryMetric(distillability_entries.front(),
-                                          "IsPageDistillable"),
-              Pointee(false));
-}
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_MAC)OS || BUILDFLAG(IS_WIN)
 
 }  // namespace dom_distiller

@@ -5,11 +5,13 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/check_deref.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/to_string.h"
 #include "base/test/bind.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
@@ -21,10 +23,11 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
-#include "chrome/browser/ui/web_applications/web_app_controller_browsertest.h"
+#include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/commands/web_app_uninstall_command.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
 #include "chrome/browser/web_applications/isolated_web_apps/remove_isolated_web_app_data.h"
+#include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
 #include "chrome/browser/web_applications/jobs/uninstall/remove_web_app_job.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
@@ -49,6 +52,7 @@
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/cookies/canonical_cookie.h"
@@ -56,6 +60,7 @@
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "services/network/test/test_network_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -79,24 +84,24 @@ MATCHER_P(IsApproximately, approximate_value, "") {
 class IsolatedWebAppBrowsingDataTest : public IsolatedWebAppBrowserTestHarness {
  protected:
   IsolatedWebAppUrlInfo InstallIsolatedWebApp() {
-    server_ =
-        CreateAndStartServer(FILE_PATH_LITERAL("web_apps/simple_isolated_app"));
-    web_app::IsolatedWebAppUrlInfo url_info =
-        InstallDevModeProxyIsolatedWebApp(server_->GetOrigin());
-    return url_info;
+    std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app =
+        web_app::IsolatedWebAppBuilder(
+            web_app::ManifestBuilder().AddPermissionsPolicyWildcard(
+                network::mojom::PermissionsPolicyFeature::kControlledFrame))
+            .BuildBundle();
+    app->TrustSigningKey();
+    return app->InstallChecked(profile());
   }
-
-  net::EmbeddedTestServer* dev_server() { return server_.get(); }
 
   WebAppProvider& web_app_provider() {
     return CHECK_DEREF(WebAppProvider::GetForTest(profile()));
   }
 
   int64_t GetIwaUsage(const IsolatedWebAppUrlInfo& url_info) {
-    base::test::TestFuture<base::flat_map<url::Origin, int64_t>> future;
+    base::test::TestFuture<base::flat_map<url::Origin, uint64_t>> future;
     web_app_provider().scheduler().GetIsolatedWebAppBrowsingData(
         future.GetCallback());
-    base::flat_map<url::Origin, int64_t> result = future.Get();
+    base::flat_map<url::Origin, uint64_t> result = future.Get();
     return result.contains(url_info.origin()) ? result.at(url_info.origin())
                                               : 0;
   }
@@ -104,25 +109,21 @@ class IsolatedWebAppBrowsingDataTest : public IsolatedWebAppBrowserTestHarness {
   void AddLocalStorageIfMissing(const content::ToRenderFrameHost& target) {
     EXPECT_TRUE(
         ExecJs(target, "localStorage.setItem('test', '!'.repeat(1000))"));
-
-    base::test::TestFuture<void> test_future;
-    target.render_frame_host()
-        ->GetStoragePartition()
-        ->GetLocalStorageControl()
-        ->Flush(test_future.GetCallback());
-    EXPECT_TRUE(test_future.Wait());
+  }
+  void AddLocalStorageIfMissing(extensions::WebViewGuest* guest) {
+    AddLocalStorageIfMissing(guest->GetGuestMainFrame());
   }
 
   void SetLocalStorageValue(const content::ToRenderFrameHost& target,
-                            const base::StringPiece& key,
-                            const base::StringPiece& value) {
+                            std::string_view key,
+                            std::string_view value) {
     EXPECT_TRUE(
         ExecJs(target,
                content::JsReplace("localStorage.setItem($1, $2)", key, value)));
   }
 
   std::string GetLocalStorageValue(const content::ToRenderFrameHost& target,
-                                   const base::StringPiece& key) {
+                                   std::string_view key) {
     return EvalJs(target, content::JsReplace("localStorage.getItem($1)", key))
         .ExtractString();
   }
@@ -150,8 +151,26 @@ class IsolatedWebAppBrowsingDataTest : public IsolatedWebAppBrowserTestHarness {
                   content::JsReplace(kCreateControlledFrame, src, partition));
   }
 
+  std::vector<extensions::WebViewGuest*> GetWebViewGuests(
+      content::WebContents* embedder_web_contents) {
+    std::vector<extensions::WebViewGuest*> web_view_guests;
+    embedder_web_contents->GetPrimaryMainFrame()
+        ->ForEachRenderFrameHostWithAction(
+            [&web_view_guests](content::RenderFrameHost* rfh) {
+              if (auto* web_view =
+                      extensions::WebViewGuest::FromRenderFrameHost(rfh)) {
+                web_view_guests.push_back(web_view);
+                return content::RenderFrameHost::FrameIterationAction::
+                    kSkipChildren;
+              }
+              return content::RenderFrameHost::FrameIterationAction::kContinue;
+            });
+    return web_view_guests;
+  }
+
  private:
-  std::unique_ptr<net::EmbeddedTestServer> server_;
+  base::test::ScopedFeatureList scoped_feature_list_{
+      blink::features::kControlledFrame};
 };
 
 IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataTest,
@@ -168,29 +187,37 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataTest,
   EXPECT_THAT(GetIwaUsage(url_info), IsApproximately(1000));
 
   // Create a persisted <controlledframe>, add some usage to it.
-  ASSERT_TRUE(CreateControlledFrame(web_contents,
-                                    dev_server()->GetURL("/empty_title.html"),
-                                    "persist:partition_name"));
-  ASSERT_EQ(1UL, web_contents->GetInnerWebContents().size());
-  AddLocalStorageIfMissing(web_contents->GetInnerWebContents()[0]);
+  ASSERT_TRUE(CreateControlledFrame(
+      web_contents,
+      https_server()->GetURL("/web_apps/simple_isolated_app/empty_title.html"),
+      "persist:partition_name"));
+  std::vector<extensions::WebViewGuest*> guests =
+      GetWebViewGuests(web_contents);
+  ASSERT_EQ(1UL, guests.size());
+  AddLocalStorageIfMissing(guests[0]);
   EXPECT_THAT(GetIwaUsage(url_info), IsApproximately(2000));
 
   // Create another persisted <controlledframe> with a different partition name.
-  ASSERT_TRUE(CreateControlledFrame(web_contents,
-                                    dev_server()->GetURL("/empty_title.html"),
-                                    "persist:partition_name_2"));
-  ASSERT_EQ(2UL, web_contents->GetInnerWebContents().size());
-  AddLocalStorageIfMissing(web_contents->GetInnerWebContents()[0]);
-  AddLocalStorageIfMissing(web_contents->GetInnerWebContents()[1]);
+  ASSERT_TRUE(CreateControlledFrame(
+      web_contents,
+      https_server()->GetURL("/web_apps/simple_isolated_app/empty_title.html"),
+      "persist:partition_name_2"));
+  guests = GetWebViewGuests(web_contents);
+  ASSERT_EQ(2UL, guests.size());
+  AddLocalStorageIfMissing(guests[0]);
+  AddLocalStorageIfMissing(guests[1]);
   EXPECT_THAT(GetIwaUsage(url_info), IsApproximately(3000));
 
   // Create an in-memory <controlledframe> that won't count towards IWA usage.
   ASSERT_TRUE(CreateControlledFrame(
-      web_contents, dev_server()->GetURL("/empty_title.html"), "unpersisted"));
-  ASSERT_EQ(3UL, web_contents->GetInnerWebContents().size());
-  AddLocalStorageIfMissing(web_contents->GetInnerWebContents()[0]);
-  AddLocalStorageIfMissing(web_contents->GetInnerWebContents()[1]);
-  AddLocalStorageIfMissing(web_contents->GetInnerWebContents()[2]);
+      web_contents,
+      https_server()->GetURL("/web_apps/simple_isolated_app/empty_title.html"),
+      "unpersisted"));
+  guests = GetWebViewGuests(web_contents);
+  ASSERT_EQ(3UL, guests.size());
+  AddLocalStorageIfMissing(guests[0]);
+  AddLocalStorageIfMissing(guests[1]);
+  AddLocalStorageIfMissing(guests[2]);
   EXPECT_THAT(GetIwaUsage(url_info), IsApproximately(3000));
 }
 
@@ -213,10 +240,11 @@ class IsolatedWebAppBrowsingDataClearingTest
     run_loop.Run();
 
     browsing_data_remover->SetWouldCompleteCallbackForTesting(
-        base::DoNothing());
+        base::NullCallback());
   }
 
   void ClearTimeRangedData(browsing_data::TimePeriod time_period) {
+    const GURL kClearDataUrl("chrome://settings/clearBrowserData");
     base::RunLoop run_loop;
 
     auto* browsing_data_remover = profile()->GetBrowsingDataRemover();
@@ -228,8 +256,13 @@ class IsolatedWebAppBrowsingDataClearingTest
           std::move(callback).Run();
         }));
 
-    content::RenderFrameHost* rfh = ui_test_utils::NavigateToURL(
-        browser(), GURL("chrome://settings/clearBrowserData"));
+    content::RenderFrameHost* rfh = browser()
+                                        ->tab_strip_model()
+                                        ->GetActiveWebContents()
+                                        ->GetPrimaryMainFrame();
+    if (rfh->GetLastCommittedURL() != kClearDataUrl) {
+      rfh = ui_test_utils::NavigateToURL(browser(), kClearDataUrl);
+    }
 
     for (auto& handler : *rfh->GetWebUI()->GetHandlersForTesting()) {
       handler->AllowJavascriptForTesting();
@@ -251,6 +284,8 @@ class IsolatedWebAppBrowsingDataClearingTest
         rfh->GetLastCommittedURL(), "clearBrowsingData", std::move(list_args));
 
     run_loop.Run();
+    browsing_data_remover->SetWouldCompleteCallbackForTesting(
+        base::NullCallback());
   }
 
   void ClearAllTimeData() {
@@ -274,7 +309,7 @@ class IsolatedWebAppBrowsingDataClearingTest
         future.GetCallback());
 
     auto code = future.Get();
-    ASSERT_TRUE(code == webapps::UninstallResultCode::kSuccess);
+    ASSERT_TRUE(code == webapps::UninstallResultCode::kAppRemoved);
     run_loop.Run();
   }
 
@@ -305,9 +340,9 @@ class IsolatedWebAppBrowsingDataClearingTest
     storage_partition->GetNetworkContext()->GetCookieManager(
         cookie_manager.BindNewPipeAndPassReceiver());
 
-    auto cookie_obj = net::CanonicalCookie::Create(url, cookie_line, time,
-                                                   /*server_time=*/std::nullopt,
-                                                   cookie_partition_key);
+    auto cookie_obj = net::CanonicalCookie::CreateForTesting(
+        url, cookie_line, time,
+        /*server_time=*/std::nullopt, cookie_partition_key);
 
     base::test::TestFuture<net::CookieAccessResult> future;
     cookie_manager->SetCanonicalCookie(*cookie_obj, url,
@@ -347,11 +382,14 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
   AddLocalStorageIfMissing(web_contents2);
   EXPECT_THAT(GetIwaUsage(url_info2), IsApproximately(1000));
 
-  ASSERT_TRUE(CreateControlledFrame(web_contents2,
-                                    dev_server()->GetURL("/empty_title.html"),
-                                    "persist:partition_name"));
-  ASSERT_EQ(1UL, web_contents2->GetInnerWebContents().size());
-  AddLocalStorageIfMissing(web_contents2->GetInnerWebContents()[0]);
+  ASSERT_TRUE(CreateControlledFrame(
+      web_contents2,
+      https_server()->GetURL("/web_apps/simple_isolated_app/empty_title.html"),
+      "persist:partition_name"));
+  std::vector<extensions::WebViewGuest*> guests =
+      GetWebViewGuests(web_contents2);
+  ASSERT_EQ(1UL, guests.size());
+  AddLocalStorageIfMissing(guests[0]);
   EXPECT_THAT(GetIwaUsage(url_info2), IsApproximately(2000));
 
   ClearData(url_info2);
@@ -371,15 +409,20 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest, CacheCleared) {
   content::WebContents* web_contents =
       browser->tab_strip_model()->GetActiveWebContents();
 
-  // Create both a persistent and a non-persistent partitions.
-  ASSERT_TRUE(CreateControlledFrame(
-      web_contents,
-      cache_test_server->GetURL("/page_with_cached_subresource.html"),
-      "persist:partition_name_0"));
-  ASSERT_TRUE(CreateControlledFrame(
-      web_contents,
-      cache_test_server->GetURL("/page_with_cached_subresource.html"),
-      "partition_name_1"));
+  // Load a cached resource in an iframe to put something in the IWA main
+  // StoragePartition cache.
+  GURL cache_url = https_server()->GetURL(
+      "/set-header?"
+      "Cache-Control: max-age=60&"
+      "Cross-Origin-Resource-Policy: cross-origin");
+  CreateIframe(web_contents->GetPrimaryMainFrame(), "child", cache_url,
+               /*permissions_policy=*/"");
+
+  // Create both a persistent and a non-persistent Controlled Frame partitions.
+  ASSERT_TRUE(CreateControlledFrame(web_contents, cache_url,
+                                    "persist:partition_name_0"));
+  ASSERT_TRUE(
+      CreateControlledFrame(web_contents, cache_url, "partition_name_1"));
 
   std::vector<content::StoragePartitionConfig> storage_partition_configs{
       url_info.storage_partition_config(profile()),
@@ -414,12 +457,14 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest, CookieCleared) {
       browser->tab_strip_model()->GetActiveWebContents();
 
   // Create both a persistent and a non-persistent partitions.
-  ASSERT_TRUE(CreateControlledFrame(web_contents,
-                                    dev_server()->GetURL("/empty_title.html"),
-                                    "persist:partition_name_0"));
-  ASSERT_TRUE(CreateControlledFrame(web_contents,
-                                    dev_server()->GetURL("/empty_title.html"),
-                                    "partition_name_1"));
+  ASSERT_TRUE(CreateControlledFrame(
+      web_contents,
+      https_server()->GetURL("/web_apps/simple_isolated_app/empty_title.html"),
+      "persist:partition_name_0"));
+  ASSERT_TRUE(CreateControlledFrame(
+      web_contents,
+      https_server()->GetURL("/web_apps/simple_isolated_app/empty_title.html"),
+      "partition_name_1"));
 
   std::vector<content::StoragePartitionConfig> storage_partition_configs{
       url_info.storage_partition_config(profile()),
@@ -471,12 +516,14 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
       browser->tab_strip_model()->GetActiveWebContents();
 
   // Create both a persistent and a non-persistent partitions.
-  ASSERT_TRUE(CreateControlledFrame(web_contents,
-                                    dev_server()->GetURL("/empty_title.html"),
-                                    "persist:partition_name_0"));
-  ASSERT_TRUE(CreateControlledFrame(web_contents,
-                                    dev_server()->GetURL("/empty_title.html"),
-                                    "partition_name_1"));
+  ASSERT_TRUE(CreateControlledFrame(
+      web_contents,
+      https_server()->GetURL("/web_apps/simple_isolated_app/empty_title.html"),
+      "persist:partition_name_0"));
+  ASSERT_TRUE(CreateControlledFrame(
+      web_contents,
+      https_server()->GetURL("/web_apps/simple_isolated_app/empty_title.html"),
+      "partition_name_1"));
 
   std::vector<content::StoragePartitionConfig> storage_partition_configs{
       url_info.storage_partition_config(profile()),
@@ -520,8 +567,14 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
   }
 }
 
+#if BUILDFLAG(IS_LINUX) && !defined(NDEBUG)
+// TODO(crbug.com/353551973): This test has been flaky on Linux Debug testers.
+#define MAYBE_ClearBrowserDataAllTime DISABLED_ClearBrowserDataAllTime
+#else
+#define MAYBE_ClearBrowserDataAllTime ClearBrowserDataAllTime
+#endif
 IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
-                       ClearBrowserDataAllTime) {
+                       MAYBE_ClearBrowserDataAllTime) {
   auto cache_test_server = std::make_unique<net::EmbeddedTestServer>();
   cache_test_server->AddDefaultHandlers(
       base::FilePath(FILE_PATH_LITERAL("content/test/data")));
@@ -532,30 +585,32 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
   Browser* browser1 = LaunchWebAppBrowserAndWait(url_info1.app_id());
   content::WebContents* web_contents1 =
       browser1->tab_strip_model()->GetActiveWebContents();
-  // Create both a persistent and a non-persistent partitions.
-  ASSERT_TRUE(CreateControlledFrame(
-      web_contents1,
-      cache_test_server->GetURL("/page_with_cached_subresource.html"),
-      "persist:partition_name_0"));
-  ASSERT_TRUE(CreateControlledFrame(
-      web_contents1,
-      cache_test_server->GetURL("/page_with_cached_subresource.html"),
-      "partition_name_1"));
+  // Create cache data in the IWA's main, persistent, and non-persistent
+  // Controlled Frame StoragePartition.
+  GURL cache_url = https_server()->GetURL(
+      "/set-header?"
+      "Cache-Control: max-age=60&"
+      "Cross-Origin-Resource-Policy: cross-origin");
+  CreateIframe(web_contents1->GetPrimaryMainFrame(), "child", cache_url,
+               /*permissions_policy=*/"");
+  ASSERT_TRUE(CreateControlledFrame(web_contents1, cache_url,
+                                    "persist:partition_name_0"));
+  ASSERT_TRUE(
+      CreateControlledFrame(web_contents1, cache_url, "partition_name_1"));
 
   // Set up IWA 2.
   IsolatedWebAppUrlInfo url_info2 = InstallIsolatedWebApp();
   Browser* browser2 = LaunchWebAppBrowserAndWait(url_info2.app_id());
   content::WebContents* web_contents2 =
       browser2->tab_strip_model()->GetActiveWebContents();
-  // Create both a persistent and a non-persistent partitions.
-  ASSERT_TRUE(CreateControlledFrame(
-      web_contents2,
-      cache_test_server->GetURL("/page_with_cached_subresource.html"),
-      "persist:partition_name_0"));
-  ASSERT_TRUE(CreateControlledFrame(
-      web_contents2,
-      cache_test_server->GetURL("/page_with_cached_subresource.html"),
-      "partition_name_1"));
+  // Create cache data in the IWA's main, persistent, and non-persistent
+  // Controlled Frame StoragePartition.
+  CreateIframe(web_contents2->GetPrimaryMainFrame(), "child", cache_url,
+               /*permissions_policy=*/"");
+  ASSERT_TRUE(CreateControlledFrame(web_contents2, cache_url,
+                                    "persist:partition_name_0"));
+  ASSERT_TRUE(
+      CreateControlledFrame(web_contents2, cache_url, "partition_name_1"));
   // Making IWA 2 a stub.
   {
     ScopedRegistryUpdate update =
@@ -582,9 +637,11 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
   ASSERT_THAT(GetIwaUsage(url_info1), 0);
   AddLocalStorageIfMissing(web_contents1);
   ASSERT_THAT(GetIwaUsage(url_info1), IsApproximately(1000));
-  ASSERT_EQ(web_contents1->GetInnerWebContents().size(), 2UL);
-  AddLocalStorageIfMissing(web_contents1->GetInnerWebContents()[0]);
-  AddLocalStorageIfMissing(web_contents1->GetInnerWebContents()[1]);
+  std::vector<extensions::WebViewGuest*> guests =
+      GetWebViewGuests(web_contents1);
+  ASSERT_EQ(guests.size(), 2UL);
+  AddLocalStorageIfMissing(guests[0]);
+  AddLocalStorageIfMissing(guests[1]);
   // 2000 because non-persistent partitions are not counted toward usage.
   ASSERT_THAT(GetIwaUsage(url_info1), IsApproximately(2000));
 
@@ -612,6 +669,7 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
     // Each partition should have 2 cookies.
     ASSERT_EQ(GetAllCookies(partition).size(), 2UL);
     // Each partition should have cache.
+
     ASSERT_GT(GetCacheSize(partition), 0);
   }
 
@@ -631,14 +689,8 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
   EXPECT_THAT(GetIwaUsage(url_info2), 0);
 }
 
-// TODO(crbug.com/1504250): Re-enable this test
-#if BUILDFLAG(IS_LINUX)
-#define MAYBE_ClearBrowserDataTimeRanged DISABLED_ClearBrowserDataTimeRanged
-#else
-#define MAYBE_ClearBrowserDataTimeRanged ClearBrowserDataTimeRanged
-#endif
 IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
-                       MAYBE_ClearBrowserDataTimeRanged) {
+                       ClearBrowserDataTimeRanged) {
   auto cache_test_server = std::make_unique<net::EmbeddedTestServer>();
   cache_test_server->AddDefaultHandlers(
       base::FilePath(FILE_PATH_LITERAL("content/test/data")));
@@ -665,7 +717,7 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
       url_info1.GetStoragePartitionConfigForControlledFrame(
           profile(), "partition_name_1", /*in_memory=*/true)};
 
-  // Set cookies for: Now, 3 days ago, 10 days ago.
+  // Set cookies for: 3 days ago, 10 days ago.
   const std::vector<TestCookie> cookietest_cases{
       {base::Time::Now() - base::Days(3), "b=1"},
       {base::Time::Now() - base::Days(10), "c=2"}};
@@ -765,11 +817,10 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
 
 IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
                        ControlledFrameClearSiteDataHeader) {
-  std::vector<const bool> in_memory_test_cases{true, false};
   const std::string partition_name("test_partition");
-  for (const bool& in_memory : in_memory_test_cases) {
+  for (const bool in_memory : {true, false}) {
     SCOPED_TRACE(base::StrCat({"Controlled Frame partition is in-memory: ",
-                               (in_memory ? "true" : "false")}));
+                               base::ToString(in_memory)}));
     IsolatedWebAppUrlInfo url_info = InstallIsolatedWebApp();
 
     Browser* browser = LaunchWebAppBrowserAndWait(url_info.app_id());
@@ -783,7 +834,9 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
     ASSERT_TRUE(CreateControlledFrame(
         web_contents, cookie_url,
         base::StrCat({(in_memory ? "" : "persist:") + partition_name})));
-    ASSERT_EQ(web_contents->GetInnerWebContents().size(), 1UL);
+    std::vector<extensions::WebViewGuest*> guests =
+        GetWebViewGuests(web_contents);
+    ASSERT_EQ(guests.size(), 1UL);
 
     content::StoragePartition* controlled_frame_partition =
         profile()->GetStoragePartition(
@@ -797,7 +850,7 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
     ASSERT_EQ(cookie_list[0].Domain(), https_server()->GetOrigin().host());
 
     content::RenderFrameHost* controlled_frame_rfh =
-        web_contents->GetInnerWebContents()[0]->GetPrimaryMainFrame();
+        guests[0]->GetGuestMainFrame();
     SetLocalStorageValue(controlled_frame_rfh, "foo", "bar");
     ASSERT_EQ(GetLocalStorageCount(controlled_frame_rfh), 1);
     ASSERT_EQ(GetLocalStorageValue(controlled_frame_rfh, "foo"), "bar");
@@ -816,10 +869,7 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowsingDataClearingTest,
     cookie_list = GetAllCookies(controlled_frame_partition);
     EXPECT_EQ(cookie_list.size(), 0UL);
     // Verify localStorage cleared.
-    EXPECT_EQ(
-        GetLocalStorageCount(
-            web_contents->GetInnerWebContents()[0]->GetPrimaryMainFrame()),
-        0);
+    EXPECT_EQ(GetLocalStorageCount(guests[0]->GetGuestMainFrame()), 0);
   }
 }
 

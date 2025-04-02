@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <array>
 #include <map>
 #include <memory>
 #include <set>
@@ -19,9 +20,13 @@
 #include "core/fxcrt/autorestorer.h"
 #include "core/fxcrt/cfx_read_only_string_stream.h"
 #include "core/fxcrt/cfx_read_only_vector_stream.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_extension.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/stl_util.h"
 #include "core/fxcrt/xml/cfx_xmldocument.h"
@@ -34,10 +39,6 @@
 #include "fxjs/xfa/cfxjse_engine.h"
 #include "fxjs/xfa/cfxjse_value.h"
 #include "fxjs/xfa/cjx_node.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/containers/contains.h"
-#include "third_party/base/notreached.h"
 #include "xfa/fde/cfde_textout.h"
 #include "xfa/fgas/crt/cfgas_decimal.h"
 #include "xfa/fgas/crt/locale_iface.h"
@@ -375,7 +376,7 @@ namespace {
 
 constexpr uint8_t kMaxExecuteRecursion = 2;
 
-constexpr uint8_t kInvBase64[128] = {
+constexpr std::array<const uint8_t, 128> kInvBase64 = {{
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 62,  255,
@@ -385,7 +386,7 @@ constexpr uint8_t kInvBase64[128] = {
     25,  255, 255, 255, 255, 255, 255, 26,  27,  28,  29,  30,  31,  32,  33,
     34,  35,  36,  37,  38,  39,  40,  41,  42,  43,  44,  45,  46,  47,  48,
     49,  50,  51,  255, 255, 255, 255, 255,
-};
+}};
 
 inline uint8_t GetInvBase64(uint8_t x) {
   return (x & 128) == 0 ? kInvBase64[x] : 255;
@@ -407,7 +408,8 @@ DataVector<uint8_t> XFA_Base64Decode(const ByteString& bsStr) {
   if (bsStr.IsEmpty())
     return result;
 
-  DataVector<uint8_t> buffer = XFA_RemoveBase64Whitespace(bsStr.raw_span());
+  DataVector<uint8_t> buffer =
+      XFA_RemoveBase64Whitespace(bsStr.unsigned_span());
   result.reserve(3 * (buffer.size() / 4));
 
   uint32_t dwLimb = 0;
@@ -1138,11 +1140,10 @@ CXFA_Node* CXFA_Node::GetOrCreateProperty(int32_t index,
   if (index < 0 || index >= PropertyOccurrenceCount(eProperty))
     return nullptr;
 
-  int32_t iCount = 0;
-  CXFA_Node* node;
-  std::tie(node, iCount) = GetProperty(index, eProperty);
-  if (node)
+  auto [node, iCount] = GetProperty(index, eProperty);
+  if (node) {
     return node;
+  }
 
   if (HasPropertyFlag(eProperty, XFA_PropertyFlag::kOneOf)) {
     for (CXFA_Node* pNode = GetFirstChild(); pNode;
@@ -1274,7 +1275,7 @@ CXFA_Node* CXFA_Node::CreateSamePacketNode(XFA_Element eType) {
 }
 
 CXFA_Node* CXFA_Node::CloneTemplateToForm(bool bRecursive) {
-  DCHECK_EQ(m_ePacket, XFA_PacketType::Template);
+  CHECK_EQ(m_ePacket, XFA_PacketType::Template);
   CXFA_Node* pClone =
       m_pDocument->CreateNode(XFA_PacketType::Form, m_elementType);
   if (!pClone)
@@ -1286,6 +1287,9 @@ CXFA_Node* CXFA_Node::CloneTemplateToForm(bool bRecursive) {
   if (bRecursive) {
     for (CXFA_Node* pChild = GetFirstChild(); pChild;
          pChild = pChild->GetNextSibling()) {
+      if (pChild->GetPacketType() != XFA_PacketType::Template) {
+        continue;
+      }
       pClone->InsertChildAndNotify(pChild->CloneTemplateToForm(bRecursive),
                                    nullptr);
     }
@@ -2914,7 +2918,7 @@ CXFA_Node::CreateChildUIAndValueNodesIfNeeded() {
       widget_type = XFA_FFWidgetType::kTextEdit;
     }
   } else {
-    NOTREACHED_NORETURN();
+    NOTREACHED();
   }
 
   if (!pUIChild) {
@@ -2929,7 +2933,7 @@ CXFA_Node::CreateChildUIAndValueNodesIfNeeded() {
 }
 
 XFA_FFWidgetType CXFA_Node::GetDefaultFFWidgetType() const {
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 CXFA_Node* CXFA_Node::CreateUINodeIfNeeded(CXFA_Ui* ui, XFA_Element type) {
@@ -2974,7 +2978,7 @@ CXFA_Node* CXFA_Node::GetUIChildNode() {
   } else if (type == XFA_Element::ExclGroup) {
     ff_widget_type_ = XFA_FFWidgetType::kExclGroup;
   } else {
-    NOTREACHED_NORETURN();
+    NOTREACHED();
   }
   return ui_ ? ui_->GetFirstChild() : nullptr;
 }
@@ -3010,10 +3014,7 @@ CFX_RectF CXFA_Node::GetUIMargin() {
   std::optional<float> right = mgUI->TryRightInset();
   std::optional<float> bottom = mgUI->TryBottomInset();
   if (border) {
-    bool bVisible = false;
-    float fThickness = 0;
-    XFA_AttributeValue iType = XFA_AttributeValue::Unknown;
-    std::tie(iType, bVisible, fThickness) = border->Get3DStyle();
+    auto [iType, bVisible, fThickness] = border->Get3DStyle();
     if (!left.has_value() || !top.has_value() || !right.has_value() ||
         !bottom.has_value()) {
       std::vector<CXFA_Stroke*> strokes = border->GetStrokes();
@@ -3705,7 +3706,7 @@ std::optional<float> CXFA_Node::FindSplitPos(CXFA_FFDocView* pDocView,
           fStartOffset += (fHeight - fTextHeight + fSpaceAbove);
           break;
         default:
-          NOTREACHED_NORETURN();
+          NOTREACHED();
       }
     }
     if (fStartOffset < 0.1f)
@@ -3930,10 +3931,12 @@ RetainPtr<CFGAS_GEFont> CXFA_Node::GetFGASFont(CXFA_FFDoc* doc) {
   uint32_t dwFontStyle = 0;
   CXFA_Font* font = GetFontIfExists();
   if (font) {
-    if (font->IsBold())
-      dwFontStyle |= FXFONT_FORCE_BOLD;
-    if (font->IsItalic())
-      dwFontStyle |= FXFONT_ITALIC;
+    if (font->IsBold()) {
+      dwFontStyle |= pdfium::kFontStyleForceBold;
+    }
+    if (font->IsItalic()) {
+      dwFontStyle |= pdfium::kFontStyleItalic;
+    }
 
     wsFontName = font->GetTypeface();
   }
@@ -4304,7 +4307,7 @@ int32_t CXFA_Node::GetSelectedItem(int32_t nIndex) {
   auto it = std::find(wsSaveTextArray.begin(), wsSaveTextArray.end(),
                       wsValueArray[nIndex]);
   return it != wsSaveTextArray.end()
-             ? pdfium::base::checked_cast<int32_t>(it - wsSaveTextArray.begin())
+             ? pdfium::checked_cast<int32_t>(it - wsSaveTextArray.begin())
              : -1;
 }
 
@@ -4316,7 +4319,7 @@ std::vector<int32_t> CXFA_Node::GetSelectedItems() {
     auto it = std::find(wsSaveTextArray.begin(), wsSaveTextArray.end(), value);
     if (it != wsSaveTextArray.end()) {
       iSelArray.push_back(
-          pdfium::base::checked_cast<int32_t>(it - wsSaveTextArray.begin()));
+          pdfium::checked_cast<int32_t>(it - wsSaveTextArray.begin()));
     }
   }
   return iSelArray;
@@ -4351,8 +4354,7 @@ void CXFA_Node::SetItemState(int32_t nIndex,
   auto value_iter = std::find(wsValueArray.begin(), wsValueArray.end(),
                               wsSaveTextArray[nIndex]);
   if (value_iter != wsValueArray.end()) {
-    iSel =
-        pdfium::base::checked_cast<int32_t>(value_iter - wsValueArray.begin());
+    iSel = pdfium::checked_cast<int32_t>(value_iter - wsValueArray.begin());
   }
   if (IsChoiceListMultiSelect()) {
     if (bSelected) {
@@ -4960,11 +4962,11 @@ WideString CXFA_Node::NormalizeNumStr(const WideString& wsValue) {
     return WideString();
 
   WideString wsOutput = wsValue;
-  wsOutput.TrimLeft('0');
+  wsOutput.TrimFront('0');
 
   if (!wsOutput.IsEmpty() && wsOutput.Contains('.') && GetFracDigits() != -1) {
-    wsOutput.TrimRight(L"0");
-    wsOutput.TrimRight(L".");
+    wsOutput.TrimBack(L"0");
+    wsOutput.TrimBack(L".");
   }
   if (wsOutput.IsEmpty() || wsOutput[0] == '.')
     wsOutput.InsertAtFront('0');
@@ -4986,7 +4988,7 @@ WideString CXFA_Node::NumericLimit(const WideString& wsValue) {
   if (iLead == -1 && iTread == -1)
     return wsValue;
 
-  int32_t iCount = pdfium::base::checked_cast<int32_t>(wsValue.GetLength());
+  int32_t iCount = pdfium::checked_cast<int32_t>(wsValue.GetLength());
   if (iCount == 0)
     return wsValue;
 
@@ -5090,7 +5092,7 @@ void CXFA_Node::SetToXML(const WideString& value) {
       ToXMLText(GetXMLMappingNode())->SetText(value);
       break;
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 

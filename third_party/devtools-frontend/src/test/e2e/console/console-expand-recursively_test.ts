@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 import {click, getBrowserAndPages, step, waitFor} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   clickOnContextMenu,
   CONSOLE_TAB_SELECTOR,
@@ -11,7 +10,7 @@ import {
   typeIntoConsole,
 } from '../helpers/console-helpers.js';
 
-describe('The Console Tab', async () => {
+describe('The Console Tab', () => {
   it('recursively expands objects', async () => {
     const {frontend} = getBrowserAndPages();
 
@@ -23,7 +22,7 @@ describe('The Console Tab', async () => {
     await typeIntoConsole(frontend, '({a: {x: 21}, b: {y: 42}})');
 
     // Expand the object node recursively
-    await clickOnContextMenu('.console-view-object-properties-section', 'Expand recursively');
+    await clickOnContextMenu('.console-view-object-properties-section', 'expand-recursively');
     const root = await waitFor('.console-view-object-properties-section.expanded');
 
     // Ensure that both a and b are expanded.

@@ -4,6 +4,8 @@
 
 #include "chrome/browser/headless/headless_mode_protocol_browsertest.h"
 
+#include <string_view>
+
 #include "base/base_paths.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -51,7 +53,7 @@ base::Value::Dict HeadlessModeProtocolBrowserTest::GetPageUrlExtraParams() {
 }
 
 void HeadlessModeProtocolBrowserTest::RunTestScript(
-    base::StringPiece script_name) {
+    std::string_view script_name) {
   test_folder_ = "/protocol/";
   script_name_ = script_name;
   RunTest();
@@ -149,8 +151,8 @@ void HeadlessModeProtocolBrowserTest::OnEvaluateResult(
   FinishAsyncTest();
 }
 
-// TODO(1408839): Move similar code in //headless/test to a shared location
-// in //components/devtools/test.
+// TODO(crbug.com/40253719): Move similar code in //headless/test to a shared
+// location in //components/devtools/test.
 void HeadlessModeProtocolBrowserTest::ProcessTestResult(
     const std::string& test_result) {
   base::ScopedAllowBlockingForTesting allow_blocking;
@@ -209,8 +211,8 @@ HEADLESS_MODE_PROTOCOL_TEST(FocusEvent, "input/focus-event.js")
 // Flaky crbug/1431857
 HEADLESS_MODE_PROTOCOL_TEST(DISABLED_FocusBlurNotifications,
                             "input/focus-blur-notifications.js")
-// TODO(crbug.com/1416882): Re-enable this test
-#if BUILDFLAG(IS_MAC)
+// TODO(crbug.com/40257054): Re-enable this test
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 #define MAYBE_InputClipboardOps DISABLED_InputClipboardOps
 #else
 #define MAYBE_InputClipboardOps InputClipboardOps
@@ -246,7 +248,7 @@ class HeadlessModeInputSelectFileDialogTest
   bool select_file_dialog_has_run_ = false;
 };
 
-// TODO(crbug.com/1459246): flaky on Mac and Linux builders.
+// TODO(crbug.com/40919351): flaky on Mac and Linux builders.
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 #define MAYBE_InputSelectFileDialog DISABLED_InputSelectFileDialog
 #else
@@ -281,7 +283,7 @@ HEADLESS_MODE_PROTOCOL_TEST_F(HeadlessModeScreencastTest,
 HEADLESS_MODE_PROTOCOL_TEST(LargeBrowserWindowSize,
                             "sanity/large-browser-window-size.js")
 
-// These currently fail on Mac,see https://crbug.com/1488010
+// These currently fail on Mac, see https://crbug.com/1488010
 #if !BUILDFLAG(IS_MAC)
 HEADLESS_MODE_PROTOCOL_TEST(MinimizeRestoreWindow,
                             "sanity/minimize-restore-window.js")
@@ -294,7 +296,7 @@ HEADLESS_MODE_PROTOCOL_TEST(FullscreenRestoreWindow,
 HEADLESS_MODE_PROTOCOL_TEST(MaximizedWindowSize,
                             "sanity/maximized-window-size.js")
 
-// This currently fails on Mac,see https://crbug.com/1500046
+// This currently fails on Mac, see https://crbug.com/1500046
 #if !BUILDFLAG(IS_MAC)
 HEADLESS_MODE_PROTOCOL_TEST(FullscreenWindowSize,
                             "sanity/fullscreen-window-size.js")
@@ -302,5 +304,13 @@ HEADLESS_MODE_PROTOCOL_TEST(FullscreenWindowSize,
 
 HEADLESS_MODE_PROTOCOL_TEST(PrintToPdfTinyPage,
                             "sanity/print-to-pdf-tiny-page.js")
+
+HEADLESS_MODE_PROTOCOL_TEST(RequestFullscreen, "sanity/request-fullscreen.js")
+
+HEADLESS_MODE_PROTOCOL_TEST(CreateTargetPosition,
+                            "sanity/create-target-position.js")
+
+HEADLESS_MODE_PROTOCOL_TEST(CreateTargetWindowState,
+                            "sanity/create-target-window-state.js")
 
 }  // namespace headless

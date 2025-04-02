@@ -60,7 +60,6 @@ void SharedDictionaryWriterOnDisk::Append(const char* buf, int num_bytes) {
   switch (state_) {
     case State::kBeforeInitialize:
       NOTREACHED();
-      return;
     case State::kInitializing:
       pending_write_buffers_.push_back(
           base::MakeRefCounted<net::StringIOBuffer>(
@@ -73,7 +72,6 @@ void SharedDictionaryWriterOnDisk::Append(const char* buf, int num_bytes) {
     } break;
     case State::kFailed:
       NOTREACHED();
-      break;
   }
 }
 

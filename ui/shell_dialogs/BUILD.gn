@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//build/config/features.gni")
 import("//build/config/ui.gni")
 import("//testing/test.gni")
@@ -34,14 +33,14 @@ component("shell_dialogs") {
   deps = [
     "//base",
     "//base:i18n",
-    "//build:chromeos_buildflags",
+    "//build/config/linux/dbus:buildflags",
     "//skia",
     "//ui/base",
     "//ui/strings",
     "//url",
   ]
 
-  if (is_chromeos || is_castos || is_cast_android) {
+  if (is_chromeos || is_castos) {
     sources += [ "shell_dialog_stub.cc" ]
   }
 
@@ -54,17 +53,14 @@ component("shell_dialogs") {
       "shell_dialog_linux.cc",
       "shell_dialog_linux.h",
     ]
-    deps += [
-      "//components/dbus/thread_linux",
-      "//ui/linux:linux_ui",
-    ]
+    deps += [ "//ui/linux:linux_ui" ]
     if (use_dbus) {
-      defines += [ "USE_DBUS" ]
       sources += [
         "select_file_dialog_linux_portal.cc",
         "select_file_dialog_linux_portal.h",
       ]
       deps += [
+        "//components/dbus",
         "//dbus",
         "//ui/views",
       ]
@@ -114,7 +110,7 @@ component("shell_dialogs") {
     ]
     deps += [
       "//ui/android",
-      "//ui/base:ui_base_jni_headers",
+      "//ui/base:select_file_dialog_jni_headers",
     ]
     include_dirs = [ "$root_gen_dir/ui" ]
     libs = [ "jnigraphics" ]
@@ -136,20 +132,6 @@ component("shell_dialogs") {
   if (is_fuchsia) {
     sources += [ "select_file_dialog_fuchsia.cc" ]
   }
-
-  # TODO(crbug.com/1052397): Rename is_chromeos_lacros.
-  if (is_chromeos_lacros) {
-    sources += [
-      "select_file_dialog_lacros.cc",
-      "select_file_dialog_lacros.h",
-    ]
-    deps += [
-      "//chromeos/crosapi/mojom",
-      "//chromeos/lacros",
-      "//mojo/public/cpp/bindings",
-      "//ui/platform_window",
-    ]
-  }
 }
 
 test("shell_dialogs_unittests") {
@@ -161,9 +143,7 @@ test("shell_dialogs_unittests") {
 
   if (is_mac) {
     sources += [ "select_file_dialog_mac_unittest.mm" ]
-    weak_frameworks = [
-      "UniformTypeIdentifiers.framework",  # macOS 11
-    ]
+    frameworks = [ "UniformTypeIdentifiers.framework" ]
   }
 
   if (is_win) {

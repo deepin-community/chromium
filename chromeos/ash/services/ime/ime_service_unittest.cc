@@ -16,7 +16,6 @@
 #include "chromeos/ash/services/ime/public/mojom/input_engine.mojom.h"
 #include "chromeos/ash/services/ime/public/mojom/input_method.mojom.h"
 #include "chromeos/ash/services/ime/public/mojom/input_method_host.mojom.h"
-#include "chromeos/ash/services/ime/public/mojom/japanese_settings.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -46,13 +45,13 @@ class TestDecoderState;
 // the only way to have a stateful fake is to have a global reference to it.
 TestDecoderState* g_test_decoder_state = nullptr;
 
-mojo::ScopedMessagePipeHandle MessagePipeHandleFromInt(uint32_t handle) {
+mojo::ScopedMessagePipeHandle MessagePipeHandleFromInt(uintptr_t handle) {
   return mojo::ScopedMessagePipeHandle(mojo::MessagePipeHandle(handle));
 }
 
 class TestDecoderState : public mojom::ConnectionFactory {
  public:
-  bool InitializeConnectionFactory(uint32_t receiver_pipe_handle) {
+  bool InitializeConnectionFactory(uintptr_t receiver_pipe_handle) {
     connection_factory_.reset();
     connection_factory_.Bind(mojo::PendingReceiver<mojom::ConnectionFactory>(
         MessagePipeHandleFromInt(receiver_pipe_handle)));
@@ -74,10 +73,9 @@ class TestDecoderState : public mojom::ConnectionFactory {
       ConnectToInputMethodCallback callback) override {
     std::move(callback).Run(/*bound=*/false);
   }
-  void ConnectToJapaneseDecoder(
-      mojo::PendingAssociatedReceiver<ime::mojom::JapaneseDecoder>
-          japanese_decoder,
-      ConnectToJapaneseDecoderCallback callback) override {
+  void Unused(
+      mojo::PendingAssociatedReceiver<ime::mojom::JpUnused> japanese_decoder,
+      UnusedCallback callback) override {
     std::move(callback).Run(/*bound=*/false);
   }
 
@@ -116,7 +114,7 @@ class TestImeSharedLibraryWrapper : public ImeSharedLibraryWrapper {
         .init_mojo_mode = [](ImeCrosPlatform* platform) {},
         .close_mojo_mode = []() {},
         .mojo_mode_initialize_connection_factory =
-            [](uint32_t receiver_pipe_handle) {
+            [](uintptr_t receiver_pipe_handle) {
               return g_test_decoder_state->InitializeConnectionFactory(
                   receiver_pipe_handle);
             },

@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "ash/constants/ash_features.h"
+#include "base/containers/span.h"
 #include "base/functional/callback_helpers.h"
 #include "base/scoped_observation.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -42,7 +43,7 @@
 
 namespace apps {
 
-const PackageId kTestPackageId(AppType::kArc, "test.package.name");
+const PackageId kTestPackageId(PackageType::kArc, "test.package.name");
 
 class PromiseAppServiceTest : public testing::Test,
                               public PromiseAppRegistryCache::Observer {
@@ -100,10 +101,9 @@ class PromiseAppServiceTest : public testing::Test,
   // This is used to produce mock content for the url_loader_factory.
   std::string CreateImageString(int width) {
     SkBitmap bitmap = gfx::test::CreateBitmap(width, width);
-    std::vector<unsigned char> compressed;
-    gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, true, &compressed);
-    std::string image_string(compressed.begin(), compressed.end());
-    return image_string;
+    std::optional<std::vector<uint8_t>> compressed =
+        gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, true);
+    return std::string(base::as_string_view(compressed.value()));
   }
 
   // Set the number of updates we expect the Promise App Registry Cache to
@@ -324,7 +324,7 @@ TEST_F(PromiseAppServiceTest, ShowPromiseAppDespiteErrorAlmanacResponse) {
 TEST_F(PromiseAppServiceTest, CompleteAppInstallationRemovesPromiseApp) {
   AppType app_type = AppType::kArc;
   std::string identifier = "test.com.example";
-  PackageId package_id(app_type, identifier);
+  PackageId package_id(PackageType::kArc, identifier);
 
   // Register test promise app.
   PromiseAppPtr promise_app = std::make_unique<PromiseApp>(package_id);
@@ -366,7 +366,7 @@ TEST_F(PromiseAppServiceTest,
        SuppressPromiseAppsForAppsRegisteredInAppRegistryCache) {
   AppType app_type = AppType::kArc;
   std::string identifier = "test.com.example";
-  PackageId package_id(app_type, identifier);
+  PackageId package_id(PackageType::kArc, identifier);
 
   // Register sample test app in AppRegistryCache.
   apps::AppPtr app = std::make_unique<apps::App>(app_type, "asdfghjkl");
@@ -389,7 +389,7 @@ TEST_F(PromiseAppServiceTest,
 TEST_F(PromiseAppServiceTest, AllowPromiseAppsForReinstallingApps) {
   AppType app_type = AppType::kArc;
   std::string identifier = "test.com.example";
-  PackageId package_id(app_type, identifier);
+  PackageId package_id(PackageType::kArc, identifier);
 
   // Register an app in AppRegistryCache, marked as uninstalled.
   apps::AppPtr app = std::make_unique<apps::App>(app_type, "asdfghjkl");
@@ -411,8 +411,7 @@ TEST_F(PromiseAppServiceTest, AllowPromiseAppsForReinstallingApps) {
 
 TEST_F(PromiseAppServiceTest, WebOnlyTwaInstallationReplacesArcPromiseApp) {
   std::string package_name = "com.example.this";
-  apps::PackageId package_id =
-      apps::PackageId(apps::AppType::kArc, package_name);
+  PackageId package_id(PackageType::kArc, package_name);
   std::string app_id = "asdfghjkl";
 
   // Add a promise app to the cache.
@@ -441,9 +440,8 @@ TEST_F(PromiseAppServiceTest, WebOnlyTwaInstallationReplacesArcPromiseApp) {
 }
 
 TEST_F(PromiseAppServiceTest, FailedWebAppInstallationRemovesTwaPromiseApp) {
-  AppType app_type = AppType::kArc;
   std::string package_name = "test.com.example";
-  PackageId package_id(app_type, package_name);
+  PackageId package_id(PackageType::kArc, package_name);
   std::string app_id = "asdfghjkl";
 
   // Register test promise app.
@@ -465,8 +463,7 @@ TEST_F(PromiseAppServiceTest, FailedWebAppInstallationRemovesTwaPromiseApp) {
 TEST_F(PromiseAppServiceTest, PromiseAppTypeRecorded) {
   // Case 1: ARC promise app.
   std::string arc_package_name = "com.arc.example";
-  apps::PackageId arc_package_id =
-      apps::PackageId(apps::AppType::kArc, arc_package_name);
+  PackageId arc_package_id(PackageType::kArc, arc_package_name);
   std::string arc_app_id = "qwerty";
 
   // Add an ARC package ID promise app to the cache.
@@ -492,8 +489,7 @@ TEST_F(PromiseAppServiceTest, PromiseAppTypeRecorded) {
   // Case 2: TWA promise app: should have an ARC package ID but results in a web
   // app.
   std::string twa_package_name = "com.twa.example";
-  apps::PackageId twa_package_id =
-      apps::PackageId(apps::AppType::kArc, twa_package_name);
+  PackageId twa_package_id(PackageType::kArc, twa_package_name);
   std::string twa_app_id = "asdfghjkl";
 
   // Add an ARC package ID promise app to the cache.

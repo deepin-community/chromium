@@ -5,6 +5,7 @@
 #include "chrome/browser/ash/system_web_apps/apps/help_app/help_app_untrusted_ui_config.h"
 
 #include <memory>
+#include <string_view>
 
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/assistant/assistant_state.h"
@@ -20,12 +21,18 @@
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/assistant/assistant_util.h"
+// TODO(b/342514059): Depending on chrome/browser/ash/child_accounts is not
+// ideal because it's in chrome.
+#include "chrome/browser/ash/child_accounts/on_device_controls/app_controls_service_factory.h"
+#include "chrome/browser/ash/input_method/editor_mediator_factory.h"
+#include "chrome/browser/ash/input_method/editor_switch.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_utils.h"
+#include "chrome/browser/ash/scalable_iph/scalable_iph_factory_impl.h"
+#include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_utils.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/upload_office_to_cloud/upload_office_to_cloud.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/scalable_iph/scalable_iph_factory_impl.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/pref_names.h"
@@ -41,6 +48,7 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/chromeos/devicetype_utils.h"
 #include "ui/display/screen.h"
+#include "ui/events/ash/keyboard_capability.h"
 #include "ui/events/devices/device_data_manager.h"
 
 namespace ash {
@@ -67,9 +75,9 @@ void PopulateLoadTimeData(content::WebUI* web_ui,
       system::StatisticsProvider::GetInstance();
   // MachineStatistics may not exist for browser tests, but it is fine for these
   // to be empty strings.
-  const std::optional<base::StringPiece> customization_id =
+  const std::optional<std::string_view> customization_id =
       provider->GetMachineStatistic(system::kCustomizationIdKey);
-  const std::optional<base::StringPiece> hwid =
+  const std::optional<std::string_view> hwid =
       provider->GetMachineStatistic(system::kHardwareClassKey);
   source->AddString("customizationId",
                     std::string(customization_id.value_or("")));
@@ -82,15 +90,42 @@ void PopulateLoadTimeData(content::WebUI* web_ui,
   // Add any features that have been enabled.
   source->AddBoolean(
       "HelpAppLauncherSearch",
-      base::FeatureList::IsEnabled(features::kHelpAppLauncherSearch) &&
-          base::FeatureList::IsEnabled(features::kEnableLocalSearchService));
-  source->AddBoolean(
-      "HelpAppSearchServiceIntegration",
-      base::FeatureList::IsEnabled(features::kEnableLocalSearchService));
+      base::FeatureList::IsEnabled(features::kHelpAppLauncherSearch));
+  source->AddBoolean("HelpAppSearchServiceIntegration", true);
   source->AddBoolean("isCloudGamingDevice",
                      chromeos::features::IsCloudGamingDeviceEnabled());
+
+  Profile* profile = Profile::FromWebUI(web_ui);
+
   // Features the background page does not need to query:
   if (web_ui->GetWebContents()->GetVisibleURL().path() != "/background") {
+    // Flags for showing or hiding educational content about some feature.
+    bool isEditorSwitchAllowed = false;
+    if (chromeos::features::IsOrcaEnabled()) {
+      auto* editor_mediator =
+          ash::input_method::EditorMediatorFactory::GetInstance()
+              ->GetForProfile(profile);
+      isEditorSwitchAllowed =
+          editor_mediator != nullptr && editor_mediator->IsAllowedForUse();
+    }
+    source->AddBoolean("isEditorSwitchAllowed", isEditorSwitchAllowed);
+    source->AddBoolean("isOnDeviceAppControlsAvailable",
+                       ash::on_device_controls::AppControlsServiceFactory::
+                           IsOnDeviceAppControlsAvailable(profile));
+    source->AddBoolean(
+        "isSeaPenAllowed",
+        ash::features::IsSeaPenEnabled() &&
+            ash::personalization_app::IsEligibleForSeaPen(profile));
+    source->AddBoolean(
+        "isVcBackgroundReplaceAllowed",
+        ash::features::IsVcBackgroundReplaceEnabled() &&
+            ash::personalization_app::IsEligibleForSeaPen(profile));
+    source->AddBoolean("isCrosSwitcherEnabled",
+                       ash::features::IsCrosSwitcherEnabled());
+    source->AddBoolean(
+        "featureManagementShowoff",
+        base::FeatureList::IsEnabled(ash::features::kFeatureManagementShowoff));
+
     // By default, querying the feature flag is what marks a Finch study as
     // active for a client. For features that only happen when the user is
     // actively browsing the help app (such as UI-only features), avoid querying
@@ -101,20 +136,22 @@ void PopulateLoadTimeData(content::WebUI* web_ui,
         base::FeatureList::IsEnabled(ash::features::kHelpAppAppDetailPage));
     source->AddBoolean("HelpAppAppsList", base::FeatureList::IsEnabled(
                                               ash::features::kHelpAppAppsList));
-    source->AddBoolean(
-        "HelpAppCrosComponents",
-        base::FeatureList::IsEnabled(ash::features::kHelpAppCrosComponents));
     source->AddBoolean("HelpAppHomePageAppArticles",
                        base::FeatureList::IsEnabled(
                            ash::features::kHelpAppHomePageAppArticles));
     source->AddBoolean("HelpAppAutoTriggerInstallDialog",
                        base::FeatureList::IsEnabled(
                            features::kHelpAppAutoTriggerInstallDialog));
-    source->AddBoolean("AppInstallServiceUri",
-                       chromeos::features::IsAppInstallServiceUriEnabled());
+    source->AddBoolean(
+        "HelpAppOnboardingRevamp",
+        base::FeatureList::IsEnabled(ash::features::kHelpAppOnboardingRevamp));
+    source->AddBoolean("HelpAppAppMall",
+                       chromeos::features::IsCrosMallSwaEnabled());
+    // Only use the action URL if the install URI is enabled.
+    // TODO(b/346687914): Clean up flag in Showoff code.
+    source->AddBoolean("UseActionUrl", true);
   }
 
-  Profile* profile = Profile::FromWebUI(web_ui);
   PrefService* pref_service = profile->GetPrefs();
 
   bool is_scalable_iph_available =
@@ -151,6 +188,12 @@ void PopulateLoadTimeData(content::WebUI* web_ui,
   source->AddBoolean(
       "rgbKeyboard",
       rgb_keyboard_manager && rgb_keyboard_manager->IsRgbKeyboardSupported());
+  // Whether or not there is a function key on any keyboard.
+  ui::KeyboardCapability* keyboard_capability =
+      Shell::Get()->keyboard_capability();
+  source->AddBoolean("hasFunctionKey",
+                     keyboard_capability &&
+                         keyboard_capability->HasFunctionKeyOnAnyKeyboard());
 
   // Checks if there are active touch screens.
   source->AddBoolean(

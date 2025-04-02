@@ -32,6 +32,11 @@
 //
 // Author: Mark Mentovai
 
+// For <inttypes.h> PRI* macros, before anything else might #include it.
+#ifndef __STDC_FORMAT_MACROS
+#define __STDC_FORMAT_MACROS
+#endif  /* __STDC_FORMAT_MACROS */
+
 #ifdef HAVE_CONFIG_H
 #include <config.h>  // Must come first
 #endif
@@ -42,6 +47,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 #include <time.h>
 
@@ -56,8 +62,6 @@
 #include <limits>
 #include <utility>
 
-#include "processor/range_map-inl.h"
-
 #include "common/macros.h"
 #include "common/scoped_ptr.h"
 #include "common/stdio_wrapper.h"
@@ -66,6 +70,7 @@
 #include "processor/basic_code_modules.h"
 #include "processor/convert_old_arm64_context.h"
 #include "processor/logging.h"
+#include "processor/range_map-inl.h"
 
 namespace google_breakpad {
 
@@ -820,7 +825,7 @@ bool MinidumpContext::Read(uint32_t expected_size) {
           // Context may include xsave registers and so be larger than
           // sizeof(MDRawContextX86). For now we skip this extended data.
           if (context_flags & MD_CONTEXT_X86_XSTATE) {
-            size_t bytes_left = expected_size - sizeof(MDRawContextX86);
+            int64_t bytes_left = expected_size - sizeof(MDRawContextX86);
             if (bytes_left > kMaxXSaveAreaSize) {
               BPLOG(ERROR) << "MinidumpContext oversized xstate area";
               return false;
@@ -897,8 +902,12 @@ bool MinidumpContext::Read(uint32_t expected_size) {
 
         // Skip extended xstate data if present in X86 context.
         if (context_flags & MD_CONTEXT_X86_XSTATE) {
-          minidump_->SeekSet((minidump_->Tell() - sizeof(MDRawContextX86)) +
-                             expected_size);
+          if (!minidump_->SeekSet(
+                  (minidump_->Tell() - sizeof(MDRawContextX86)) +
+                  expected_size)) {
+            BPLOG(ERROR) << "MinidumpContext cannot seek to past xstate data";
+            return false;
+          }
         }
 
         break;

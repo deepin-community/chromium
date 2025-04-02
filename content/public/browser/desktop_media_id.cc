@@ -105,7 +105,6 @@ std::string DesktopMediaID::ToString() const {
   switch (type) {
     case TYPE_NONE:
       NOTREACHED();
-      return std::string();
     case TYPE_SCREEN:
       prefix = kScreenPrefix;
       break;

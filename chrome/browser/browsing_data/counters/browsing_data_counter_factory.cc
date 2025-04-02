@@ -8,6 +8,7 @@
 #include "base/functional/callback_helpers.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/browsing_data/counters/browsing_data_counter_utils.h"
 #include "chrome/browser/browsing_data/counters/cache_counter.h"
 #include "chrome/browser/browsing_data/counters/downloads_counter.h"
@@ -22,8 +23,8 @@
 #include "chrome/browser/password_manager/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/web_data_service_factory.h"
 #include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "components/browsing_data/core/counters/autofill_counter.h"
 #include "components/browsing_data/core/counters/browsing_data_counter.h"
 #include "components/browsing_data/core/counters/history_counter.h"
@@ -39,11 +40,10 @@
 #endif
 
 #if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/user_annotations/user_annotations_service_factory.h"
 #include "content/public/browser/host_zoom_map.h"
-#endif
-
-#if BUILDFLAG(IS_MAC)
-#include "device/fido/mac/credential_store.h"
+#else
+#include "chrome/browser/browsing_data/counters/tabs_counter.h"
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -90,11 +90,7 @@ BrowsingDataCounterFactory::GetForProfileAndPref(Profile* profile,
 
   if (pref_name == browsing_data::prefs::kDeletePasswords) {
     std::unique_ptr<::device::fido::PlatformCredentialStore> credential_store =
-#if BUILDFLAG(IS_MAC)
-        std::make_unique<::device::fido::mac::TouchIdCredentialStore>(
-            ChromeWebAuthenticationDelegate::
-                TouchIdAuthenticatorConfigForProfile(profile));
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS_ASH)
         std::make_unique<
             ::device::fido::cros::PlatformAuthenticatorCredentialStore>();
 #else
@@ -111,8 +107,14 @@ BrowsingDataCounterFactory::GetForProfileAndPref(Profile* profile,
 
   if (pref_name == browsing_data::prefs::kDeleteFormData) {
     return std::make_unique<browsing_data::AutofillCounter>(
+        autofill::PersonalDataManagerFactory::GetForBrowserContext(profile),
         WebDataServiceFactory::GetAutofillWebDataForProfile(
             profile, ServiceAccessType::EXPLICIT_ACCESS),
+#if !BUILDFLAG(IS_ANDROID)
+        UserAnnotationsServiceFactory::GetForProfile(profile),
+#else
+        /*user_annotations_service=*/nullptr,
+#endif
         SyncServiceFactory::GetForProfile(profile));
   }
 
@@ -135,6 +137,12 @@ BrowsingDataCounterFactory::GetForProfileAndPref(Profile* profile,
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   if (pref_name == browsing_data::prefs::kDeleteHostedAppsData) {
     return std::make_unique<HostedAppsCounter>(profile);
+  }
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+  if (pref_name == browsing_data::prefs::kCloseTabs) {
+    return std::make_unique<TabsCounter>(profile);
   }
 #endif
 

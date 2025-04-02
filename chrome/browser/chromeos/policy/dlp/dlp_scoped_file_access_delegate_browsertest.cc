@@ -24,6 +24,7 @@
 #include "chrome/browser/chromeos/policy/dlp/test/mock_dlp_rules_manager.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/test/base/chrome_test_utils.h"
@@ -59,7 +60,8 @@ class FileChooserDelegate : public content::WebContentsDelegate {
     std::vector<blink::mojom::FileChooserFileInfoPtr> files;
     auto file_info = blink::mojom::FileChooserFileInfo::NewNativeFile(
         blink::mojom::NativeFileInfo::New(file_.AppendASCII(""),
-                                          std::u16string()));
+                                          std::u16string(),
+                                          std::vector<std::u16string>()));
     files.push_back(std::move(file_info));
     listener->FileSelected(std::move(files), base::FilePath(), params.mode);
   }
@@ -74,13 +76,14 @@ class TestFileSystemAccessPermissionContext
   explicit TestFileSystemAccessPermissionContext(
       content::BrowserContext* context,
       url::Origin origin,
-      const base::FilePath& path)
-      : ChromeFileSystemAccessPermissionContext(context), directory_(path) {
+      const content::PathInfo& path_info)
+      : ChromeFileSystemAccessPermissionContext(context),
+        directory_(path_info) {
     read_grant_ = GetExtendedReadPermissionGrantForTesting(
-        origin, path,
+        origin, path_info,
         ChromeFileSystemAccessPermissionContext::HandleType::kDirectory);
     write_grant_ = GetExtendedWritePermissionGrantForTesting(
-        origin, path,
+        origin, path_info,
         ChromeFileSystemAccessPermissionContext::HandleType::kDirectory);
   }
 
@@ -94,17 +97,14 @@ class TestFileSystemAccessPermissionContext
     return true;
   }
 
-  PathInfo GetLastPickedDirectory(const url::Origin& origin,
-                                  const std::string& id) override {
-    ChromeFileSystemAccessPermissionContext::PathInfo dir_info;
-    dir_info.path = directory_;
-    return dir_info;
+  content::PathInfo GetLastPickedDirectory(const url::Origin& origin,
+                                           const std::string& id) override {
+    return directory_;
   }
 
   void ConfirmSensitiveEntryAccess(
       const url::Origin& origin,
-      PathType path_type,
-      const base::FilePath& path,
+      const content::PathInfo& path_info,
       HandleType handle_type,
       UserAction user_action,
       content::GlobalRenderFrameHostId frame_id,
@@ -115,31 +115,31 @@ class TestFileSystemAccessPermissionContext
 
   scoped_refptr<content::FileSystemAccessPermissionGrant>
   GetReadPermissionGrant(const url::Origin& origin,
-                         const base::FilePath& path,
+                         const content::PathInfo& path_info,
                          HandleType handle_type,
                          UserAction user_action) override {
     if (read_grant_) {
       return read_grant_;
     }
     return ChromeFileSystemAccessPermissionContext::GetReadPermissionGrant(
-        origin, path, handle_type, user_action);
+        origin, path_info, handle_type, user_action);
   }
 
   scoped_refptr<content::FileSystemAccessPermissionGrant>
   GetWritePermissionGrant(const url::Origin& origin,
-                          const base::FilePath& path,
+                          const content::PathInfo& path_info,
                           HandleType handle_type,
                           UserAction user_action) override {
     if (write_grant_) {
       return write_grant_;
     }
     return ChromeFileSystemAccessPermissionContext::GetWritePermissionGrant(
-        origin, path, handle_type, user_action);
+        origin, path_info, handle_type, user_action);
   }
 
   scoped_refptr<content::FileSystemAccessPermissionGrant> read_grant_;
   scoped_refptr<content::FileSystemAccessPermissionGrant> write_grant_;
-  base::FilePath directory_;
+  content::PathInfo directory_;
 };
 
 // A class replacing the SelectFileDialog with a fake class that selects a
@@ -163,15 +163,14 @@ class TestSelectFileDialog : public ui::SelectFileDialog {
                       int file_type_index,
                       const base::FilePath::StringType& default_extension,
                       gfx::NativeWindow owning_window,
-                      void* params,
                       const GURL* caller) override {
     if (selected_path_.empty()) {
-      listener_->FileSelectionCanceled(params);
+      listener_->FileSelectionCanceled();
       return;
     }
 
     ui::SelectedFileInfo file(selected_path_, selected_path_);
-    listener_->FileSelected(file, /*index=*/0, /*params=*/nullptr);
+    listener_->FileSelected(file, /*index=*/0);
   }
 
   bool IsRunning(gfx::NativeWindow owning_window) const override {
@@ -336,7 +335,7 @@ class DlpScopedFileAccessDelegateBrowserTest : public InProcessBrowserTest {
     auto permission_context = std::make_unique<
         testing::NiceMock<TestFileSystemAccessPermissionContext>>(
         browser()->profile(), embedded_test_server()->GetOrigin(),
-        file.DirName());
+        content::PathInfo(file.DirName()));
 
     return PermissionContextHandle(web_contents->GetBrowserContext(),
                                    std::move(permission_context));

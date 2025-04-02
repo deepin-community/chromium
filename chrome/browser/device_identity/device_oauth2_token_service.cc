@@ -12,6 +12,7 @@
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/device_identity/device_oauth2_token_store.h"
@@ -24,6 +25,10 @@
 #include "google_apis/gaia/oauth2_access_token_consumer.h"
 #include "google_apis/gaia/oauth2_access_token_fetcher.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+
+namespace {
+const char kRefreshTokenInitMetric[] = "Enterprise.RefreshTokenLoadResult";
+}  // namespace
 
 struct DeviceOAuth2TokenService::PendingRequest {
   PendingRequest(
@@ -120,7 +125,6 @@ bool DeviceOAuth2TokenService::RefreshTokenIsAvailable() const {
   }
 
   NOTREACHED() << "Unhandled state " << state_;
-  return false;
 }
 
 OAuth2AccessTokenManager* DeviceOAuth2TokenService::GetAccessTokenManager() {
@@ -170,6 +174,7 @@ void DeviceOAuth2TokenService::OnNetworkError(int response_code) {
 
 void DeviceOAuth2TokenService::OnInitComplete(bool init_result,
                                               bool validation_required) {
+  base::UmaHistogramBoolean(kRefreshTokenInitMetric, init_result);
   if (!init_result) {
     state_ = STATE_NO_TOKEN;
     return;
@@ -294,7 +299,6 @@ bool DeviceOAuth2TokenService::HandleAccessTokenFetch(
   }
 
   NOTREACHED() << "Unexpected state " << state_;
-  return false;
 }
 
 void DeviceOAuth2TokenService::FlushPendingRequests(
@@ -348,7 +352,6 @@ std::string DeviceOAuth2TokenService::GetRefreshToken() const {
       // minting via OAuth2AccessTokenManager::FetchOAuth2Token should be
       // triggered.
       NOTREACHED();
-      return std::string();
     case STATE_VALIDATION_PENDING:
     case STATE_VALIDATION_STARTED:
     case STATE_TOKEN_VALID:
@@ -356,7 +359,6 @@ std::string DeviceOAuth2TokenService::GetRefreshToken() const {
   }
 
   NOTREACHED() << "Unhandled state " << state_;
-  return std::string();
 }
 
 void DeviceOAuth2TokenService::StartValidation() {

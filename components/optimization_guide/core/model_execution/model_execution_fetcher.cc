@@ -7,10 +7,12 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "components/optimization_guide/core/access_token_helper.h"
+#include "components/optimization_guide/core/model_execution/feature_keys.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
 #include "components/variations/net/variations_http_headers.h"
 #include "google_apis/gaia/gaia_constants.h"
+#include "net/base/url_util.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -26,9 +28,9 @@ namespace {
 constexpr char kGoogleAPITypeName[] = "type.googleapis.com/";
 
 net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
-    proto::ModelExecutionFeature feature) {
+    ModelBasedCapabilityKey feature) {
   switch (feature) {
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH:
+    case ModelBasedCapabilityKey::kWallpaperSearch:
       return net::DefineNetworkTrafficAnnotation(
           "wallpaper_create_themes_model_execution",
           R"(
@@ -61,7 +63,7 @@ net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
             }
           }
         })");
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION:
+    case ModelBasedCapabilityKey::kTabOrganization:
       return net::DefineNetworkTrafficAnnotation(
           "tab_organizer_model_execution", R"(
         semantics {
@@ -95,7 +97,7 @@ net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
             }
           }
         })");
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_COMPOSE:
+    case ModelBasedCapabilityKey::kCompose:
       return net::DefineNetworkTrafficAnnotation(
           "help_me_write_model_execution", R"(
         semantics {
@@ -130,15 +132,109 @@ net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
             }
           }
         })");
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST:
+    case ModelBasedCapabilityKey::kTextSafety:
+      // TODO: b/330346344 - Add traffic annotation.
+    case ModelBasedCapabilityKey::kPasswordChangeSubmission:
+      // TODO: b/380116258 - Add traffic annotation.
+      return MISSING_TRAFFIC_ANNOTATION;
+    case ModelBasedCapabilityKey::kTest:
+    case ModelBasedCapabilityKey::kBlingPrototyping:
       // Used for testing purposes. No real features use this.
       return MISSING_TRAFFIC_ANNOTATION;
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UNSPECIFIED:
+    case ModelBasedCapabilityKey::kFormsAnnotations:
+      return net::DefineNetworkTrafficAnnotation(
+          "forms_annotations_model_execution", R"(
+        semantics {
+          sender: "Autofill Predictions - Forms Annotations"
+          description:
+            "Autofill sends the filled form fields to model execution to "
+            "determine the field types and store them for subsequent "
+            "autofilling of forms."
+          trigger: "User submits a web form."
+          destination: GOOGLE_OWNED_SERVICE
+          data:
+            "User filled form data, title, URL, content of the page, and "
+            "previously saved form entries."
+          internal {
+            contacts {
+              email: "chrome-intelligence-core@google.com"
+            }
+          }
+          user_data {
+            type: ACCESS_TOKEN
+            type: SENSITIVE_URL
+            type: WEB_CONTENT
+            type: USER_CONTENT
+          }
+          last_reviewed: "2024-10-10"
+        }
+        policy {
+          cookies_allowed: NO
+          setting:
+            "Users can control this by signing-in to Chrome, and via the "
+            "'Autofill with AI' setting in the 'Autofill and passwords' "
+            "section."
+          chrome_policy {
+            AutofillPredictionSettings {
+              AutofillPredictionSettings: 2
+            }
+          }
+        })");
+    case ModelBasedCapabilityKey::kFormsPredictions:
+      return net::DefineNetworkTrafficAnnotation(
+          "forms_predictions_model_execution", R"(
+        semantics {
+          sender: "Autofill Predictions - Forms Predictions"
+          description:
+            "Autofill sends the filled form fields, and previously saved form "
+            "entries to model execution to predict and prefill the form "
+            "fields."
+          trigger: "User submits a web form."
+          destination: GOOGLE_OWNED_SERVICE
+          data:
+            "User filled form data, title, URL, content of the page, and "
+            "previously saved form entries"
+          internal {
+            contacts {
+              email: "chrome-intelligence-core@google.com"
+            }
+          }
+          user_data {
+            type: ACCESS_TOKEN
+            type: SENSITIVE_URL
+            type: WEB_CONTENT
+            type: USER_CONTENT
+          }
+          last_reviewed: "2024-10-10"
+        }
+        policy {
+          cookies_allowed: NO
+          setting:
+            "Users can control this by signing-in to Chrome, and via the "
+            "'Autofill with AI' setting in the 'Autofill and passwords' "
+            "section."
+          chrome_policy {
+            AutofillPredictionSettings {
+              AutofillPredictionSettings: 2
+            }
+          }
+        })");
+    case ModelBasedCapabilityKey::kFormsClassifications:
+      // TODO(crbug.com/389631477) - Add traffic annotation.
       return MISSING_TRAFFIC_ANNOTATION;
+    case ModelBasedCapabilityKey::kHistorySearch:
+    case ModelBasedCapabilityKey::kHistoryQueryIntent:
+    case ModelBasedCapabilityKey::kPromptApi:
+    case ModelBasedCapabilityKey::kScamDetection:
+    case ModelBasedCapabilityKey::kPermissionsAi:
+    case ModelBasedCapabilityKey::kSummarize:
+    case ModelBasedCapabilityKey::kWritingAssistanceApi:
+      // On-device only feature.
+      NOTREACHED();
   }
 }
 
-void RecordRequestStatusHistogram(proto::ModelExecutionFeature feature,
+void RecordRequestStatusHistogram(ModelBasedCapabilityKey feature,
                                   FetcherRequestStatus status) {
   base::UmaHistogramEnumeration(
       base::StrCat({"OptimizationGuide.ModelExecutionFetcher.RequestStatus.",
@@ -158,14 +254,15 @@ ModelExecutionFetcher::ModelExecutionFetcher(
     : optimization_guide_service_url_(optimization_guide_service_url),
       url_loader_factory_(url_loader_factory),
       optimization_guide_logger_(optimization_guide_logger) {
-  CHECK(optimization_guide_service_url_.SchemeIs(url::kHttpsScheme));
+  if (!net::IsLocalhost(optimization_guide_service_url_)) {
+    CHECK(optimization_guide_service_url_.SchemeIs(url::kHttpsScheme));
+  }
 }
 
 ModelExecutionFetcher::~ModelExecutionFetcher() {
-  if (active_url_loader_) {
-    DCHECK_NE(proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UNSPECIFIED,
-              model_execution_feature_);
-    RecordRequestStatusHistogram(model_execution_feature_,
+  if (model_execution_callback_) {
+    DCHECK(model_execution_feature_);
+    RecordRequestStatusHistogram(*model_execution_feature_,
                                  FetcherRequestStatus::kRequestCanceled);
     std::move(model_execution_callback_)
         .Run(base::unexpected(
@@ -175,13 +272,12 @@ ModelExecutionFetcher::~ModelExecutionFetcher() {
 }
 
 void ModelExecutionFetcher::ExecuteModel(
-    proto::ModelExecutionFeature feature,
+    ModelBasedCapabilityKey feature,
     signin::IdentityManager* identity_manager,
     const google::protobuf::MessageLite& request_metadata,
+    std::optional<base::TimeDelta> timeout,
     ModelExecuteResponseCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_NE(proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UNSPECIFIED,
-            feature);
 
   if (model_execution_callback_) {
     RecordRequestStatusHistogram(feature, FetcherRequestStatus::kFetcherBusy);
@@ -196,7 +292,7 @@ void ModelExecutionFetcher::ExecuteModel(
   model_execution_callback_ = std::move(callback);
 
   proto::ExecuteRequest execute_request;
-  execute_request.set_feature(feature);
+  execute_request.set_feature(ToModelExecutionFeatureProto(feature));
   proto::Any* any_metadata = execute_request.mutable_request_metadata();
   any_metadata->set_type_url(
       base::StrCat({kGoogleAPITypeName, request_metadata.GetTypeName()}));
@@ -208,14 +304,16 @@ void ModelExecutionFetcher::ExecuteModel(
       identity_manager,
       {GaiaConstants::kOptimizationGuideServiceModelExecutionOAuth2Scope},
       base::BindOnce(&ModelExecutionFetcher::OnAccessTokenReceived,
-                     weak_ptr_factory_.GetWeakPtr(), serialized_request));
+                     weak_ptr_factory_.GetWeakPtr(), serialized_request,
+                     timeout));
 }
 
 void ModelExecutionFetcher::OnAccessTokenReceived(
     const std::string& serialized_request,
+    std::optional<base::TimeDelta> timeout,
     const std::string& access_token) {
   if (access_token.empty()) {
-    RecordRequestStatusHistogram(model_execution_feature_,
+    RecordRequestStatusHistogram(*model_execution_feature_,
                                  FetcherRequestStatus::kUserNotSignedIn);
     std::move(model_execution_callback_)
         .Run(base::unexpected(
@@ -228,6 +326,9 @@ void ModelExecutionFetcher::OnAccessTokenReceived(
   if (!access_token.empty()) {
     PopulateAuthorizationRequestHeader(resource_request.get(), access_token);
   }
+  if (timeout && timeout->is_positive()) {
+    PopulateServerTimeoutRequestHeader(resource_request.get(), *timeout);
+  }
 
   resource_request->url = optimization_guide_service_url_;
   resource_request->method = "POST";
@@ -238,7 +339,7 @@ void ModelExecutionFetcher::OnAccessTokenReceived(
       // This is always InIncognito::kNo as the server model execution is not
       // enabled on incognito sessions and is rechecked before each fetch.
       variations::InIncognito::kNo, variations::SignedIn::kNo,
-      GetNetworkTrafficAnnotation(model_execution_feature_));
+      GetNetworkTrafficAnnotation(*model_execution_feature_));
 
   active_url_loader_->AttachStringForUpload(serialized_request,
                                             "application/x-protobuf");
@@ -264,10 +365,10 @@ void ModelExecutionFetcher::OnURLLoadComplete(
   // handling may start a new fetch.
   active_url_loader_.reset();
 
-  base::UmaHistogramEnumeration(
-      "OptimizationGuide.ModelExecutionFetcher.Status",
-      static_cast<net::HttpStatusCode>(response_code),
-      net::HTTP_VERSION_NOT_SUPPORTED);
+  if (response_code >= 0) {
+    base::UmaHistogramSparse("OptimizationGuide.ModelExecutionFetcher.Status",
+                             response_code);
+  }
   // Net error codes are negative but histogram enums must be positive.
   base::UmaHistogramSparse(
       "OptimizationGuide.ModelExecutionFetcher.NetErrorCode", -net_error);
@@ -275,7 +376,7 @@ void ModelExecutionFetcher::OnURLLoadComplete(
   proto::ExecuteResponse execute_response;
 
   if (net_error != net::OK || response_code != net::HTTP_OK) {
-    RecordRequestStatusHistogram(model_execution_feature_,
+    RecordRequestStatusHistogram(*model_execution_feature_,
                                  FetcherRequestStatus::kResponseError);
     std::move(model_execution_callback_)
         .Run(base::unexpected(
@@ -284,7 +385,7 @@ void ModelExecutionFetcher::OnURLLoadComplete(
     return;
   }
   if (!response_body || !execute_response.ParseFromString(*response_body)) {
-    RecordRequestStatusHistogram(model_execution_feature_,
+    RecordRequestStatusHistogram(*model_execution_feature_,
                                  FetcherRequestStatus::kResponseError);
     std::move(model_execution_callback_)
         .Run(base::unexpected(
@@ -295,9 +396,9 @@ void ModelExecutionFetcher::OnURLLoadComplete(
   base::UmaHistogramMediumTimes(
       base::StrCat(
           {"OptimizationGuide.ModelExecutionFetcher.FetchLatency.",
-           GetStringNameForModelExecutionFeature(model_execution_feature_)}),
+           GetStringNameForModelExecutionFeature(*model_execution_feature_)}),
       base::TimeTicks::Now() - fetch_start_time_);
-  RecordRequestStatusHistogram(model_execution_feature_,
+  RecordRequestStatusHistogram(*model_execution_feature_,
                                FetcherRequestStatus::kSuccess);
   // This should be the last call, since the callback could be deleting `this`.
   std::move(model_execution_callback_).Run(base::ok(execute_response));

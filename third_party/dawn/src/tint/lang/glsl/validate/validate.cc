@@ -30,7 +30,11 @@
 #include <string>
 
 #include "glslang/Public/ResourceLimits.h"
+
+TINT_BEGIN_DISABLE_WARNING(UNSAFE_BUFFER_USAGE);
 #include "glslang/Public/ShaderLang.h"
+TINT_END_DISABLE_WARNING(UNSAFE_BUFFER_USAGE);
+
 #include "src/tint/utils/macros/static_init.h"
 #include "src/tint/utils/text/string_stream.h"
 
@@ -48,7 +52,9 @@ EShLanguage PipelineStageToEshLanguage(tint::ast::PipelineStage stage) {
             return EShLangCompute;
         default:
             TINT_UNREACHABLE();
-            return EShLangVertex;
+            // MSVC considered the inlined call:
+            // `lang = PipelineStageToEshLanguage()` as potentially uninitialized
+            TINT_MSVC_ONLY(return EShLangCompute;)
     }
 }
 

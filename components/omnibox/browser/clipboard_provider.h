@@ -27,11 +27,12 @@ class ClipboardProvider : public AutocompleteProvider {
   // Returns a new AutocompleteMatch clipboard match that will navigate to the
   // given copied url. Used to construct a match later when the URL is not
   // available at match creation time (e.g. iOS 14).
-  AutocompleteMatch NewClipboardURLMatch(GURL url);
+  AutocompleteMatch NewClipboardURLMatch(const GURL& url);
   // Returns a new AutocompleteMatch clipboard match that will search for the
   // given copied text. Used to construct a match later when the text is not
   // available at match creation time (e.g. iOS 14).
-  std::optional<AutocompleteMatch> NewClipboardTextMatch(std::u16string text);
+  std::optional<AutocompleteMatch> NewClipboardTextMatch(
+      const std::u16string& text);
 
   using ClipboardImageMatchCallback =
       base::OnceCallback<void(std::optional<AutocompleteMatch>)>;
@@ -142,7 +143,7 @@ class ClipboardProvider : public AutocompleteProvider {
       ClipboardImageMatchCallback callback,
       scoped_refptr<base::RefCountedMemory> image_bytes);
 
-  // TODO(crbug.com/1195673): OmniboxViewIOS should use following functions
+  // TODO(crbug.com/40176141): OmniboxViewIOS should use following functions
   // instead their own implementations.
   // Called when url data is received from clipboard for creating match with
   // content.

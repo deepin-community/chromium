@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "ash/ambient/ambient_constants.h"
@@ -23,13 +24,14 @@
 #include "ash/ambient/util/ambient_util.h"
 #include "ash/ambient/util/time_of_day_utils.h"
 #include "ash/assistant/assistant_interaction_controller_impl.h"
+#include "ash/constants/ambient_time_of_day_constants.h"
 #include "ash/constants/ambient_video.h"
-#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_paths.h"
 #include "ash/login/login_screen_controller.h"
 #include "ash/login/ui/lock_screen.h"
 #include "ash/public/cpp/ambient/ambient_prefs.h"
 #include "ash/public/cpp/ambient/ambient_ui_model.h"
+#include "ash/public/cpp/ambient/fake_ambient_backend_controller_impl.h"
 #include "ash/public/cpp/assistant/controller/assistant_interaction_controller.h"
 #include "ash/public/cpp/personalization_app/time_of_day_test_utils.h"
 #include "ash/public/cpp/test/in_process_data_decoder.h"
@@ -52,7 +54,6 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_path_override.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/test_future.h"
@@ -70,6 +71,7 @@
 #include "ui/events/platform/platform_event_source.h"
 #include "ui/events/pointer_details.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/events/test/test_event_handler.h"
 #include "ui/events/types/event_type.h"
 
 namespace ash {
@@ -82,6 +84,11 @@ constexpr char kUser1[] = "user1@gmail.com";
 constexpr char kUser2[] = "user2@gmail.com";
 constexpr base::FilePath::CharType kTestDlcRootPath[] =
     FILE_PATH_LITERAL("/test/time_of_day");
+
+// Expects argument of type `dlcservice::DlcsWithContent::DlcInfo`.
+MATCHER(HasVideoDlcPackageId, "") {
+  return arg.id() == kTimeOfDayDlcId;
+}
 
 std::vector<base::OnceClosure> GetEventGeneratorCallbacks(
     ui::test::EventGenerator* event_generator) {
@@ -189,9 +196,7 @@ class AmbientControllerTest : public AmbientAshTestBase {
   // AmbientAshTestBase:
   void SetUp() override {
     std::vector<base::test::FeatureRef> features_to_enable =
-        personalization_app::GetTimeOfDayEnabledFeatures();
-    features_to_enable.emplace_back(features::kTimeOfDayDlc);
-    features_to_enable.emplace_back(features::kAmbientModeThrottleAnimation);
+        personalization_app::GetTimeOfDayFeatures();
     feature_list_.InitWithFeatures(features_to_enable, {});
     AmbientAshTestBase::SetUp();
     GetSessionControllerClient()->set_show_lock_screen_views(true);
@@ -421,15 +426,6 @@ TEST_F(AmbientControllerTest, ConsumerShouldNotRecordManagedMetrics) {
 
   SetAmbientModeEnabled(false);
 
-  {
-    base::test::ScopedFeatureList scoped_feature_list(
-        ash::features::kAmbientModeManagedScreensaver);
-
-    SetAmbientModeEnabled(true);
-
-    SetAmbientModeEnabled(false);
-  }
-
   histogram_tester.ExpectTotalCount(
       GetManagedScreensaverHistogram(kManagedScreensaverEnabledUMA),
       /*expected_count=*/0);
@@ -515,7 +511,7 @@ TEST_P(AmbientControllerTestForAnyUiSettings, ShouldReturnCachedAccessToken) {
   base::OnceClosure closure = base::MakeExpectedRunClosure(FROM_HERE);
   base::RunLoop run_loop;
   ambient_controller()->RequestAccessToken(base::BindLambdaForTesting(
-      [&](const std::string& gaia_id, const std::string& access_token_fetched) {
+      [&](const GaiaId& gaia_id, const std::string& access_token_fetched) {
         EXPECT_EQ(access_token_fetched, TestAmbientClient::kTestAccessToken);
 
         std::move(closure).Run();
@@ -556,7 +552,7 @@ TEST_F(AmbientControllerTest, ShouldReturnEmptyAccessToken) {
   base::OnceClosure closure = base::MakeExpectedRunClosure(FROM_HERE);
   base::RunLoop run_loop_1;
   ambient_controller()->RequestAccessToken(base::BindLambdaForTesting(
-      [&](const std::string& gaia_id, const std::string& access_token_fetched) {
+      [&](const GaiaId& gaia_id, const std::string& access_token_fetched) {
         EXPECT_EQ(access_token_fetched, TestAmbientClient::kTestAccessToken);
 
         std::move(closure).Run();
@@ -572,7 +568,7 @@ TEST_F(AmbientControllerTest, ShouldReturnEmptyAccessToken) {
 
   closure = base::MakeExpectedRunClosure(FROM_HERE);
   ambient_controller()->RequestAccessToken(base::BindLambdaForTesting(
-      [&](const std::string& gaia_id, const std::string& access_token_fetched) {
+      [&](const GaiaId& gaia_id, const std::string& access_token_fetched) {
         EXPECT_TRUE(access_token_fetched.empty());
 
         std::move(closure).Run();
@@ -865,7 +861,7 @@ TEST_F(AmbientControllerTest, ShouldResetLockScreenInactivityTimerOnEvent) {
   // not hooked up to `UserActivityDetector` in this test environment, so
   // manually trigger `UserActivityDetector` ourselves.
   auto* user_activity_detector = ui::UserActivityDetector::Get();
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_A, ui::EF_NONE);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_A, ui::EF_NONE);
   user_activity_detector->DidProcessEvent(&event);
   EXPECT_EQ(AmbientUiVisibility::kShouldShow, ambient_ui_model->ui_visibility())
       << "Still shown because waiting for `OnKeyEvent` to be called";
@@ -900,13 +896,43 @@ TEST_P(AmbientControllerTestForAnyUiSettings,
   CloseAmbientScreen();
 
   // When ambient is shown, OnUserActivity() should ignore key event.
-  ambient_controller()->SetUiVisibilityShouldShow();
+  SetAmbientShownAndWaitForWidgets();
   EXPECT_TRUE(ambient_controller()->ShouldShowAmbientUi());
 
   // General key press will exit ambient mode.
   // Simulate key press to close the widget.
+  ui::test::TestEventHandler event_handler;
+  Shell::GetPrimaryRootWindow()->AddPreTargetHandler(&event_handler);
   PressAndReleaseKey(ui::VKEY_A);
   EXPECT_FALSE(ambient_controller()->ShouldShowAmbientUi());
+  // First key press event should be consumed by ambient mode when closing the
+  // UI. Only the key release event gets propagated to the rest of the system.
+  EXPECT_EQ(event_handler.num_key_events(), 1);
+  Shell::GetPrimaryRootWindow()->RemovePreTargetHandler(&event_handler);
+}
+
+TEST_F(AmbientControllerTest, ShouldPropagateKeyPressIfNotRendering) {
+  // Force ambient mode to be in a state where it's trying to download photos
+  // but has not started rendering yet. In this state, the user should hit the
+  // keyboard and see the effect in the existing UI (probably the lock screen).
+  // The key stroke should also dismiss ambient mode.
+  SetAmbientTheme(AmbientTheme::kSlideshow);
+  DisableBackupCacheDownloads();
+  backend_controller()->SetFetchScreenUpdateInfoResponseSize(0);
+
+  ambient_controller()->SetUiVisibilityShouldShow();
+  ASSERT_TRUE(ambient_controller()->ShouldShowAmbientUi());
+  ASSERT_FALSE(GetContainerView());
+
+  ui::test::TestEventHandler event_handler;
+  Shell::GetPrimaryRootWindow()->AddPreTargetHandler(&event_handler);
+  PressAndReleaseKey(ui::VKEY_A);
+  EXPECT_FALSE(ambient_controller()->ShouldShowAmbientUi());
+  // Unlike the `ShouldDismissContainerViewOnKeyEvent` test case, both key
+  // events (press and release) should be propagated to the `event_handler` in
+  // the background.
+  EXPECT_EQ(event_handler.num_key_events(), 2);
+  Shell::GetPrimaryRootWindow()->RemovePreTargetHandler(&event_handler);
 }
 
 TEST_P(AmbientControllerTestForAnyUiSettings, ShowThenImmediatelyClose) {
@@ -1607,8 +1633,9 @@ TEST_F(AmbientControllerTest,
   ambient_controller()->SetUiVisibilityPreview();
   EXPECT_TRUE(ambient_controller()->ShouldShowAmbientUi());
 
-  ui::MouseEvent mouse_event(ui::ET_MOUSE_RELEASED, gfx::Point(), gfx::Point(),
-                             base::TimeTicks(), ui::EF_NONE, ui::EF_NONE);
+  ui::MouseEvent mouse_event(ui::EventType::kMouseReleased, gfx::Point(),
+                             gfx::Point(), base::TimeTicks(), ui::EF_NONE,
+                             ui::EF_NONE);
   ui::UserActivityDetector::Get()->DidProcessEvent(&mouse_event);
   FastForwardTiny();
 
@@ -1704,8 +1731,6 @@ class AmbientControllerForManagedScreensaverTest : public AmbientAshTestBase {
             ash::DIR_DEVICE_POLICY_SCREENSAVER_DATA, temp_dir_.GetPath());
   }
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        ash::features::kAmbientModeManagedScreensaver);
     AmbientAshTestBase::SetUp();
     // Disable consumer ambient mode
     SetAmbientModeEnabled(false);
@@ -1739,7 +1764,6 @@ class AmbientControllerForManagedScreensaverTest : public AmbientAshTestBase {
     EXPECT_TRUE(ambient_controller()->ShouldShowAmbientUi());
   }
 
-  base::test::ScopedFeatureList scoped_feature_list_;
   InProcessDataDecoder decoder_;
   std::vector<base::FilePath> image_file_paths_;
   base::ScopedTempDir temp_dir_;
@@ -2019,7 +2043,7 @@ TEST_F(AmbientControllerForManagedScreensaverLoginScreenTest,
   ASSERT_TRUE(GetContainerView());
 
   // Simulate user session start (e.g. user login)
-  CreateUserSessions(/*session_count=*/1);
+  SimulateUserLogin(kDefaultUserEmail);
 
   // Confirm that ambient mode is not shown if disabled. (disabled by default)
   FastForwardByLockScreenInactivityTimeout();
@@ -2069,7 +2093,7 @@ TEST_F(AmbientControllerForManagedScreensaverLoginScreenTest,
   EXPECT_FALSE(ambient_controller()->ShouldShowAmbientUi());
 
   // Simulate login
-  CreateUserSessions(/*session_count=*/1);
+  SimulateUserLogin(kDefaultUserEmail);
   EXPECT_FALSE(ambient_controller()->ShouldShowAmbientUi());
 
   SetAmbientModeManagedScreensaverEnabled(true);
@@ -2102,7 +2126,7 @@ TEST_F(AmbientControllerForManagedScreensaverLoginScreenTest,
   EXPECT_FALSE(ambient_controller()->ShouldShowAmbientUi());
 
   // Simulate login
-  CreateUserSessions(/*session_count=*/1);
+  SimulateUserLogin(kDefaultUserEmail);
   EXPECT_FALSE(ambient_controller()->ShouldShowAmbientUi());
 
   SetAmbientModeManagedScreensaverEnabled(true);
@@ -2300,18 +2324,12 @@ class AmbientControllerDurationTest : public AmbientAshTestBase {
   ~AmbientControllerDurationTest() override = default;
 
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(features::kScreenSaverDuration);
     AmbientAshTestBase::SetUp();
     GetSessionControllerClient()->set_show_lock_screen_views(true);
   }
-
- protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(AmbientControllerDurationTest, SetScreenSaverDuration) {
-  EXPECT_TRUE(ash::features::IsScreenSaverDurationEnabled());
-
   // Duration is default to forever.
   SetAmbientModeEnabled(true);
   EXPECT_EQ(0, GetScreenSaverDuration());

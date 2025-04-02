@@ -10,6 +10,7 @@
 #include "base/component_export.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
+#include "build/build_config.h"
 #include "third_party/webrtc/modules/audio_processing/include/audio_processing.h"
 
 namespace features {
@@ -19,9 +20,6 @@ BASE_DECLARE_FEATURE(kWebRtcAllowWgcScreenCapturer);
 
 COMPONENT_EXPORT(MEDIA_WEBRTC)
 BASE_DECLARE_FEATURE(kWebRtcAllowWgcWindowCapturer);
-
-COMPONENT_EXPORT(MEDIA_WEBRTC)
-BASE_DECLARE_FEATURE(kWebRtcAllowDxgiGdiZeroHz);
 
 COMPONENT_EXPORT(MEDIA_WEBRTC)
 BASE_DECLARE_FEATURE(kWebRtcAllowWgcScreenZeroHz);
@@ -42,6 +40,23 @@ extern const base::FeatureParam<
 
 COMPONENT_EXPORT(MEDIA_WEBRTC)
 BASE_DECLARE_FEATURE(kWebRtcApmTellsIfPlayoutReferenceIsNeeded);
+
+COMPONENT_EXPORT(MEDIA_WEBRTC)
+BASE_DECLARE_FEATURE(kWebRtcAllowH265Send);
+
+COMPONENT_EXPORT(MEDIA_WEBRTC)
+BASE_DECLARE_FEATURE(kWebRtcAllowH265Receive);
+
+COMPONENT_EXPORT(MEDIA_WEBRTC)
+BASE_DECLARE_FEATURE(kWebRtcH265L1T2);
+
+COMPONENT_EXPORT(MEDIA_WEBRTC)
+BASE_DECLARE_FEATURE(kWebRtcH265L1T3);
+
+#if BUILDFLAG(IS_ANDROID)
+COMPONENT_EXPORT(MEDIA_WEBRTC)
+BASE_DECLARE_FEATURE(kWebRtcApm48kHzSampleRateOnAndroidKillSwitch);
+#endif
 
 }  // namespace features
 

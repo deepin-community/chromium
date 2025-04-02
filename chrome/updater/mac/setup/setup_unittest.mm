@@ -78,7 +78,7 @@ void CreateTestApp(const base::FilePath& test_dir) {
 
   ASSERT_TRUE([launchd_plist
       writeToURL:base::apple::FilePathToNSURL(test_app_info_plist_path)
-      atomically:YES]);
+           error:nil]);
 }
 
 void CreateTestSuiteTestDir(const base::FilePath& test_dir) {
@@ -113,9 +113,7 @@ const base::FilePath& GetTestSuiteDirPath() {
 }  // namespace
 
 class ChromeUpdaterMacSetupTest : public testing::Test {
- public:
-  ~ChromeUpdaterMacSetupTest() override = default;
-
+ protected:
   static void SetUpTestSuite() {
     // SetUpTestSuite will run a script (install_test_helper.sh), which will set
     // up all the necessary things for running the mac installer test. This will

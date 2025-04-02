@@ -5,6 +5,7 @@
 #ifndef IPCZ_SRC_IPCZ_PARCEL_H_
 #define IPCZ_SRC_IPCZ_PARCEL_H_
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -114,12 +115,7 @@ class Parcel {
     return absl::get<DataFragment>(data_.storage).memory();
   }
 
-  absl::Span<Ref<APIObject>> objects_view() const {
-    if (!objects_) {
-      return {};
-    }
-    return objects_->view;
-  }
+  absl::Span<Ref<APIObject>> objects_view() const { return objects_.view; }
 
   size_t num_objects() const { return objects_view().size(); }
 
@@ -140,6 +136,8 @@ class Parcel {
   // Note that the size of `out_handles` must not be larger than the size of
   // objects_view().
   void ConsumeHandles(absl::Span<IpczHandle> out_handles);
+
+  void SetEnvelope(DriverObject envelope);
 
   // Produces a log-friendly description of the Parcel, useful for various
   // debugging log messages.
@@ -237,15 +235,16 @@ class Parcel {
   DataStorageWithView data_;
 
   // The set of APIObjects attached to this parcel, and a view of the objects
-  // not yet consumed from it. Heap-allocated to keep Parcels small in the
-  // common case of no object attachments.
-  std::unique_ptr<ObjectStorageWithView> objects_;
+  // not yet consumed from it.
+  ObjectStorageWithView objects_;
 
   // By default, all parcels have a single subparcel (theirself) at index 0. On
   // any Parcel that exists as a subparcel of another, these fields will be
   // updated by the containing Parcel as needed.
   size_t num_subparcels_ = 1;
   size_t subparcel_index_ = 0;
+
+  DriverObject envelope_;
 };
 
 }  // namespace ipcz

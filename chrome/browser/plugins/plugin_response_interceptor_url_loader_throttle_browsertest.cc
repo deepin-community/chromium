@@ -9,6 +9,7 @@
 #include "base/run_loop.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/pdf/pdf_extension_test_util.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -26,8 +27,8 @@ using content::WebContents;
 class PluginResponseInterceptorURLLoaderThrottleBrowserTest
     : public extensions::ExtensionApiTest {
  public:
-  PluginResponseInterceptorURLLoaderThrottleBrowserTest() {}
-  ~PluginResponseInterceptorURLLoaderThrottleBrowserTest() override {}
+  PluginResponseInterceptorURLLoaderThrottleBrowserTest() = default;
+  ~PluginResponseInterceptorURLLoaderThrottleBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
     extensions::ExtensionApiTest::SetUpOnMainThread();
@@ -51,8 +52,8 @@ class PluginResponseInterceptorURLLoaderThrottleBrowserTest
 
 class DownloadObserver : public content::DownloadManager::Observer {
  public:
-  DownloadObserver() {}
-  ~DownloadObserver() override {}
+  DownloadObserver() = default;
+  ~DownloadObserver() override = default;
 
   const GURL& GetLastUrl() {
     // Wait until the download has been created.

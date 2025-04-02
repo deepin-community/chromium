@@ -3,31 +3,43 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/scalable_iph/scalable_iph_browser_test_base.h"
-#include "base/memory/raw_ptr.h"
 
 #include <memory>
 
 #include "ash/constants/ash_features.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/ash/scalable_iph/customizable_test_env_browser_test_base.h"
 #include "chrome/browser/ash/scalable_iph/mock_scalable_iph_delegate.h"
 #include "chrome/browser/ash/scalable_iph/scalable_iph_delegate_impl.h"
+#include "chrome/browser/ash/scalable_iph/scalable_iph_factory_impl.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/scalable_iph/scalable_iph_factory.h"
-#include "chrome/browser/scalable_iph/scalable_iph_factory_impl.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_window_manager_helper.h"
 #include "chrome/browser/ui/browser.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/scalable_iph/scalable_iph.h"
 #include "chromeos/ash/components/scalable_iph/scalable_iph_constants.h"
 #include "chromeos/ash/components/scalable_iph/scalable_iph_delegate.h"
+#include "chromeos/ash/components/scalable_iph/scalable_iph_factory.h"
 #include "chromeos/ash/services/network_config/in_process_instance.h"
 #include "chromeos/ash/services/network_config/public/cpp/cros_network_config_test_helper.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
+#include "components/feature_engagement/test/mock_tracker.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
+#include "components/signin/public/identity_manager/account_info.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "components/signin/public/identity_manager/test_identity_manager_observer.h"
+#include "components/user_manager/user.h"
+#include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -43,13 +55,40 @@ std::set<std::string> mock_delegate_created_;
 
 constexpr char kTestWiFiId[] = "test-wifi-id";
 
+constexpr auto kEligileUserSessionTypesForMantaService = base::MakeFixedFlatSet<
+    CustomizableTestEnvBrowserTestBase::UserSessionType>(
+    {CustomizableTestEnvBrowserTestBase::UserSessionType::kRegular,
+     CustomizableTestEnvBrowserTestBase::UserSessionType::kRegularNonOwner,
+     CustomizableTestEnvBrowserTestBase::UserSessionType::kManaged,
+     CustomizableTestEnvBrowserTestBase::UserSessionType::kRegularWithOobe});
+
 BASE_FEATURE(kScalableIphTest,
              "ScalableIphTest",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+// One off helper that waits for refresh token loading with nestable tasks
+// allowed so that it could be used under nested `RunLoops`.
+void EnsureRefreshTokensLoaded(signin::IdentityManager* identity_manager) {
+  base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+  signin::TestIdentityManagerObserver load_credentials_observer(
+      identity_manager);
+  load_credentials_observer.SetOnRefreshTokensLoadedCallback(
+      run_loop.QuitClosure());
+
+  if (identity_manager->AreRefreshTokensLoaded()) {
+    return;
+  }
+
+  run_loop.Run();
+  ASSERT_TRUE(identity_manager->AreRefreshTokensLoaded());
+}
+
 }  // namespace
 
-ScalableIphBrowserTestBase::ScalableIphBrowserTestBase() = default;
+ScalableIphBrowserTestBase::ScalableIphBrowserTestBase() {
+  scalable_iph::ScalableIph::ForceEnableIphFeatureForTesting();
+}
+
 ScalableIphBrowserTestBase::~ScalableIphBrowserTestBase() = default;
 
 void ScalableIphBrowserTestBase::SetUp() {
@@ -73,18 +112,41 @@ void ScalableIphBrowserTestBase::SetUp() {
   // `SetUpOnMainThread` below is too late to set a testing factory. Note that
   // `InProcessBrowserTest::SetUp` is called at the very early stage, e.g.
   // before command lines are set, etc.
+  MockTrackerFactoryMethod mock_tracker_factory_method =
+      GetMockTrackerFactoryMethod();
+  mock_tracker_enabled_ = !mock_tracker_factory_method.is_null();
   subscription_ =
       BrowserContextDependencyManager::GetInstance()
           ->RegisterCreateServicesCallbackForTesting(base::BindRepeating(
               &ScalableIphBrowserTestBase::SetTestingFactories,
-              enable_mock_tracker_));
+              mock_tracker_factory_method));
 
   CustomizableTestEnvBrowserTestBase::SetUp();
+}
+
+void ScalableIphBrowserTestBase::SetUpInProcessBrowserTestFixture() {
+  CustomizableTestEnvBrowserTestBase::SetUpInProcessBrowserTestFixture();
+
+  if (enable_multi_user_) {
+    // Add a secondary user.
+    LoginManagerMixin* login_manager_mixin = GetLoginManagerMixin();
+    CHECK(login_manager_mixin);
+    login_manager_mixin->AppendRegularUsers(1);
+    CHECK_EQ(login_manager_mixin->users().size(), 2ul);
+  }
 }
 
 // `SetUpOnMainThread` is called just before a test body. Do the mock set up in
 // this function as `browser()` is not available in `SetUp` above.
 void ScalableIphBrowserTestBase::SetUpOnMainThread() {
+  if (kEligileUserSessionTypesForMantaService.contains(
+          test_environment().user_session_type()) &&
+      !force_disable_manta_service_) {
+    ScalableIphFactory::GetInstance()
+        ->SetOnBuildingServiceInstanceForTestingCallback(base::BindRepeating(
+            &ScalableIphBrowserTestBase::SetCanUseMantaService));
+  }
+
   // `CustomizableTestEnvBrowserTestBase::SetUpOnMainThread` must be called
   // before our `SetUpOnMainThread` as login happens in the method, i.e. profile
   // is not available before it.
@@ -100,12 +162,6 @@ void ScalableIphBrowserTestBase::SetUpOnMainThread() {
   }
 
   if (enable_multi_user_) {
-    // Add a secondary user.
-    LoginManagerMixin* login_manager_mixin = GetLoginManagerMixin();
-    CHECK(login_manager_mixin);
-    login_manager_mixin->AppendRegularUsers(1);
-    CHECK_EQ(login_manager_mixin->users().size(), 2ul);
-
     // By default, `MultiUserWindowManager` is created with multi profile off.
     // Re-create for multi profile tests. This has to be done after
     // `SetUpOnMainThread` of a base class as the original multi-profile-off
@@ -152,20 +208,12 @@ void ScalableIphBrowserTestBase::SetUpMocks() {
          "at a login time. We check the behavior by confirming creation of a "
          "delegate.";
 
-  if (enable_mock_tracker_) {
+  if (mock_tracker_enabled_) {
     mock_tracker_ = static_cast<feature_engagement::test::MockTracker*>(
         feature_engagement::TrackerFactory::GetForBrowserContext(profile));
     CHECK(mock_tracker_)
         << "mock_tracker_ must be non-nullptr. GetForBrowserContext should "
            "create one via CreateMockTracker if it does not exist.";
-
-    ON_CALL(*mock_tracker_, AddOnInitializedCallback)
-        .WillByDefault(
-            [](feature_engagement::Tracker::OnInitializedCallback callback) {
-              std::move(callback).Run(true);
-            });
-
-    ON_CALL(*mock_tracker_, IsInitialized).WillByDefault(testing::Return(true));
   }
 
   // The static cast is necessary to access the delegate functions declared in
@@ -402,12 +450,12 @@ void ScalableIphBrowserTestBase::AddOnlineNetwork() {
 
 // static
 void ScalableIphBrowserTestBase::SetTestingFactories(
-    bool enable_mock_tracker,
+    ScalableIphBrowserTestBase::MockTrackerFactoryMethod
+        mock_tracker_factory_method,
     content::BrowserContext* browser_context) {
-  if (enable_mock_tracker) {
+  if (!mock_tracker_factory_method.is_null()) {
     feature_engagement::TrackerFactory::GetInstance()->SetTestingFactory(
-        browser_context,
-        base::BindRepeating(&ScalableIphBrowserTestBase::CreateMockTracker));
+        browser_context, mock_tracker_factory_method);
   }
 
   // The static cast is necessary to access the delegate functions declared in
@@ -428,10 +476,29 @@ void ScalableIphBrowserTestBase::SetTestingFactories(
       base::BindRepeating(&ScalableIphBrowserTestBase::CreateMockDelegate));
 }
 
+ScalableIphBrowserTestBase::MockTrackerFactoryMethod
+ScalableIphBrowserTestBase::GetMockTrackerFactoryMethod() {
+  return base::BindRepeating(&ScalableIphBrowserTestBase::CreateMockTracker);
+}
+
+// static
+std::unique_ptr<feature_engagement::test::MockTracker>
+ScalableIphBrowserTestBase::SetUpFakeInitializationCalls(
+    std::unique_ptr<feature_engagement::test::MockTracker> mock_tracker) {
+  ON_CALL(*mock_tracker, AddOnInitializedCallback)
+      .WillByDefault(
+          [](feature_engagement::Tracker::OnInitializedCallback callback) {
+            std::move(callback).Run(true);
+          });
+  ON_CALL(*mock_tracker, IsInitialized).WillByDefault(testing::Return(true));
+  return mock_tracker;
+}
+
 // static
 std::unique_ptr<KeyedService> ScalableIphBrowserTestBase::CreateMockTracker(
     content::BrowserContext* browser_context) {
-  return std::make_unique<feature_engagement::test::MockTracker>();
+  return SetUpFakeInitializationCalls(
+      std::make_unique<feature_engagement::test::MockTracker>());
 }
 
 // static
@@ -452,6 +519,26 @@ ScalableIphBrowserTestBase::CreateMockDelegate(Profile* profile,
   delegate->FakeObservers();
 
   return delegate;
+}
+
+// static
+void ScalableIphBrowserTestBase::SetCanUseMantaService(
+    content::BrowserContext* browser_context) {
+  signin::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(
+          Profile::FromBrowserContext(browser_context));
+  CHECK(identity_manager);
+  EnsureRefreshTokensLoaded(identity_manager);
+
+  const user_manager::User* user =
+      ash::BrowserContextHelper::Get()->GetUserByBrowserContext(
+          browser_context);
+  CHECK(user);
+  AccountInfo account_info = identity_manager->FindExtendedAccountInfoByGaiaId(
+      user->GetAccountId().GetGaiaId());
+  AccountCapabilitiesTestMutator test_mutator(&account_info.capabilities);
+  test_mutator.set_can_use_manta_service(true);
+  signin::UpdateAccountInfoForAccount(identity_manager, account_info);
 }
 
 }  // namespace ash

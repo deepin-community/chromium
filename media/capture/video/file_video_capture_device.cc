@@ -2,26 +2,35 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/capture/video/file_video_capture_device.h"
 
 #include <stddef.h>
 
 #include <algorithm>
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <utility>
 
+#include "base/containers/heap_array.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
 #include "media/base/video_frame.h"
 #include "media/capture/mojom/image_capture_types.h"
 #include "media/capture/video/blob_utils.h"
 #include "media/capture/video/gpu_memory_buffer_utils.h"
+#include "media/capture/video/video_capture_gpu_channel_host.h"
 #include "media/capture/video_capture_types.h"
 #include "media/parsers/jpeg_parser.h"
 #include "third_party/libyuv/include/libyuv.h"
@@ -29,6 +38,11 @@
 namespace media {
 
 namespace {
+
+// Allow MappableSI to be used for FileVideoCaptureDevice.
+BASE_FEATURE(kUseMappableSIForFileVideoCaptureDevice,
+             "UseMappableSIForFileVideoCaptureDevice",
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 int gcd(int a, int b) {
   int c;
@@ -43,6 +57,51 @@ int gcd(int a, int b) {
   return (b);
 }
 
+VideoCaptureDevice::Client::ReserveResult AllocateNV12SharedImage(
+    VideoCaptureDevice::Client* capture_client,
+    const gfx::Size& buffer_size,
+    scoped_refptr<gpu::ClientSharedImage>* out_shared_image,
+    VideoCaptureDevice::Client::Buffer* out_capture_buffer) {
+  CHECK(out_shared_image);
+  CHECK(out_capture_buffer);
+
+  // When GpuMemoryBuffer is used, the frame data is opaque to the CPU for most
+  // of the time.  Currently the only supported underlying format is NV12.
+  constexpr VideoPixelFormat kOpaqueVideoFormat = PIXEL_FORMAT_NV12;
+  const int arbitrary_frame_feedback_id = 0;
+  const auto reserve_result = capture_client->ReserveOutputBuffer(
+      buffer_size, kOpaqueVideoFormat, arbitrary_frame_feedback_id,
+      out_capture_buffer, /*require_new_buffer_id=*/nullptr,
+      /*retire_old_buffer_id=*/nullptr);
+  if (reserve_result != VideoCaptureDevice::Client::ReserveResult::kSucceeded) {
+    return reserve_result;
+  }
+
+  auto sii =
+      VideoCaptureGpuChannelHost::GetInstance().GetSharedImageInterface();
+  if (!sii) {
+    LOG(ERROR) << "Failed to get SharedImageInterface.";
+    return VideoCaptureDevice::Client::ReserveResult::kAllocationFailed;
+  }
+
+  // Setting some default usage in order to get a mappable shared image for
+  // windows. Note that the usage should be part of supported usages in
+  // D3DImageBackingFactory.
+  const auto si_usage = gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
+  *out_shared_image = sii->CreateSharedImage(
+      {viz::MultiPlaneFormat::kNV12, buffer_size, gfx::ColorSpace(),
+       gpu::SharedImageUsageSet(si_usage), "AllocatedNV12SharedImage"},
+      gpu::kNullSurfaceHandle,
+      gfx::BufferUsage::VEA_READ_CAMERA_AND_CPU_READ_WRITE,
+      out_capture_buffer->handle_provider->GetGpuMemoryBufferHandle());
+  if (!*out_shared_image) {
+    LOG(ERROR) << "Failed to create a mappable shared image.";
+    return VideoCaptureDevice::Client::ReserveResult::kAllocationFailed;
+  }
+
+  return reserve_result;
+}
+
 }  // namespace
 
 static const int kY4MHeaderMaxSize = 200;
@@ -50,7 +109,7 @@ static const char kY4MSimpleFrameDelimiter[] = "FRAME";
 static const int kY4MSimpleFrameDelimiterSize = 6;
 static const float kMJpegFrameRate = 30.0f;
 
-int ParseY4MInt(const base::StringPiece& token) {
+int ParseY4MInt(std::string_view token) {
   int temp_int;
   CHECK(base::StringToInt(token, &temp_int)) << token;
   return temp_int;
@@ -58,7 +117,7 @@ int ParseY4MInt(const base::StringPiece& token) {
 
 // Extract numerator and denominator out of a token that must have the aspect
 // numerator:denominator, both integer numbers.
-void ParseY4MRational(const base::StringPiece& token,
+void ParseY4MRational(std::string_view token,
                       int* numerator,
                       int* denominator) {
   size_t index_divider = token.find(':');
@@ -85,13 +144,13 @@ void ParseY4MTags(const std::string& file_header,
   format.pixel_format = PIXEL_FORMAT_I420;
   size_t index = 0;
   size_t blank_position = 0;
-  base::StringPiece token;
+  std::string_view token;
   while ((blank_position = file_header.find_first_of("\n ", index)) !=
          std::string::npos) {
     // Every token is supposed to have an identifier letter and a bunch of
     // information immediately after, which we extract into a |token| here.
-    token =
-        base::StringPiece(&file_header[index + 1], blank_position - index - 1);
+    token = std::string_view(file_header)
+                .substr(index + 1, blank_position - index - 1);
     CHECK(!token.empty());
     switch (file_header[index]) {
       case 'W':
@@ -148,7 +207,7 @@ class VideoFileParser {
 
  protected:
   const base::FilePath file_path_;
-  int frame_size_;
+  size_t frame_size_;
   size_t current_byte_index_;
   size_t first_frame_byte_index_;
 };
@@ -167,7 +226,7 @@ class Y4mFileParser final : public VideoFileParser {
 
  private:
   std::unique_ptr<base::File> file_;
-  std::unique_ptr<uint8_t[]> video_frame_;
+  base::HeapArray<uint8_t> video_frame_;
 };
 
 class MjpegFileParser final : public VideoFileParser {
@@ -222,26 +281,26 @@ bool Y4mFileParser::Initialize(VideoCaptureFormat* capture_format) {
 }
 
 base::span<const uint8_t> Y4mFileParser::GetNextFrame() {
-  if (!video_frame_)
-    video_frame_ = std::make_unique<uint8_t[]>(frame_size_);
-  int result =
-      file_->Read(current_byte_index_,
-                  reinterpret_cast<char*>(video_frame_.get()), frame_size_);
+  if (video_frame_.size() != frame_size_) {
+    video_frame_ = base::HeapArray<uint8_t>::Uninit(frame_size_);
+  }
+  std::optional<size_t> result = file_->Read(current_byte_index_, video_frame_);
+
+  // Result will only not have a value if there was an error.
+  CHECK(result.has_value());
 
   // If we passed EOF to base::File, it will return 0 read characters. In that
   // case, reset the pointer and read again.
-  if (result != frame_size_) {
-    CHECK_EQ(result, 0);
+  if (result.value() != frame_size_) {
+    CHECK_EQ(result.value(), 0u);
     current_byte_index_ = first_frame_byte_index_;
-    CHECK_EQ(
-        file_->Read(current_byte_index_,
-                    reinterpret_cast<char*>(video_frame_.get()), frame_size_),
-        frame_size_);
+    result = file_->Read(current_byte_index_, video_frame_);
+    CHECK(result.has_value());
+    CHECK_EQ(result.value(), frame_size_);
   } else {
     current_byte_index_ += frame_size_ + kY4MSimpleFrameDelimiterSize;
   }
-  return base::make_span(video_frame_.get(),
-                         base::checked_cast<size_t>(frame_size_));
+  return video_frame_;
 }
 
 MjpegFileParser::MjpegFileParser(const base::FilePath& file_path)
@@ -263,7 +322,7 @@ bool MjpegFileParser::Initialize(VideoCaptureFormat* capture_format) {
   }
 
   frame_size_ = result.image_size;
-  if (frame_size_ > base::checked_cast<int>(mapped_file_->length())) {
+  if (frame_size_ > mapped_file_->length()) {
     LOG(ERROR) << "File is incomplete";
     return false;
   }
@@ -599,8 +658,12 @@ void FileVideoCaptureDevice::OnAllocateAndStart(
 
   client_ = std::move(client);
 
+  // Note that VideoCaptureBufferType::kGpuMemoryBuffer is used currently to
+  // either created a gmb or MappableSI.
+  // VideoCaptureBufferType::kGpuMemoryBuffer will be renamed once all clients
+  // are converted to use MappableSI.
   if (params.buffer_type == VideoCaptureBufferType::kGpuMemoryBuffer)
-    video_capture_use_gmb_ = true;
+    video_capture_use_mappable_buffer_ = true;
 
   DCHECK(!file_parser_);
   file_parser_ = GetVideoFileParser(file_path_, &capture_format_);
@@ -660,12 +723,22 @@ void FileVideoCaptureDevice::OnCaptureTask() {
   if (first_ref_time_.is_null())
     first_ref_time_ = current_time;
 
-  if (video_capture_use_gmb_) {
+  if (video_capture_use_mappable_buffer_) {
     const gfx::Size& buffer_size = capture_format_.frame_size;
     std::unique_ptr<gfx::GpuMemoryBuffer> gmb;
+    scoped_refptr<gpu::ClientSharedImage> shared_image;
     VideoCaptureDevice::Client::Buffer capture_buffer;
-    auto reserve_result = AllocateNV12GpuMemoryBuffer(
-        client_.get(), buffer_size, gmb_support_.get(), &gmb, &capture_buffer);
+    VideoCaptureDevice::Client::ReserveResult reserve_result;
+    const bool is_mappable_si_enabled =
+        base::FeatureList::IsEnabled(kUseMappableSIForFileVideoCaptureDevice);
+    if (is_mappable_si_enabled) {
+      reserve_result = AllocateNV12SharedImage(client_.get(), buffer_size,
+                                               &shared_image, &capture_buffer);
+    } else {
+      reserve_result = AllocateNV12GpuMemoryBuffer(client_.get(), buffer_size,
+                                                   gmb_support_.get(), &gmb,
+                                                   &capture_buffer);
+    }
     if (reserve_result !=
         VideoCaptureDevice::Client::ReserveResult::kSucceeded) {
       client_->OnFrameDropped(
@@ -673,7 +746,7 @@ void FileVideoCaptureDevice::OnCaptureTask() {
       DVLOG(2) << __func__ << " frame was dropped.";
       return;
     }
-    ScopedNV12GpuMemoryBufferMapping scoped_mapping(std::move(gmb));
+
     const uint8_t* src_y_plane = ptz_frame.data();
     const uint8_t* src_u_plane =
         ptz_frame.data() +
@@ -682,11 +755,24 @@ void FileVideoCaptureDevice::OnCaptureTask() {
         ptz_frame.data() +
         VideoFrame::PlaneSize(PIXEL_FORMAT_I420, 0, buffer_size).GetArea() +
         VideoFrame::PlaneSize(PIXEL_FORMAT_I420, 1, buffer_size).GetArea();
-    libyuv::I420ToNV12(
-        src_y_plane, buffer_size.width(), src_u_plane, buffer_size.width() / 2,
-        src_v_plane, buffer_size.width() / 2, scoped_mapping.y_plane(),
-        scoped_mapping.y_stride(), scoped_mapping.uv_plane(),
-        scoped_mapping.uv_stride(), buffer_size.width(), buffer_size.height());
+    if (is_mappable_si_enabled) {
+      auto scoped_mapping = shared_image->Map();
+      libyuv::I420ToNV12(
+          src_y_plane, buffer_size.width(), src_u_plane,
+          buffer_size.width() / 2, src_v_plane, buffer_size.width() / 2,
+          scoped_mapping->GetMemoryForPlane(0).data(),
+          scoped_mapping->Stride(0),
+          scoped_mapping->GetMemoryForPlane(1).data(),
+          scoped_mapping->Stride(1), buffer_size.width(), buffer_size.height());
+    } else {
+      ScopedNV12GpuMemoryBufferMapping scoped_mapping(std::move(gmb));
+      libyuv::I420ToNV12(src_y_plane, buffer_size.width(), src_u_plane,
+                         buffer_size.width() / 2, src_v_plane,
+                         buffer_size.width() / 2, scoped_mapping.y_plane(),
+                         scoped_mapping.y_stride(), scoped_mapping.uv_plane(),
+                         scoped_mapping.uv_stride(), buffer_size.width(),
+                         buffer_size.height());
+    }
     // When GpuMemoryBuffer is used, the frame data is opaque to the CPU for
     // most of the time.  Currently the only supported underlying format is
     // NV12.
@@ -694,14 +780,17 @@ void FileVideoCaptureDevice::OnCaptureTask() {
     gmb_format.pixel_format = PIXEL_FORMAT_NV12;
     client_->OnIncomingCapturedBuffer(std::move(capture_buffer), gmb_format,
                                       current_time,
-                                      current_time - first_ref_time_);
+                                      current_time - first_ref_time_,
+                                      /*capture_begin_timestamp=*/std::nullopt,
+                                      /*metadata=*/std::nullopt);
   } else {
     // Leave the color space unset for compatibility purposes but this
     // information should be retrieved from the container when possible.
     client_->OnIncomingCapturedData(
         ptz_frame.data(), ptz_frame.size(), ptz_format, gfx::ColorSpace(),
         0 /* clockwise_rotation */, false /* flip_y */, current_time,
-        current_time - first_ref_time_);
+        current_time - first_ref_time_,
+        /*capture_begin_timestamp=*/std::nullopt, VideoFrameMetadata{});
   }
 
   // Process waiting photo callbacks

@@ -6,32 +6,42 @@
 
 #include "base/check_deref.h"
 #include "base/check_is_test.h"
+#include "base/feature_list.h"
 #include "base/strings/string_util.h"
-#include "chrome/browser/profiles/profile.h"
-#include "components/country_codes/country_codes.h"
-#include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
-
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/regional_capabilities/regional_capabilities_service_factory.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
+#include "components/search_engines/search_engines_switches.h"
 #include "components/variations/service/variations_service.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/components/mgs/managed_guest_session_utils.h"
 #endif
 
 namespace search_engines {
 namespace {
 std::unique_ptr<KeyedService> BuildSearchEngineChoiceService(
     content::BrowserContext* context) {
-  int variations_country_id = country_codes::kCountryIDUnknown;
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
-  if (g_browser_process->variations_service()) {
-    variations_country_id =
-        country_codes::CountryStringToCountryID(base::ToUpperASCII(
-            g_browser_process->variations_service()->GetLatestCountry()));
-  }
+  Profile& profile = CHECK_DEREF(Profile::FromBrowserContext(context));
+
+  bool is_profile_elibile_for_dse_guest_propagation = false;
+#if !BUILDFLAG(IS_ANDROID)
+  is_profile_elibile_for_dse_guest_propagation =
+      base::FeatureList::IsEnabled(
+          switches::kSearchEngineChoiceGuestExperience) &&
+#if BUILDFLAG(IS_CHROMEOS)
+      !chromeos::IsManagedGuestSession() &&
+#endif
+      profile.IsGuestSession();
 #endif
 
-  auto& profile = CHECK_DEREF(Profile::FromBrowserContext(context));
-  return std::make_unique<SearchEngineChoiceService>(*profile.GetPrefs(),
-                                                     variations_country_id);
+  return std::make_unique<SearchEngineChoiceService>(
+      CHECK_DEREF(profile.GetPrefs()), g_browser_process->local_state(),
+      CHECK_DEREF(regional_capabilities::RegionalCapabilitiesServiceFactory::
+                      GetForProfile(&profile)),
+      is_profile_elibile_for_dse_guest_propagation,
+      g_browser_process->variations_service());
 }
 }  // namespace
 
@@ -42,7 +52,13 @@ SearchEngineChoiceServiceFactory::SearchEngineChoiceServiceFactory()
               .WithRegular(ProfileSelection::kRedirectedToOriginal)
               .WithGuest(ProfileSelection::kRedirectedToOriginal)
               .WithSystem(ProfileSelection::kNone)
-              .Build()) {}
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kRedirectedToOriginal)
+              .Build()) {
+  DependsOn(
+      regional_capabilities::RegionalCapabilitiesServiceFactory::GetInstance());
+}
 
 SearchEngineChoiceServiceFactory::~SearchEngineChoiceServiceFactory() = default;
 
@@ -72,5 +88,4 @@ SearchEngineChoiceServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   return BuildSearchEngineChoiceService(context);
 }
-
 }  // namespace search_engines

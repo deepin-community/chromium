@@ -172,7 +172,7 @@ class WiredDisplayMediaRouteProviderTest : public testing::Test {
         secondary_display1_(10000001, secondary_display1_bounds_),
         secondary_display2_(10000002, secondary_display2_bounds_),
         mirror_display_(10000004, primary_display_bounds_) {}
-  ~WiredDisplayMediaRouteProviderTest() override {}
+  ~WiredDisplayMediaRouteProviderTest() override = default;
 
   void SetUp() override {
     display::Screen::SetScreenInstance(&test_screen_);
@@ -270,7 +270,7 @@ TEST_F(WiredDisplayMediaRouteProviderTest, NotifyOnDisplayChange) {
   EXPECT_CALL(router_,
               OnSinksReceived(mojom::MediaRouteProviderId::WIRED_DISPLAY, _,
                               IsEmpty(), _));
-  provider_->OnDisplayRemoved(secondary_display1_);
+  provider_->OnDisplaysRemoved({secondary_display1_});
   base::RunLoop().RunUntilIdle();
 
   // Add a display that mirrors the primary display. The sink list should still
@@ -293,7 +293,7 @@ TEST_F(WiredDisplayMediaRouteProviderTest, NoDisplay) {
   // primary display, as it would be invalid.
   EXPECT_CALL(*provider_, GetPrimaryDisplayInternal()).Times(0);
   provider_->set_all_displays({});
-  provider_->OnDisplayRemoved(primary_display_);
+  provider_->OnDisplaysRemoved({primary_display_});
   base::RunLoop().RunUntilIdle();
 }
 
@@ -404,7 +404,7 @@ TEST_F(WiredDisplayMediaRouteProviderTest, ExitFullscreenOnDisplayRemoved) {
   base::RunLoop().RunUntilIdle();
 
   EXPECT_CALL(*receiver_creator_.receiver(), ExitFullscreen());
-  provider_->OnDisplayRemoved(secondary_display1_);
+  provider_->OnDisplaysRemoved({secondary_display1_});
 }
 
 }  // namespace media_router

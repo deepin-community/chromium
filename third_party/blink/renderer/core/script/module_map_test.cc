@@ -73,14 +73,12 @@ class TestModuleRecordResolver final : public ModuleRecordResolver {
   const ModuleScript* GetModuleScriptFromModuleRecord(
       v8::Local<v8::Module>) const override {
     NOTREACHED();
-    return nullptr;
   }
 
   v8::Local<v8::Module> Resolve(const ModuleRequest& module_request,
                                 v8::Local<v8::Module> referrer,
                                 ExceptionState&) override {
     NOTREACHED();
-    return v8::Local<v8::Module>();
   }
 
  private:

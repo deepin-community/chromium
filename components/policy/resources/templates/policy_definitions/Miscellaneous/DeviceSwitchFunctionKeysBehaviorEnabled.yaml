@@ -30,10 +30,11 @@ items:
   value: null
 owners:
 - cambickel@google.com
-- cros-peripherals@google.com
+- cros-device-enablement@google.com
 schema:
   type: boolean
 supported_on:
 - chrome_os:122-
 tags: []
 type: main
+generate_device_proto: False

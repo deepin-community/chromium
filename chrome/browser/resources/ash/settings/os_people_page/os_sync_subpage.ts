@@ -25,20 +25,22 @@ import './os_sync_encryption_options.js';
 import '../settings_shared.css.js';
 import '../settings_vars.css.js';
 
-import {CrInputElement} from '//resources/ash/common/cr_elements/cr_input/cr_input.js';
+import type {CrInputElement} from '//resources/ash/common/cr_elements/cr_input/cr_input.js';
 import {WebUiListenerMixin} from '//resources/ash/common/cr_elements/web_ui_listener_mixin.js';
 import {assert, assertNotReached} from '//resources/js/assert.js';
-import {IronCollapseElement} from '//resources/polymer/v3_0/iron-collapse/iron-collapse.js';
+import type {IronCollapseElement} from '//resources/polymer/v3_0/iron-collapse/iron-collapse.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import {PageStatus, StatusAction, SyncBrowserProxy, SyncBrowserProxyImpl, SyncPrefs, SyncStatus} from '/shared/settings/people_page/sync_browser_proxy.js';
+import type {SyncBrowserProxy, SyncPrefs, SyncStatus} from '/shared/settings/people_page/sync_browser_proxy.js';
+import {PageStatus, SignedInState, StatusAction, SyncBrowserProxyImpl} from '/shared/settings/people_page/sync_browser_proxy.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 
 import {RouteOriginMixin} from '../common/route_origin_mixin.js';
-import {Route, Router, routes} from '../router.js';
+import type {Route} from '../router.js';
+import {Router, routes} from '../router.js';
 
-import {OsSettingsPersonalizationOptionsElement} from './os_personalization_options.js';
-import {OsSettingsSyncEncryptionOptionsElement} from './os_sync_encryption_options.js';
+import type {OsSettingsPersonalizationOptionsElement} from './os_personalization_options.js';
+import type {OsSettingsSyncEncryptionOptionsElement} from './os_sync_encryption_options.js';
 import {getTemplate} from './os_sync_subpage.html.js';
 
 export interface OsSettingsSyncSubpageElement {
@@ -124,13 +126,13 @@ export class OsSettingsSyncSubpageElement extends
         type: Boolean,
         value: false,
         computed: 'computeShowExistingPassphraseBelowAccount_(' +
-            'syncStatus.signedIn, syncPrefs.passphraseRequired)',
+            'syncStatus.signedInState, syncPrefs.passphraseRequired)',
       },
 
       signedIn_: {
         type: Boolean,
         value: true,
-        computed: 'computeSignedIn_(syncStatus.signedIn)',
+        computed: 'computeSignedIn_(syncStatus.signedInState)',
       },
 
       syncDisabledByAdmin_: {
@@ -143,7 +145,7 @@ export class OsSettingsSyncSubpageElement extends
         type: Boolean,
         value: false,
         computed: 'computeSyncSectionDisabled_(' +
-            'syncStatus.signedIn, syncStatus.disabled, ' +
+            'syncStatus.signedInState, syncStatus.disabled, ' +
             'syncStatus.hasError, syncStatus.statusAction, ' +
             'syncPrefs.trustedVaultKeysRequired)',
       },
@@ -206,7 +208,7 @@ export class OsSettingsSyncSubpageElement extends
     super();
 
     /** RouteOriginMixin override */
-    this.route = routes.SYNC;
+    this.route = routes.OS_SYNC_SETUP;
 
     /**
      * The beforeunload callback is used to show the 'Leave site' dialog. This
@@ -262,7 +264,7 @@ export class OsSettingsSyncSubpageElement extends
     super.disconnectedCallback();
 
     const router = Router.getInstance();
-    if (routes.SYNC.contains(router.currentRoute)) {
+    if (this.route!.contains(router.currentRoute)) {
       this.onNavigateAwayFromPage_();
     }
 
@@ -279,7 +281,7 @@ export class OsSettingsSyncSubpageElement extends
   override ready(): void {
     super.ready();
 
-    this.addFocusConfig(routes.OS_SYNC, '#syncAdvancedRow');
+    this.addFocusConfig(routes.OS_SYNC_CONTROLS, '#syncAdvancedRow');
   }
 
   getEncryptionOptions(): OsSettingsSyncEncryptionOptionsElement|null {
@@ -303,12 +305,13 @@ export class OsSettingsSyncSubpageElement extends
   }
 
   private computeSignedIn_(): boolean {
-    return !!this.syncStatus.signedIn;
+    return this.syncStatus.signedInState === SignedInState.SYNCING;
   }
 
   private computeSyncSectionDisabled_(): boolean {
     return this.syncStatus !== undefined &&
-        (!this.syncStatus.signedIn || !!this.syncStatus.disabled ||
+        (this.syncStatus.signedInState !== SignedInState.SYNCING ||
+         !!this.syncStatus.disabled ||
          (!!this.syncStatus.hasError &&
           this.syncStatus.statusAction !== StatusAction.ENTER_PASSPHRASE &&
           this.syncStatus.statusAction !==
@@ -327,7 +330,7 @@ export class OsSettingsSyncSubpageElement extends
       return;
     }
 
-    if (routes.SYNC.contains(newRoute)) {
+    if (this.route!.contains(newRoute)) {
       return;
     }
 
@@ -436,7 +439,7 @@ export class OsSettingsSyncSubpageElement extends
     }
 
     if (!this.syncPrefs.explicitPassphraseTime) {
-      // TODO(crbug.com/1207432): There's no reason why this dateless label
+      // TODO(crbug.com/40765539): There's no reason why this dateless label
       // shouldn't link to 'syncErrorsHelpUrl' like the other one.
       return this.i18nAdvanced('enterPassphraseLabel');
     }
@@ -531,7 +534,7 @@ export class OsSettingsSyncSubpageElement extends
         this.pageStatus_ = pageStatus;
         return;
       case PageStatus.DONE:
-        if (router.currentRoute === routes.SYNC) {
+        if (router.currentRoute === this.route) {
           router.navigateTo(routes.OS_PEOPLE);
         }
         return;
@@ -559,13 +562,14 @@ export class OsSettingsSyncSubpageElement extends
   }
 
   private computeShowExistingPassphraseBelowAccount_(): boolean {
-    return this.syncStatus !== undefined && !!this.syncStatus.signedIn &&
+    return this.syncStatus !== undefined &&
+        this.syncStatus.signedInState === SignedInState.SYNCING &&
         this.syncPrefs !== undefined && !!this.syncPrefs.passphraseRequired;
   }
 
   private onSyncAdvancedClick_(): void {
     const router = Router.getInstance();
-    router.navigateTo(routes.OS_SYNC);
+    router.navigateTo(routes.OS_SYNC_CONTROLS);
   }
 
   /**
@@ -576,7 +580,7 @@ export class OsSettingsSyncSubpageElement extends
     const passphraseInput = this.shadowRoot!.querySelector<CrInputElement>(
         '#existingPassphraseInput');
     const router = Router.getInstance();
-    if (passphraseInput && router.currentRoute === routes.SYNC) {
+    if (passphraseInput && router.currentRoute === this.route) {
       passphraseInput.focus();
     }
   }

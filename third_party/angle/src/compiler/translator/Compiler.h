@@ -189,7 +189,11 @@ class TCompiler : public TShHandleBase
 
     AdvancedBlendEquations getAdvancedBlendEquations() const { return mAdvancedBlendEquations; }
 
-    bool hasPixelLocalStorageUniforms() const { return mHasPixelLocalStorageUniforms; }
+    bool hasPixelLocalStorageUniforms() const { return !mPixelLocalStorageFormats.empty(); }
+    const std::vector<ShPixelLocalStorageFormat> &GetPixelLocalStorageFormats() const
+    {
+        return mPixelLocalStorageFormats;
+    }
 
     ShPixelLocalStorageType getPixelLocalStorageType() const { return mCompileOptions.pls.type; }
 
@@ -216,16 +220,14 @@ class TCompiler : public TShHandleBase
     // it's expected to no longer transform.
     void enableValidateNoMoreTransformations();
 
-    bool areClipDistanceOrCullDistanceRedeclared() const
+    bool areClipDistanceOrCullDistanceUsed() const
     {
-        return mClipDistanceRedeclared || mCullDistanceRedeclared;
+        return mClipDistanceSize > 0 || mCullDistanceSize > 0;
     }
 
     uint8_t getClipDistanceArraySize() const { return mClipDistanceSize; }
 
     uint8_t getCullDistanceArraySize() const { return mCullDistanceSize; }
-
-    bool isClipDistanceRedeclared() const { return mClipDistanceRedeclared; }
 
     bool usesDerivatives() const { return mUsesDerivatives; }
 
@@ -323,8 +325,6 @@ class TCompiler : public TShHandleBase
                              const TParseContext &parseContext,
                              const ShCompileOptions &compileOptions);
 
-    bool resizeClipAndCullDistanceBuiltins(TIntermBlock *root);
-
     bool postParseChecks(const TParseContext &parseContext);
 
     sh::GLenum mShaderType;
@@ -364,8 +364,6 @@ class TCompiler : public TShHandleBase
     // Track gl_ClipDistance / gl_CullDistance usage.
     uint8_t mClipDistanceSize;
     uint8_t mCullDistanceSize;
-    bool mClipDistanceRedeclared;
-    bool mCullDistanceRedeclared;
 
     // geometry shader parameters.
     int mGeometryShaderMaxVertices;
@@ -385,8 +383,9 @@ class TCompiler : public TShHandleBase
     // advanced blend equation parameters
     AdvancedBlendEquations mAdvancedBlendEquations;
 
-    // ANGLE_shader_pixel_local_storage.
-    bool mHasPixelLocalStorageUniforms;
+    // ANGLE_shader_pixel_local_storage: A mapping from binding index to the PLS uniform format at
+    // that index.
+    std::vector<ShPixelLocalStorageFormat> mPixelLocalStorageFormats;
 
     // Fragment shader uses screen-space derivatives
     bool mUsesDerivatives;

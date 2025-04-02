@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <utility>
 
 #include "dawn/common/Constants.h"
 #include "dawn/common/GPUInfo.h"
@@ -43,8 +44,7 @@ FeatureValidationResult::FeatureValidationResult() : success(true) {}
 FeatureValidationResult::FeatureValidationResult(std::string errorMsg)
     : success(false), errorMessage(errorMsg) {}
 
-PhysicalDeviceBase::PhysicalDeviceBase(InstanceBase* instance, wgpu::BackendType backend)
-    : mInstance(instance), mBackend(backend) {}
+PhysicalDeviceBase::PhysicalDeviceBase(wgpu::BackendType backend) : mBackend(backend) {}
 
 PhysicalDeviceBase::~PhysicalDeviceBase() = default;
 
@@ -55,6 +55,7 @@ MaybeError PhysicalDeviceBase::Initialize() {
     EnableFeature(Feature::DawnNative);
     EnableFeature(Feature::DawnInternalUsages);
     EnableFeature(Feature::ImplicitDeviceSynchronization);
+    EnableFeature(Feature::DawnFormatCapabilities);
     InitializeSupportedFeaturesImpl();
 
     DAWN_TRY_CONTEXT(
@@ -71,8 +72,9 @@ MaybeError PhysicalDeviceBase::Initialize() {
 ResultOrError<Ref<DeviceBase>> PhysicalDeviceBase::CreateDevice(
     AdapterBase* adapter,
     const UnpackedPtr<DeviceDescriptor>& descriptor,
-    const TogglesState& deviceToggles) {
-    return CreateDeviceImpl(adapter, descriptor, deviceToggles);
+    const TogglesState& deviceToggles,
+    Ref<DeviceBase::DeviceLostEvent>&& lostEvent) {
+    return CreateDeviceImpl(adapter, descriptor, deviceToggles, std::move(lostEvent));
 }
 
 void PhysicalDeviceBase::InitializeVendorArchitectureImpl() {
@@ -116,10 +118,6 @@ wgpu::BackendType PhysicalDeviceBase::GetBackendType() const {
     return mBackend;
 }
 
-InstanceBase* PhysicalDeviceBase::GetInstance() const {
-    return mInstance.Get();
-}
-
 bool PhysicalDeviceBase::IsFeatureSupportedWithToggles(wgpu::FeatureName feature,
                                                        const TogglesState& toggles) const {
     return ValidateFeatureSupportedWithToggles(feature, toggles).success;
@@ -127,9 +125,9 @@ bool PhysicalDeviceBase::IsFeatureSupportedWithToggles(wgpu::FeatureName feature
 
 void PhysicalDeviceBase::GetDefaultLimitsForSupportedFeatureLevel(Limits* limits) const {
     // If the physical device does not support core then the defaults are compat defaults.
-    GetDefaultLimits(limits, SupportsFeatureLevel(FeatureLevel::Core)
-                                 ? FeatureLevel::Core
-                                 : FeatureLevel::Compatibility);
+    GetDefaultLimits(limits, SupportsFeatureLevel(wgpu::FeatureLevel::Core, nullptr)
+                                 ? wgpu::FeatureLevel::Core
+                                 : wgpu::FeatureLevel::Compatibility);
 }
 
 FeaturesSet PhysicalDeviceBase::GetSupportedFeatures(const TogglesState& toggles) const {
@@ -176,7 +174,7 @@ FeatureValidationResult PhysicalDeviceBase::ValidateFeatureSupportedWithToggles(
             absl::StrFormat("Requested feature %s is not supported.", feature));
     }
 
-    const FeatureInfo* featureInfo = GetInstance()->GetFeatureInfo(feature);
+    const FeatureInfo* featureInfo = GetFeatureInfo(feature);
     // Experimental features are guarded by the AllowUnsafeAPIs toggle.
     if (featureInfo->featureState == FeatureInfo::FeatureState::Experimental) {
         // AllowUnsafeAPIs toggle is by default disabled if not explicitly enabled.
@@ -198,13 +196,17 @@ void PhysicalDeviceBase::SetSupportedFeaturesForTesting(
     }
 }
 
-void PhysicalDeviceBase::ResetInternalDeviceForTesting() {
-    mInstance->ConsumedError(ResetInternalDeviceForTestingImpl());
+MaybeError PhysicalDeviceBase::ResetInternalDeviceForTesting() {
+    return ResetInternalDeviceForTestingImpl();
 }
 
 MaybeError PhysicalDeviceBase::ResetInternalDeviceForTestingImpl() {
     return DAWN_INTERNAL_ERROR(
         "ResetInternalDeviceForTesting should only be used with the D3D12 backend.");
 }
+
+void PhysicalDeviceBase::PopulateBackendFormatCapabilities(
+    wgpu::TextureFormat format,
+    UnpackedPtr<DawnFormatCapabilities>& capabilities) const {}
 
 }  // namespace dawn::native

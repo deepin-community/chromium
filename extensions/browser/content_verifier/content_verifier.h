@@ -7,7 +7,9 @@
 
 #include <memory>
 #include <set>
-#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
@@ -81,13 +83,13 @@ class ContentVerifier : public base::RefCountedThreadSafe<ContentVerifier>,
   void Start();
   void Shutdown();
 
-  // Call this before reading a file within an extension. Returns and starts a
-  // content verify job if the specified resource requires content verification,
-  // otherwise returns nullptr.
-  scoped_refptr<ContentVerifyJob> CreateAndStartJobFor(
+  // Call this before reading a file within an extension. Returns a verify job
+  // to be used for content verification.
+  static scoped_refptr<ContentVerifyJob> CreateAndStartJobFor(
       const ExtensionId& extension_id,
       const base::FilePath& extension_root,
-      const base::FilePath& relative_path);
+      const base::FilePath& relative_path,
+      scoped_refptr<ContentVerifier> verifier);
 
   // ExtensionRegistryObserver interface
   void OnExtensionLoaded(content::BrowserContext* browser_context,
@@ -99,7 +101,8 @@ class ContentVerifier : public base::RefCountedThreadSafe<ContentVerifier>,
   using ContentHashCallback =
       base::OnceCallback<void(scoped_refptr<const ContentHash>)>;
 
-  // Retrieves ContentHash for an extension through |callback|.
+  // Creates, adds to cache, and returns ContentHash for an extension through
+  // |callback|.
   // Must be called on IO thread.
   // |callback| is called on IO thread.
   // |force_missing_computed_hashes_creation| should be true if
@@ -109,11 +112,18 @@ class ContentVerifier : public base::RefCountedThreadSafe<ContentVerifier>,
   // true, handing its behavior adds extra complexity in HashHelper and this
   // param should be removed when we can unify/fix computed_hashes.json
   // treatment, see https://crbug.com/819832 for details.
-  void GetContentHash(const ExtensionId& extension_id,
-                      const base::FilePath& extension_root,
-                      const base::Version& extension_version,
-                      bool force_missing_computed_hashes_creation,
-                      ContentHashCallback callback);
+  void CreateContentHash(const ExtensionId& extension_id,
+                         const base::FilePath& extension_root,
+                         const base::Version& extension_version,
+                         bool force_missing_computed_hashes_creation,
+                         ContentHashCallback callback);
+
+  // Retrieves cached ContentHash for an extension synchronously. If the hash is
+  // not found in the cache, returns nullptr.
+  scoped_refptr<const ContentHash> GetCachedContentHash(
+      const ExtensionId& extension_id,
+      const base::Version& extension_version,
+      bool force_missing_computed_hashes_creation);
 
   // Returns whether or not we should compute hashes during installation.
   // Typically we don't need this when extension has verified (signed) resources
@@ -157,10 +167,32 @@ class ContentVerifier : public base::RefCountedThreadSafe<ContentVerifier>,
   friend class HashHelper;
   ~ContentVerifier() override;
 
+  enum class VerifiedFileType {
+    kNone,                 // Not a file to be verified.
+    kBackgroundPage,       // The background page.
+    kBackgroundScript,     // A script in a generated background page.
+    kServiceWorkerScript,  // The extension service worker script.
+    kContentScript,        // A JS script in a content script.
+    kMiscHtmlFile,  // A general HTML file (e.g. that might be loaded in a tab).
+    kMiscJsFile,    // A general JS file (e.g. that might be loaded in a tab).
+    kMiscFile,      // Any other file that should be verified.
+
+    kMaxValue = kMiscFile,
+  };
+
+  void StartOnIO();
   void ShutdownOnIO();
+
+  // Called after a verification job is created.
+  void OnJobCreated(scoped_refptr<ContentVerifyJob> job);
+
+  // If a verification is needed, starts the verification job and returns true.
+  // Otherwise, returns false without starting the job.
+  bool StartJob(const scoped_refptr<ContentVerifyJob>& job);
 
   struct CacheKey;
   class HashHelper;
+  class VerifiedFileTypeHelper;
 
   void OnFetchComplete(const scoped_refptr<const ContentHash>& content_hash);
   ContentHash::FetchKey GetFetchKey(const ExtensionId& extension_id,
@@ -186,23 +218,35 @@ class ContentVerifier : public base::RefCountedThreadSafe<ContentVerifier>,
   void OnExtensionUnloadedOnIO(const ExtensionId& extension_id,
                                const base::Version& extension_version);
 
-  // Returns true if any of the paths in |relative_unix_paths| *should* have
-  // their contents verified. (Some files get transcoded during the install
-  // process, so we don't want to verify their contents because they are
-  // expected not to match).
-  bool ShouldVerifyAnyPaths(
-      const ExtensionId& extension_id,
-      const base::FilePath& extension_root,
-      const std::set<base::FilePath>& relative_unix_paths);
+  // Called to indicate that all the relevant data is ready for the extension,
+  // and we can start verifying files.
+  void OnExtensionDataReady(const ExtensionId& extension_id);
 
   // Called (typically by a verification job) to indicate that verification
-  // failed while reading some file in |extension_id|.
+  // failed while reading some file in `extension_id`. `failed_file_types` and
+  // `manifest_version` indicate additional data about which file was detected
+  // as corrupted.
   void VerifyFailed(const ExtensionId& extension_id,
+                    const std::vector<VerifiedFileType>& failed_file_types,
+                    int manifest_version,
                     ContentVerifyJob::FailureReason reason);
 
   // Returns the HashHelper instance, making sure we create it at most once.
   // Must *not* be called after |shutdown_on_io_| is set to true.
   HashHelper* GetOrCreateHashHelper();
+
+  // Set to true once |Start| is called to enable content verification. Updated
+  // and accessed only on IO thread.
+  bool verification_enabled_ = false;
+
+  // A set of extension ids for which the verification data is ready. Updated
+  // and accessed only on IO thread.
+  std::unordered_set<ExtensionId> ready_extensions_;
+
+  // Jobs which are waiting for the extension data to be ready. Updated and
+  // accessed only on IO thread.
+  std::unordered_map<ExtensionId, std::vector<scoped_refptr<ContentVerifyJob>>>
+      pending_jobs_;
 
   // Set to true once we've begun shutting down on UI thread.
   // Updated and accessed only on UI thread.

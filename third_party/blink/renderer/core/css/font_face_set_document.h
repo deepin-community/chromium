@@ -52,9 +52,7 @@ class CORE_EXPORT FontFaceSetDocument final : public FontFaceSet,
   FontFaceSetDocument& operator=(const FontFaceSetDocument&) = delete;
   ~FontFaceSetDocument() override;
 
-  ScriptPromiseTyped<FontFaceSet> ready(ScriptState*) override;
-
-  AtomicString status() const override;
+  ScriptPromise<FontFaceSet> ready(ScriptState*) override;
 
   void DidLayout();
   void BeginFontLoading(FontFace*);

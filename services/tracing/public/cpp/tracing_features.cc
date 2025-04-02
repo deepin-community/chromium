@@ -33,12 +33,16 @@ BASE_FEATURE(kTracingServiceInProcess,
 BASE_FEATURE(kEnablePerfettoSystemTracing,
              "EnablePerfettoSystemTracing",
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
-             // TODO(crbug.com/1364196): Read from structured config on Fuchsia.
+             // TODO(crbug.com/42050521): Read from structured config on Fuchsia.
              base::FEATURE_ENABLED_BY_DEFAULT
 #else
              base::FEATURE_DISABLED_BY_DEFAULT
 #endif
 );
+
+BASE_FEATURE(kEnablePerfettoSystemBackgroundTracing,
+             "EnablePerfettoSystemBackgroundTracing",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace features
 
@@ -55,6 +59,12 @@ bool ShouldSetupSystemTracing() {
   }
   return features::kEnablePerfettoSystemTracing.default_state ==
          base::FEATURE_ENABLED_BY_DEFAULT;
+}
+
+bool SystemBackgroundTracingEnabled() {
+  return ShouldSetupSystemTracing() &&
+         base::FeatureList::IsEnabled(
+             features::kEnablePerfettoSystemBackgroundTracing);
 }
 
 }  // namespace tracing

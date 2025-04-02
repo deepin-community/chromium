@@ -9,7 +9,6 @@ import {
   goToResource,
   waitForFunction,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   focusCSSPropertyValue,
   getPropertiesWithHints,
@@ -25,7 +24,7 @@ const goToResourceAndWaitForStyleSection = async (path: string) => {
   await waitForPartialContentOfSelectedElementsNode('<body>\u200B');
 };
 
-describe('CSS hints in the Styles panel', async () => {
+describe('CSS hints in the Styles panel', () => {
   it('can detect inactive CSS', async () => {
     await goToResourceAndWaitForStyleSection('elements/inactive-css-page.html');
     await waitForStyleRule('body');

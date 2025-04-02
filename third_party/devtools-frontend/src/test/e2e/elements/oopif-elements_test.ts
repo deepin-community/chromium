@@ -4,14 +4,13 @@
 // found in the LICENSE file.
 
 import {goToResource} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   expandSelectedNodeRecursively,
   waitForElementsStyleSection,
   waitForElementWithPartialText,
 } from '../helpers/elements-helpers.js';
 
-describe('The Elements tab', async () => {
+describe('The Elements tab', () => {
   it('shows OOPIF frame error inline', async () => {
     await goToResource('elements/page-error.html');
     await waitForElementsStyleSection();

@@ -2,11 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import * as ComponentHelpers from '../../../ui/components/helpers/helpers.js';
-import * as LitHtml from '../../../ui/lit-html/lit-html.js';
-import * as i18n from '../../../core/i18n/i18n.js';
+import '../../../ui/legacy/legacy.js';
 
-import cssHintDetailsViewStyles from './cssHintDetailsView.css.js';
+import * as i18n from '../../../core/i18n/i18n.js';
+import {Directives, html, render} from '../../../ui/lit/lit.js';
+
+import cssHintDetailsViewStylesRaw from './cssHintDetailsView.css.js';
+
+// TODO(crbug.com/391381439): Fully migrate off of constructed style sheets.
+const cssHintDetailsViewStyles = new CSSStyleSheet();
+cssHintDetailsViewStyles.replaceSync(cssHintDetailsViewStylesRaw.cssContent);
 
 const UIStrings = {
   /**
@@ -17,8 +22,6 @@ const UIStrings = {
 const str_ = i18n.i18n.registerUIStrings('panels/elements/components/CSSHintDetailsView.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
-const {render, html, Directives} = LitHtml;
-
 interface Hint {
   getMessage(): string;
   getPossibleFixMessage(): string|null;
@@ -26,7 +29,6 @@ interface Hint {
 }
 
 export class CSSHintDetailsView extends HTMLElement {
-    static readonly litTagName = LitHtml.literal`devtools-css-hint-details-view`;
     readonly #shadow = this.attachShadow({mode: 'open'});
     readonly #authoringHint: Hint;
 
@@ -49,7 +51,7 @@ export class CSSHintDetailsView extends HTMLElement {
               <div class="hint-popup-possible-fix">
                   ${Directives.unsafeHTML(this.#authoringHint.getPossibleFixMessage())}
                   ${link ? html`
-                      <x-link id="learn-more" href=${link} class="clickable underlined unbreakable-text"}>
+                      <x-link id="learn-more" href=${link} class="clickable underlined unbreakable-text">
                           ${i18nString(UIStrings.learnMore)}
                       </x-link>
                   `: ''}
@@ -63,11 +65,10 @@ export class CSSHintDetailsView extends HTMLElement {
     }
 }
 
-ComponentHelpers.CustomElements.defineComponent('devtools-css-hint-details-view', CSSHintDetailsView);
+customElements.define('devtools-css-hint-details-view', CSSHintDetailsView);
 
 declare global {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    interface HTMLElementTagNameMap {
-      'devtools-css-hint-details-view': CSSHintDetailsView;
-    }
+  interface HTMLElementTagNameMap {
+    'devtools-css-hint-details-view': CSSHintDetailsView;
+  }
 }

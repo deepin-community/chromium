@@ -57,13 +57,23 @@ bool TextElementTiming::CanReportElements() const {
          !performance_->IsElementTimingBufferFull();
 }
 
-void TextElementTiming::OnTextObjectPainted(const TextRecord& record) {
+void TextElementTiming::OnTextObjectPainted(
+    const TextRecord& record,
+    const DOMPaintTimingInfo& paint_timing_info) {
+  DCHECK(record.is_needed_for_element_timing_);
   Node* node = record.node_;
-  if (!node || node->IsInShadowTree())
-    return;
 
-  // Text aggregators should be Elements!
-  DCHECK(node->IsElementNode());
+  // Text aggregators need to be Elements. This will not be the case if the
+  // aggregator is the LayoutView (a Document node), though. This will be the
+  // only aggregator we have if the text is for an @page margin, since that is
+  // on the outside of the DOM.
+  //
+  // TODO(paint-dev): Document why it's necessary to check for null, and whether
+  // we're in a shadow tree.
+  if (!node || node->IsInShadowTree() || !node->IsElementNode()) {
+    return;
+  }
+
   auto* element = To<Element>(node);
   const AtomicString& id = element->GetIdAttribute();
   if (!element->FastHasAttribute(html_names::kElementtimingAttr))
@@ -72,7 +82,7 @@ void TextElementTiming::OnTextObjectPainted(const TextRecord& record) {
   DEFINE_STATIC_LOCAL(const AtomicString, kTextPaint, ("text-paint"));
   performance_->AddElementTiming(
       kTextPaint, g_empty_string, record.element_timing_rect_,
-      record.paint_time, base::TimeTicks(),
+      paint_timing_info, base::TimeTicks(),
       element->FastGetAttribute(html_names::kElementtimingAttr), gfx::Size(),
       id, element);
 }

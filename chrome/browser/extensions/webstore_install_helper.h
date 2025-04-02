@@ -36,11 +36,7 @@ class WebstoreInstallHelper : public base::RefCounted<WebstoreInstallHelper>,
  public:
   class Delegate {
    public:
-    enum InstallHelperResultCode {
-      UNKNOWN_ERROR,
-      ICON_ERROR,
-      MANIFEST_ERROR
-    };
+    enum InstallHelperResultCode { UNKNOWN_ERROR, ICON_ERROR, kManifestError };
 
     // Called when we've successfully parsed the manifest and decoded the icon
     // in the utility process.
@@ -56,7 +52,7 @@ class WebstoreInstallHelper : public base::RefCounted<WebstoreInstallHelper>,
         const std::string& error_message) = 0;
 
    protected:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
   };
 
   // It is legal for |icon_url| to be empty.

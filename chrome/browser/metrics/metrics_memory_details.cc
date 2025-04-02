@@ -46,8 +46,7 @@ void CountRenderProcessHosts(size_t* initialized_and_not_dead, size_t* all) {
 MetricsMemoryDetails::MetricsMemoryDetails(base::OnceClosure callback)
     : callback_(std::move(callback)) {}
 
-MetricsMemoryDetails::~MetricsMemoryDetails() {
-}
+MetricsMemoryDetails::~MetricsMemoryDetails() = default;
 
 void MetricsMemoryDetails::OnDetailsAvailable() {
   UpdateHistograms();
@@ -70,7 +69,6 @@ void MetricsMemoryDetails::UpdateHistograms() {
           continue;
         case ProcessMemoryInformation::RENDERER_UNKNOWN:
           NOTREACHED() << "Unknown renderer process type.";
-          continue;
         case ProcessMemoryInformation::RENDERER_NORMAL:
         default:
           renderer_count++;

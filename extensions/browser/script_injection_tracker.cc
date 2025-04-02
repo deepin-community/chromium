@@ -4,14 +4,16 @@
 
 #include "extensions/browser/script_injection_tracker.h"
 
+#include <algorithm>
+
 #include "base/check_is_test.h"
 #include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ref.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/trace_event/typed_macros.h"
-#include "components/guest_view/browser/guest_view_base.h"
+#include "components/guest_view/buildflags/buildflags.h"
+#include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/global_routing_id.h"
@@ -22,18 +24,23 @@
 #include "extensions/browser/browser_frame_context_data.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
-#include "extensions/browser/guest_view/web_view/web_view_content_script_manager.h"
 #include "extensions/browser/url_loader_factory_manager.h"
 #include "extensions/browser/user_script_manager.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/content_script_injection_url_getter.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_handlers/content_scripts_handler.h"
+#include "extensions/common/mojom/match_origin_as_fallback.mojom-shared.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/trace_util.h"
 #include "extensions/common/user_script.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
+#include "components/guest_view/browser/guest_view_base.h"
+#include "extensions/browser/guest_view/web_view/web_view_content_script_manager.h"
+#endif
 
 using perfetto::protos::pbzero::ChromeTrackEvent;
 
@@ -191,7 +198,7 @@ std::vector<const UserScript*> GetLoadedDynamicScripts(
 GURL GetEffectiveDocumentURL(
     content::RenderFrameHost* frame,
     const GURL& document_url,
-    MatchOriginAsFallbackBehavior match_origin_as_fallback) {
+    mojom::MatchOriginAsFallbackBehavior match_origin_as_fallback) {
   // This is a simplification to avoid calling
   // `BrowserFrameContextData::CanAccess` which is unable to replicate all of
   // WebSecurityOrigin::CanAccess checks (e.g. universal access or file
@@ -207,11 +214,15 @@ GURL GetEffectiveDocumentURL(
 // Returns whether the extension's scripts can run on `frame`.
 bool CanExtensionScriptsAffectFrame(content::RenderFrameHost& frame,
                                     const Extension& extension) {
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
   // Most extension's scripts won't run on webviews. The only ones that may are
   // those from extensions that can execute script everywhere.
   auto* guest = guest_view::GuestViewBase::FromRenderFrameHost(&frame);
   return !guest || PermissionsData::CanExecuteScriptEverywhere(
                        extension.id(), extension.location());
+#else
+  return true;
+#endif
 }
 
 // Returns whether `extension` will inject any of `scripts` JavaScript content
@@ -236,6 +247,14 @@ bool DoesScriptMatch(const Extension& extension,
 
   GURL effective_url =
       GetEffectiveDocumentURL(&frame, url, script.match_origin_as_fallback());
+  auto* web_contents = content::WebContents::FromRenderFrameHost(&frame);
+  int tab_id = sessions::SessionTabHelper::IdForTab(web_contents).id();
+
+  // Script can inject if the extension has tab permissions for the url.
+  if (extension.permissions_data()->HasTabPermissionsForSecurityOrigin(
+          tab_id, effective_url)) {
+    return true;
+  }
 
   // Dynamic scripts can only inject when the extension has host permissions for
   // the url.
@@ -276,7 +295,7 @@ bool DoScriptsMatch(const Extension& extension,
                     const std::vector<const UserScript*>& scripts,
                     content::RenderFrameHost& frame,
                     const GURL& url) {
-  return base::ranges::any_of(
+  return std::ranges::any_of(
       scripts.begin(), scripts.end(),
       [&extension, &frame, &url](const UserScript* script) {
         return DoesScriptMatch(extension, *script, frame, url);
@@ -287,6 +306,7 @@ bool DoScriptsMatch(const Extension& extension,
 // the `frame` / `url`.
 bool DoWebViewScripstMatch(const Extension& extension,
                            content::RenderFrameHost& frame) {
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
   content::RenderProcessHost& process = *frame.GetProcess();
   TRACE_EVENT("extensions", "ScriptInjectionTracker/DoWebViewScripstMatch",
               ChromeTrackEvent::kRenderProcessHost, process,
@@ -306,7 +326,8 @@ bool DoWebViewScripstMatch(const Extension& extension,
       owner_site_url.host_piece() == extension.id()) {
     WebViewContentScriptManager* script_manager =
         WebViewContentScriptManager::Get(frame.GetBrowserContext());
-    int embedder_process_id = guest->owner_rfh()->GetProcess()->GetID();
+    int embedder_process_id =
+        guest->owner_rfh()->GetProcess()->GetDeprecatedID();
     std::set<std::string> script_ids = script_manager->GetContentScriptIDSet(
         embedder_process_id, guest->view_instance_id());
 
@@ -321,6 +342,7 @@ bool DoWebViewScripstMatch(const Extension& extension,
       return true;
     }
   }
+#endif
 
   return false;
 }
@@ -579,7 +601,7 @@ void StoreExtensionsInjectingScripts(
     const std::vector<const Extension*>& extensions,
     ScriptInjectionTracker::ScriptType script_type,
     content::RenderProcessHost& process) {
-  // ContentScriptTracker never removes entries from this set - once a
+  // ScriptInjectionTracker never removes entries from this set - once a
   // renderer process gains an ability to talk on behalf of a content script,
   // it retains this ability forever.  Note that the `process_data` will be
   // destroyed together with the RenderProcessHost (see also a comment inside
@@ -676,7 +698,7 @@ void ScriptInjectionTracker::ReadyToCommitNavigation(
   // Notify URLLoaderFactoryManager for both user and content scripts. This
   // needs to happen at ReadyToCommitNavigation time (i.e. before constructing a
   // URLLoaderFactory that will be sent to the Renderer in a Commit IPC).
-  // TODO(crbug.com/1495177): This should only use webview scripts, since it's
+  // TODO(crbug.com/40286422): This should only use webview scripts, since it's
   // not needed for all extensions.
   extensions_injecting_content_scripts.reserve(
       extensions_injecting_content_scripts.size() +
@@ -781,6 +803,16 @@ void ScriptInjectionTracker::WillExecuteCode(
 }
 
 // static
+void ScriptInjectionTracker::WillGrantActiveTab(
+    base::PassKey<ActiveTabPermissionGranter> pass_key,
+    const Extension& extension,
+    content::RenderProcessHost& process) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  AddMatchingScriptsToProcess(extension, process);
+}
+
+// static
 void ScriptInjectionTracker::DidUpdateScriptsInRenderer(
     base::PassKey<UserScriptLoader> pass_key,
     const mojom::HostID& host_id,
@@ -877,11 +909,13 @@ base::debug::CrashKeyString* GetLifecycleStateCrashKey() {
   return crash_key;
 }
 
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
 base::debug::CrashKeyString* GetIsGuestCrashKey() {
   static auto* crash_key = base::debug::AllocateCrashKeyString(
       "is_guest", base::debug::CrashKeySize::Size32);
   return crash_key;
 }
+#endif
 
 base::debug::CrashKeyString* GetDoWebViewScriptsMatchCrashKey() {
   static auto* crash_key = base::debug::AllocateCrashKeyString(
@@ -940,9 +974,11 @@ ScopedScriptInjectionTrackerFailureCrashKeys::
       GetLifecycleStateCrashKey(),
       base::NumberToString(static_cast<int>(frame.GetLifecycleState())));
 
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
   auto* guest = guest_view::GuestViewBase::FromRenderFrameHost(&frame);
   is_guest_crash_key_.emplace(GetIsGuestCrashKey(),
                               BoolToCrashKeyValue(!!guest));
+#endif
 
   const ExtensionRegistry* registry =
       ExtensionRegistry::Get(frame.GetBrowserContext());

@@ -21,6 +21,7 @@
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
 #include "base/timer/wall_clock_timer.h"
+#include "base/values.h"
 #include "components/account_id/account_id.h"
 
 class PrefService;
@@ -58,22 +59,6 @@ class WallpaperProfileHelper {
 // Manages wallpaper preferences and tracks the currently configured wallpaper.
 class ASH_EXPORT WallpaperPrefManager : public SessionObserver {
  public:
-  // Names of nodes with wallpaper info in |kUserWallpaperInfo| dictionary.
-  static const char kNewWallpaperAssetIdNodeName[];
-  static const char kNewWallpaperCollectionIdNodeName[];
-  static const char kNewWallpaperDateNodeName[];
-  static const char kNewWallpaperDedupKeyNodeName[];
-  static const char kNewWallpaperLayoutNodeName[];
-  static const char kNewWallpaperLocationNodeName[];
-  static const char kNewWallpaperUserFilePathNodeName[];
-  static const char kNewWallpaperTypeNodeName[];
-  static const char kNewWallpaperUnitIdNodeName[];
-  static const char kNewWallpaperVariantListNodeName[];
-
-  // Names of nodes for the online wallpaper variant dictionary.
-  static const char kOnlineWallpaperTypeNodeName[];
-  static const char kOnlineWallpaperUrlNodeName[];
-
   // Determines whether the wallpaper info is syncable and should be stored in
   // synced prefs.
   static bool ShouldSyncOut(const WallpaperInfo& local_info);
@@ -141,7 +126,7 @@ class ASH_EXPORT WallpaperPrefManager : public SessionObserver {
 
   // Returns the cached KMeans color value for the wallpaper at `location`.
   virtual std::optional<SkColor> GetCachedKMeanColor(
-      const std::string_view location) const = 0;
+      std::string_view location) const = 0;
 
   virtual void RemoveKMeanColor(const AccountId& account_id) = 0;
 
@@ -150,7 +135,7 @@ class ASH_EXPORT WallpaperPrefManager : public SessionObserver {
                                 SkColor celebi_color) = 0;
   // Returns the cached celebi color for the wallpaper at `location`.
   virtual std::optional<SkColor> GetCelebiColor(
-      const std::string_view location) const = 0;
+      std::string_view location) const = 0;
   virtual void RemoveCelebiColor(const AccountId& account_id) = 0;
 
   virtual bool SetDailyGooglePhotosWallpaperIdCache(
@@ -186,4 +171,4 @@ class ASH_EXPORT WallpaperPrefManager : public SessionObserver {
 
 }  // namespace ash
 
-#endif  //  ASH_WALLPAPER_WALLPAPER_PREF_MANAGER_H_
+#endif  // ASH_WALLPAPER_WALLPAPER_PREF_MANAGER_H_

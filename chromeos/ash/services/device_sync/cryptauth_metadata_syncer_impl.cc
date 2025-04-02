@@ -310,7 +310,6 @@ void CryptAuthMetadataSyncerImpl::AttemptNextStep() {
           return;
         default:
           NOTREACHED();
-          return;
       }
     }
 
@@ -346,7 +345,6 @@ void CryptAuthMetadataSyncerImpl::AttemptNextStep() {
           return;
         default:
           NOTREACHED();
-          return;
       }
     }
 
@@ -371,7 +369,6 @@ void CryptAuthMetadataSyncerImpl::AttemptNextStep() {
     // Each CryptAuthMetadataSyncer object can only be used once.
     case State::kFinished:
       NOTREACHED();
-      return;
   }
 }
 
@@ -509,7 +506,6 @@ void CryptAuthMetadataSyncerImpl::MakeSyncMetadataCall() {
     default:
       // AttemptNextStep() ensures that no more than two calls are made.
       NOTREACHED();
-      return;
   }
 
   cryptauth_client_ = client_factory_->CreateInstance();
@@ -525,14 +521,15 @@ void CryptAuthMetadataSyncerImpl::OnSyncMetadataSuccess(
     const cryptauthv2::SyncMetadataResponse& response) {
   base::TimeDelta execution_time =
       base::TimeTicks::Now() - last_state_change_timestamp_;
-  if (state_ == State::kWaitingForFirstSyncMetadataResponse)
+  if (state_ == State::kWaitingForFirstSyncMetadataResponse) {
     RecordFirstSyncMetadataMetrics(execution_time,
                                    CryptAuthApiCallResult::kSuccess);
-  else if (state_ == State::kWaitingForSecondSyncMetadataResponse)
+  } else if (state_ == State::kWaitingForSecondSyncMetadataResponse) {
     RecordSecondSyncMetadataMetrics(execution_time,
                                     CryptAuthApiCallResult::kSuccess);
-  else
+  } else {
     NOTREACHED();
+  }
 
   PA_LOG(VERBOSE) << "SyncMetadata response:\n" << response;
 
@@ -558,14 +555,15 @@ void CryptAuthMetadataSyncerImpl::OnSyncMetadataFailure(
     NetworkRequestError error) {
   base::TimeDelta execution_time =
       base::TimeTicks::Now() - last_state_change_timestamp_;
-  if (state_ == State::kWaitingForFirstSyncMetadataResponse)
+  if (state_ == State::kWaitingForFirstSyncMetadataResponse) {
     RecordFirstSyncMetadataMetrics(
         execution_time, CryptAuthApiCallResultFromNetworkRequestError(error));
-  else if (state_ == State::kWaitingForSecondSyncMetadataResponse)
+  } else if (state_ == State::kWaitingForSecondSyncMetadataResponse) {
     RecordSecondSyncMetadataMetrics(
         execution_time, CryptAuthApiCallResultFromNetworkRequestError(error));
-  else
+  } else {
     NOTREACHED();
+  }
 
   FinishAttempt(SyncMetadataNetworkRequestErrorToResultCode(error));
 }

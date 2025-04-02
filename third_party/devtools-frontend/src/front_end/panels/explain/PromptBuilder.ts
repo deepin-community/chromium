@@ -7,8 +7,11 @@ import * as Bindings from '../../models/bindings/bindings.js';
 import * as Formatter from '../../models/formatter/formatter.js';
 import * as Logs from '../../models/logs/logs.js';
 import * as Components from '../../ui/legacy/components/utils/utils.js';
+import * as AiAssistance from '../ai_assistance/ai_assistance.js';
 import type * as Console from '../console/console.js';
 
+const MAX_MESSAGE_SIZE = 1000;
+const MAX_STACK_TRACE_SIZE = 1000;
 const MAX_CODE_SIZE = 1000;
 
 export enum SourceType {
@@ -71,7 +74,7 @@ export class PromptBuilder {
   }
 
   async buildPrompt(sourcesTypes: SourceType[] = Object.values(SourceType)):
-      Promise<{prompt: string, sources: Source[]}> {
+      Promise<{prompt: string, sources: Source[], isPageReloadRecommended: boolean}> {
     const [sourceCode, request] = await Promise.all([
       sourcesTypes.includes(SourceType.RELATED_CODE) ? this.getMessageSourceCode() : undefined,
       sourcesTypes.includes(SourceType.NETWORK_REQUEST) ? this.getNetworkRequest() : undefined,
@@ -120,17 +123,22 @@ export class PromptBuilder {
     return {
       prompt,
       sources,
+      isPageReloadRecommended: sourcesTypes.includes(SourceType.NETWORK_REQUEST) &&
+          Boolean(this.#consoleMessage.consoleMessage().getAffectedResources()?.requestId) && !relatedRequest,
     };
   }
 
   formatPrompt({message, relatedCode, relatedRequest}: {message: string, relatedCode: string, relatedRequest: string}):
       string {
-    let prompt = `Why does browser show an error
-${message}`;
+    let prompt = `Please explain the following console error or warning:
+
+\`\`\`
+${message}
+\`\`\``;
 
     if (relatedCode) {
       prompt += `
-For the following code in my web app
+For the following code:
 
 \`\`\`
 ${relatedCode}
@@ -139,13 +147,23 @@ ${relatedCode}
 
     if (relatedRequest) {
       prompt += `
-For the following network request in my web app
+For the following network request:
 
 \`\`\`
 ${relatedRequest}
 \`\`\``;
     }
     return prompt;
+  }
+
+  getSearchQuery(): string {
+    let message = this.#consoleMessage.toMessageTextString();
+    if (message) {
+      // If there are multiple lines, it is likely the rest of the message
+      // is a stack trace, which we don't want.
+      message = message.split('\n')[0];
+    }
+    return message;
   }
 }
 
@@ -232,25 +250,33 @@ export function formatRelatedCode(
   return lines.slice(startLine, endLine + 1).join('\n');
 }
 
+function formatLines(title: string, lines: string[], maxLength: number): string {
+  let result = '';
+  for (const line of lines) {
+    if (result.length + line.length > maxLength) {
+      break;
+    }
+    result += line;
+  }
+  result = result.trim();
+  return result && title ? title + '\n' + result : result;
+}
+
 export function formatNetworkRequest(
     request:
         Pick<SDK.NetworkRequest.NetworkRequest, 'url'|'requestHeaders'|'responseHeaders'|'statusCode'|'statusText'>):
     string {
-  // TODO: anything else that might be relavant?
-  // TODO: handle missing headers
   return `Request: ${request.url()}
 
-Request headers:
-${request.requestHeaders().filter(allowHeader).map(header => `${header.name}: ${header.value}`).join('\n')}
+${AiAssistance.formatHeaders('Request headers:', request.requestHeaders())}
 
-Response headers:
-${request.responseHeaders.filter(allowHeader).map(header => `${header.name}: ${header.value}`).join('\n')}
+${AiAssistance.formatHeaders('Response headers:', request.responseHeaders)}
 
 Response status: ${request.statusCode} ${request.statusText}`;
 }
 
 export function formatConsoleMessage(message: Console.ConsoleViewMessage.ConsoleViewMessage): string {
-  return message.toMessageTextString();
+  return message.toMessageTextString().substr(0, MAX_MESSAGE_SIZE);
 }
 
 /**
@@ -273,7 +299,6 @@ export function formatStackTrace(message: Console.ConsoleViewMessage.ConsoleView
                              .filter(n => {
                                return !n.parentElement?.closest('.show-all-link,.show-less-link,.hidden-row');
                              })
-                             .map(Components.Linkifier.Linkifier.untruncatedNodeText)
-                             .join('');
-  return messageContent.trim();
+                             .map(Components.Linkifier.Linkifier.untruncatedNodeText);
+  return formatLines('', messageContent, MAX_STACK_TRACE_SIZE);
 }

@@ -191,7 +191,7 @@ class GitRebaseUpdateTest(git_test_utils.GitRepoReadWriteTestBase):
 
         self.repo.git('checkout', 'sub_K')
         output, _ = self.repo.capture_stdio(self.rp.main, ['foobar'])
-        self.assertIn('Squashing failed', output)
+        self.assertIn('try squashing your branch first', output)
 
         self.assertTrue(self.repo.run(self.gc.in_rebase))
 
@@ -257,7 +257,7 @@ class GitRebaseUpdateTest(git_test_utils.GitRepoReadWriteTestBase):
         self.repo.git('add', 'M')
         self.repo.git_commit('K NOPE')
 
-        # Add a commits to branch_L which will work when squashed
+        # Add a commits to branch_L which would work if squashed
         self.repo.git('checkout', 'branch_L')
         self.repo.git('reset', 'branch_L~')
         with self.repo.open('L', 'w') as f:
@@ -282,7 +282,16 @@ class GitRebaseUpdateTest(git_test_utils.GitRepoReadWriteTestBase):
         self.repo.git('rebase', '--skip')
 
         output, _ = self.repo.capture_stdio(self.reup.main)
-        self.assertIn('Failed! Attempting to squash', output)
+        self.assertIn('try squashing your branch first', output)
+
+        # manually squash the branch
+        self.repo.git('rebase', '--abort')
+        self.repo.git('squash-branch',)
+
+        # Try the rebase again
+        self.repo.git('rebase', '--skip')
+
+        output, _ = self.repo.capture_stdio(self.reup.main)
         self.assertIn('Deleted branch branch_G', output)
         self.assertIn('Deleted branch branch_L', output)
         self.assertIn('\'branch_G\' was merged', output)
@@ -325,17 +334,21 @@ class GitRebaseUpdateTest(git_test_utils.GitRepoReadWriteTestBase):
         self.assertIn('  branch_K', output)
 
     def testTrackTag(self):
-        self.origin.git('tag', 'lkgr', self.origin['M'])
-        self.repo.git('tag', 'lkgr', self.repo['D'])
+        self.origin.git('tag', 'tag-to-track', self.origin['M'])
+        self.repo.git('tag', 'tag-to-track', self.repo['D'])
 
         self.repo.git('config', 'branch.branch_G.remote', '.')
-        self.repo.git('config', 'branch.branch_G.merge', 'refs/tags/lkgr')
+        self.repo.git('config', 'branch.branch_G.merge',
+                      'refs/tags/tag-to-track')
 
         self.assertIn(
             'fatal: \'foo bar\' is not a valid branch name',
-            self.repo.capture_stdio(self.nb.main, ['--lkgr', 'foo bar'])[1])
+            self.repo.capture_stdio(
+                self.nb.main,
+                ['--upstream', 'tags/tag-to-track', 'foo bar'])[1])
 
-        self.repo.run(self.nb.main, ['--lkgr', 'foobar'])
+        self.repo.run(self.nb.main,
+                      ['--upstream', 'tags/tag-to-track', 'foobar'])
 
         with self.repo.open('foobar', 'w') as f:
             f.write('this is the foobar file')
@@ -361,7 +374,8 @@ class GitRebaseUpdateTest(git_test_utils.GitRepoReadWriteTestBase):
         self.assertIn('Rebasing: branch_L', output)
         self.assertIn('Rebasing: foobar', output)
         self.assertEqual(
-            self.repo.git('rev-parse', 'lkgr').stdout.strip(), self.origin['M'])
+            self.repo.git('rev-parse', 'tags/tag-to-track').stdout.strip(),
+            self.origin['M'])
 
         self.assertSchema("""
     A B C D E F G M N O
@@ -373,7 +387,7 @@ class GitRebaseUpdateTest(git_test_utils.GitRepoReadWriteTestBase):
         self.assertIn('fatal: invalid reference', err)
 
         output, _ = self.repo.capture_stdio(self.rp.main, ['tag_F'])
-        self.assertIn('to track tag_F [tag] (was lkgr [tag])', output)
+        self.assertIn('to track tag_F [tag] (was tag-to-track [tag])', output)
 
         self.assertSchema("""
     A B C D E F G M N O
@@ -381,8 +395,8 @@ class GitRebaseUpdateTest(git_test_utils.GitRepoReadWriteTestBase):
               F foobar1 foobar2
     """)
 
-        output, _ = self.repo.capture_stdio(self.rp.main, ['--lkgr'])
-        self.assertIn('to track lkgr [tag] (was tag_F [tag])', output)
+        output, _ = self.repo.capture_stdio(self.rp.main, ['tag-to-track'])
+        self.assertIn('to track tag-to-track [tag] (was tag_F [tag])', output)
 
         self.assertSchema("""
     A B C D E F G M N O
@@ -391,7 +405,7 @@ class GitRebaseUpdateTest(git_test_utils.GitRepoReadWriteTestBase):
     """)
 
         output, _ = self.repo.capture_stdio(self.rp.main, ['--root'])
-        self.assertIn('to track origin/main (was lkgr [tag])', output)
+        self.assertIn('to track origin/main (was tag-to-track [tag])', output)
 
         self.assertSchema("""
     A B C D E F G M N O foobar1 foobar2

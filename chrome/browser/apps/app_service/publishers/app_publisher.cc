@@ -10,7 +10,7 @@
 #include "components/services/app_service/public/cpp/capability_access.h"
 #include "components/services/app_service/public/cpp/package_id.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/apps/app_service/promise_apps/promise_app.h"
 #include "extensions/grit/extensions_browser_resources.h"
 #endif
@@ -46,11 +46,9 @@ AppPtr AppPublisher::MakeApp(AppType app_type,
   return app;
 }
 
-#if !BUILDFLAG(IS_CHROMEOS_LACROS)
 void AppPublisher::RegisterPublisher(AppType app_type) {
   proxy_->RegisterPublisher(app_type, this);
 }
-#endif
 
 void AppPublisher::LoadIcon(const std::string& app_id,
                             const IconKey& icon_key,
@@ -61,7 +59,7 @@ void AppPublisher::LoadIcon(const std::string& app_id,
   std::move(callback).Run(std::make_unique<IconValue>());
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 int AppPublisher::DefaultIconResourceId() const {
   return IDR_APP_DEFAULT_ICON;
 }
@@ -111,6 +109,14 @@ void AppPublisher::UnpauseApp(const std::string& app_id) {
   NOTIMPLEMENTED();
 }
 
+void AppPublisher::BlockApp(const std::string& app_id) {
+  NOTIMPLEMENTED();
+}
+
+void AppPublisher::UnblockApp(const std::string& app_id) {
+  NOTIMPLEMENTED();
+}
+
 void AppPublisher::StopApp(const std::string& app_id) {
   NOTIMPLEMENTED();
 }
@@ -146,7 +152,7 @@ void AppPublisher::SetWindowMode(const std::string& app_id,
   NOTIMPLEMENTED();
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void AppPublisher::SetAppLocale(const std::string& app_id,
                                 const std::string& locale_tag) {
   NOTIMPLEMENTED();
@@ -160,17 +166,14 @@ PromiseAppPtr AppPublisher::MakePromiseApp(const PackageId& package_id) {
 void AppPublisher::PublishPromiseApp(PromiseAppPtr delta) {
   if (!proxy_) {
     NOTREACHED();
-    return;
   }
   proxy_->OnPromiseApp(std::move(delta));
 }
 #endif
 
-#if !BUILDFLAG(IS_CHROMEOS_LACROS)
 void AppPublisher::Publish(AppPtr app) {
   if (!proxy_) {
     NOTREACHED();
-    return;
   }
 
   std::vector<AppPtr> apps;
@@ -184,7 +187,6 @@ void AppPublisher::Publish(std::vector<AppPtr> apps,
                            bool should_notify_initialized) {
   if (!proxy_) {
     NOTREACHED();
-    return;
   }
   proxy_->OnApps(std::move(apps), app_type, should_notify_initialized);
 }
@@ -220,6 +222,5 @@ void AppPublisher::ResetCapabilityAccess(AppType app_type) {
   }
   proxy()->OnCapabilityAccesses(std::move(capability_accesses));
 }
-#endif
 
 }  // namespace apps

@@ -86,7 +86,17 @@ struct JingleMessage {
   // Value from the <google:remoting:error-code> tag if it is present in the
   // message. Useful mainly for session-terminate messages. If it's UNKNOWN,
   // or reason is UNKNOWN_REASON, this field will be ignored in the xml output.
-  ErrorCode error_code = UNKNOWN_ERROR;
+  ErrorCode error_code = ErrorCode::UNKNOWN_ERROR;
+
+  // Value from the <google:remoting:error-details> tag if it is present in the
+  // message. Useful mainly for session-terminate messages. If it's empty, or
+  // reason is UNKNOWN_REASON, this field will be ignored in the xml output.
+  std::string error_details;
+
+  // Value from the <google:remoting:error-location> tag if it is present in the
+  // message. Useful mainly for session-terminate messages. If it's empty, or
+  // reason is UNKNOWN_REASON, this field will be ignored in the xml output.
+  std::string error_location;
 };
 
 struct JingleMessageReply {

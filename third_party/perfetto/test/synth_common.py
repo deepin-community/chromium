@@ -198,6 +198,9 @@ class Trace(object):
   def add_atrace_instant(self, ts, tid, pid, buf):
     self.add_print(ts, tid, 'I|{}|{}'.format(pid, buf))
 
+  def add_atrace_instant_for_track(self, ts, tid, pid, track_name, buf):
+        self.add_print(ts, tid, 'N|{}|{}|{}'.format(pid, track_name, buf))
+
   def add_process(self, pid, ppid, cmdline, uid=None):
     process = self.packet.process_tree.processes.add()
     process.pid = pid
@@ -215,8 +218,8 @@ class Trace(object):
       thread.name = name
     self.proc_map[tid] = cmdline
 
-  def add_battery_counters(self, ts, charge_uah, cap_prct, curr_ua,
-                           curr_avg_ua):
+  def add_battery_counters(self, ts, charge_uah, cap_prct, curr_ua, curr_avg_ua,
+                           voltage_uv):
     self.packet = self.trace.packet.add()
     self.packet.timestamp = ts
     battery_count = self.packet.battery
@@ -224,6 +227,7 @@ class Trace(object):
     battery_count.capacity_percent = cap_prct
     battery_count.current_ua = curr_ua
     battery_count.current_avg_ua = curr_avg_ua
+    battery_count.voltage_uv = voltage_uv
 
   def add_binder_transaction(self, transaction_id, ts_start, ts_end, tid, pid,
                              reply_id, reply_ts_start, reply_ts_end, reply_tid,
@@ -255,13 +259,14 @@ class Trace(object):
     reply_binder_transaction_received.debug_id = reply_id
 
   def add_battery_counters_no_curr_ua(self, ts, charge_uah, cap_prct,
-                                      curr_avg_ua):
+                                      curr_avg_ua, voltage_uv):
     self.packet = self.trace.packet.add()
     self.packet.timestamp = ts
     battery_count = self.packet.battery
     battery_count.charge_counter_uah = charge_uah
     battery_count.capacity_percent = cap_prct
     battery_count.current_avg_ua = curr_avg_ua
+    battery_count.voltage_uv = voltage_uv
 
   def add_power_rails_desc(self, index_val, name):
     power_rails = self.packet.power_rails

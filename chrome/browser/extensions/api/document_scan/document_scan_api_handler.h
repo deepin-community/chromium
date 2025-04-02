@@ -14,10 +14,13 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/common/extensions/api/document_scan.h"
 #include "chromeos/crosapi/mojom/document_scan.mojom-forward.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
+#include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_registry_observer.h"
 #include "extensions/common/extension_id.h"
 #include "ui/gfx/native_widget_types.h"
 
@@ -35,10 +38,12 @@ namespace extensions {
 
 class Extension;
 class ScannerDiscoveryRunner;
+class SimpleScanRunner;
 class StartScanRunner;
 
 // Handles chrome.documentScan API function calls.
-class DocumentScanAPIHandler : public BrowserContextKeyedAPI {
+class DocumentScanAPIHandler : public BrowserContextKeyedAPI,
+                               public ExtensionRegistryObserver {
  public:
   using SimpleScanCallback = base::OnceCallback<void(
       std::optional<api::document_scan::ScanResults> scan_results,
@@ -76,8 +81,13 @@ class DocumentScanAPIHandler : public BrowserContextKeyedAPI {
   // Returns the current instance for `browser_context`.
   static DocumentScanAPIHandler* Get(content::BrowserContext* browser_context);
 
-  // Registers the documentScan API preference with the |registry|.
-  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
+  // ExtensionRegistryObserver implementation:
+  void OnExtensionUnloaded(content::BrowserContext* browser_context,
+                           const Extension* extension,
+                           UnloadedExtensionReason reason) override;
+
+  // KeyedService implementation:
+  void Shutdown() override;
 
   // Replaces the DocumentScan service with a mock.
   void SetDocumentScanForTesting(crosapi::mojom::DocumentScan* document_scan);
@@ -85,7 +95,8 @@ class DocumentScanAPIHandler : public BrowserContextKeyedAPI {
   // Scans one page from the first available scanner on the system and passes
   // the result to `callback`.  `mime_types` is a list of MIME types the caller
   // is willing to receive back as the image format.
-  void SimpleScan(const std::vector<std::string>& mime_types,
+  void SimpleScan(scoped_refptr<const Extension> extension,
+                  const std::vector<std::string>& mime_types,
                   SimpleScanCallback callback);
 
   // If the user approves, gets a list of available scanners that match
@@ -220,12 +231,14 @@ class DocumentScanAPIHandler : public BrowserContextKeyedAPI {
   DocumentScanAPIHandler(content::BrowserContext* browser_context,
                          crosapi::mojom::DocumentScan* document_scan);
 
-  void OnSimpleScanNamesReceived(bool force_virtual_usb_printer,
-                                 SimpleScanCallback callback,
-                                 const std::vector<std::string>& scanner_names);
-  void OnSimpleScanCompleted(SimpleScanCallback callback,
-                             crosapi::mojom::ScanFailureMode failure_mode,
-                             const std::optional<std::string>& scan_data);
+  // Cleanup all handles and state for the given extension.
+  void ExtensionCleanup(const ExtensionId& id);
+
+  void OnSimpleScanCompleted(
+      std::unique_ptr<SimpleScanRunner> runner,
+      SimpleScanCallback callback,
+      std::optional<api::document_scan::ScanResults> scan_results,
+      std::optional<std::string> error);
 
   void SendGetScannerListRequest(const api::document_scan::DeviceFilter& filter,
                                  GetScannerListCallback callback);
@@ -262,13 +275,17 @@ class DocumentScanAPIHandler : public BrowserContextKeyedAPI {
   raw_ptr<crosapi::mojom::DocumentScan> document_scan_;
   std::map<ExtensionId, ExtensionState> extension_state_;
 
+  base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
+      extension_registry_observation_{this};
+
   base::WeakPtrFactory<DocumentScanAPIHandler> weak_ptr_factory_{this};
 };
 
 template <>
-KeyedService*
-BrowserContextKeyedAPIFactory<DocumentScanAPIHandler>::BuildServiceInstanceFor(
-    content::BrowserContext* context) const;
+std::unique_ptr<KeyedService>
+BrowserContextKeyedAPIFactory<DocumentScanAPIHandler>::
+    BuildServiceInstanceForBrowserContext(
+        content::BrowserContext* context) const;
 
 }  // namespace extensions
 

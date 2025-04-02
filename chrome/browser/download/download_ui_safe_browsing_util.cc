@@ -6,8 +6,11 @@
 
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/stringprintf.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/download/public/common/download_item.h"
+#include "components/prefs/pref_service.h"
 #include "components/safe_browsing/content/common/file_type_policies.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 
 #if BUILDFLAG(FULL_SAFE_BROWSING)
@@ -78,15 +81,8 @@ void SendSafeBrowsingDownloadReport(
     ClientSafeBrowsingReportRequest::ReportType report_type,
     bool did_proceed,
     download::DownloadItem* item) {
-  ClientDownloadResponse::Verdict download_verdict =
-      safe_browsing::DownloadProtectionService::GetDownloadProtectionVerdict(
-          item);
-  if (download_verdict == ClientDownloadResponse::SAFE) {
-    return;
-  }
-  safe_browsing::SafeBrowsingService* sb_service =
-      g_browser_process->safe_browsing_service();
-  if (sb_service) {
+  if (safe_browsing::SafeBrowsingService* sb_service =
+          g_browser_process->safe_browsing_service()) {
     sb_service->SendDownloadReport(item, report_type, did_proceed,
                                    /*show_download_in_folder=*/std::nullopt);
   }

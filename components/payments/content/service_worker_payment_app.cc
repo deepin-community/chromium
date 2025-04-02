@@ -222,7 +222,7 @@ void ServiceWorkerPaymentApp::OnCanMakePaymentEventResponded(
 
 void ServiceWorkerPaymentApp::CallValidateCanMakePaymentCallback(
     ValidateCanMakePaymentCallback callback) {
-  std::move(callback).Run(weak_ptr_factory_.GetWeakPtr(), true);
+  std::move(callback).Run(weak_ptr_factory_.GetWeakPtr());
 }
 
 void ServiceWorkerPaymentApp::InvokePaymentApp(
@@ -399,7 +399,6 @@ bool ServiceWorkerPaymentApp::CanPreselect() const {
 
 std::u16string ServiceWorkerPaymentApp::GetMissingInfoLabel() const {
   NOTREACHED();
-  return std::u16string();
 }
 
 bool ServiceWorkerPaymentApp::HasEnrolledInstrument() const {
@@ -407,10 +406,6 @@ bool ServiceWorkerPaymentApp::HasEnrolledInstrument() const {
   // interface should not be invoked.
   DCHECK(can_make_payment_result_);
   return has_enrolled_instrument_result_;
-}
-
-void ServiceWorkerPaymentApp::RecordUse() {
-  NOTIMPLEMENTED();
 }
 
 bool ServiceWorkerPaymentApp::NeedsInstallation() const {

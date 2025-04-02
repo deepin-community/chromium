@@ -4,10 +4,11 @@
 
 #include "third_party/blink/renderer/platform/loader/link_header.h"
 
+#include <string_view>
+
 #include "base/strings/string_util.h"
 #include "components/link_header_util/link_header_util.h"
 #include "third_party/blink/public/common/web_package/signed_exchange_consts.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/parsing_utilities.h"
 
 namespace blink {
@@ -19,7 +20,7 @@ static bool IsExtensionParameter(LinkHeader::LinkParameterName name) {
 }
 
 static LinkHeader::LinkParameterName ParameterNameFromString(
-    base::StringPiece name) {
+    std::string_view name) {
   if (base::EqualsCaseInsensitiveASCII(name, "rel"))
     return LinkHeader::kLinkParameterRel;
   if (base::EqualsCaseInsensitiveASCII(name, "anchor"))
@@ -115,13 +116,13 @@ LinkHeader::LinkHeader(Iterator begin, Iterator end) : is_valid_(true) {
   if (!is_valid_)
     return;
 
-  url_ = String(&url[0], url.length());
+  url_ = String(url);
   for (const auto& param : params) {
     LinkParameterName name = ParameterNameFromString(param.first);
     if (!IsExtensionParameter(name) && !param.second)
       is_valid_ = false;
     std::string value = param.second.value_or("");
-    SetValue(name, String(&value[0], value.length()));
+    SetValue(name, String(value));
   }
   // According to Section 5.2 of RFC 5988, "anchor" parameters in Link headers
   // must be either respected, or the entire header must be ignored:

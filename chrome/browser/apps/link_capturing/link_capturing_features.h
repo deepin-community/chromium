@@ -15,20 +15,20 @@ namespace apps::features {
 BASE_DECLARE_FEATURE(kLinkCapturingUiUpdate);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_CHROMEOS)
-// Enables link capturing into apps when links are clicked from another app
-// context, regardless of user setting.
-BASE_DECLARE_FEATURE(kAppToAppLinkCapturing);
-
-// Enables link capturing into a specific set of Google Workspace apps when
-// links are clicked from another app context, regardless of user setting.
-BASE_DECLARE_FEATURE(kAppToAppLinkCapturingWorkspaceApps);
-#endif
-
 // Returns true if the updated UX for link capturing needs to be shown. Only set
-// to true if kDesktopPWAsLinkCapturing is enabled on desktop platforms, and
+// to true if kPwaNavigationCapturing is enabled on desktop platforms, and
 // kLinkCapturingUiUpdate on CrOS platforms.
 bool ShouldShowLinkCapturingUX();
+
+// Returns true if the `kPwaNavigationCapturing` flag is enabled with the
+// reimplementation parameters set.
+//
+// NOTE: the reimplementation can also be enabled for particular applications
+// even if this flag is off. Hence only the `true` return value can be fully
+// trusted, but if `false` is returned extra considerations are required. See
+// `IsNavigationCapturingReimplExperimentEnabled()` at
+// //c/b/ui/web_applications/web_app_launch_utils.cc.
+bool IsNavigationCapturingReimplEnabled();
 
 }  // namespace apps::features
 

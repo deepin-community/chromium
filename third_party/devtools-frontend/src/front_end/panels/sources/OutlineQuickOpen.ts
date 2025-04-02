@@ -4,11 +4,12 @@
 
 import * as i18n from '../../core/i18n/i18n.js';
 import * as CodeMirror from '../../third_party/codemirror.next/codemirror.next.js';
+import * as IconButton from '../../ui/components/icon_button/icon_button.js';
 import * as QuickOpen from '../../ui/legacy/components/quick_open/quick_open.js';
 import * as UI from '../../ui/legacy/legacy.js';
-import {type UISourceCodeFrame} from './UISourceCodeFrame.js';
 
 import {SourcesView} from './SourcesView.js';
+import type {UISourceCodeFrame} from './UISourceCodeFrame.js';
 
 const UIStrings = {
   /**
@@ -27,10 +28,12 @@ const UIStrings = {
 const str_ = i18n.i18n.registerUIStrings('panels/sources/OutlineQuickOpen.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
-export type OutlineItem = {
-  title: string,
-  subtitle?: string, lineNumber: number, columnNumber: number,
-};
+export interface OutlineItem {
+  title: string;
+  lineNumber: number;
+  columnNumber: number;
+  subtitle?: string;
+}
 
 export function outline(state: CodeMirror.EditorState): OutlineItem[] {
   function toLineColumn(offset: number): {lineNumber: number, columnNumber: number} {
@@ -267,6 +270,10 @@ export class OutlineQuickOpen extends QuickOpen.FilteredListWidget.Provider {
   private items: OutlineItem[] = [];
   private active: boolean = false;
 
+  constructor() {
+    super('source-symbol');
+  }
+
   override attach(): void {
     const sourceFrame = this.currentSourceFrame();
     if (sourceFrame) {
@@ -306,6 +313,8 @@ export class OutlineQuickOpen extends QuickOpen.FilteredListWidget.Provider {
 
   override renderItem(itemIndex: number, query: string, titleElement: Element, _subtitleElement: Element): void {
     const item = this.items[itemIndex];
+    const icon = IconButton.Icon.create('deployed');
+    titleElement.parentElement?.parentElement?.insertBefore(icon, titleElement.parentElement);
     titleElement.textContent = item.title + (item.subtitle ? item.subtitle : '');
     QuickOpen.FilteredListWidget.FilteredListWidget.highlightRanges(titleElement, query);
 
@@ -314,7 +323,7 @@ export class OutlineQuickOpen extends QuickOpen.FilteredListWidget.Provider {
       return;
     }
 
-    const tagElement = (titleElement.parentElement?.parentElement?.createChild('span', 'tag') as HTMLElement);
+    const tagElement = titleElement.parentElement?.parentElement?.createChild('span', 'tag');
     if (!tagElement) {
       return;
     }

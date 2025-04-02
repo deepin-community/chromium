@@ -17,7 +17,7 @@ namespace media {
 
 class MuteableAudioOutputStream;
 
-// Android implemention of AudioManager.
+// Android implementation of AudioManager.
 class MEDIA_EXPORT AudioManagerAndroid : public AudioManagerBase {
  public:
   AudioManagerAndroid(std::unique_ptr<AudioThread> audio_thread,
@@ -101,6 +101,7 @@ class MEDIA_EXPORT AudioManagerAndroid : public AudioManagerBase {
   void SetCommunicationAudioModeOn(bool on);
   bool SetAudioDevice(const std::string& device_id);
   int GetNativeOutputSampleRate();
+  bool IsBluetoothMicrophoneOn();
   bool IsAudioLowLatencySupported();
   int GetAudioLowLatencyOutputFrameSize();
   int GetOptimalOutputFrameSize(int sample_rate, int channels);

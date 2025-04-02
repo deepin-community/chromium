@@ -68,7 +68,7 @@ uint32_t CalculatePrivateFootprintKb(const mojom::RawOSMemDump& os_dump,
   return base::saturated_cast<int32_t>(
       os_dump.platform_private_footprint->private_bytes / 1024);
 #else
-  // TODO(crbug.com/1506552): Implement for iOS.
+  // TODO(crbug.com/40947218): Implement for iOS.
   return 0;
 #endif
 }
@@ -86,6 +86,7 @@ memory_instrumentation::mojom::OSMemDumpPtr CreatePublicOSDump(
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   os_dump->private_footprint_swap_kb =
       internal_os_dump.platform_private_footprint->vm_swap_bytes / 1024;
+  os_dump->mappings_count = internal_os_dump.mappings_count;
 #endif
   return os_dump;
 }

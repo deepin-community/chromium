@@ -80,7 +80,6 @@ bool NetworkTypeIsConfigurable(NetworkType type) {
       return false;
   }
   NOTREACHED();
-  return false;
 }
 
 ActivationStateType GetNetworkActivationState(
@@ -102,7 +101,6 @@ bool IsCellularNetworkSimLocked(
 
 bool IsCellularNetworkCarrierLocked(
     const NetworkStatePropertiesPtr& network_properties) {
-  CHECK(features::IsCellularCarrierLockEnabled());
   CHECK(
       NetworkTypeMatchesType(network_properties->type, NetworkType::kCellular));
   return network_properties->type_state->get_cellular()->sim_locked &&
@@ -186,7 +184,6 @@ gfx::ImageSkia GetNetworkImageForNetwork(
 
   if (NetworkTypeMatchesType(network_properties->type,
                              NetworkType::kCellular) &&
-      features::IsCellularCarrierLockEnabled() &&
       IsCellularNetworkCarrierLocked(network_properties)) {
     network_image = network_icon::GetImageForCarrierLockedNetwork(
         color_provider, network_icon::ICON_TYPE_LIST);
@@ -231,10 +228,8 @@ gfx::ImageSkia GetNetworkImageForNetwork(
 
 int GetCellularNetworkSubText(
     const NetworkStatePropertiesPtr& network_properties) {
-  if (features::IsCellularCarrierLockEnabled()) {
-    if (IsCellularNetworkCarrierLocked(network_properties)) {
-      return IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CARRIER_LOCKED;
-    }
+  if (IsCellularNetworkCarrierLocked(network_properties)) {
+    return IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CARRIER_LOCKED;
   }
 
   if (IsCellularNetworkUnActivated(network_properties)) {
@@ -322,15 +317,15 @@ void NetworkListNetworkItemView::UpdateViewForNetwork(
     network_icon::NetworkIconAnimation::GetInstance()->RemoveObserver(this);
   }
 
-  SetAccessibleName(GenerateAccessibilityLabel(label));
+  GetViewAccessibility().SetName(GenerateAccessibilityLabel(label));
   GetViewAccessibility().SetDescription(GenerateAccessibilityDescription());
 }
 
 void NetworkListNetworkItemView::NetworkIconChanged() {
   DCHECK(views::IsViewClass<views::ImageView>(left_view()));
   static_cast<views::ImageView*>(left_view())
-      ->SetImage(
-          GetNetworkImageForNetwork(GetColorProvider(), network_properties_));
+      ->SetImage(ui::ImageModel::FromImageSkia(
+          GetNetworkImageForNetwork(GetColorProvider(), network_properties_)));
 }
 
 void NetworkListNetworkItemView::OnThemeChanged() {
@@ -416,7 +411,7 @@ void NetworkListNetworkItemView::AddPolicyView() {
   const SkColor icon_color = AshColorProvider::Get()->GetContentLayerColor(
       AshColorProvider::ContentLayerType::kIconColorPrimary);
   controlled_icon->SetImage(
-      gfx::CreateVectorIcon(kSystemMenuBusinessIcon, icon_color));
+      ui::ImageModel::FromVectorIcon(kSystemMenuBusinessIcon, icon_color));
   AddRightView(controlled_icon.release());
 }
 
@@ -543,11 +538,9 @@ std::u16string
 NetworkListNetworkItemView::GenerateAccessibilityDescriptionForCellular(
     const std::u16string& connection_status,
     int signal_strength) {
-  if (features::IsCellularCarrierLockEnabled()) {
-    if (IsCellularNetworkCarrierLocked(network_properties())) {
-      return l10n_util::GetStringUTF16(
-          IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CARRIER_LOCKED);
-    }
+  if (IsCellularNetworkCarrierLocked(network_properties())) {
+    return l10n_util::GetStringUTF16(
+        IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CARRIER_LOCKED);
   }
   if (IsCellularNetworkUnActivated(network_properties())) {
     if (Shell::Get()->session_controller()->login_status() ==

@@ -6,8 +6,8 @@
 
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
-#include "ui/base/pointer/touch_editing_controller.h"
 #include "ui/events/event.h"
+#include "ui/touch_selection/touch_editing_controller.h"
 
 namespace ui {
 
@@ -34,7 +34,7 @@ TouchSelectionMenuAction MapCommandIdToMenuAction(int command_id) {
     case TouchEditable::kSelectWord:
       return TouchSelectionMenuAction::kSelectWord;
     default:
-      NOTREACHED_NORETURN() << "Invalid command id: " << command_id;
+      NOTREACHED() << "Invalid command id: " << command_id;
   }
 }
 

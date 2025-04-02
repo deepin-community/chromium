@@ -24,9 +24,7 @@
 namespace updater {
 
 class KeystoneTest : public testing::Test {
- public:
-  ~KeystoneTest() override = default;
-
+ protected:
   void SetUp() override {
     ASSERT_TRUE(temp_keystone_dir_.CreateUniqueTempDir());
 
@@ -46,7 +44,6 @@ class KeystoneTest : public testing::Test {
         temp_keystone_dir_.GetPath().AppendASCII("CountingMetrics.plist")));
   }
 
- protected:
   base::ScopedTempDir temp_keystone_dir_;
 };
 
@@ -80,7 +77,7 @@ TEST_F(KeystoneTest, CreateEmptyPlistFile) {
   @autoreleasepool {
     // Verify the plist is re-created when contents needs update.
     NSURL* const url = base::apple::FilePathToNSURL(plist_path);
-    EXPECT_TRUE([@{@"foo" : @2} writeToURL:url atomically:YES]);
+    EXPECT_TRUE([@{@"foo" : @2} writeToURL:url error:nil]);
     base::Time previous_mtime = base::Time::Now() - base::Days(1);
     EXPECT_TRUE(base::TouchFile(plist_path, previous_mtime, previous_mtime));
     EXPECT_TRUE(CreateEmptyPlistFile(plist_path));

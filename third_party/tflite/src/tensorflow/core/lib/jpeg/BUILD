@@ -26,7 +26,6 @@ cc_library(
         "jpeg_handle.cc",
         "jpeg_mem.cc",
         "//tensorflow/core/platform:jpeg_hdrs",
-        "@local_tsl//tsl/platform:jpeg_hdrs",
     ],
     hdrs = [
         "jpeg_handle.h",
@@ -38,6 +37,7 @@ cc_library(
         "//tensorflow:windows": [],
         "//conditions:default": ["-ldl"],
     }),
+    visibility = ["//visibility:public"],
     deps = [
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
@@ -52,7 +52,6 @@ cc_library(
         "jpeg_handle.cc",
         "jpeg_mem.cc",
         "//tensorflow/core/platform:jpeg_hdrs",
-        "@local_tsl//tsl/platform:jpeg_hdrs",
     ]),
     hdrs = [
         "jpeg_handle.h",
@@ -60,8 +59,8 @@ cc_library(
         "//tensorflow/core/lib/core:legacy_lib_core_stringpiece_header",
         "//tensorflow/core/platform:jpeg_internal_hdrs",
         "@local_tsl//tsl/platform:jpeg_internal_hdrs",
-        "@local_tsl//tsl/platform/default:integral_types.h",
-        "@local_tsl//tsl/platform/default:logging.h",
+        "@local_xla//xla/tsl/platform/default:integral_types.h",
+        "@local_xla//xla/tsl/platform/default:logging.h",
     ],
     copts = tf_copts(),
     linkopts = if_android(["-ldl"]),
@@ -96,6 +95,8 @@ tf_cc_test(
         "//tensorflow/core:lib_internal",
         "//tensorflow/core:test",
         "//tensorflow/core:test_main",
+        "//tensorflow/core/platform:jpeg",
         "@com_google_absl//absl/base",
+        "@libjpeg_turbo//:jpeg",
     ],
 )

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/capture/content/video_capture_oracle.h"
 
 #include <algorithm>
@@ -47,7 +52,7 @@ constexpr auto kMaxTimeSinceLastFeedbackUpdate = base::Seconds(1);
 
 // The amount of additional time, since content animation was last detected, to
 // continue being extra-careful about increasing the capture size.  This is used
-// to prevent breif periods of non-animating content from throwing off the
+// to prevent brief periods of non-animating content from throwing off the
 // heuristics that decide whether to increase the capture size.
 constexpr auto kDebouncingPeriodForAnimatedContent = base::Seconds(3);
 
@@ -191,7 +196,6 @@ bool VideoCaptureOracle::ObserveEventAndDecideCapture(
 
     case kNumEvents:
       NOTREACHED();
-      break;
   }
 
   if (!should_sample)
@@ -422,7 +426,7 @@ const char* VideoCaptureOracle::EventAsString(Event event) {
     case kNumEvents:
       break;
   }
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 base::TimeTicks VideoCaptureOracle::GetFrameTimestamp(int frame_number) const {

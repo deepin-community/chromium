@@ -57,7 +57,6 @@ const std::string GetVersionRunningStatusString(
     default:
       NOTREACHED();
   }
-  return std::string();
 }
 
 const std::string GetVersionStatusString(
@@ -78,7 +77,6 @@ const std::string GetVersionStatusString(
     default:
       NOTREACHED();
   }
-  return std::string();
 }
 
 Response CreateDomainNotEnabledErrorResponse() {

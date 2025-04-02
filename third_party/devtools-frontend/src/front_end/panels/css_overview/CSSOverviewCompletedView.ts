@@ -24,7 +24,7 @@ import {
   type PopulateNodesEventNodeTypes,
 } from './CSSOverviewController.js';
 import {CSSOverviewSidebarPanel, type ItemSelectedEvent, SidebarEvents} from './CSSOverviewSidebarPanel.js';
-import {type UnusedDeclaration} from './CSSOverviewUnusedDeclarations.js';
+import type {UnusedDeclaration} from './CSSOverviewUnusedDeclarations.js';
 
 const UIStrings = {
   /**
@@ -241,6 +241,7 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
 
   constructor(controller: OverviewController) {
     super();
+    this.registerRequiredCSS(cssOverviewCompletedViewStyles);
 
     this.#controller = controller;
     this.#formatter = new Intl.NumberFormat('en-US');
@@ -253,7 +254,7 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
     this.#elementContainer = new DetailsView();
 
     // If closing the last tab, collapse the sidebar.
-    this.#elementContainer.addEventListener(Events.TabClosed, evt => {
+    this.#elementContainer.addEventListener(Events.TAB_CLOSED, evt => {
       if (evt.data === 0) {
         this.#mainContainer.setSidebarMinimized(true);
       }
@@ -266,6 +267,7 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
     this.#mainContainer.setVertical(false);
     this.#mainContainer.setSecondIsSidebar(true);
     this.#mainContainer.setSidebarMinimized(true);
+    this.#mainContainer.registerRequiredCSS(cssOverviewCompletedViewStyles);
 
     this.#sideBar = new CSSOverviewSidebarPanel();
     this.#sideBar.setMinimumSize(100, 25);
@@ -283,21 +285,13 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
     this.#sideBar.addItem(i18nString(UIStrings.mediaQueries), 'media-queries');
     this.#sideBar.select('summary', false);
 
-    this.#sideBar.addEventListener(SidebarEvents.ItemSelected, this.#sideBarItemSelected, this);
-    this.#sideBar.addEventListener(SidebarEvents.Reset, this.#sideBarReset, this);
-    this.#controller.addEventListener(CSSOverViewControllerEvents.Reset, this.#reset, this);
-    this.#controller.addEventListener(CSSOverViewControllerEvents.PopulateNodes, this.#createElementsView, this);
+    this.#sideBar.addEventListener(SidebarEvents.ITEM_SELECTED, this.#sideBarItemSelected, this);
+    this.#sideBar.addEventListener(SidebarEvents.RESET, this.#sideBarReset, this);
+    this.#controller.addEventListener(CSSOverViewControllerEvents.RESET, this.#reset, this);
+    this.#controller.addEventListener(CSSOverViewControllerEvents.POPULATE_NODES, this.#createElementsView, this);
     this.#resultsContainer.element.addEventListener('click', this.#onClick.bind(this));
 
     this.#data = null;
-  }
-
-  override wasShown(): void {
-    super.wasShown();
-    this.#mainContainer.registerCSSFiles([cssOverviewCompletedViewStyles]);
-    this.registerCSSFiles([cssOverviewCompletedViewStyles]);
-
-    // TODO(paullewis): update the links in the panels in case source has been .
   }
 
   initializeModels(target: SDK.Target.Target): void {
@@ -326,7 +320,7 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
   }
 
   #sideBarReset(): void {
-    this.#controller.dispatchEventToListeners(CSSOverViewControllerEvents.Reset);
+    this.#controller.dispatchEventToListeners(CSSOverViewControllerEvents.RESET);
   }
 
   #reset(): void {
@@ -466,7 +460,7 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
     }
 
     evt.consume();
-    this.#controller.dispatchEventToListeners(CSSOverViewControllerEvents.PopulateNodes, {payload});
+    this.#controller.dispatchEventToListeners(CSSOverViewControllerEvents.POPULATE_NODES, {payload});
     this.#mainContainer.setSidebarMinimized(false);
   }
 
@@ -661,7 +655,7 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
       this.#viewMap.set(id, view);
     }
 
-    this.#elementContainer.appendTab(id, tabTitle, view, true);
+    this.#elementContainer.appendTab(id, tabTitle, view, payload.type);
   }
 
   #fontInfoToFragment(fontInfo: Map<string, Map<string, Map<string, number[]>>>): UI.Fragment.Fragment {
@@ -702,7 +696,7 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
 
     const total = values.reduce((prev, curr) => prev + curr[1].length, 0);
 
-    return UI.Fragment.Fragment.build`<ul>
+    return UI.Fragment.Fragment.build`<ul aria-label="${type}">
     ${values.map(([title, nodes]) => {
       const width = 100 * nodes.length / total;
       const itemLabel = i18nString(UIStrings.nOccurrences, {n: nodes.length});
@@ -710,7 +704,8 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
       return UI.Fragment.Fragment.build`<li>
         <div class="title">${title}</div>
         <button data-type="${type}" data-path="${path}" data-${dataLabel}="${title}"
-        jslog="${VisualLogging.action().track({click: true}).context(`css-overview.${type}`)}">
+        jslog="${VisualLogging.action().track({click: true}).context(`css-overview.${type}`)}"
+        aria-label="${title}: ${itemLabel}">
           <div class="details">${itemLabel}</div>
           <div class="bar-container">
             <div class="bar" style="width: ${width}%;"></div>
@@ -748,7 +743,7 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
     const color = (minContrastIssue.textColor.asString(Common.Color.Format.HEXA) as string);
     const backgroundColor = (minContrastIssue.backgroundColor.asString(Common.Color.Format.HEXA) as string);
 
-    const showAPCA = Root.Runtime.experiments.isEnabled('APCA');
+    const showAPCA = Root.Runtime.experiments.isEnabled('apca');
 
     const title = i18nString(UIStrings.textColorSOverSBackgroundResults, {
       PH1: color,
@@ -845,7 +840,6 @@ export class CSSOverviewCompletedView extends UI.Widget.VBox {
     void this.#render(data);
   }
 
-  // eslint-disable-next-line @typescript-eslint/naming-convention
   static readonly pushedNodes = new Set<Protocol.DOM.BackendNodeId>();
 }
 export class DetailsView extends Common.ObjectWrapper.eventMixin<EventTypes, typeof UI.Widget.VBox>(UI.Widget.VBox) {
@@ -856,13 +850,14 @@ export class DetailsView extends Common.ObjectWrapper.eventMixin<EventTypes, typ
     this.#tabbedPane = new UI.TabbedPane.TabbedPane();
     this.#tabbedPane.show(this.element);
     this.#tabbedPane.addEventListener(UI.TabbedPane.Events.TabClosed, () => {
-      this.dispatchEventToListeners(Events.TabClosed, this.#tabbedPane.tabIds().length);
+      this.dispatchEventToListeners(Events.TAB_CLOSED, this.#tabbedPane.tabIds().length);
     });
   }
 
-  appendTab(id: string, tabTitle: string, view: UI.Widget.Widget, isCloseable?: boolean): void {
+  appendTab(id: string, tabTitle: string, view: UI.Widget.Widget, jslogContext?: string): void {
     if (!this.#tabbedPane.hasTab(id)) {
-      this.#tabbedPane.appendTab(id, tabTitle, view, undefined, undefined, isCloseable);
+      this.#tabbedPane.appendTab(
+          id, tabTitle, view, undefined, undefined, /* isCloseable */ true, undefined, undefined, jslogContext);
     }
 
     this.#tabbedPane.selectTab(id);
@@ -874,12 +869,12 @@ export class DetailsView extends Common.ObjectWrapper.eventMixin<EventTypes, typ
 }
 
 export const enum Events {
-  TabClosed = 'TabClosed',
+  TAB_CLOSED = 'TabClosed',
 }
 
-export type EventTypes = {
-  [Events.TabClosed]: number,
-};
+export interface EventTypes {
+  [Events.TAB_CLOSED]: number;
+}
 
 export class ElementDetailsView extends UI.Widget.Widget {
   readonly #controller: OverviewController;
@@ -985,7 +980,7 @@ export class ElementDetailsView extends UI.Widget.Widget {
     this.#elementGrid.element.addEventListener('mouseover', this.#onMouseOver.bind(this));
     this.#elementGrid.setStriped(true);
     this.#elementGrid.addEventListener(
-        DataGrid.DataGrid.Events.SortingChanged, this.#sortMediaQueryDataGrid.bind(this));
+        DataGrid.DataGrid.Events.SORTING_CHANGED, this.#sortMediaQueryDataGrid.bind(this));
 
     this.#elementGrid.asWidget().show(this.element);
   }
@@ -1009,7 +1004,7 @@ export class ElementDetailsView extends UI.Widget.Widget {
     }
 
     const backendNodeId = Number(node.dataset.backendNodeId);
-    this.#controller.dispatchEventToListeners(CSSOverViewControllerEvents.RequestNodeHighlight, backendNodeId);
+    this.#controller.dispatchEventToListeners(CSSOverViewControllerEvents.REQUEST_NODE_HIGHLIGHT, backendNodeId);
   }
 
   async populateNodes(data: PopulateNodesEventNodes): Promise<void> {
@@ -1058,7 +1053,7 @@ export class ElementDetailsView extends UI.Widget.Widget {
       this.#elementGrid.insertChild(node);
     }
 
-    this.#elementGrid.setColumnsVisiblity(visibility);
+    this.#elementGrid.setColumnsVisibility(visibility);
     this.#elementGrid.renderInline();
     this.#elementGrid.wasShown();
   }
@@ -1127,7 +1122,7 @@ export class ElementNode extends DataGrid.SortableDataGrid.SortableDataGridNode<
 
     if (columnId === 'contrast-ratio') {
       const cell = this.createTD(columnId);
-      const showAPCA = Root.Runtime.experiments.isEnabled('APCA');
+      const showAPCA = Root.Runtime.experiments.isEnabled('apca');
       const contrastRatio = Platform.NumberUtilities.floor(this.data.contrastRatio, 2);
       const contrastRatioString = showAPCA ? contrastRatio + '%' : contrastRatio;
       const border = getBorderString(this.data.backgroundColor);

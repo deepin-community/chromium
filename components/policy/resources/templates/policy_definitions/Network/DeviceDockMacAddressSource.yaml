@@ -26,7 +26,6 @@ items:
   value: 3
 owners:
 - bkersting@google.com
-- kerker@chromium.org
 - chungsheng@google.com
 - byronlee@chromium.org
 - chromeos-oem-services@google.com
@@ -40,3 +39,4 @@ supported_on:
 - chrome_os:75-
 tags: []
 type: int-enum
+generate_device_proto: False

@@ -2,19 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "chrome/browser/sessions/session_restore_delegate.h"
 
 #include <stddef.h>
 
+#include <array>
 #include <utility>
 
 #include "base/metrics/field_trial.h"
+#include "chrome/browser/performance_manager/public/background_tab_loading_policy.h"
 #include "chrome/browser/sessions/session_restore_stats_collector.h"
 #include "chrome/browser/sessions/tab_loader.h"
 #include "chrome/common/url_constants.h"
 #include "components/favicon/content/content_favicon_driver.h"
 #include "components/performance_manager/public/features.h"
-#include "components/performance_manager/public/graph/policies/background_tab_loading_policy.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tab_groups/tab_group_visual_data.h"
 #include "content/public/browser/web_contents.h"
@@ -24,12 +30,12 @@ namespace {
 bool IsInternalPage(const GURL& url) {
   // There are many chrome:// UI URLs, but only look for the ones that users
   // are likely to have open. Most of the benefit is from the NTP URL.
-  const char* const kReloadableUrlPrefixes[] = {
+  const auto kReloadableUrlPrefixes = std::to_array<const char*>({
       chrome::kChromeUIDownloadsURL,
       chrome::kChromeUIHistoryURL,
       chrome::kChromeUINewTabURL,
       chrome::kChromeUISettingsURL,
-  };
+  });
   // Prefix-match against the table above. Use strncmp to avoid allocating
   // memory to convert the URL prefix constants into std::strings.
   for (size_t i = 0; i < std::size(kReloadableUrlPrefixes); ++i) {
@@ -48,7 +54,7 @@ SessionRestoreDelegate::RestoredTab::RestoredTab(
     bool is_app,
     bool is_pinned,
     const std::optional<tab_groups::TabGroupId>& group)
-    : contents_(contents),
+    : contents_(contents->GetWeakPtr()),
       is_active_(is_active),
       is_app_(is_app),
       is_internal_page_(IsInternalPage(contents->GetLastCommittedURL())),
@@ -75,18 +81,8 @@ bool SessionRestoreDelegate::RestoredTab::operator<(
   if (is_app_ != right.is_app_)
     return is_app_;
   // Finally, older tabs should be deferred first.
-  return contents_->GetLastActiveTime() > right.contents_->GetLastActiveTime();
-}
-
-void SessionRestoreDelegate::RestoredTab::StartTrackingWebContentsLifetime() {
-  if (tracker_) {
-    return;
-  }
-  tracker_ = base::MakeRefCounted<WebContentsTracker>(contents_);
-}
-
-void SessionRestoreDelegate::RestoredTab::StopTrackingWebContentsLifetime() {
-  tracker_ = nullptr;
+  return contents_->GetLastActiveTimeTicks() >
+         right.contents_->GetLastActiveTimeTicks();
 }
 
 // static
@@ -100,6 +96,7 @@ void SessionRestoreDelegate::RestoreTabs(
   // to memory pressure so it's best to have some visual indication of its
   // contents.
   for (const auto& restored_tab : tabs) {
+    CHECK(restored_tab.contents());
     // Restore the favicon for deferred tabs.
     favicon::ContentFaviconDriver* favicon_driver =
         favicon::ContentFaviconDriver::FromWebContents(restored_tab.contents());
@@ -124,18 +121,11 @@ void SessionRestoreDelegate::RestoreTabs(
   } else {
     std::vector<content::WebContents*> web_contents_vector;
     web_contents_vector.reserve(tabs.size());
-    for (auto tab : tabs)
+    for (auto tab : tabs) {
+      CHECK(tab.contents());
       web_contents_vector.push_back(tab.contents());
+    }
     performance_manager::policies::ScheduleLoadForRestoredTabs(
         std::move(web_contents_vector));
   }
-}
-
-SessionRestoreDelegate::WebContentsTracker::WebContentsTracker(
-    content::WebContents* web_contents)
-    : WebContentsObserver(web_contents) {}
-
-void SessionRestoreDelegate::WebContentsTracker::WebContentsDestroyed() {
-  // TODO(https://crbug.com/1482502): remove once crash understood.
-  DUMP_WILL_BE_CHECK(false);
 }

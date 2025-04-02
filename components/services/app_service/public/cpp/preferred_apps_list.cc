@@ -4,11 +4,11 @@
 
 #include "components/services/app_service/public/cpp/preferred_apps_list.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/containers/contains.h"
 #include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "components/services/app_service/public/cpp/intent_filter_util.h"
 #include "components/services/app_service/public/cpp/intent_util.h"
@@ -172,12 +172,12 @@ void PreferredAppsList::ApplyBulkUpdate(apps::PreferredAppChangesPtr changes) {
     }
 
     bool has_supported_link =
-        base::ranges::any_of(filters, [&app_id](const auto& filter) {
+        std::ranges::any_of(filters, [&app_id](const auto& filter) {
           return apps_util::IsSupportedLinkForApp(app_id, filter);
         });
 
     // Notify observers if any of the removed filters were supported links.
-    // TODO(crbug.com/1250153): Notify observers about all changes, not just
+    // TODO(crbug.com/40791690): Notify observers about all changes, not just
     // changes to supported links status.
     if (has_supported_link) {
       for (auto& obs : observers_) {

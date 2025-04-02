@@ -66,19 +66,6 @@ constexpr char kHTMLTable[] = R"HTML(
     <p id="after">After table.</p>
     )HTML";
 
-constexpr char kAOM[] = R"HTML(
-    <p id="before">Before virtual AOM node.</p>
-    <div id="aomParent"></div>
-    <p id="after">After virtual AOM node.</p>
-    <script>
-      let parent = document.getElementById("aomParent");
-      let node = MakeGarbageCollected<AccessibleNode>();
-      node.role = "button";
-      node.label = "Button";
-      parent.accessibleNode.appendChild(node);
-    </script>
-    )HTML";
-
 constexpr char kMap[] = R"HTML(
     <br id="br">
     <map id="map">
@@ -867,7 +854,7 @@ TEST_F(AccessibilityTest, PositionInHTMLLabel) {
 
   const AXObject* ax_label = GetAXObjectByElementId("label");
   ASSERT_NE(nullptr, ax_label);
-  ASSERT_FALSE(ax_label->AccessibilityIsIgnored());
+  ASSERT_FALSE(ax_label->IsIgnored());
   const AXObject* ax_label_text = ax_label->FirstChildIncludingIgnored();
   ASSERT_NE(nullptr, ax_label_text);
   ASSERT_EQ(ax::mojom::Role::kStaticText, ax_label_text->RoleValue());
@@ -942,10 +929,10 @@ TEST_F(AccessibilityTest, PositionInHTMLLabelIgnored) {
   // The HTML label element should be ignored.
   const AXObject* ax_label = GetAXObjectByElementId("label");
   ASSERT_NE(nullptr, ax_label);
-  ASSERT_TRUE(ax_label->AccessibilityIsIgnored());
+  ASSERT_TRUE(ax_label->IsIgnored());
   const AXObject* ax_label_text = ax_label->FirstChildIncludingIgnored();
   ASSERT_NE(nullptr, ax_label_text);
-  ASSERT_TRUE(ax_label_text->AccessibilityIsIgnored());
+  ASSERT_TRUE(ax_label_text->IsIgnored());
   ASSERT_EQ(ax::mojom::Role::kStaticText, ax_label_text->RoleValue());
   const AXObject* ax_paragraph = GetAXObjectByElementId("paragraph");
   ASSERT_NE(nullptr, ax_paragraph);
@@ -1044,7 +1031,7 @@ TEST_F(AccessibilityTest, PositionInIgnoredObject) {
   const AXObject* ax_hidden = GetAXObjectByElementId("hidden");
   ASSERT_NE(nullptr, ax_hidden);
   ASSERT_EQ(ax::mojom::Role::kGenericContainer, ax_hidden->RoleValue());
-  ASSERT_TRUE(ax_hidden->AccessibilityIsIgnoredButIncludedInTree());
+  ASSERT_TRUE(ax_hidden->IsIgnoredButIncludedInTree());
 
   const AXObject* ax_visible = GetAXObjectByElementId("visible");
   ASSERT_NE(nullptr, ax_visible);
@@ -1133,7 +1120,7 @@ TEST_F(AccessibilityTest, BeforePositionInARIAHiddenShouldNotSkipARIAHidden) {
   ASSERT_EQ(ax::mojom::Role::kParagraph, ax_after->RoleValue());
   const AXObject* ax_hidden = GetAXObjectByElementId("ariaHidden");
   ASSERT_NE(nullptr, ax_hidden);
-  ASSERT_TRUE(ax_hidden->AccessibilityIsIgnored());
+  ASSERT_TRUE(ax_hidden->IsIgnored());
 
   const auto ax_position = AXPosition::CreatePositionAfterObject(*ax_before);
   const auto position = ax_position.ToPositionWithAffinity();
@@ -1166,7 +1153,7 @@ TEST_F(AccessibilityTest,
   ASSERT_NE(nullptr, ax_after);
   ASSERT_EQ(ax::mojom::Role::kParagraph, ax_after->RoleValue());
   ASSERT_NE(nullptr, GetAXObjectByElementId("ariaHidden"));
-  ASSERT_TRUE(GetAXObjectByElementId("ariaHidden")->AccessibilityIsIgnored());
+  ASSERT_TRUE(GetAXObjectByElementId("ariaHidden")->IsIgnored());
 
   const auto ax_position = AXPosition::CreatePositionBeforeObject(*ax_after);
   const auto position = ax_position.ToPositionWithAffinity();
@@ -1217,7 +1204,7 @@ TEST_F(AccessibilityTest, FromPositionInARIAHidden) {
   ASSERT_EQ(ax::mojom::Role::kParagraph, ax_after->RoleValue());
   const AXObject* ax_hidden = GetAXObjectByElementId("ariaHidden");
   ASSERT_NE(nullptr, ax_hidden);
-  ASSERT_TRUE(ax_hidden->AccessibilityIsIgnored());
+  ASSERT_TRUE(ax_hidden->IsIgnored());
 
   const auto position_first = Position::FirstPositionInNode(*hidden);
   // Since "ax_hidden" has a static text child, the AXPosition should move to an
@@ -1520,7 +1507,7 @@ TEST_F(AccessibilityTest, DISABLED_PositionInCSSContent) {
 
   const AXObject* ax_quote = GetAXObjectByElementId("quote");
   ASSERT_NE(nullptr, ax_quote);
-  ASSERT_TRUE(ax_quote->AccessibilityIsIgnored());
+  ASSERT_TRUE(ax_quote->IsIgnored());
   const AXObject* ax_quote_parent = ax_quote->ParentObjectUnignored();
   ASSERT_NE(nullptr, ax_quote_parent);
   ASSERT_EQ(4, ax_quote_parent->UnignoredChildCount());
@@ -1725,7 +1712,6 @@ TEST_F(AccessibilityTest, DISABLED_PositionInTableWithCSSContent) {
 //
 // Objects deriving from |AXMockObject|, e.g. table columns, are in the
 // accessibility tree but are neither in the DOM or layout trees.
-// Same for virtual nodes created using the Accessibility Object Model (AOM).
 //
 
 TEST_F(AccessibilityTest, PositionBeforeAndAfterTable) {
@@ -1905,51 +1891,6 @@ TEST_F(AccessibilityTest, PositionInTableRow) {
       AXPosition::FromPosition(position_after);
   EXPECT_EQ(ax_position_after, ax_position_after_from_dom);
   EXPECT_EQ(nullptr, ax_position_after_from_dom.ChildAfterTreePosition());
-}
-
-TEST_F(AccessibilityTest, DISABLED_PositionInVirtualAOMNode) {
-  ScopedAccessibilityObjectModelForTest(true);
-  SetBodyInnerHTML(kAOM);
-
-  const Node* parent = GetElementById("aomParent");
-  ASSERT_NE(nullptr, parent);
-  const Node* after = GetElementById("after");
-  ASSERT_NE(nullptr, after);
-
-  const AXObject* ax_parent = GetAXObjectByElementId("aomParent");
-  ASSERT_NE(nullptr, ax_parent);
-  ASSERT_EQ(ax::mojom::Role::kGenericContainer, ax_parent->RoleValue());
-  ASSERT_EQ(1, ax_parent->ChildCountIncludingIgnored());
-  const AXObject* ax_button = ax_parent->FirstChildIncludingIgnored();
-  ASSERT_NE(nullptr, ax_button);
-  ASSERT_EQ(ax::mojom::Role::kButton, ax_button->RoleValue());
-  const AXObject* ax_after = GetAXObjectByElementId("after");
-  ASSERT_NE(nullptr, ax_after);
-  ASSERT_EQ(ax::mojom::Role::kParagraph, ax_after->RoleValue());
-
-  const auto ax_position_before =
-      AXPosition::CreatePositionBeforeObject(*ax_button);
-  const auto position_before = ax_position_before.ToPositionWithAffinity();
-  EXPECT_EQ(parent, position_before.AnchorNode());
-  EXPECT_TRUE(position_before.GetPosition().IsBeforeChildren());
-  EXPECT_EQ(nullptr, position_before.GetPosition().ComputeNodeAfterPosition());
-
-  const auto ax_position_before_from_dom =
-      AXPosition::FromPosition(position_before);
-  EXPECT_EQ(ax_position_before, ax_position_before_from_dom);
-  EXPECT_EQ(ax_button, ax_position_before_from_dom.ChildAfterTreePosition());
-
-  const auto ax_position_after =
-      AXPosition::CreatePositionAfterObject(*ax_button);
-  const auto position_after = ax_position_after.ToPositionWithAffinity();
-  EXPECT_EQ(after, position_after.AnchorNode());
-  EXPECT_TRUE(position_after.GetPosition().IsBeforeChildren());
-  EXPECT_EQ(nullptr, position_after.GetPosition().ComputeNodeAfterPosition());
-
-  const auto ax_position_after_from_dom =
-      AXPosition::FromPosition(position_after);
-  EXPECT_EQ(ax_position_after, ax_position_after_from_dom);
-  EXPECT_EQ(ax_after, ax_position_after_from_dom.ChildAfterTreePosition());
 }
 
 TEST_F(AccessibilityTest, PositionInInvalidMapLayout) {

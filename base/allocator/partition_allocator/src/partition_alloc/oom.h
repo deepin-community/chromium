@@ -2,17 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_OOM_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_OOM_H_
+#ifndef PARTITION_ALLOC_OOM_H_
+#define PARTITION_ALLOC_OOM_H_
 
 #include <cstddef>
 
-#include "build/build_config.h"
 #include "partition_alloc/allocation_guard.h"
+#include "partition_alloc/build_config.h"
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_base/component_export.h"
 
-#if BUILDFLAG(IS_WIN)
+#if PA_BUILDFLAG(IS_WIN)
 #include "partition_alloc/partition_alloc_base/win/windows_types.h"
 #endif
 
@@ -22,15 +22,15 @@ namespace partition_alloc {
 // |size| is the size of the failed allocation, or 0 if not known.
 // Crash reporting classifies such crashes as OOM.
 // Must be allocation-safe.
-PA_COMPONENT_EXPORT(PARTITION_ALLOC)
-void TerminateBecauseOutOfMemory(size_t size);
+[[noreturn]] PA_NOT_TAIL_CALLED PA_COMPONENT_EXPORT(
+    PARTITION_ALLOC) void TerminateBecauseOutOfMemory(size_t size);
 
 // Records the size of the allocation that caused the current OOM crash, for
 // consumption by Breakpad.
 // TODO: this can be removed when Breakpad is no longer supported.
 PA_COMPONENT_EXPORT(PARTITION_ALLOC) extern size_t g_oom_size;
 
-#if BUILDFLAG(IS_WIN)
+#if PA_BUILDFLAG(IS_WIN)
 namespace win {
 
 // Custom Windows exception code chosen to indicate an out of memory error.
@@ -67,4 +67,4 @@ namespace internal {
 
 }  // namespace partition_alloc
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_OOM_H_
+#endif  // PARTITION_ALLOC_OOM_H_

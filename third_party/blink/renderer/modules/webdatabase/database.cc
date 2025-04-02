@@ -40,7 +40,6 @@
 #include "third_party/blink/renderer/modules/webdatabase/change_version_wrapper.h"
 #include "third_party/blink/renderer/modules/webdatabase/database_authorizer.h"
 #include "third_party/blink/renderer/modules/webdatabase/database_context.h"
-#include "third_party/blink/renderer/modules/webdatabase/database_manager.h"
 #include "third_party/blink/renderer/modules/webdatabase/database_task.h"
 #include "third_party/blink/renderer/modules/webdatabase/database_thread.h"
 #include "third_party/blink/renderer/modules/webdatabase/database_tracker.h"
@@ -265,8 +264,8 @@ Database::Database(DatabaseContext* database_context,
     guid_ = cache.RegisterOriginAndName(GetSecurityOrigin()->ToString(), name);
   }
 
-  filename_ = DatabaseManager::Manager().FullPathForDatabase(
-      GetSecurityOrigin(), name_);
+  filename_ = DatabaseTracker::Tracker().FullPathForDatabase(
+      GetSecurityOrigin(), name_, /*create_if_does_not_exist=*/true);
 
   database_thread_security_origin_ =
       context_thread_security_origin_->IsolatedCopy();
@@ -418,11 +417,6 @@ SQLTransactionClient* Database::TransactionClient() const {
 
 SQLTransactionCoordinator* Database::TransactionCoordinator() const {
   return GetDatabaseContext()->GetDatabaseThread()->TransactionCoordinator();
-}
-
-// static
-const char* Database::DatabaseInfoTableName() {
-  return kInfoTableName;
 }
 
 void Database::CloseDatabase() {
@@ -869,49 +863,6 @@ void Database::ScheduleTransactionCallback(SQLTransaction* transaction) {
       *GetDatabaseTaskRunner(), FROM_HERE,
       CrossThreadBindOnce(&SQLTransaction::PerformPendingCallback,
                           WrapCrossThreadPersistent(transaction)));
-}
-
-Vector<String> Database::PerformGetTableNames() {
-  DisableAuthorizer();
-
-  SQLiteStatement statement(
-      SqliteDatabase(), "SELECT name FROM sqlite_master WHERE type='table';");
-  if (statement.Prepare() != kSQLResultOk) {
-    DLOG(ERROR) << "Unable to retrieve list of tables for database "
-                << DatabaseDebugName();
-    EnableAuthorizer();
-    return Vector<String>();
-  }
-
-  Vector<String> table_names;
-  int result;
-  while ((result = statement.Step()) == kSQLResultRow) {
-    String name = statement.GetColumnText(0);
-    if (name != DatabaseInfoTableName())
-      table_names.push_back(name);
-  }
-
-  EnableAuthorizer();
-
-  if (result != kSQLResultDone) {
-    DLOG(ERROR) << "Error getting tables for database " << DatabaseDebugName();
-    return Vector<String>();
-  }
-
-  return table_names;
-}
-
-Vector<String> Database::TableNames() {
-  Vector<String> result;
-  base::WaitableEvent event;
-  if (!GetDatabaseContext()->DatabaseThreadAvailable())
-    return result;
-
-  auto task = std::make_unique<DatabaseTableNamesTask>(this, &event, result);
-  GetDatabaseContext()->GetDatabaseThread()->ScheduleTask(std::move(task));
-  event.Wait();
-
-  return result;
 }
 
 const SecurityOrigin* Database::GetSecurityOrigin() const {

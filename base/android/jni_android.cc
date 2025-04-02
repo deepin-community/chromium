@@ -11,14 +11,19 @@
 #include "base/android/jni_string.h"
 #include "base/android/jni_utils.h"
 #include "base/android_runtime_jni_headers/Throwable_jni.h"
-#include "base/base_jni/JniAndroid_jni.h"
 #include "base/debug/debugging_buildflags.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
+#include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "build/robolectric_buildflags.h"
-#include "third_party/abseil-cpp/absl/base/attributes.h"
 #include "third_party/jni_zero/jni_zero.h"
+
+#if BUILDFLAG(IS_ROBOLECTRIC)
+#include "base/base_robolectric_jni/JniAndroid_jni.h"  // nogncheck
+#else
+#include "base/base_jni/JniAndroid_jni.h"
+#endif
 
 namespace base {
 namespace android {
@@ -28,7 +33,7 @@ namespace {
 // uncaught Java exception (historical behavior). If enabled, we give the Java
 // uncaught exception handler a chance to handle the exception first, so that
 // the crash is (hopefully) seen as a Java crash, not a native crash.
-// TODO(https://crbug.com/1426888): remove this switch once we are confident the
+// TODO(crbug.com/40261529): remove this switch once we are confident the
 // new behavior is fine.
 BASE_FEATURE(kHandleExceptionsInJava,
              "HandleJniExceptionsInJava",
@@ -45,9 +50,11 @@ jmethodID g_class_loader_load_class_method_id = nullptr;
 jclass GetClassFromSplit(JNIEnv* env,
                          const char* class_name,
                          const char* split_name) {
+  DCHECK(IsStringASCII(class_name));
+  ScopedJavaLocalRef<jstring> j_class_name(env, env->NewStringUTF(class_name));
   return static_cast<jclass>(env->CallObjectMethod(
       GetSplitClassLoader(env, split_name), g_class_loader_load_class_method_id,
-      ConvertUTF8ToJavaString(env, class_name).obj()));
+      j_class_name.obj()));
 }
 
 // Must be called before using GetClassFromSplit - we need to set the global,
@@ -104,7 +111,6 @@ void InitVM(JavaVM* vm) {
       env->NewGlobalRef(env->FindClass("java/lang/OutOfMemoryError")));
   DCHECK(g_out_of_memory_error_class);
 }
-
 
 void CheckException(JNIEnv* env) {
   if (!jni_zero::HasException(env)) {
@@ -197,8 +203,7 @@ void CheckException(JNIEnv* env) {
   LOG(ERROR) << "Native stack trace:" << std::endl << native_stack_trace;
 
   ScopedJavaLocalRef<jthrowable> secondary_exception =
-      Java_JniAndroid_handleException(
-          env, throwable, ConvertUTF8ToJavaString(env, native_stack_trace));
+      Java_JniAndroid_handleException(env, throwable, native_stack_trace);
 
   // Ideally handleException() should have terminated the process and we should
   // not get here. This can happen in the case of OutOfMemoryError or if the
@@ -220,11 +225,11 @@ void CheckException(JNIEnv* env) {
 
 std::string GetJavaExceptionInfo(JNIEnv* env,
                                  const JavaRef<jthrowable>& throwable) {
-  ScopedJavaLocalRef<jstring> sanitized_exception_string =
+  std::string sanitized_exception_string =
       Java_JniAndroid_sanitizedStacktraceForUnhandledException(env, throwable);
   // Returns null when PiiElider results in an OutOfMemoryError.
-  return sanitized_exception_string
-             ? ConvertJavaStringToUTF8(sanitized_exception_string)
+  return !sanitized_exception_string.empty()
+             ? sanitized_exception_string
              : kOomInGetJavaExceptionInfoMessage;
 }
 

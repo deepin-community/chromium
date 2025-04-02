@@ -15,7 +15,6 @@
 #include "base/functional/callback_helpers.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/apps/link_capturing/intent_picker_info.h"
 #include "chrome/browser/lifetime/browser_close_manager.h"
 #include "chrome/browser/share/share_attempt.h"
@@ -26,16 +25,17 @@
 #include "chrome/browser/ui/exclusive_access/exclusive_access_bubble_type.h"
 #include "chrome/browser/ui/hats/hats_service.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
-#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
-#include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/translate/partial_translate_bubble_model.h"
+#include "chrome/browser/ui/user_education/browser_user_education_interface.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_entry_id.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
+#include "chrome/browser/ui/webui/tab_search/tab_search.mojom.h"
 #include "chrome/common/buildflags.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/translate/core/common/translate_errors.h"
-#include "components/user_education/common/feature_promo_controller.h"
-#include "components/user_education/common/feature_promo_specification.h"
 #include "ui/base/base_window.h"
 #include "ui/base/interaction/element_identifier.h"
+#include "ui/base/mojom/window_show_state.mojom-forward.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/native_widget_types.h"
 #include "url/origin.h"
@@ -45,6 +45,7 @@
 #endif
 
 class Browser;
+class BrowserView;
 class DownloadBubbleUIController;
 class DownloadShelf;
 class ExclusiveAccessContext;
@@ -91,10 +92,11 @@ namespace ui {
 class ColorProvider;
 class NativeTheme;
 class ThemeProvider;
-}
+}  // namespace ui
 
 namespace views {
 class Button;
+class WebView;
 }  // namespace views
 
 namespace web_modal {
@@ -131,9 +133,10 @@ enum class BrowserThemeChangeType {
 //
 // NOTE: All getters may return NULL.
 //
-class BrowserWindow : public ui::BaseWindow {
+class BrowserWindow : public ui::BaseWindow,
+                      public BrowserUserEducationInterface {
  public:
-  virtual ~BrowserWindow() {}
+  ~BrowserWindow() override = default;
 
   //////////////////////////////////////////////////////////////////////////////
   // ui::BaseWindow interface notes:
@@ -253,9 +256,6 @@ class BrowserWindow : public ui::BaseWindow {
   // Sets the starred state for the current tab.
   virtual void SetStarredState(bool is_starred) = 0;
 
-  // Sets whether the translate icon is lit for the current tab.
-  virtual void SetTranslateIconToggled(bool is_lit) = 0;
-
   // Called when the active tab changes.  Subclasses which implement
   // TabStripModelObserver should implement this instead of ActiveTabChanged();
   // the Browser will call this method while processing that one.
@@ -321,9 +321,16 @@ class BrowserWindow : public ui::BaseWindow {
   // Updates the toolbar with the state for the specified |contents|.
   virtual void UpdateToolbar(content::WebContents* contents) = 0;
 
+  // Updates the toolbar's visible security state. Returns true if the toolbar
+  // was redrawn.
+  virtual bool UpdateToolbarSecurityState() = 0;
+
   // Updates whether or not the custom tab bar is visible. Animates the
   // transition if |animate| is true.
   virtual void UpdateCustomTabBarVisibility(bool visible, bool animate) = 0;
+
+  // Updates the visibility of the scrim that covers the content area.
+  virtual void SetContentScrimVisibility(bool visible) = 0;
 
   // Resets the toolbar's tab state for |contents|.
   virtual void ResetToolbarTabState(content::WebContents* contents) = 0;
@@ -342,7 +349,7 @@ class BrowserWindow : public ui::BaseWindow {
 
   // Called when a link is opened in the window from a user gesture.
   // Link will be opened with |disposition|.
-  // TODO(crbug.com/1129028): see if this can't be piped through TabStripModel
+  // TODO(crbug.com/40719979): see if this can't be piped through TabStripModel
   // events instead.
   virtual void LinkOpeningFromGesture(WindowOpenDisposition disposition) = 0;
 
@@ -487,6 +494,9 @@ class BrowserWindow : public ui::BaseWindow {
   // can happen if the new download bubble UI is enabled.
   virtual DownloadShelf* GetDownloadShelf() = 0;
 
+  // Returns the TopContainerView.
+  virtual views::View* GetTopContainer() = 0;
+
   // Returns the DownloadBubbleUIController. Returns null if Download Bubble
   // UI is not enabled, or if the download toolbar button does not exist.
   virtual DownloadBubbleUIController* GetDownloadBubbleUIController() = 0;
@@ -509,15 +519,12 @@ class BrowserWindow : public ui::BaseWindow {
   // Allows the BrowserWindow object to handle the specified keyboard event
   // before sending it to the renderer.
   virtual content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
-      const content::NativeWebKeyboardEvent& event) = 0;
+      const input::NativeWebKeyboardEvent& event) = 0;
 
   // Allows the BrowserWindow object to handle the specified keyboard event,
   // if the renderer did not process it.
   virtual bool HandleKeyboardEvent(
-      const content::NativeWebKeyboardEvent& event) = 0;
-
-  // Clipboard commands applied to the whole browser window.
-  virtual void CutCopyPaste(int command_id) = 0;
+      const input::NativeWebKeyboardEvent& event) = 0;
 
   // Construct a FindBar implementation for the |browser|.
   virtual std::unique_ptr<FindBar> CreateFindBar() = 0;
@@ -540,14 +547,31 @@ class BrowserWindow : public ui::BaseWindow {
   // customization bubble is shown, the IPH should be shown after.
   virtual void MaybeShowProfileSwitchIPH() = 0;
 
+  // Attempts showing the In-Product-Help for supervised user profiles.
+  // This should be invoked for new signed-in supervised profiles created
+  // by FRE, the profile picker, profile menu or chrome menu.
+  // If the profile customization bubble is shown, the IPH should be shown
+  // after.
+  // TODO(351333491): To specify if this will be invoked on signing-in/turning
+  // on sync for an existing profile.
+  virtual void MaybeShowSupervisedUserProfileSignInIPH() = 0;
+
   // Shows User Happiness Tracking Survey's dialog after the survey associated
   // with |site_id| has been successfully loaded. Failure to load the survey
   // will result in the dialog not being shown. |product_specific_bits_data| and
   // |product_specific_string_data| should contain key-value pairs where the
   // keys match the field names set for the survey in hats_service.cc, and the
   // values are those which will be associated with the survey response.
+  // The parameters |hats_histogram_name| and |hats_survey_ukm_id| allows HaTS
+  // to log to UMA and UKM, respectively. These values are are populated in
+  // chrome/browser/ui/hats/survey_config.cc and can be configured in finch.
+  // Surveys that opt-in to UMA and UKM will need to have surveys reviewed by
+  // privacy to ensure they are appropriate to log to UMA and/or UKM. This is
+  // enforced through the OWNERS mechanism.
   virtual void ShowHatsDialog(
       const std::string& site_id,
+      const std::optional<std::string>& hats_histogram_name,
+      const std::optional<uint64_t> hats_survey_ukm_id,
       base::OnceClosure success_callback,
       base::OnceClosure failure_callback,
       const SurveyBitsData& product_specific_bits_data,
@@ -573,88 +597,18 @@ class BrowserWindow : public ui::BaseWindow {
   virtual void ShowCaretBrowsingDialog() = 0;
 
   // Create and open the tab search bubble. Optionally force it to open to the
-  // given tab index.
-  virtual void CreateTabSearchBubble(int tab_index) = 0;
+  // given section and organization feature.
+  virtual void CreateTabSearchBubble(
+      tab_search::mojom::TabSearchSection section,
+      tab_search::mojom::TabOrganizationFeature organization_feature) = 0;
+  void CreateTabSearchBubble(tab_search::mojom::TabSearchSection section =
+                                 tab_search::mojom::TabSearchSection::kSearch) {
+    CreateTabSearchBubble(section,
+                          tab_search::mojom::TabOrganizationFeature::kNone);
+  }
+
   // Closes the tab search bubble if open for the given browser instance.
   virtual void CloseTabSearchBubble() = 0;
-
-  // Gets the windows's FeaturePromoController which manages display of
-  // in-product help. Will return null in incognito and guest profiles.
-  virtual user_education::FeaturePromoController*
-  GetFeaturePromoController() = 0;
-
-  // Returns whether the promo associated with `iph_feature` is running.
-  //
-  // Includes promos with visible bubbles and those which have been continued
-  // with CloseFeaturePromoAndContinue() and are still running in the
-  // background.
-  virtual bool IsFeaturePromoActive(const base::Feature& iph_feature) const = 0;
-
-  // Returns whether `MaybeShowFeaturePromo()` would succeed if called now.
-  //
-  // USAGE NOTE: Only call this method if figuring out whether to try to show an
-  // IPH would involve significant expense. This method may itself have
-  // non-trivial cost.
-  virtual user_education::FeaturePromoResult CanShowFeaturePromo(
-      const base::Feature& iph_feature) const = 0;
-
-  // Maybe shows an in-product help promo. Returns true if the promo is shown.
-  // In cases where there is no promo controller, immediately returns false.
-  //
-  // If this feature promo is likely to be shown at browser startup, prefer
-  // calling `MaybeShowStartupFeaturePromo()` instead.
-  //
-  // If determining whether to call this method would involve significant
-  // expense, you *may* first call `CanShowFeaturePromo()` before doing the
-  // required computation; otherwise just call this method.
-  virtual user_education::FeaturePromoResult MaybeShowFeaturePromo(
-      user_education::FeaturePromoParams params) = 0;
-
-  // Maybe shows an in-product help promo at startup, whenever the Feature
-  // Engagement system is fully initialized. If the promo cannot be queued for
-  // whatever reason, fails and returns false. The promo may still not run if it
-  // is excluded for other reasons (e.g. another promo starts first; its Feature
-  // Engagement conditions are not satisfied).
-  //
-  // On success, when the FE system is initialized (which might be immediately),
-  // `promo_callback` is called with the result of whether the promo was
-  // actually shown. Since `promo_callback` could be called any time, make sure
-  // that you will not experience any race conditions or UAFs if the calling
-  // object goes out of scope.
-  //
-  // If your promo is not likely to be shown at browser startup, prefer using
-  // MaybeShowFeaturePromo() - which always runs synchronously - instead.
-  virtual bool MaybeShowStartupFeaturePromo(
-      user_education::FeaturePromoParams params) = 0;
-
-  // Closes the in-product help promo for `iph_feature` if it is showing or
-  // cancels a pending startup promo; returns true if a promo bubble was
-  // actually closed.
-  virtual bool CloseFeaturePromo(
-      const base::Feature& iph_feature,
-      user_education::EndFeaturePromoReason end_promo_reason =
-          user_education::EndFeaturePromoReason::kFeatureEngaged) = 0;
-
-  // Closes the bubble for a feature promo but continues the promo; returns a
-  // handle that can be used to end the promo when it is destructed. The handle
-  // will be valid (i.e. have a true boolean value) if the promo was showing,
-  // invalid otherwise.
-  virtual user_education::FeaturePromoHandle CloseFeaturePromoAndContinue(
-      const base::Feature& iph_feature) = 0;
-
-  // Records that the user has engaged with a particular feature that has an
-  // associated promo; this information is used to determine whether to show
-  // specific promos in the future.
-  //
-  // If `event_name` corresponds to the "used" event for an IPH, prefer using
-  // `NotifyFeaturePromoFeatureUsed()` for clarity instead.
-  virtual void NotifyFeatureEngagementEvent(const char* event_name) = 0;
-
-  // Records that the user has engaged the specific feature associated with
-  // the promo `iph_feature`; this information is used to determine whether to
-  // show the promo in the future. Prefer this to
-  // `NotifyFeatureEngagementEvent()` where possible.
-  virtual void NotifyPromoFeatureUsed(const base::Feature& iph_feature) = 0;
 
   // Shows an Incognito clear browsing data dialog.
   virtual void ShowIncognitoClearBrowsingDataDialog() = 0;
@@ -675,10 +629,18 @@ class BrowserWindow : public ui::BaseWindow {
   // "native" resizability.
   virtual bool GetCanResize() = 0;
 
-  virtual ui::WindowShowState GetWindowShowState() const = 0;
+  virtual ui::mojom::WindowShowState GetWindowShowState() const = 0;
 
   // Shows the Chrome Labs bubble if enabled.
   virtual void ShowChromeLabs() = 0;
+
+  // Returns the WebView backing the tab-contents area of the BrowserWindow.
+  virtual views::WebView* GetContentsWebView() = 0;
+
+  // In production code BrowserView is the only subclass for BrowserWindow. The
+  // fact that this is not true in some tests is a problem with the tests. See
+  // https://crbug.com/360163254.
+  virtual BrowserView* AsBrowserView() = 0;
 
  protected:
   friend class BrowserCloseManager;

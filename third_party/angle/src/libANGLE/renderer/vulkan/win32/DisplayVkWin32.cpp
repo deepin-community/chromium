@@ -9,7 +9,7 @@
 
 #include "libANGLE/renderer/vulkan/win32/DisplayVkWin32.h"
 #include "libANGLE/renderer/vulkan/DisplayVk.h"
-#include "libANGLE/renderer/vulkan/RendererVk.h"
+#include "libANGLE/renderer/vulkan/vk_renderer.h"
 
 #include <windows.h>
 
@@ -164,7 +164,7 @@ void DisplayVkWin32::checkConfigSupport(egl::Config *config)
 
     for (const VkSurfaceFormatKHR &surfaceFormat : mSurfaceFormats)
     {
-        if (surfaceFormat.format == formatVk.getActualRenderableImageVkFormat())
+        if (surfaceFormat.format == formatVk.getActualRenderableImageVkFormat(this->getRenderer()))
         {
             return;
         }

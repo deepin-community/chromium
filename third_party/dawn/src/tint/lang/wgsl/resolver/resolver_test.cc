@@ -30,13 +30,12 @@
 #include <tuple>
 
 #include "gmock/gmock.h"
-#include "gtest/gtest-spi.h"
+#include "src/tint/lang/core/address_space.h"
 #include "src/tint/lang/core/builtin_value.h"
 #include "src/tint/lang/core/type/reference.h"
 #include "src/tint/lang/core/type/sampled_texture.h"
 #include "src/tint/lang/core/type/texture_dimension.h"
 #include "src/tint/lang/wgsl/ast/assignment_statement.h"
-#include "src/tint/lang/wgsl/ast/bitcast_expression.h"
 #include "src/tint/lang/wgsl/ast/break_statement.h"
 #include "src/tint/lang/wgsl/ast/builtin_texture_helper_test.h"
 #include "src/tint/lang/wgsl/ast/call_statement.h"
@@ -668,7 +667,7 @@ TEST_F(ResolverTest, Expr_Initializer_Type_Vec2) {
 
     ASSERT_NE(TypeOf(tc), nullptr);
     ASSERT_TRUE(TypeOf(tc)->Is<core::type::Vector>());
-    EXPECT_TRUE(TypeOf(tc)->As<core::type::Vector>()->type()->Is<core::type::F32>());
+    EXPECT_TRUE(TypeOf(tc)->As<core::type::Vector>()->Type()->Is<core::type::F32>());
     EXPECT_EQ(TypeOf(tc)->As<core::type::Vector>()->Width(), 2u);
 }
 
@@ -680,7 +679,7 @@ TEST_F(ResolverTest, Expr_Initializer_Type_Vec3) {
 
     ASSERT_NE(TypeOf(tc), nullptr);
     ASSERT_TRUE(TypeOf(tc)->Is<core::type::Vector>());
-    EXPECT_TRUE(TypeOf(tc)->As<core::type::Vector>()->type()->Is<core::type::F32>());
+    EXPECT_TRUE(TypeOf(tc)->As<core::type::Vector>()->Type()->Is<core::type::F32>());
     EXPECT_EQ(TypeOf(tc)->As<core::type::Vector>()->Width(), 3u);
 }
 
@@ -692,7 +691,7 @@ TEST_F(ResolverTest, Expr_Initializer_Type_Vec4) {
 
     ASSERT_NE(TypeOf(tc), nullptr);
     ASSERT_TRUE(TypeOf(tc)->Is<core::type::Vector>());
-    EXPECT_TRUE(TypeOf(tc)->As<core::type::Vector>()->type()->Is<core::type::F32>());
+    EXPECT_TRUE(TypeOf(tc)->As<core::type::Vector>()->Type()->Is<core::type::F32>());
     EXPECT_EQ(TypeOf(tc)->As<core::type::Vector>()->Width(), 4u);
 }
 
@@ -899,18 +898,6 @@ TEST_F(ResolverTest, Function_Parameters_Locations) {
     EXPECT_EQ(3u, func_sem->Parameters()[0]->Attributes().location);
     EXPECT_FALSE(func_sem->Parameters()[1]->Attributes().location.has_value());
     EXPECT_EQ(1u, func_sem->Parameters()[2]->Attributes().location);
-}
-
-TEST_F(ResolverTest, Function_GlobalVariable_Location) {
-    auto* var =
-        GlobalVar("my_vec", ty.vec4<f32>(), core::AddressSpace::kIn,
-                  Vector{Location(3_a), Disable(ast::DisabledValidation::kIgnoreAddressSpace)});
-
-    EXPECT_TRUE(r()->Resolve()) << r()->error();
-
-    auto* sem = Sem().Get<sem::GlobalVariable>(var);
-    ASSERT_NE(sem, nullptr);
-    EXPECT_EQ(3u, sem->Attributes().location);
 }
 
 TEST_F(ResolverTest, Function_RegisterInputOutputVariables) {
@@ -1301,7 +1288,7 @@ TEST_F(ResolverTest, Expr_MemberAccessor_VectorSwizzle) {
 
     ASSERT_NE(TypeOf(mem), nullptr);
     ASSERT_TRUE(TypeOf(mem)->Is<core::type::Vector>());
-    EXPECT_TRUE(TypeOf(mem)->As<core::type::Vector>()->type()->Is<core::type::F32>());
+    EXPECT_TRUE(TypeOf(mem)->As<core::type::Vector>()->Type()->Is<core::type::F32>());
     EXPECT_EQ(TypeOf(mem)->As<core::type::Vector>()->Width(), 4u);
     auto* sma = Sem().Get(mem)->As<sem::Swizzle>();
     ASSERT_NE(sma, nullptr);
@@ -1353,7 +1340,7 @@ TEST_F(ResolverTest, Expr_Accessor_MultiLevel) {
 
     ASSERT_NE(TypeOf(mem), nullptr);
     ASSERT_TRUE(TypeOf(mem)->Is<core::type::Vector>());
-    EXPECT_TRUE(TypeOf(mem)->As<core::type::Vector>()->type()->Is<core::type::F32>());
+    EXPECT_TRUE(TypeOf(mem)->As<core::type::Vector>()->Type()->Is<core::type::F32>());
     EXPECT_EQ(TypeOf(mem)->As<core::type::Vector>()->Width(), 2u);
     ASSERT_TRUE(Sem().Get(mem)->Is<sem::Swizzle>());
 }
@@ -1752,7 +1739,7 @@ TEST_P(Expr_Binary_Test_Invalid, All) {
     WrapInFunction(expr);
 
     ASSERT_FALSE(r()->Resolve());
-    EXPECT_THAT(r()->error(), HasSubstr("12:34 error: no matching overload for operator "));
+    EXPECT_THAT(r()->error(), HasSubstr("12:34 error: no matching overload for 'operator "));
 }
 INSTANTIATE_TEST_SUITE_P(ResolverTest,
                          Expr_Binary_Test_Invalid,
@@ -1796,7 +1783,7 @@ TEST_P(Expr_Binary_Test_Invalid_VectorMatrixMultiply, All) {
         ASSERT_TRUE(TypeOf(expr) == result_type);
     } else {
         ASSERT_FALSE(r()->Resolve());
-        EXPECT_THAT(r()->error(), HasSubstr("no matching overload for operator *"));
+        EXPECT_THAT(r()->error(), HasSubstr("no matching overload for 'operator *"));
     }
 }
 auto all_dimension_values = testing::Values(2u, 3u, 4u);
@@ -1834,7 +1821,7 @@ TEST_P(Expr_Binary_Test_Invalid_MatrixMatrixMultiply, All) {
         ASSERT_TRUE(TypeOf(expr) == result_type);
     } else {
         ASSERT_FALSE(r()->Resolve());
-        EXPECT_THAT(r()->error(), HasSubstr("12:34 error: no matching overload for operator * "));
+        EXPECT_THAT(r()->error(), HasSubstr("12:34 error: no matching overload for 'operator * "));
     }
 }
 INSTANTIATE_TEST_SUITE_P(ResolverTest,
@@ -1865,11 +1852,11 @@ TEST_P(UnaryOpExpressionTest, Expr_UnaryOp) {
     ASSERT_NE(TypeOf(der), nullptr);
     ASSERT_TRUE(TypeOf(der)->Is<core::type::Vector>());
     if (op == core::UnaryOp::kNot) {
-        EXPECT_TRUE(TypeOf(der)->As<core::type::Vector>()->type()->Is<core::type::Bool>());
+        EXPECT_TRUE(TypeOf(der)->As<core::type::Vector>()->Type()->Is<core::type::Bool>());
     } else if (op == core::UnaryOp::kNegation || op == core::UnaryOp::kComplement) {
-        EXPECT_TRUE(TypeOf(der)->As<core::type::Vector>()->type()->Is<core::type::I32>());
+        EXPECT_TRUE(TypeOf(der)->As<core::type::Vector>()->Type()->Is<core::type::I32>());
     } else {
-        EXPECT_TRUE(TypeOf(der)->As<core::type::Vector>()->type()->Is<core::type::F32>());
+        EXPECT_TRUE(TypeOf(der)->As<core::type::Vector>()->Type()->Is<core::type::F32>());
     }
     EXPECT_EQ(TypeOf(der)->As<core::type::Vector>()->Width(), 4u);
 }
@@ -2087,8 +2074,8 @@ TEST_F(ResolverTest, ASTNodesAreReached) {
     ASSERT_TRUE(r()->Resolve()) << r()->error();
 }
 
-TEST_F(ResolverTest, ASTNodeNotReached) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(ResolverDeathTest, ASTNodeNotReached) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             ProgramBuilder b;
             b.Ident("ident");
@@ -2098,8 +2085,8 @@ TEST_F(ResolverTest, ASTNodeNotReached) {
         "resolver");
 }
 
-TEST_F(ResolverTest, ASTNodeReachedTwice) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(ResolverDeathTest, ASTNodeReachedTwice) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             ProgramBuilder b;
             auto* expr = b.Expr(1_i);
@@ -2118,7 +2105,7 @@ TEST_F(ResolverTest, UnaryOp_Not) {
     WrapInFunction(der);
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_THAT(r()->error(), HasSubstr("error: no matching overload for operator ! (vec4<f32>)"));
+    EXPECT_THAT(r()->error(), HasSubstr("error: no matching overload for 'operator ! (vec4<f32>)"));
 }
 
 TEST_F(ResolverTest, UnaryOp_Complement) {
@@ -2128,7 +2115,7 @@ TEST_F(ResolverTest, UnaryOp_Complement) {
     WrapInFunction(der);
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_THAT(r()->error(), HasSubstr("error: no matching overload for operator ~ (vec4<f32>)"));
+    EXPECT_THAT(r()->error(), HasSubstr("error: no matching overload for 'operator ~ (vec4<f32>)"));
 }
 
 TEST_F(ResolverTest, UnaryOp_Negation) {
@@ -2138,7 +2125,7 @@ TEST_F(ResolverTest, UnaryOp_Negation) {
     WrapInFunction(der);
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_THAT(r()->error(), HasSubstr("error: no matching overload for operator - (u32)"));
+    EXPECT_THAT(r()->error(), HasSubstr("error: no matching overload for 'operator - (u32)"));
 }
 
 TEST_F(ResolverTest, TextureSampler_TextureSample) {
@@ -2340,27 +2327,13 @@ TEST_F(ResolverTest, TextureSampler_UnusedTextureSampleInFunctionPassedAsArgumen
     EXPECT_TRUE(r()->Resolve()) << r()->error();
 
     auto inner_pairs = Sem().Get(inner_func)->TextureSamplerPairs();
-    ASSERT_EQ(inner_pairs.Length(), 2u);
-    auto* inner_pair_texture = As<sem::Parameter>(inner_pairs[0].first);
-    ASSERT_NE(inner_pair_texture, nullptr);
-    EXPECT_EQ(inner_pair_texture->Index(), 1u);
-    auto* inner_pair_sampler = As<sem::Parameter>(inner_pairs[1].second);
-    ASSERT_NE(inner_pair_sampler, nullptr);
-    EXPECT_EQ(inner_pair_sampler->Index(), 2u);
+    ASSERT_EQ(inner_pairs.Length(), 0u);
 
     auto middle_pairs = Sem().Get(middle_func)->TextureSamplerPairs();
-    ASSERT_EQ(middle_pairs.Length(), 2u);
-    auto* middle_pair_texture = As<sem::Parameter>(middle_pairs[0].first);
-    ASSERT_NE(middle_pair_texture, nullptr);
-    EXPECT_EQ(middle_pair_texture->Index(), 2u);
-    auto* middle_pair_sampler = As<sem::Parameter>(middle_pairs[1].second);
-    ASSERT_NE(middle_pair_sampler, nullptr);
-    EXPECT_EQ(middle_pair_sampler->Index(), 1u);
+    ASSERT_EQ(middle_pairs.Length(), 0u);
 
     auto outer_pairs = Sem().Get(outer_func)->TextureSamplerPairs();
-    ASSERT_EQ(outer_pairs.Length(), 2u);
-    EXPECT_TRUE(outer_pairs[0].first != nullptr);
-    EXPECT_TRUE(outer_pairs[1].second != nullptr);
+    ASSERT_EQ(outer_pairs.Length(), 0u);
 }
 
 TEST_F(ResolverTest, TextureSampler_TextureDimensions) {
@@ -2420,7 +2393,7 @@ TEST_F(ResolverTest, TextureSampler_Bug1715) {  // crbug.com/tint/1715
          });
 
     ASSERT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "error: cannot take the address of var 's' in handle address space");
+    EXPECT_EQ(r()->error(), "error: pointer can not be formed to a sampler");
 }
 
 TEST_F(ResolverTest, ModuleDependencyOrderedDeclarations) {
@@ -2534,7 +2507,7 @@ TEST_F(ResolverTest, MaxNumStructMembers_Invalid) {
     }
     Structure(Source{{12, 34}}, "S", std::move(members));
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: struct 'S' has 16384 members, maximum is 16383");
+    EXPECT_EQ(r()->error(), "12:34 error: 'struct S' has 16384 members, maximum is 16383");
 }
 
 TEST_F(ResolverTest, MaxNumStructMembers_WithIgnoreStructMemberLimit_Valid) {
@@ -2575,7 +2548,7 @@ TEST_F(ResolverTest, MaxNestDepthOfCompositeType_Structs_Invalid) {
         s = Structure(source, "S" + std::to_string(i), Vector{Member("m", ty.Of(s))});
     }
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: struct 'S254' has nesting depth of 256, maximum is 255");
+    EXPECT_EQ(r()->error(), "12:34 error: 'struct S254' has nesting depth of 256, maximum is 255");
 }
 
 TEST_F(ResolverTest, MaxNestDepthOfCompositeType_StructsWithVector_Valid) {
@@ -2597,7 +2570,7 @@ TEST_F(ResolverTest, MaxNestDepthOfCompositeType_StructsWithVector_Invalid) {
         s = Structure(source, "S" + std::to_string(i), Vector{Member("m", ty.Of(s))});
     }
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: struct 'S253' has nesting depth of 256, maximum is 255");
+    EXPECT_EQ(r()->error(), "12:34 error: 'struct S253' has nesting depth of 256, maximum is 255");
 }
 
 TEST_F(ResolverTest, MaxNestDepthOfCompositeType_StructsWithMatrix_Valid) {
@@ -2619,7 +2592,7 @@ TEST_F(ResolverTest, MaxNestDepthOfCompositeType_StructsWithMatrix_Invalid) {
         s = Structure(source, "S" + std::to_string(i), Vector{Member("m", ty.Of(s))});
     }
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: struct 'S252' has nesting depth of 256, maximum is 255");
+    EXPECT_EQ(r()->error(), "12:34 error: 'struct S252' has nesting depth of 256, maximum is 255");
 }
 
 TEST_F(ResolverTest, MaxNestDepthOfCompositeType_Arrays_Valid) {
@@ -2715,7 +2688,7 @@ TEST_F(ResolverTest, MaxNestDepthOfCompositeType_StructsOfArray_Invalid) {
         s = Structure(source, "S" + std::to_string(i), Vector{Member("m", ty.Of(s))});
     }
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: struct 'S251' has nesting depth of 256, maximum is 255");
+    EXPECT_EQ(r()->error(), "12:34 error: 'struct S251' has nesting depth of 256, maximum is 255");
 }
 
 TEST_F(ResolverTest, MaxNestDepthOfCompositeType_ArraysOfStruct_Valid) {
@@ -2742,6 +2715,124 @@ TEST_F(ResolverTest, MaxNestDepthOfCompositeType_ArraysOfStruct_Invalid) {
     Alias("a", a);
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(), "12:34 error: array has nesting depth of 256, maximum is 255");
+}
+
+TEST_F(ResolverTest, PointerToHandleTextureParameter) {
+    Func("helper",
+         Vector{
+             Param("sl", ty.ptr<function>(
+                             Source{{12, 34}},
+                             ty.sampled_texture(core::type::TextureDimension::k1d, ty.f32()))),
+         },
+         ty.void_(), {});
+
+    EXPECT_FALSE(r()->Resolve());
+    EXPECT_EQ(r()->error(), "12:34 error: pointer can not be formed to a texture");
+}
+
+TEST_F(ResolverTest, PointerToHandleTextureReturn) {
+    Func("helper", {},
+         ty.ptr<function>(Source{{12, 34}},
+                          ty.sampled_texture(core::type::TextureDimension::k1d, ty.f32())),
+         {});
+
+    EXPECT_FALSE(r()->Resolve());
+    EXPECT_EQ(r()->error(), "12:34 error: pointer can not be formed to a texture");
+}
+
+TEST_F(ResolverTest, PointerToHandleSamplerParameter) {
+    Func("helper",
+         Vector{
+             Param("sl", ty.ptr<function>(Source{{12, 34}},
+                                          ty.sampler(core::type::SamplerKind::kSampler))),
+         },
+         ty.void_(), {});
+
+    EXPECT_FALSE(r()->Resolve());
+    EXPECT_EQ(r()->error(), "12:34 error: pointer can not be formed to a sampler");
+}
+
+TEST_F(ResolverTest, PointerToHandleTextureParameterAlias) {
+    auto* my_ty = Alias(
+        "MyTy", ty.ptr<private_>(Source{{12, 34}},
+                                 ty.sampled_texture(core::type::TextureDimension::k1d, ty.f32())));
+    Func("helper",
+         Vector{
+             Param("sl", ty.Of(my_ty)),
+         },
+         ty.void_(), {});
+
+    EXPECT_FALSE(r()->Resolve());
+    EXPECT_EQ(r()->error(), "12:34 error: pointer can not be formed to a texture");
+}
+
+TEST_F(ResolverTest, PointerToHandleSamplerParameterAlias) {
+    auto* my_ty = Alias(
+        "MyTy", ty.ptr<private_>(Source{{12, 34}}, ty.sampler(core::type::SamplerKind::kSampler)));
+    Func("helper",
+         Vector{
+             Param("sl", ty.Of(my_ty)),
+         },
+         ty.void_(), {});
+
+    EXPECT_FALSE(r()->Resolve());
+    EXPECT_EQ(r()->error(), "12:34 error: pointer can not be formed to a sampler");
+}
+
+TEST_F(ResolverTest, PointerToHandleTextureVar) {
+    GlobalVar("s",
+              ty.ptr<private_>(Source{{12, 34}},
+                               ty.sampled_texture(core::type::TextureDimension::k1d, ty.f32())),
+              core::AddressSpace::kPrivate, Group(0_a), Binding(0_a));
+
+    EXPECT_FALSE(r()->Resolve());
+    EXPECT_EQ(r()->error(), "12:34 error: pointer can not be formed to a texture");
+}
+
+TEST_F(ResolverTest, PointerToHandleSamplerVar) {
+    GlobalVar("s",
+              ty.ptr<private_>(Source{{12, 34}}, ty.sampler(core::type::SamplerKind::kSampler)),
+              Group(0_a), core::AddressSpace::kPrivate, Binding(0_a));
+
+    EXPECT_FALSE(r()->Resolve());
+    EXPECT_EQ(r()->error(), "12:34 error: pointer can not be formed to a sampler");
+}
+
+TEST_F(ResolverTest, PointerToHandleTextureVarAlias) {
+    auto* my_ty = Alias(
+        "MyTy", ty.ptr<private_>(Source{{12, 34}},
+                                 ty.sampled_texture(core::type::TextureDimension::k1d, ty.f32())));
+    GlobalVar("s", ty.Of(my_ty), core::AddressSpace::kPrivate, Group(0_a), Binding(0_a));
+
+    EXPECT_FALSE(r()->Resolve());
+    EXPECT_EQ(r()->error(), "12:34 error: pointer can not be formed to a texture");
+}
+
+TEST_F(ResolverTest, PointerToHandleSamplerVarAlias) {
+    auto* my_ty = Alias(
+        "MyTy", ty.ptr<private_>(Source{{12, 34}}, ty.sampler(core::type::SamplerKind::kSampler)));
+
+    GlobalVar("s", ty.Of(my_ty), Group(0_a), core::AddressSpace::kPrivate, Binding(0_a));
+
+    EXPECT_FALSE(r()->Resolve());
+    EXPECT_EQ(r()->error(), "12:34 error: pointer can not be formed to a sampler");
+}
+
+TEST_F(ResolverTest, PointerToHandleTextureAlias) {
+    Alias("MyTy",
+          ty.ptr<private_>(Source{{12, 34}},
+                           ty.sampled_texture(core::type::TextureDimension::k1d, ty.f32())));
+
+    EXPECT_FALSE(r()->Resolve());
+    EXPECT_EQ(r()->error(), "12:34 error: pointer can not be formed to a texture");
+}
+
+TEST_F(ResolverTest, PointerToHandleSamplerAlias) {
+    Alias("MyTy",
+          ty.ptr<private_>(Source{{12, 34}}, ty.sampler(core::type::SamplerKind::kSampler)));
+
+    EXPECT_FALSE(r()->Resolve());
+    EXPECT_EQ(r()->error(), "12:34 error: pointer can not be formed to a sampler");
 }
 
 }  // namespace

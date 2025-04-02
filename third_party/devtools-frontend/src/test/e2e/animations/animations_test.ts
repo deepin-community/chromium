@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 import {getBrowserAndPages, goToResource} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   navigateToSiteWithAnimation,
   waitForAnimationContent,
@@ -18,7 +17,7 @@ const runAnimationTest = async (animationFn: string) => {
   await waitForAnimationContent();
 };
 
-describe('The Animations Panel', async () => {
+describe('The Animations Panel', () => {
   it('Listens for animation in webpage', async () => {
     await waitForAnimationsPanelToLoad();
     await navigateToSiteWithAnimation();

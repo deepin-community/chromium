@@ -16,9 +16,9 @@
 #include "core/fpdfapi/parser/cpdf_document.h"
 #include "core/fpdfapi/parser/cpdf_object.h"
 #include "core/fpdfapi/parser/cpdf_stream.h"
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/fx_safe_types.h"
-#include "third_party/base/check.h"
-#include "third_party/base/notreached.h"
+#include "core/fxcrt/notreached.h"
 
 namespace {
 
@@ -120,11 +120,11 @@ bool CPDF_ShadingPattern::Validate() const {
       break;
     }
     default: {
-      NOTREACHED_NORETURN();
+      NOTREACHED();
     }
   }
 
-  uint32_t nNumColorSpaceComponents = m_pCS->CountComponents();
+  uint32_t nNumColorSpaceComponents = m_pCS->ComponentCount();
   switch (m_ShadingType) {
     case kFunctionBasedShading: {
       // Either one 2-to-N function or N 2-to-1 functions.
@@ -147,7 +147,7 @@ bool CPDF_ShadingPattern::Validate() const {
              ValidateFunctions(nNumColorSpaceComponents, 1, 1);
     }
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 
@@ -163,12 +163,12 @@ bool CPDF_ShadingPattern::ValidateFunctions(
     if (!function)
       return false;
 
-    if (function->CountInputs() != nExpectedNumInputs ||
-        function->CountOutputs() != nExpectedNumOutputs) {
+    if (function->InputCount() != nExpectedNumInputs ||
+        function->OutputCount() != nExpectedNumOutputs) {
       return false;
     }
 
-    nTotalOutputs += function->CountOutputs();
+    nTotalOutputs += function->OutputCount();
   }
 
   return nTotalOutputs.IsValid();

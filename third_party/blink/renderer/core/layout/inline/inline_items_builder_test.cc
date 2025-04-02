@@ -8,10 +8,10 @@
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_node_data.h"
 #include "third_party/blink/renderer/core/layout/layout_inline.h"
-#include "third_party/blink/renderer/core/layout/layout_ruby_column.h"
 #include "third_party/blink/renderer/core/layout/layout_text.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
@@ -21,9 +21,12 @@ namespace blink {
 #define SEGMENT_BREAK_TRANSFORMATION_FOR_EAST_ASIAN_WIDTH 0
 
 #define EXPECT_ITEM_OFFSET(item, type, start, end) \
-  EXPECT_EQ(type, (item).Type());                  \
-  EXPECT_EQ(start, (item).StartOffset());          \
-  EXPECT_EQ(end, (item).EndOffset());
+  {                                                \
+    const auto& item_ref = (item);                 \
+    EXPECT_EQ(type, item_ref.Type());              \
+    EXPECT_EQ(start, item_ref.StartOffset());      \
+    EXPECT_EQ(end, item_ref.EndOffset());          \
+  }
 
 class InlineItemsBuilderTest : public RenderingTest {
  protected:
@@ -84,14 +87,6 @@ class InlineItemsBuilderTest : public RenderingTest {
         LayoutBlockFlow::CreateAnonymous(&GetDocument(), style_);
     anonymous_objects_->push_back(layout_block_flow);
     builder->AppendBlockInInline(layout_block_flow);
-  }
-
-  void AppendRubyColumn(InlineItemsBuilder* builder) {
-    auto* ruby_column = MakeGarbageCollected<LayoutRubyColumn>();
-    ruby_column->SetDocumentForAnonymous(&GetDocument());
-    ruby_column->SetStyle(style_);
-    anonymous_objects_->push_back(ruby_column);
-    builder->AppendAtomicInline(ruby_column);
   }
 
   struct Input {
@@ -553,26 +548,81 @@ TEST_F(InlineItemsBuilderTest, BlockInInline) {
   EXPECT_EQ(String(u"Hello\uFFFCWorld"), builder.ToString());
 }
 
-TEST_F(InlineItemsBuilderTest, HasRuby) {
+TEST_F(InlineItemsBuilderTest, OpenCloseRubyColumns) {
+  GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kInStyleRecalc);
+  LayoutInline* ruby =
+      CreateLayoutInline(&GetDocument(), [](ComputedStyleBuilder& builder) {
+        builder.SetDisplay(EDisplay::kRuby);
+      });
+  LayoutInline* rt =
+      CreateLayoutInline(&GetDocument(), [](ComputedStyleBuilder& builder) {
+        builder.SetDisplay(EDisplay::kRubyText);
+      });
+  ruby->AddChild(rt);
+  GetLayoutBlockFlow()->AddChild(ruby);
+  LayoutInline* orphan_rt =
+      CreateLayoutInline(&GetDocument(), [](ComputedStyleBuilder& builder) {
+        builder.SetDisplay(EDisplay::kRubyText);
+      });
+  GetLayoutBlockFlow()->AddChild(orphan_rt);
   HeapVector<InlineItem> items;
   InlineItemsBuilder builder(GetLayoutBlockFlow(), &items);
-  EXPECT_FALSE(HasRuby(builder)) << "has_ruby_ should be false initially.";
 
-  AppendText("Hello ", &builder);
-  EXPECT_FALSE(HasRuby(builder))
-      << "Adding non-AtomicInline should not affect it.";
+  // Input: <ruby>base1<rt>anno1</rt>base2<rt>anno2</ruby><rt>anno3</rt>.
+  builder.EnterInline(ruby);
+  AppendText("base1", &builder);
+  builder.EnterInline(rt);
+  AppendText("anno1", &builder);
+  builder.ExitInline(rt);
+  AppendText("base2", &builder);
+  builder.EnterInline(rt);
+  AppendText("anno2", &builder);
+  builder.ExitInline(rt);
+  builder.ExitInline(ruby);
+  builder.EnterInline(orphan_rt);
+  AppendText("anno3", &builder);
+  builder.ExitInline(orphan_rt);
 
-  AppendAtomicInline(&builder);
-  EXPECT_FALSE(HasRuby(builder))
-      << "Adding non-ruby AtomicInline should not affect it.";
+  auto* node_data = MakeGarbageCollected<InlineNodeData>();
+  builder.DidFinishCollectInlines(node_data);
+  EXPECT_TRUE(node_data->HasRuby());
 
-  AppendRubyColumn(&builder);
-  EXPECT_TRUE(HasRuby(builder))
-      << "Adding a ruby AtomicInline should set it to true.";
+  wtf_size_t i = 0;
+  EXPECT_ITEM_OFFSET(items[i], InlineItem::kOpenTag, 0u, 0u);  // <ruby>
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kOpenRubyColumn, 0u, 1u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kRubyLinePlaceholder, 1u, 1u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kText, 1u, 6u);  // "base1"
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kRubyLinePlaceholder, 6u, 6u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kOpenTag, 6u, 6u);  // <rt>
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kRubyLinePlaceholder, 6u, 6u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kText, 6u, 11u);  // "anno1"
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kRubyLinePlaceholder, 11u, 11u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kCloseTag, 11u, 11u);  // </rt>
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kCloseRubyColumn, 11u, 12u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kOpenRubyColumn, 12u, 13u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kRubyLinePlaceholder, 13u, 13u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kText, 13u, 18u);  // "base2"
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kRubyLinePlaceholder, 18u, 18u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kOpenTag, 18u, 18u);  // <rt>
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kRubyLinePlaceholder, 18u, 18u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kText, 18u, 23u);  // "anno2"
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kRubyLinePlaceholder, 23u, 23u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kCloseTag, 23u, 23u);  // </rt>
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kCloseRubyColumn, 23u, 24u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kCloseTag, 24u, 24u);  // </ruby>
 
-  AppendAtomicInline(&builder);
-  EXPECT_TRUE(HasRuby(builder))
-      << "Adding non-ruby AtomicInline should not clear it.";
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kOpenRubyColumn, 24u, 25u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kRubyLinePlaceholder, 25u, 25u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kOpenTag, 25u, 25u);  // <rt>
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kRubyLinePlaceholder, 25u, 25u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kText, 25u, 30u);  // "anno3"
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kRubyLinePlaceholder, 30u, 30u);
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kCloseTag, 30u, 30u);  // </rt>
+  EXPECT_ITEM_OFFSET(items[++i], InlineItem::kCloseRubyColumn, 30u, 31u);
+
+  orphan_rt->Destroy();
+  rt->Destroy();
+  ruby->Destroy();
 }
 
 }  // namespace blink

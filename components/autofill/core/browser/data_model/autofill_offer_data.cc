@@ -5,19 +5,17 @@
 #include "components/autofill/core/browser/data_model/autofill_offer_data.h"
 
 #include <algorithm>
-#include <optional>
 
-#include "base/ranges/algorithm.h"
 #include "components/autofill/core/common/autofill_clock.h"
 
 namespace autofill {
 
-// TODO(crbug.com/1483969): Refactor these methods and create separate
+// TODO(crbug.com/40932427): Refactor these methods and create separate
 // constructors that are specific to each offer.
 // static
 AutofillOfferData AutofillOfferData::GPayCardLinkedOffer(
     int64_t offer_id,
-    const base::Time& expiry,
+    base::Time expiry,
     const std::vector<GURL>& merchant_origins,
     const GURL& offer_details_url,
     const DisplayStrings& display_strings,
@@ -29,25 +27,9 @@ AutofillOfferData AutofillOfferData::GPayCardLinkedOffer(
 }
 
 // static
-AutofillOfferData AutofillOfferData::FreeListingCouponOffer(
-    int64_t offer_id,
-    const base::Time& expiry,
-    const std::vector<GURL>& merchant_origins,
-    const GURL& offer_details_url,
-    const DisplayStrings& display_strings,
-    const std::string& promo_code,
-    bool is_merchant_wide,
-    std::optional<std::string> terms_and_conditions) {
-  return AutofillOfferData(OfferType::FREE_LISTING_COUPON_OFFER, offer_id,
-                           expiry, merchant_origins, offer_details_url,
-                           display_strings, promo_code, is_merchant_wide,
-                           terms_and_conditions);
-}
-
-// static
 AutofillOfferData AutofillOfferData::GPayPromoCodeOffer(
     int64_t offer_id,
-    const base::Time& expiry,
+    base::Time expiry,
     const std::vector<GURL>& merchant_origins,
     const GURL& offer_details_url,
     const DisplayStrings& display_strings,
@@ -142,31 +124,21 @@ bool AutofillOfferData::IsCardLinkedOffer() const {
 }
 
 bool AutofillOfferData::IsPromoCodeOffer() const {
-  return GetOfferType() == OfferType::GPAY_PROMO_CODE_OFFER ||
-         GetOfferType() == OfferType::FREE_LISTING_COUPON_OFFER;
+  return GetOfferType() == OfferType::GPAY_PROMO_CODE_OFFER;
 }
 
 bool AutofillOfferData::IsGPayPromoCodeOffer() const {
   return GetOfferType() == OfferType::GPAY_PROMO_CODE_OFFER;
 }
 
-bool AutofillOfferData::IsFreeListingCouponOffer() const {
-  return GetOfferType() == OfferType::FREE_LISTING_COUPON_OFFER;
-}
-
 bool AutofillOfferData::IsActiveAndEligibleForOrigin(const GURL& origin) const {
   return expiry_ > AutofillClock::Now() &&
-         base::ranges::count(merchant_origins_, origin) > 0;
-}
-
-bool AutofillOfferData::IsMerchantWideOffer() const {
-  CHECK(IsFreeListingCouponOffer());
-  return is_merchant_wide_offer_;
+         std::ranges::count(merchant_origins_, origin) > 0;
 }
 
 AutofillOfferData::AutofillOfferData(
     int64_t offer_id,
-    const base::Time& expiry,
+    base::Time expiry,
     const std::vector<GURL>& merchant_origins,
     const GURL& offer_details_url,
     const DisplayStrings& display_strings,
@@ -181,24 +153,19 @@ AutofillOfferData::AutofillOfferData(
       offer_reward_amount_(offer_reward_amount),
       eligible_instrument_id_(eligible_instrument_id) {}
 
-AutofillOfferData::AutofillOfferData(
-    OfferType offer_type,
-    int64_t offer_id,
-    const base::Time& expiry,
-    const std::vector<GURL>& merchant_origins,
-    const GURL& offer_details_url,
-    const DisplayStrings& display_strings,
-    const std::string& promo_code,
-    bool is_merchant_wide,
-    std::optional<std::string> terms_and_conditions)
+AutofillOfferData::AutofillOfferData(OfferType offer_type,
+                                     int64_t offer_id,
+                                     base::Time expiry,
+                                     const std::vector<GURL>& merchant_origins,
+                                     const GURL& offer_details_url,
+                                     const DisplayStrings& display_strings,
+                                     const std::string& promo_code)
     : offer_type_(offer_type),
       offer_id_(offer_id),
       expiry_(expiry),
       offer_details_url_(offer_details_url),
       merchant_origins_(merchant_origins),
       display_strings_(display_strings),
-      promo_code_(promo_code),
-      is_merchant_wide_offer_(is_merchant_wide),
-      terms_and_conditions_(terms_and_conditions) {}
+      promo_code_(promo_code) {}
 
 }  // namespace autofill

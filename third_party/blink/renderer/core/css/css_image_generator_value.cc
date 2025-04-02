@@ -92,7 +92,7 @@ void CSSImageGeneratorValue::AddClient(const ImageResourceObserver* client) {
 void CSSImageGeneratorValue::RemoveClient(const ImageResourceObserver* client) {
   DCHECK(client);
   ClientSizeCountMap::iterator it = clients_.find(client);
-  SECURITY_DCHECK(it != clients_.end());
+  SECURITY_CHECK(it != clients_.end());
 
   SizeAndCount& size_count = it->value;
   if (!size_count.size.IsEmpty()) {
@@ -166,7 +166,6 @@ scoped_refptr<Image> CSSImageGeneratorValue::GetImage(
     default:
       NOTREACHED();
   }
-  return nullptr;
 }
 
 bool CSSImageGeneratorValue::IsUsingCustomProperty(
@@ -224,7 +223,6 @@ bool CSSImageGeneratorValue::KnownToBeOpaque(const Document& document,
     default:
       NOTREACHED();
   }
-  return false;
 }
 
 }  // namespace blink

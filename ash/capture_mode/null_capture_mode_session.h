@@ -44,9 +44,23 @@ class ASH_EXPORT NullCaptureModeSession : public BaseCaptureModeSession {
       bool capture_surface_became_too_small,
       bool did_bounds_or_visibility_change) override;
   void OnCameraPreviewDestroyed() override;
-  void MaybeDismissUserNudgeForever() override;
-  void MaybeChangeRoot(aura::Window* new_root) override;
+  void MaybeDismissSunfishRegionNudgeForever() override;
+  void MaybeChangeRoot(aura::Window* new_root,
+                       bool root_window_will_shutdown) override;
+  void OnPerformCaptureForSearchStarting(
+      PerformCaptureType capture_type) override;
+  void OnPerformCaptureForSearchEnded(PerformCaptureType capture_type) override;
   std::set<aura::Window*> GetWindowsToIgnoreFromWidgets() override;
+  base::WeakPtr<BaseCaptureModeSession> GetImageSearchToken() override;
+  ActionButtonView* AddActionButton(views::Button::PressedCallback callback,
+                                    std::u16string text,
+                                    const gfx::VectorIcon* icon,
+                                    ActionButtonRank rank,
+                                    ActionButtonViewID id) override;
+  void AddSmartActionsButton() override;
+  void OnScannerActionsFetched(
+      std::vector<ScannerActionViewModel> scanner_actions) override;
+  gfx::Rect GetFeedbackWidgetScreenBounds() const override;
 
  private:
   // CaptureModeSession:

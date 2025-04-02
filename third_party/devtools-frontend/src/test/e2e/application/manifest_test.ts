@@ -5,7 +5,6 @@
 import {assert} from 'chai';
 
 import {click, getBrowserAndPages, getTestServerPort, waitFor} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {getTrimmedTextContent, navigateToApplicationTab} from '../helpers/application-helpers.js';
 
 const MANIFEST_SELECTOR = '[aria-label="Manifest"]';
@@ -20,7 +19,7 @@ const FIELD_VALUES_SELECTOR = '.report-field-value';
 // The tests are provided for local debugging only. They require debug
 // mode and setting a chrome feature flag:
 // npm run debug-e2etest -- -- --chrome-features=WebAppEnableManifestId
-describe.skip('[crbug.com/1222571]: The Manifest Page', async () => {
+describe.skip('[crbug.com/1222571]: The Manifest Page', () => {
   it('shows app id', async () => {
     const {target} = getBrowserAndPages();
     await navigateToApplicationTab(target, 'app-manifest-id');

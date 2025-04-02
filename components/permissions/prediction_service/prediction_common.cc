@@ -8,7 +8,6 @@
 #include "base/notreached.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 
 namespace permissions {
 
@@ -67,7 +66,6 @@ ClientFeatures_Gesture ConvertToProtoGesture(
   }
 
   NOTREACHED();
-  return permissions::ClientFeatures_Gesture_GESTURE_UNSPECIFIED;
 }
 
 ClientFeatures_GestureEnum ConvertToProtoGestureEnum(
@@ -83,7 +81,26 @@ ClientFeatures_GestureEnum ConvertToProtoGestureEnum(
   }
 
   NOTREACHED();
-  return permissions::ClientFeatures_GestureEnum_GESTURE_UNSPECIFIED_V2;
+}
+
+PermissionFeatures_Relevance ConvertToProtoRelevance(
+    const permissions::PermissionRequestRelevance relevance) {
+  switch (relevance) {
+    case permissions::PermissionRequestRelevance::kUnspecified:
+      return permissions::PermissionFeatures_Relevance_RELEVANCE_UNSPECIFIED;
+    case permissions::PermissionRequestRelevance::kVeryLow:
+      return permissions::PermissionFeatures_Relevance_RELEVANCE_VERY_LOW;
+    case permissions::PermissionRequestRelevance::kLow:
+      return permissions::PermissionFeatures_Relevance_RELEVANCE_LOW;
+    case permissions::PermissionRequestRelevance::kMedium:
+      return permissions::PermissionFeatures_Relevance_RELEVANCE_MEDIUM;
+    case permissions::PermissionRequestRelevance::kHigh:
+      return permissions::PermissionFeatures_Relevance_RELEVANCE_HIGH;
+    case permissions::PermissionRequestRelevance::kVeryHigh:
+      return permissions::PermissionFeatures_Relevance_RELEVANCE_VERY_HIGH;
+  }
+
+  NOTREACHED();
 }
 
 void FillInStatsFeatures(const PredictionRequestFeatures::ActionCounts& counts,
@@ -115,7 +132,8 @@ std::unique_ptr<GeneratePredictionsRequest> GetPredictionRequestProto(
       proto_request->mutable_permission_features()->Add();
   FillInStatsFeatures(entity.requested_permission_counts,
                       permission_features->mutable_permission_stats());
-
+  permission_features->set_permission_relevance(
+      ConvertToProtoRelevance(entity.permission_relevance));
   switch (entity.type) {
     case RequestType::kNotifications:
       permission_features->mutable_notification_permission()->Clear();
@@ -131,6 +149,10 @@ std::unique_ptr<GeneratePredictionsRequest> GetPredictionRequestProto(
     SiteFeatures* site_features = proto_request->mutable_site_features();
     site_features->set_origin(entity.url.spec());
   }
+
+  ClientFeatures_ExperimentConfig* experiment_config =
+      client_features->mutable_experiment_config();
+  experiment_config->set_experiment_id(entity.experiment_id);
 
   return proto_request;
 }
