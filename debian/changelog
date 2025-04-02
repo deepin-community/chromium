@@ -1,3 +1,10 @@
+chromium (134.0.6998.117-1deepin1) unstable; urgency=high
+
+  * Allow chromium to build on libxml2 (2.9.x)
+  * Revert t64
+
+ -- lhdjply <lhdjply@126.com>  Wed, 02 Apr 2025 11:38:36 +0800
+
 chromium (134.0.6998.117-1) unstable; urgency=high
 
   * New upstream security release.
